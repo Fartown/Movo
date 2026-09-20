@@ -37,7 +37,11 @@ internal class OnDeviceRecognitionWakeEngine(
 
     override fun isRunning(): Boolean = running.get() && !paused.get()
 
-    override fun start(phrase: String, sensitivity: WakeSensitivity, listener: Listener) {
+    override fun start(
+        phrase: String,
+        sensitivity: WakeSensitivity,
+        listener: WakeWordEngine.Listener,
+    ) {
         stop()
         this.phrase = WakePhraseRules.normalizeOrDefault(phrase)
         this.sensitivity = sensitivity

@@ -47,7 +47,6 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString.Companion.toByteString
 import top.yukonga.miuix.kmp.basic.Button
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.DropdownItem
 import top.yukonga.miuix.kmp.basic.SmallTitle
@@ -182,7 +181,6 @@ internal fun VoiceSettingsScreen(
                                 EtaWakeWordController.refresh(context)
                             }
                         },
-                        colors = ButtonDefaults.textButtonColors(),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(stringResource(R.string.voice_settings_restore_default_phrase))
@@ -309,7 +307,6 @@ internal fun VoiceSettingsScreen(
                             }
                         },
                         enabled = !testing,
-                        colors = ButtonDefaults.textButtonColors(),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(

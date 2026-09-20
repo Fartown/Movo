@@ -295,6 +295,8 @@ internal fun EtaVoicePanel(
                     onSubmit()
                 },
                 onStop = onStop,
+                isListening = isListening,
+                onToggleListen = onToggleListen,
                 onClose = onClose,
                 onOpenConversation = onOpenConversation,
             )
@@ -318,6 +320,8 @@ private fun BoxScope.AssistantPanel(
     onScreenContextRemove: () -> Unit,
     onSubmit: () -> Unit,
     onStop: () -> Unit,
+    isListening: Boolean = false,
+    onToggleListen: () -> Unit = {},
     onClose: () -> Unit,
     onOpenConversation: () -> Unit,
 ) {

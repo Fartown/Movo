@@ -29,7 +29,11 @@ internal class SherpaWakeEngine(
 
     override fun isRunning(): Boolean = running.get() && !paused.get()
 
-    override fun start(phrase: String, sensitivity: WakeSensitivity, listener: Listener) {
+    override fun start(
+        phrase: String,
+        sensitivity: WakeSensitivity,
+        listener: WakeWordEngine.Listener,
+    ) {
         this.phrase = WakePhraseRules.normalizeOrDefault(phrase)
         this.sensitivity = sensitivity
         this.listener = listener

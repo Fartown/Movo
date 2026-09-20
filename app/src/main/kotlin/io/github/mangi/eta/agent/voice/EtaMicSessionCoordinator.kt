@@ -58,7 +58,7 @@ internal class EtaMicSessionCoordinator(
         val now = clock()
         val current = phase.get()
         if (current != Phase.ListeningWake) return false
-        if (now - lastWakeAt.get() < cooldownMs) {
+        if (lastWakeAt.get() > 0L && now - lastWakeAt.get() < cooldownMs) {
             phase.set(Phase.WakeCooldown)
             return false
         }
