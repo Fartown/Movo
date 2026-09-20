@@ -212,6 +212,15 @@ internal fun SettingsScreen(
                         onClick = { onNavigate(AppRoute.ModelProviders) },
                     )
 
+                    ArrowPreference(
+                        title = stringResource(R.string.voice_settings_title),
+                        summary = stringResource(R.string.voice_settings_entry_summary),
+                        startAction = {
+                            PreferenceIcon(icon = Icons.Rounded.Mic)
+                        },
+                        onClick = { onNavigate(AppRoute.VoiceSettings) },
+                    )
+
                     SwitchPref(
                         context = context,
                         prefs = agentPrefs,

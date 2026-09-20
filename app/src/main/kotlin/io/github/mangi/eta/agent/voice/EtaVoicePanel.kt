@@ -46,6 +46,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.CancelPresentation
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DesktopWindows
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -207,11 +208,13 @@ internal fun EtaVoicePanel(
     inputFocusRequestKey: Int,
     canOpenConversation: Boolean,
     exitRequested: Boolean,
+    isListening: Boolean = false,
     onInputChange: (String) -> Unit,
     onScreenContextSelect: () -> Unit,
     onScreenContextRemove: () -> Unit,
     onSubmit: () -> Unit,
     onStop: () -> Unit,
+    onToggleListen: () -> Unit = {},
     onClose: () -> Unit,
     onOpenConversation: () -> Unit,
 ) {
@@ -568,11 +571,13 @@ private fun BoxScope.AssistantPanel(
             input = input,
             colors = colors,
             focusRequester = focusRequester,
+            isListening = isListening,
             onInputChange = onInputChange,
             onScreenContextSelect = onScreenContextSelect,
             onScreenContextRemove = onScreenContextRemove,
             onSubmit = onSubmit,
             onStop = onStop,
+            onToggleListen = onToggleListen,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(
@@ -591,11 +596,13 @@ private fun AssistantComposer(
     input: String,
     colors: EtaVoicePanelColors,
     focusRequester: FocusRequester,
+    isListening: Boolean,
     onInputChange: (String) -> Unit,
     onScreenContextSelect: () -> Unit,
     onScreenContextRemove: () -> Unit,
     onSubmit: () -> Unit,
     onStop: () -> Unit,
+    onToggleListen: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -618,9 +625,11 @@ private fun AssistantComposer(
             input = input,
             colors = colors,
             focusRequester = focusRequester,
+            isListening = isListening,
             onInputChange = onInputChange,
             onSubmit = onSubmit,
             onStop = onStop,
+            onToggleListen = onToggleListen,
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -788,9 +797,11 @@ private fun AssistantInputBar(
     input: String,
     colors: EtaVoicePanelColors,
     focusRequester: FocusRequester,
+    isListening: Boolean,
     onInputChange: (String) -> Unit,
     onSubmit: () -> Unit,
     onStop: () -> Unit,
+    onToggleListen: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val canSubmit = input.isNotBlank() && state.phase != EtaVoicePhase.PROCESSING
@@ -803,9 +814,38 @@ private fun AssistantInputBar(
                 indication = null,
                 onClick = {},
             )
-            .padding(start = 16.dp, end = 4.dp),
+            .padding(start = 8.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        IconButton(
+            onClick = onToggleListen,
+            enabled = state.phase != EtaVoicePhase.PROCESSING,
+            minWidth = 36.dp,
+            minHeight = 36.dp,
+            cornerRadius = 18.dp,
+            backgroundColor = if (isListening) {
+                MiuixTheme.colorScheme.primary.copy(alpha = 0.18f)
+            } else {
+                Color.Transparent
+            },
+        ) {
+            Icon(
+                imageVector = if (isListening) {
+                    Icons.Rounded.Stop
+                } else {
+                    Icons.Rounded.Mic
+                },
+                contentDescription = stringResource(
+                    if (isListening) R.string.voice_listening else R.string.voice_tap_to_speak,
+                ),
+                modifier = Modifier.size(18.dp),
+                tint = if (isListening) {
+                    MiuixTheme.colorScheme.primary
+                } else {
+                    colors.inputSecondary
+                },
+            )
+        }
         BasicTextField(
             value = input,
             onValueChange = onInputChange,
@@ -813,7 +853,7 @@ private fun AssistantInputBar(
                 .weight(1f)
                 .padding(vertical = 6.dp)
                 .focusRequester(focusRequester),
-            enabled = state.phase != EtaVoicePhase.PROCESSING,
+            enabled = state.phase != EtaVoicePhase.PROCESSING && !isListening,
             textStyle = TextStyle(
                 color = colors.inputPrimary,
                 fontSize = 14.sp,
@@ -828,7 +868,9 @@ private fun AssistantInputBar(
                 Box(contentAlignment = Alignment.CenterStart) {
                     if (input.isEmpty()) {
                         Text(
-                            text = stringResource(R.string.voice_input_hint),
+                            text = stringResource(
+                                if (isListening) R.string.voice_listening else R.string.voice_input_hint,
+                            ),
                             color = colors.inputTertiary,
                             fontSize = 14.sp,
                             maxLines = 1,

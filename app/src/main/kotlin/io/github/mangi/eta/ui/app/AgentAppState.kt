@@ -2765,6 +2765,10 @@ private fun buildPermissionHealthState(context: Context): PermissionHealthUiStat
     val locationAccess = DeviceLocationProvider.accessState(context)
     val notificationHistoryEnabled = io.github.mangi.eta.agent.device.AgentNotificationHistoryService.isEnabled(context)
     val usageAccessEnabled = io.github.mangi.eta.agent.tool.AgentPersonalContextTools.hasUsageAccess(context)
+    val microphoneEnabled = androidx.core.content.ContextCompat.checkSelfPermission(
+        context,
+        android.Manifest.permission.RECORD_AUDIO,
+    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
     return PermissionHealthUiState(
         items = listOf(
@@ -2781,6 +2785,13 @@ private fun buildPermissionHealthState(context: Context): PermissionHealthUiStat
                 summary = "",
                 status = if (overlayEnabled) PermissionStatusUi.Available else PermissionStatusUi.Missing,
                 primaryActionLabel = if (overlayEnabled) null else context.getString(R.string.state_ui_to_authorize_762ec4),
+            ),
+            PermissionHealthItemUi(
+                id = "microphone",
+                title = context.getString(R.string.permission_microphone_title),
+                summary = context.getString(R.string.permission_microphone_summary),
+                status = if (microphoneEnabled) PermissionStatusUi.Available else PermissionStatusUi.Missing,
+                primaryActionLabel = if (microphoneEnabled) null else context.getString(R.string.state_ui_to_authorize_762ec4),
             ),
             PermissionHealthItemUi(
                 id = "app_list",

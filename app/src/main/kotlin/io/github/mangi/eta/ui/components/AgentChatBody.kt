@@ -852,6 +852,33 @@ private fun AgentChatBottomBar(
     onRemoveFileReference: (String) -> Unit,
     onCancelMessageEdit: () -> Unit,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var isListening by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(false)
+    }
+    var liveTranscript by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<String?>(null)
+    }
+    val dictation = androidx.compose.runtime.remember(context) {
+        io.github.mangi.eta.agent.voice.asr.EtaDictationController(context)
+    }
+    val micPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            startChatDictation(
+                context = context,
+                dictation = dictation,
+                setListening = { isListening = it },
+                setTranscript = { liveTranscript = it },
+                onSubmit = onSubmit,
+            )
+        }
+    }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose { dictation.cancel() }
+    }
+    val composedInput = liveTranscript ?: input
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -911,7 +938,7 @@ private fun AgentChatBottomBar(
                 .padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
         ) {
             AgentChatInputBar(
-                input = input,
+                input = composedInput,
                 modelPickerState = modelPickerState,
                 isCompacting = isCompacting,
                 contextUsage = contextUsage,
@@ -924,7 +951,10 @@ private fun AgentChatBottomBar(
                 isEditingMessage = messageEdit != null,
                 editHasLaterTurns = messageEdit?.hasLaterTurns == true,
                 preserveFollowingMessages = messageEdit?.preserveFollowingMessages == true,
-                onSubmit = onSubmit,
+                onSubmit = { text ->
+                    liveTranscript = null
+                    onSubmit(text)
+                },
                 onReasoningEffortChange = onReasoningEffortChange,
                 onCompactContext = onCompactContext,
                 canCompactContext = canCompactContext,
@@ -937,6 +967,29 @@ private fun AgentChatBottomBar(
                 onAttachFilePath = onAttachFilePath,
                 onRemoveFileReference = onRemoveFileReference,
                 onCancelMessageEdit = onCancelMessageEdit,
+                isListening = isListening,
+                onToggleListen = {
+                    if (isListening) {
+                        dictation.stop(submitFinal = true)
+                        io.github.mangi.eta.agent.voice.EtaWakeWordService.resumeWake(context)
+                    } else if (!isStreaming) {
+                        val granted = androidx.core.content.ContextCompat.checkSelfPermission(
+                            context,
+                            android.Manifest.permission.RECORD_AUDIO,
+                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                        if (!granted) {
+                            micPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                        } else {
+                            startChatDictation(
+                                context = context,
+                                dictation = dictation,
+                                setListening = { isListening = it },
+                                setTranscript = { liveTranscript = it },
+                                onSubmit = onSubmit,
+                            )
+                        }
+                    }
+                },
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -1113,3 +1166,39 @@ private data class SuggestionItem(
     val icon: ImageVector,
     val prompt: String,
 )
+
+private fun startChatDictation(
+    context: android.content.Context,
+    dictation: io.github.mangi.eta.agent.voice.asr.EtaDictationController,
+    setListening: (Boolean) -> Unit,
+    setTranscript: (String?) -> Unit,
+    onSubmit: (String) -> Unit,
+) {
+    io.github.mangi.eta.agent.voice.EtaWakeWordService.pauseWake(context)
+    setListening(true)
+    dictation.start(
+        object : io.github.mangi.eta.agent.voice.asr.EtaAsrEngine.Listener {
+            override fun onPartial(text: String) {
+                if (text.isNotBlank()) setTranscript(text)
+            }
+
+            override fun onFinal(text: String) {
+                setListening(false)
+                setTranscript(null)
+                io.github.mangi.eta.agent.voice.EtaWakeWordService.resumeWake(context)
+                if (text.isNotBlank()) onSubmit(text)
+            }
+
+            override fun onError(message: String, canFallback: Boolean) {
+                setListening(false)
+                setTranscript(null)
+                io.github.mangi.eta.agent.voice.EtaWakeWordService.resumeWake(context)
+            }
+
+            override fun onEnded() {
+                setListening(false)
+                io.github.mangi.eta.agent.voice.EtaWakeWordService.resumeWake(context)
+            }
+        },
+    )
+}

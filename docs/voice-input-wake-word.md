@@ -1,6 +1,6 @@
 # Eta 语音输入与自定义唤醒词方案
 
-> 状态：调研方案（**不实施代码**）  
+> 状态：已实现主路径（豆包双向流式 ASR + 唤醒 FGS + 设置/权限；Sherpa 原生待模型/AAR，当前回退本机识别）  
 > 调研仓库：当前 cloud checkout（Origin `superchao/genesis`，内容对应 Fartown/Movo / Eta Android 应用）  
 > 版本锚点：`applicationId io.github.mangi.eta`，`versionName 3.0.4`，`minSdk 34` / `targetSdk 36`  
 > 读者：产品负责人（Chao）与后续实现同学  

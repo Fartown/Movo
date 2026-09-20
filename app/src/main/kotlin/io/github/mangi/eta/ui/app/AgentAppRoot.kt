@@ -114,6 +114,12 @@ fun AgentAppRoot(
     ) {
         agentState.refreshPermissionHealth()
     }
+    val microphonePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {
+        agentState.refreshPermissionHealth()
+        io.github.mangi.eta.agent.voice.EtaWakeWordController.refresh(context)
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -502,6 +508,9 @@ fun AgentAppRoot(
                                             )
                                         }
                                     }
+                                    "microphone" -> {
+                                        microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                    }
                                     "background" -> {
                                         if (RootAccess.isGranted && Build.MANUFACTURER.lowercase() in setOf("oppo", "realme", "oneplus")) {
                                             uiScope.launch(Dispatchers.IO) {
@@ -602,6 +611,9 @@ fun AgentAppRoot(
                     onNavigate = { route -> pushRoute(route) },
                     onBack = ::popRoute
                 )
+            }
+            entry<AppRoute.VoiceSettings>(swipeDismiss = swipeDismiss) {
+                io.github.mangi.eta.ui.screens.voice.VoiceSettingsScreen(onBack = ::popRoute)
             }
             entry<AppRoute.AppearanceSettings>(swipeDismiss = swipeDismiss) {
                 AppearanceSettingsScreen(onBack = ::popRoute)
