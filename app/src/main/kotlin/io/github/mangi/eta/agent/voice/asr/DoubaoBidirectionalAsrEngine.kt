@@ -3,6 +3,7 @@ package io.github.mangi.eta.agent.voice.asr
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import io.github.mangi.eta.R
 import io.github.mangi.eta.agent.model.AgentHttpClient
 import io.github.mangi.eta.core.AndroidAgentLogger
 import io.github.mangi.eta.core.safeLogType
@@ -49,7 +50,7 @@ internal class DoubaoBidirectionalAsrEngine(
         sequence.set(1)
         val normalized = credentials.normalized()
         if (!normalized.hasUsableAuth()) {
-            failAndStop("未配置豆包语音凭证", canFallback = true)
+            failAndStop(context.getString(R.string.voice_doubao_credentials_required))
             return
         }
         val connectId = UUID.randomUUID().toString()
@@ -68,7 +69,7 @@ internal class DoubaoBidirectionalAsrEngine(
                 requestBuilder.header("X-Api-Access-Key", normalized.accessKey)
             }
             DoubaoSpeechCredentials.AuthMode.Missing -> {
-                failAndStop("未配置豆包语音凭证", canFallback = true)
+                failAndStop(context.getString(R.string.voice_doubao_credentials_required))
                 return
             }
         }
@@ -100,7 +101,6 @@ internal class DoubaoBidirectionalAsrEngine(
                     AndroidAgentLogger.warn("Doubao ASR failure: type=${t.safeLogType()}")
                     failAndStop(
                         message = "豆包语音连接失败",
-                        canFallback = true,
                     )
                 }
 
@@ -161,10 +161,10 @@ internal class DoubaoBidirectionalAsrEngine(
                     ).toByteString(),
                 )
                 if (!ok) {
-                    failAndStop("音频发送失败", canFallback = true)
+                    failAndStop("音频发送失败")
                 }
             },
-            onError = { message -> failAndStop(message, canFallback = true) },
+            onError = { message -> failAndStop(message) },
         )
         pcmCapture = capture
         capture.start()
@@ -178,7 +178,7 @@ internal class DoubaoBidirectionalAsrEngine(
             }
         when (frame) {
             is SaucServerFrame.Error -> {
-                failAndStop("豆包语音错误 ${frame.code}", canFallback = true)
+                failAndStop("豆包语音错误 ${frame.code}")
             }
             is SaucServerFrame.Response -> {
                 val text = frame.result.text.trim()
@@ -201,11 +201,8 @@ internal class DoubaoBidirectionalAsrEngine(
         }
     }
 
-    private fun failAndStop(message: String, canFallback: Boolean) {
-        if (!running.getAndSet(false)) {
-            mainHandler.post { listener?.onError(message, canFallback) }
-            return
-        }
+    private fun failAndStop(message: String) {
+        if (!running.getAndSet(false)) return
         pcmCapture?.stop()
         pcmCapture = null
         webSocket?.cancel()
@@ -213,7 +210,7 @@ internal class DoubaoBidirectionalAsrEngine(
         val current = listener
         listener = null
         mainHandler.post {
-            current?.onError(message, canFallback)
+            current?.onError(message)
             current?.onEnded()
         }
     }

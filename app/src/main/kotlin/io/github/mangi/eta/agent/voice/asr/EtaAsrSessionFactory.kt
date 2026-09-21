@@ -5,80 +5,67 @@ import io.github.mangi.eta.data.model.DoubaoSpeechCredentials
 import io.github.mangi.eta.data.repository.VoiceSettingsRepository
 
 /**
- * Creates ASR sessions: Doubao streaming first, system SpeechRecognizer as fallback.
+ * Creates Doubao-only dictation sessions. Missing credentials are reported by the engine.
  */
 internal object EtaAsrSessionFactory {
-    fun createPreferred(
+    fun create(
         context: Context,
         credentials: DoubaoSpeechCredentials = VoiceSettingsRepository.loadDoubaoCredentials(),
-        allowSystemFallback: Boolean = true,
-    ): Pair<EtaAsrEngine, AsrBackend> {
-        val normalized = credentials.normalized()
-        if (normalized.hasUsableAuth()) {
-            return DoubaoBidirectionalAsrEngine(context, normalized) to AsrBackend.Doubao
-        }
-        require(allowSystemFallback) { "豆包语音凭证未配置" }
-        return SystemAsrEngine(context) to AsrBackend.System
-    }
-
-    fun createSystem(context: Context): EtaAsrEngine = SystemAsrEngine(context)
+    ): EtaAsrEngine = DoubaoBidirectionalAsrEngine(context, credentials.normalized())
 }
 
 /**
- * Dictation helper that auto-falls back to system ASR once on Doubao failure.
+ * Owns one dictation session; failures are surfaced without switching recognizers.
  */
 internal class EtaDictationController(
-    private val context: Context,
-    private val allowSystemFallback: Boolean = true,
+    private val createEngine: () -> EtaAsrEngine,
 ) {
+    constructor(context: Context) : this({ EtaAsrSessionFactory.create(context) })
+
     private var engine: EtaAsrEngine? = null
-    private var backend: AsrBackend? = null
-    private var fellBack = false
 
     fun isRunning(): Boolean = engine?.isRunning() == true
 
     fun start(listener: EtaAsrEngine.Listener) {
-        stop(submitFinal = false)
-        fellBack = false
-        val (created, usedBackend) = EtaAsrSessionFactory.createPreferred(
-            context = context,
-            allowSystemFallback = allowSystemFallback,
-        )
+        cancel()
+        val created = createEngine()
         engine = created
-        backend = usedBackend
-        created.start(wrap(listener))
+        created.start(wrap(created, listener))
     }
 
     fun stop(submitFinal: Boolean = true) {
-        engine?.stop(submitFinal)
-        engine = null
-        backend = null
+        if (submitFinal) {
+            engine?.stop(submitFinal = true)
+        } else {
+            cancel()
+        }
     }
 
     fun cancel() {
-        engine?.cancel()
+        val current = engine
         engine = null
-        backend = null
+        current?.cancel()
     }
 
-    fun currentBackend(): AsrBackend? = backend
-
-    private fun wrap(listener: EtaAsrEngine.Listener): EtaAsrEngine.Listener =
+    private fun wrap(current: EtaAsrEngine, listener: EtaAsrEngine.Listener): EtaAsrEngine.Listener =
         object : EtaAsrEngine.Listener {
-            override fun onPartial(text: String) = listener.onPartial(text)
-            override fun onFinal(text: String) = listener.onFinal(text)
-            override fun onEnded() = listener.onEnded()
-            override fun onError(message: String, canFallback: Boolean) {
-                if (canFallback && allowSystemFallback && !fellBack && backend == AsrBackend.Doubao) {
-                    fellBack = true
-                    engine?.cancel()
-                    val system = EtaAsrSessionFactory.createSystem(context)
-                    engine = system
-                    backend = AsrBackend.System
-                    system.start(listener)
-                    return
+            override fun onPartial(text: String) {
+                if (engine === current) listener.onPartial(text)
+            }
+
+            override fun onFinal(text: String) {
+                if (engine === current) listener.onFinal(text)
+            }
+
+            override fun onError(message: String) {
+                if (engine === current) listener.onError(message)
+            }
+
+            override fun onEnded() {
+                if (engine === current) {
+                    engine = null
+                    listener.onEnded()
                 }
-                listener.onError(message, canFallback = false)
             }
         }
 }

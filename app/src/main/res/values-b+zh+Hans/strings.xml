@@ -1195,7 +1195,8 @@
   <string name="voice_settings_clear_credentials">清除凭证</string>
   <string name="voice_settings_credentials_cleared">凭证已清除</string>
   <string name="voice_settings_privacy_section">隐私说明</string>
-  <string name="voice_settings_privacy_body">唤醒阶段仅在本地检词。听写窗口才会使用你配置的豆包凭证上传音频。未配置豆包或网络失败时，可降级系统 SpeechRecognizer。</string>
+  <string name="voice_settings_privacy_body">听写仅使用豆包语音，在听写窗口通过你配置的豆包凭证上传音频。未配置凭证或识别失败时，会提示错误并结束本次听写。</string>
+  <string name="voice_doubao_credentials_required">请先在「语音与唤醒词」设置中配置豆包语音凭证</string>
   <string name="voice_mic_permission_denied">未授予麦克风权限</string>
   <string name="permission_microphone_title">麦克风</string>
   <string name="permission_microphone_summary">语音输入与唤醒词常听需要此权限</string>

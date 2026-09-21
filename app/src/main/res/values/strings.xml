@@ -1212,7 +1212,8 @@
   <string name="voice_settings_clear_credentials">Clear credentials</string>
   <string name="voice_settings_credentials_cleared">Credentials cleared</string>
   <string name="voice_settings_privacy_section">Privacy</string>
-  <string name="voice_settings_privacy_body">Wake listening runs on-device. Speech is sent to Doubao only during dictation windows using your own credentials. System SpeechRecognizer is used only as a fallback when Doubao is unavailable.</string>
+  <string name="voice_settings_privacy_body">Dictation uses Doubao speech exclusively. Audio is uploaded during dictation using your own credentials. Missing credentials or recognition failures show an error and end the dictation session.</string>
+  <string name="voice_doubao_credentials_required">Configure Doubao speech credentials in Voice &amp; Wake Word settings first</string>
   <string name="voice_mic_permission_denied">Microphone permission denied</string>
   <string name="permission_microphone_title">Microphone</string>
   <string name="permission_microphone_summary">Required for voice input and wake-word listening</string>

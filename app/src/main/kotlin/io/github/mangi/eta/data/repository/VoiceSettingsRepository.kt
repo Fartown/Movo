@@ -25,7 +25,6 @@ internal object VoiceSettingsRepository {
     private val WAKE_ENABLED = booleanPreferencesKey("wake_enabled")
     private val WAKE_PHRASE = stringPreferencesKey("wake_phrase")
     private val WAKE_SENSITIVITY = stringPreferencesKey("wake_sensitivity")
-    private val PREFER_SYSTEM_FALLBACK = booleanPreferencesKey("prefer_system_asr_fallback")
 
     private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = STORE_NAME)
 
@@ -84,11 +83,6 @@ internal object VoiceSettingsRepository {
         dataStore.edit { it[WAKE_SENSITIVITY] = sensitivity.name }
     }
 
-    suspend fun setPreferSystemAsrFallback(prefer: Boolean) {
-        ensureInitialized()
-        dataStore.edit { it[PREFER_SYSTEM_FALLBACK] = prefer }
-    }
-
     fun loadDoubaoCredentials(): DoubaoSpeechCredentials =
         requireSecretStore().load()
 
@@ -108,7 +102,6 @@ internal object VoiceSettingsRepository {
             sensitivity = this[WAKE_SENSITIVITY]?.let { raw ->
                 runCatching { WakeSensitivity.valueOf(raw) }.getOrNull()
             } ?: WakeSensitivity.Medium,
-            preferSystemAsrFallback = this[PREFER_SYSTEM_FALLBACK] ?: true,
         )
     }
 

@@ -1183,7 +1183,8 @@
   <string name="voice_settings_clear_credentials">清除憑證</string>
   <string name="voice_settings_credentials_cleared">憑證已清除</string>
   <string name="voice_settings_privacy_section">隱私說明</string>
-  <string name="voice_settings_privacy_body">喚醒階段僅在本機檢詞。聽寫視窗才會使用你設定的豆包憑證上傳音訊。未設定豆包或網路失敗時，可降級系統 SpeechRecognizer。</string>
+  <string name="voice_settings_privacy_body">聽寫僅使用豆包語音，在聽寫視窗透過你設定的豆包憑證上傳音訊。未設定憑證或辨識失敗時，會提示錯誤並結束本次聽寫。</string>
+  <string name="voice_doubao_credentials_required">請先在「語音與喚醒詞」設定中配置豆包語音憑證</string>
   <string name="voice_mic_permission_denied">未授予麥克風權限</string>
   <string name="permission_microphone_title">麥克風</string>
   <string name="permission_microphone_summary">語音輸入與喚醒詞常聽需要此權限</string>

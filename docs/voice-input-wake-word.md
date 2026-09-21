@@ -1,6 +1,7 @@
 # Eta 语音输入与自定义唤醒词方案
 
 > 状态：已实现主路径（豆包双向流式 ASR + 唤醒 FGS + 设置/权限；Sherpa 原生待模型/AAR，当前回退本机识别）  
+> **听写策略更新（2026-09-22）**：语音输入仅使用豆包；未配置凭证时提示前往设置，连接或识别失败时提示错误并结束本次听写，不切换系统识别。
 > 调研仓库：当前 cloud checkout（Origin `superchao/genesis`，内容对应 Fartown/Movo / Eta Android 应用）  
 > 版本锚点：`applicationId io.github.mangi.eta`，`versionName 3.0.4`，`minSdk 34` / `targetSdk 36`  
 > 读者：产品负责人（Chao）与后续实现同学  
@@ -19,7 +20,7 @@ Eta **已经具备「系统助理入口 → 浮窗 → Runtime 对话」整条�
 3. **唤醒成功后**进入听写窗口，音频经 **豆包双向流式 ASR WebSocket（BYOK）** 实时上屏，最终文本注入 `submitPrompt` / `sendCurrentMessage`。  
 4. 与「Hey Google 自愈」、小布/小爱接管无关；常听 = 新的 `microphone` 前台服务 + 本地 KWS。
 
-**推荐栈：** 唤醒 = **Sherpa-ONNX KWS（主）** / Porcupine（备）；听写 = **豆包双向流式 WebSocket（主路径，优先优化版 `bigmodel_async`）**；系统 `SpeechRecognizer` 仅作无凭证 / 断网降级。**不再以 Flash/文件识别作主 MVP。**
+**推荐栈：** 唤醒 = **Sherpa-ONNX KWS（主）** / Porcupine（备）；听写仅使用 **豆包双向流式 WebSocket（优先优化版 `bigmodel_async`）**。缺少凭证或识别失败时提示错误并结束听写。**不再以 Flash/文件识别作主 MVP。**
 
 ---
 
@@ -104,7 +105,7 @@ Eta 是面向 Android 14+ 的**第三方系统级 AI 助手**（单模块 `:app`
 
 1. **聊天页**：在 `AgentChatInputBar` 增加麦克风；最终文本调用已有 `onSubmit(text)` → `SubmitMessage` → `sendCurrentMessage`。不必改 Runtime 协议。
 2. **助理浮窗**：在 `EtaVoicePanel` 用已有文案（「点击说话」「正在聆听…」）；识别完成调用 `EtaAssistantOverlayService.submitPrompt(transcript)`（或先写入输入框再确认）。
-3. **ASR 引擎封装**：新建例如 `agent/voice/asr/EtaAsrSession.kt`，内部优先调用 `SystemSpeechRecognizer.create()`；统一回调 `onPartial` / `onFinal` / `onError`。
+3. **ASR 引擎封装**：`agent/voice/asr/EtaAsrSessionFactory.kt` 仅创建豆包听写会话；统一回调 `onPartial` / `onFinal` / `onError`，失败后结束会话。
 4. **权限**：首次使用前运行时申请 `RECORD_AUDIO`；纳入 Permission Health 列表（当前未列麦克风）。
 
 **不包含（本能力可后置）：** TTS 播报回复、打断说话、多轮自动听。
@@ -161,8 +162,8 @@ Eta 是面向 Android 14+ 的**第三方系统级 AI 助手**（单模块 `:app`
 
 | 方案 | 延迟 | 隐私 | 中文准确率 | 离线 | APK 增量 | 费用 | 商店/政策 | 对本项目 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **Android `SpeechRecognizer`（系统/厂商）** | 低–中 | 取决于厂商实现（常上传） | 国产机通常好 | 部分机型 on-device | ≈0 | 免费 | 友好 | **MVP 首选**；已有 `SystemSpeechRecognizer` |
-| **On-device SpeechRecognizer** | 低 | 较好 | 机型差异大；部分海外 ROM 中文弱 | 是 | ≈0 | 免费 | 友好 | 作 fallback |
+| **Android `SpeechRecognizer`（系统/厂商）** | 低–中 | 取决于厂商实现（常上传） | 国产机通常好 | 部分机型 on-device | ≈0 | 免费 | 友好 | 已调研；不用于本方案听写 |
+| **On-device SpeechRecognizer** | 低 | 较好 | 机型差异大；部分海外 ROM 中文弱 | 是 | ≈0 | 免费 | 友好 | 已调研；不用于本方案听写 |
 | **ML Kit Speech** | — | — | — | — | — | — | — | **不推荐作为主力**（能力/语言覆盖不如系统 ASR + 云厂商） |
 | **Vosk** | 低 | 优（本地） | 中文模型可用，大指令弱于云 | 是 | 中–大（模型数十 MB+） | 免费 | 友好 | 可选「纯离线听写」档 |
 | **Sherpa-ONNX ASR** | 低 | 优 | 中文流式模型成熟 | 是 | 中–大 | 免费 | 友好 | 与 KWS 同栈时可复用；工程量中 |
@@ -184,10 +185,10 @@ Eta 是面向 Android 14+ 的**第三方系统级 AI 助手**（单模块 `:app`
 
 ### 3.3 维度小结（给决策用）
 
-- **要最快上线听写**：系统 `SpeechRecognizer`。  
+- **听写选型已确定**：豆包双向流式 WebSocket。
 - **要「xx」可改、中文好、可离线、无 AccessKey**：Sherpa-ONNX KWS。  
 - **要最少踩坑、体积最小、接受商业授权**：Porcupine。  
-- **要中文听写天花板**：云端讯飞/百炼/阿里 ASR 作**可选增强**，默认仍系统 ASR。  
+- **其他云端 ASR**：仅作为调研对比，不接入本方案听写。
 - **不要**把 Whisper 端侧当常听；**不要**用 Google Hotword Hook 冒充 Eta 唤醒。
 
 ---
@@ -201,7 +202,7 @@ Eta 是面向 Android 14+ 的**第三方系统级 AI 助手**（单模块 `:app`
 | 常听起点 | **App 打开并取得麦权后**启动唤醒监听；通知栏可停；设置可关 | `EtaWakeWordService` + `FOREGROUND_SERVICE_MICROPHONE` |
 | 自定义热词 | 本地 KWS；**默认词 + 设置可改** | **Sherpa-ONNX KWS（主，改 keywords 即可）** / Porcupine（备，改词需重新导出 `.ppn`） |
 | ASR | **豆包双向流式 WebSocket BYOK**；仅听写窗上传 | `DoubaoBidirectionalAsrEngine`（官方 SAUC 协议） |
-| 系统 ASR | 无 Key / 网络失败时的兜底 | `SystemSpeechRecognizer`（降级，非主路径） |
+| 听写失败处理 | 无 Key 提示配置；连接/识别失败提示错误并结束 | 仅使用豆包，不切换识别服务 |
 | 系统助理入口 | 电源键 / VIS **保留**，与常听热词并行 | 现有 VIS / Hook 不动 |
 | TTS | 未拍板，本方案仍不排期 | — |
 
@@ -214,7 +215,6 @@ io.github.mangi.eta.agent.voice/
   asr/
     EtaAsrEngine
     DoubaoBidirectionalAsrEngine  // 主：官方双向流式 WebSocket（SAUC）
-    SystemAsrEngine               // 降级
   wake/
     WakeWordEngine
     SherpaWakeEngine
@@ -290,7 +290,7 @@ MainActivity / EtaApp 进入前台（或用户开启「语音唤醒」）
 
 **辅路径：聊天栏 / 浮窗手动麦**（不经唤醒词，直接开同一套双向流式 ASR）。
 
-**降级：** 未配置豆包凭证 → 引导去设置；可选回落系统 `SpeechRecognizer`。
+**失败处理：** 未配置豆包凭证 → 引导去设置；连接或识别失败 → 展示错误并结束本次听写。所有听写入口仅使用豆包。
 
 ### 4.4 代码钩子（实现时直接改这些文件）
 
@@ -304,7 +304,6 @@ MainActivity / EtaApp 进入前台（或用户开启「语音唤醒」）
 | P0 | `ui/app/AgentAppState.kt` + Permission Health | 麦克风 +「语音唤醒运行中」状态 |
 | P0 | `agent/voice/EtaAssistantOverlayService.kt` / `EtaVoicePanel.kt` | 唤醒后自动听写 → `submitPrompt` |
 | P1 | `ui/components/AgentChatInputBar.kt` | 手动麦克风（直连豆包 ASR） |
-| P1 | `agent/voice/SystemSpeechRecognizer.kt` | 降级路径 |
 | — | `hook/system/HotwordSelfHealHooks.kt` | **不要**接业务 |
 
 ### 4.5 权限与前台服务（常听为默认目标）
@@ -358,7 +357,7 @@ MainActivity / EtaApp 进入前台（或用户开启「语音唤醒」）
 - 设置页：豆包凭证（App-Key/Access-Key 或 Api-Key）+ Resource-Id + 连通测试  
 - `DoubaoBidirectionalAsrEngine`：**直接按官方 WebSocket 协议实现**（默认 `bigmodel_async`）  
 - 浮窗/聊天栏手动麦克风 + partial 上屏  
-- 权限健康、错误态（无凭证 / 鉴权失败 / 可降级系统 ASR）  
+- 权限健康、错误态（无凭证 / 鉴权失败 / 网络失败；提示错误并结束听写）
 - 最终文本进 `submitPrompt` / `sendCurrentMessage`
 
 | 项 | 评估 |
@@ -408,6 +407,7 @@ MainActivity / EtaApp 进入前台（或用户开启「语音唤醒」）
 2. **ASR：** 豆包语音 **双向流式 WebSocket BYOK**（指定官方文档）。  
 3. **流式端点默认：** `bigmodel_async`。  
 4. **唤醒词：** 默认 **「小王同学」**，用户可设置/修改。
+5. **听写仅使用豆包（2026-09-22）：** 无凭证或失败时提示错误，不切换系统识别。
 
 ### 6.2 仍需拍板
 
@@ -447,7 +447,7 @@ MainActivity / EtaApp 进入前台（或用户开启「语音唤醒」）
 | 聊天/浮窗语音输入 | 无 | 手动麦 → 豆包 WebSocket 流式 | 同左 + 唤醒后自动听 |
 | App 打开后常听 | 无 | 无 | **有（本地 KWS + FGS）** |
 | 唤醒词 | 无 | 无 | **默认「小王同学」+ 用户可改** |
-| ASR | 无 | **双向流式 WebSocket BYOK** | 同左；系统 ASR 降级 |
+| ASR | 无 | **双向流式 WebSocket BYOK** | 同左；失败提示错误并结束听写 |
 | 系统助理入口 | 有 | 保持 | 保持 |
 | TTS | 无 | 无 | 可选（未拍板） |
 

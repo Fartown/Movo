@@ -15,6 +15,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
+import android.widget.Toast
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
 import androidx.compose.runtime.Composable
@@ -300,10 +301,11 @@ internal class EtaAssistantOverlayService : Service(), LifecycleOwner, SavedStat
                     EtaWakeWordService.resumeWake(this@EtaAssistantOverlayService)
                 }
 
-                override fun onError(message: String, canFallback: Boolean) {
+                override fun onError(message: String) {
                     isListening = false
                     dictationController = null
                     AndroidAgentLogger.warn("Overlay dictation failed")
+                    Toast.makeText(this@EtaAssistantOverlayService, message, Toast.LENGTH_LONG).show()
                     showKeyboard()
                     EtaWakeWordService.resumeWake(this@EtaAssistantOverlayService)
                 }

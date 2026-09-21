@@ -1,7 +1,7 @@
 package io.github.mangi.eta.agent.voice.asr
 
 /**
- * Callback surface shared by Doubao streaming ASR and system SpeechRecognizer fallback.
+ * Callback surface for dictation sessions.
  */
 internal interface EtaAsrEngine {
     fun start(listener: Listener)
@@ -12,12 +12,7 @@ internal interface EtaAsrEngine {
     interface Listener {
         fun onPartial(text: String)
         fun onFinal(text: String)
-        fun onError(message: String, canFallback: Boolean = false)
+        fun onError(message: String)
         fun onEnded()
     }
-}
-
-internal enum class AsrBackend {
-    Doubao,
-    System,
 }

@@ -1189,9 +1189,10 @@ private fun startChatDictation(
                 if (text.isNotBlank()) onSubmit(text)
             }
 
-            override fun onError(message: String, canFallback: Boolean) {
+            override fun onError(message: String) {
                 setListening(false)
                 setTranscript(null)
+                android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
                 io.github.mangi.eta.agent.voice.EtaWakeWordService.resumeWake(context)
             }
 

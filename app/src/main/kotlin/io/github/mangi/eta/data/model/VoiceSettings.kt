@@ -47,7 +47,6 @@ internal data class VoiceWakeSettings(
     val wakeEnabled: Boolean = false,
     val wakePhrase: String = DEFAULT_WAKE_PHRASE,
     val sensitivity: WakeSensitivity = WakeSensitivity.Medium,
-    val preferSystemAsrFallback: Boolean = true,
 ) {
     fun effectivePhrase(): String = WakePhraseRules.normalizeOrDefault(wakePhrase)
 
