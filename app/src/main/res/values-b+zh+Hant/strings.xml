@@ -1063,7 +1063,7 @@
   <string name="context_usage_previous_response">%1$s\n上輪實測</string>
   <string name="context_usage_estimated">%1$s\n壓縮後估算</string>
   <string name="context_compaction">上下文壓縮</string>
-  <string name="context_compact_action">壓縮上下文</string>
+  <string name="context_compact_action">壓縮</string>
   <string name="context_usage_description">內容用量：%1$s</string>
   <string name="memory_budget_summary">每輪最多注入 %1$s 個字元，詳細內容由模型視需要讀取</string>
   <string name="memory_over_limit">已超過 1 MiB 上限，請刪減內容</string>
@@ -1152,4 +1152,12 @@
   <string name="data_backup_imported">已匯入 %1$d 個對話與 %2$d 個模型供應商</string>
   <string name="data_backup_failed">備份操作失敗</string>
   <string name="data_backup_file_open_failed">無法開啟所選檔案</string>
+  <string name="drawer_settings">設定</string>
+  <string name="drawer_models">模型</string>
+  <string name="drawer_tools">工具</string>
+  <string name="drawer_permissions">權限</string>
+  <string name="drawer_characters">角色</string>
+  <string name="overlay_follow_up_hint">繼續對話…</string>
+  <string name="overlay_result_expand">展開</string>
+  <string name="overlay_result_collapse">收起</string>
 </resources>

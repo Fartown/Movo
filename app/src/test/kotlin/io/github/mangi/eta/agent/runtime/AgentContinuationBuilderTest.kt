@@ -1,12 +1,58 @@
 package io.github.mangi.eta.agent.runtime
 
 import io.github.mangi.eta.agent.model.AgentModelClient
+import io.github.mangi.eta.agent.model.AgentContextSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentContinuationBuilderTest {
+    @Test
+    fun externalAssistantCanContinueWithHistoryAndStableModelSession() {
+        val request = AgentRuntimeWire.RunRequest(
+            runId = "vendor-run", prompt = "查一下", config = modelConfig(), images = emptyList(),
+            handoff = AgentRuntimeWire.EntryHandoff("vendor-run", "breeno", "vendor-payload"),
+        )
+        val answer = AgentModelClient.ConversationMessage(role = "assistant", content = "找到三条记录")
+        val next = AgentContinuationBuilder.build(request,
+            AgentModelClient.ModelResponse.Text("找到三条记录", transcript = listOf(answer)), "展开第二条", "next")
+        assertEquals("vendor-run", next.effectiveModelSessionId)
+        assertEquals(listOf("查一下", "找到三条记录"), next.history.map { it.content })
+        assertEquals("展开第二条", next.prompt)
+        assertEquals("breeno", next.handoff?.source)
+        assertEquals("next", next.handoff?.id)
+    }
+
+    @Test
+    fun failedTurnKeepsPostCheckpointResultsAndClosesUnresolvedCallsWithoutReplaying() {
+        val request = AgentRuntimeWire.RunRequest("old", "处理文件", modelConfig(), emptyList())
+        val call = AgentModelClient.ConversationMessage(role = "assistant",
+            toolCallsJson = """[{"id":"done","type":"function","function":{"name":"read_file","arguments":"{}"}},{"id":"unknown","type":"function","function":{"name":"write_file","arguments":"{}"}}]""")
+        val result = AgentModelClient.ConversationMessage(role = "tool", toolCallId = "done", content = "已读取")
+        val snapshot = AgentContextSnapshot(operationId = "old", messages = listOf(
+            AgentModelClient.ConversationMessage(role = "user", content = "历史摘要")), consumedTranscriptMessages = 1)
+        val response = AgentModelClient.ModelResponse.Text("", transcript = listOf(
+            AgentModelClient.ConversationMessage(role = "assistant", content = "已包含在摘要中"), call, result),
+            contextSnapshot = snapshot)
+        val next = AgentContinuationBuilder.build(request, response, "先确认文件状态", "next")
+        assertEquals(listOf("user", "assistant", "tool", "tool"), next.history.map { it.role })
+        assertEquals("历史摘要", next.history.first().content)
+        assertEquals("已读取", next.history[2].content)
+        assertEquals("unknown", next.history.last().toolCallId)
+        assertTrue(next.history.last().content.contains("TOOL_INTERRUPTED"))
+    }
+
+    @Test
+    fun snapshotThatAlreadyCoversTranscriptDoesNotDuplicateMessages() {
+        val request = AgentRuntimeWire.RunRequest("old", "查询", modelConfig(), emptyList())
+        val answer = AgentModelClient.ConversationMessage(role = "assistant", content = "结果")
+        val snapshot = AgentContextSnapshot(operationId = "old", messages = listOf(answer), consumedTranscriptMessages = 1)
+        val next = AgentContinuationBuilder.build(request,
+            AgentModelClient.ModelResponse.Text("结果", transcript = listOf(answer), contextSnapshot = snapshot), "继续")
+        assertEquals(listOf(answer), next.history)
+    }
+
     @Test
     fun rewriteAndCompactionCannotBecomeAnOrdinaryToolEnabledContinuation() {
         listOf(AgentRuntimeWire.OP_REWRITE_REPLY, AgentRuntimeWire.OP_COMPACT).forEach { operation ->

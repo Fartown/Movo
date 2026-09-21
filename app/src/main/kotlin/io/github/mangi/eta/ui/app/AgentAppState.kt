@@ -621,9 +621,8 @@ internal class AgentAppState(
 
     private fun startReattachedRun(checkpoint: AgentRunCheckpointStore.Checkpoint) {
         val runId = checkpoint.runId
-        val conversationId = AgentUiHandoffPayload
-            .from(checkpoint.handoff.payload)
-            .conversationId
+        val handoff = AgentUiHandoffPayload.from(checkpoint.handoff.payload)
+        val conversationId = handoff.conversationId
         val existing = conversationsById[conversationId] ?: return
         if (currentRunId != null || AgentRuntimeHistoryReducer.wasApplied(existing, runId)) return
 
@@ -631,7 +630,12 @@ internal class AgentAppState(
         currentRunId = runId
         val restored = if (checkpoint.operation == AgentRuntimeWire.OP_REWRITE_REPLY) {
             RoleplayConversationReducer.restorePendingRewrite(existing, runId, checkpoint.rewriteTargetMessageId)
-        } else existing
+        } else existing.copy(messages = AgentPendingResultRecovery.restoreHandoffMessages(
+            runId = runId,
+            promptSupplement = handoff.promptSupplement,
+            supplements = handoff.supplements,
+            messages = existing.messages,
+        ))
         updateConversation(conversationId, restored.copy(isStreaming = true, isCompacting = checkpoint.operation == AgentRuntimeWire.OP_COMPACT))
         refreshConversationSummaries()
         currentRunJob = scope.launch(Dispatchers.IO) {
@@ -647,6 +651,7 @@ internal class AgentAppState(
                         runId = runId,
                         result = outcome.result,
                         acknowledgeRuntimeResult = true,
+                        recoveredHandoff = handoff,
                     )
                 }
                 AgentRuntimeClient.AttachOutcome.NotActive -> {
@@ -2175,6 +2180,7 @@ internal class AgentAppState(
         runId: String,
         result: AgentRuntimeWire.RunResult,
         acknowledgeRuntimeResult: Boolean = false,
+        recoveredHandoff: AgentUiHandoffPayload? = null,
     ) {
         flushPendingRunDelta(runId)
         val rewriting = result.operation == AgentRuntimeWire.OP_REWRITE_REPLY || isReplyRewrite(runId)
@@ -2202,7 +2208,20 @@ internal class AgentAppState(
                 runMessageProjector.finalizeRun(runId, messages),
                 if (result.ok) "上下文压缩完成" else result.error ?: "上下文压缩已停止")
         }
-        if (result.contextSnapshotRef.isBlank()) {
+        if (recoveredHandoff != null && result.contextSnapshotRef.isBlank()) {
+            // 在途重连与终态 outbox 恢复必须合并同一份追问及 history，保存后才能确认消费。
+            val conversationId = conversationIdForRun(runId)
+            val state = conversationsById[conversationId]
+            if (conversationId != null && state != null) {
+                updateConversation(conversationId, AgentPendingResultRecovery.applyHandoffHistory(
+                    state = state,
+                    runId = runId,
+                    result = result,
+                    promptSupplement = recoveredHandoff.promptSupplement,
+                    supplements = recoveredHandoff.supplements,
+                ).state)
+            }
+        } else if (result.contextSnapshotRef.isBlank()) {
             applyConversationHistoryResult(runId, result.transcript, result.contextSnapshot, !result.ok || result.contextSnapshot != null)
         }
         when {

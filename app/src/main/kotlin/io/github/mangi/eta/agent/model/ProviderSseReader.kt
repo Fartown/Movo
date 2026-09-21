@@ -9,6 +9,7 @@ import java.io.InputStreamReader
 internal fun readProviderSse(
     stream: InputStream,
     runController: AgentRunController,
+    trace: ModelRequestTrace? = null,
     onEvent: (event: String, data: String) -> Boolean,
 ) {
     var event = ""
@@ -21,6 +22,7 @@ internal fun readProviderSse(
         dataLines.clear()
         if (payload.isBlank()) return true
         runController.throwIfCancelled()
+        trace?.sseFrame(name, payload.trim() == "[DONE]")
         return onEvent(name, payload)
     }
 
@@ -29,6 +31,7 @@ internal fun readProviderSse(
             runController.throwIfCancelled()
             val line = reader.readLine()
             if (line == null) {
+                trace?.sseEof()
                 dispatch()
                 break
             }

@@ -127,6 +127,7 @@ import com.mikepenz.markdown.compose.elements.MarkdownTableBasicText
 import com.mikepenz.markdown.compose.elements.MarkdownText
 import com.mikepenz.markdown.compose.elements.listDepth
 import com.mikepenz.markdown.m3.Markdown
+import io.github.mangi.eta.ui.markdown.rememberCitationMarkdownAnnotator
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.MarkdownState
@@ -939,6 +940,7 @@ private fun StableMarkdown(
     val components = remember { chatMarkdownComponents() }
     Markdown(
         state = state,
+        annotator = rememberCitationMarkdownAnnotator(),
         colors = chatMarkdownColors(tone),
         typography = chatMarkdownTypography(tone),
         padding = chatMarkdownPadding(),
@@ -1056,6 +1058,7 @@ private fun StreamingMarkdown(
 
     snapshot?.let { parsed ->
         Markdown(
+            annotator = rememberCitationMarkdownAnnotator(),
             state = parsed.state,
             colors = chatMarkdownColors(tone),
             typography = chatMarkdownTypography(tone),
@@ -1281,6 +1284,7 @@ private fun chatMarkdownTypography(tone: ChatMarkdownTone) = markdownTypography(
         style = SpanStyle(
             color = MiuixTheme.colorScheme.primary,
             fontWeight = FontWeight.Medium,
+            textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
         ),
     ),
 )

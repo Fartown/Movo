@@ -39,7 +39,7 @@ class ProviderRepositoryTest {
 
     @Test
     fun builtInProvidersRoundTripThroughRoomWithModels() = runBlocking {
-        ProviderRepository.ensureBuiltInsMerged()
+        ProviderRepository.ensureBuiltInsMerged(initialProvider = null)
 
         val providers = ProviderRepository.allProviders().associateBy { it.id }
 
@@ -91,7 +91,7 @@ class ProviderRepositoryTest {
 
     @Test
     fun providerAndModelCustomHeadersSurviveRoomRoundTrip() = runBlocking {
-        ProviderRepository.ensureBuiltInsMerged()
+        ProviderRepository.ensureBuiltInsMerged(initialProvider = null)
         val provider = ProviderRepository.providerById(BuiltinProviders.OPENAI_ID)!!
         val updated = provider.copyForTest(
             customHeaders = listOf(CustomHeader("x-provider", "1")),
@@ -120,7 +120,7 @@ class ProviderRepositoryTest {
 
     @Test
     fun selectedRuntimeConfigUsesUpdatedProviderApiKey() = runBlocking {
-        ProviderRepository.ensureBuiltInsMerged()
+        ProviderRepository.ensureBuiltInsMerged(initialProvider = null)
         val provider = (ProviderRepository.providerById(BuiltinProviders.OPENAI_ID) as OpenAiCompatibleProviderSetting)
             .copy(apiKey = "sk-test-key")
 
@@ -135,7 +135,7 @@ class ProviderRepositoryTest {
 
     @Test
     fun switchingProvidersRestoresEachProvidersSelectedModel() = runBlocking {
-        ProviderRepository.ensureBuiltInsMerged()
+        ProviderRepository.ensureBuiltInsMerged(initialProvider = null)
         val openAi = ProviderRepository.providerById(BuiltinProviders.OPENAI_ID)!!
         val anthropic = ProviderRepository.providerById(BuiltinProviders.ANTHROPIC_ID)!!
         val openAiModel = openAi.models[1]
@@ -157,7 +157,7 @@ class ProviderRepositoryTest {
 
     @Test
     fun repairSelectionMigratesLegacyActiveModelToProviderMemory() = runBlocking {
-        ProviderRepository.ensureBuiltInsMerged()
+        ProviderRepository.ensureBuiltInsMerged(initialProvider = null)
         val provider = ProviderRepository.providerById(BuiltinProviders.OPENAI_ID)!!
         val model = provider.models[1]
         SettingsDataStore.clearSelectedModelIdForProvider(provider.id)

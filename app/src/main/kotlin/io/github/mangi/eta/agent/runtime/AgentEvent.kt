@@ -61,7 +61,8 @@ internal sealed interface AgentEvent {
         val reasonCode: String,
     ) : AgentEvent {
         val displayMessage: String
-            get() = "模型请求暂时中断，${delayMs / 1000} 秒后重试（$attempt/$maxAttempts）；此前工具结果已保留。"
+            get() = "模型请求暂时中断，${delayMs / 1000} 秒后重试（$attempt/$maxAttempts）；此前工具结果已保留。" +
+                "\n原因：${modelFailureHint(reasonCode)}（${reasonCode.toSafeLogToken()}）。可在设置 → 运行日志查看详情。"
 
         override fun toLogLine(): String =
             "model_retry_scheduled round=$round, attempt=$attempt, delay_ms=$delayMs, code=${reasonCode.toSafeLogToken()}"
@@ -218,6 +219,16 @@ internal sealed interface AgentEvent {
         override fun toLogLine(): String =
             "run_failed reason_chars=${reason.length}"
     }
+}
+
+internal fun modelFailureHint(code: String): String = when {
+    code == "MODEL_TIMEOUT" -> "等待模型数据超时"
+    code == "MODEL_CONNECTION_FAILED" -> "网络连接中断"
+    code == "STREAM_INCOMPLETE" -> "响应流缺少结束事件"
+    code == "PROVIDER_STREAM_ERROR" -> "服务商返回流错误"
+    code.contains("429") -> "服务商限流"
+    code.startsWith("HTTP_") -> "服务商 HTTP 错误"
+    else -> "模型请求失败"
 }
 
 private const val MAX_LOGGED_TOOL_NAMES = 8

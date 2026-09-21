@@ -3,6 +3,7 @@ package io.github.mangi.eta.agent.runtime
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import android.app.Service
+import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
@@ -21,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -39,6 +41,7 @@ import io.github.mangi.eta.agent.overlay.AgentOverlayBubble
 import io.github.mangi.eta.agent.overlay.AgentOverlayGlow
 import io.github.mangi.eta.agent.overlay.AgentOverlayOrb
 import io.github.mangi.eta.agent.overlay.AgentResultCard
+import io.github.mangi.eta.agent.overlay.AgentResultSheetSizing
 import io.github.mangi.eta.agent.overlay.AgentOverlayPhase
 import io.github.mangi.eta.agent.overlay.AgentOverlayState
 import io.github.mangi.eta.agent.overlay.AgentOverlayStatus
@@ -49,6 +52,7 @@ import io.github.mangi.eta.core.AndroidAgentLogger
 import io.github.mangi.eta.core.ModuleConfig
 import io.github.mangi.eta.core.safeLogType
 import io.github.mangi.eta.data.repository.RuntimeConfigRepository
+import io.github.mangi.eta.ui.markdown.InAppBrowserUriHandler
 import kotlin.concurrent.thread
 import kotlinx.coroutines.runBlocking
 import top.yukonga.miuix.kmp.squircle.LocalSquircleEnabled
@@ -94,6 +98,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private var orbParams: WindowManager.LayoutParams? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var resultCardParams: WindowManager.LayoutParams? = null
+    private var resultResizeAnimator: ValueAnimator? = null
+    private val resultCardExpanded = mutableStateOf(false)
+    private var isResultConversation = false
 
     private val state = mutableStateOf(AgentOverlayState.Initial)
     private val collapsed = mutableStateOf(true)
@@ -126,6 +133,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        io.github.mangi.eta.diagnostics.MemoryDiagnostics.record("lifecycle", "runtime.unbound",
+            fields = mapOf("run_active" to (activeSession?.isTerminal == false)))
         if (activeSession?.isTerminal == false) {
             AndroidAgentLogger.debug {
                 "Agent runtime client unbound while run is active; detached run continues"
@@ -135,6 +144,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     override fun onDestroy() {
+        io.github.mangi.eta.diagnostics.MemoryDiagnostics.record("lifecycle", "runtime.destroyed",
+            fields = mapOf("run_active" to (activeSession?.isTerminal == false)))
+        resultResizeAnimator?.cancel()
         startRequestGeneration++
         pendingStartRequest?.let { pending ->
             pending.incoming.close()
@@ -315,7 +327,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun startRun(
         request: AgentRuntimeWire.RunRequest,
         replyTo: Messenger? = null,
+        fromResultCard: Boolean = false,
     ) {
+        removeResultCard()
+        isResultConversation = fromResultCard
+        if (!fromResultCard) resultCardExpanded.value = false
         activeSession?.controller?.cancel()
         val session = AgentRuntimeSession(
             runId = request.runId,
@@ -358,6 +374,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             }
         }
 
+        if (fromResultCard) ensureOverlayVisible()
         thread(name = "agent-runtime") {
             try {
                 executeRun(session, request)
@@ -385,14 +402,14 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             session = session,
             result = outcome.result,
             entrySurfaceGuard = outcome.entrySurfaceGuard,
-            completedContext = outcome.response?.let { completedResponse ->
-                outcome.completedRequest?.let { completedRequest ->
-                    CompletedRunContext(
-                        request = completedRequest,
-                        response = completedResponse,
-                    )
-                }
-            },
+            completedContext = CompletedRunContext(
+                request = outcome.completedRequest ?: request.withActiveSupplements(),
+                response = outcome.response ?: AgentModelClient.ModelResponse.Text(
+                    content = outcome.result.content,
+                    transcript = outcome.result.transcript.ifEmpty { session.transcript },
+                    contextSnapshot = outcome.result.contextSnapshot ?: session.contextSnapshot,
+                ),
+            ),
         )
     }
 
@@ -771,18 +788,24 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             }
         }
 
-        val completed = lastCompletedRunContext ?: return
-        if (completed.request.operation != AgentRuntimeWire.OP_CHAT ||
-            completed.request.handoff?.source != AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE) {
+        continueFromResult(supplementText)
+    }
+
+    private fun continueFromResult(text: String): Boolean {
+        val supplementText = text.trim()
+        if (supplementText.isEmpty() || activeSession != null || pendingStartRequest != null) return false
+        val completed = lastCompletedRunContext ?: return false
+        if (completed.request.operation != AgentRuntimeWire.OP_CHAT) {
             state.value = state.value.copy(status = AgentOverlayStatus.ContinuationUnavailable)
-            return
+            return false
         }
         val continuationRequest = AgentContinuationBuilder.build(
             request = completed.request,
             response = completed.response,
             supplement = supplementText,
         )
-        startRun(continuationRequest)
+        startRun(continuationRequest, fromResultCard = true)
+        return true
     }
 
     private fun recordSupplementEvent(text: String): AgentEvent.UserSupplementReceived {
@@ -888,6 +911,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         val card = createOverlayComposeView {
             AgentResultCard(
                 state = state.value,
+                expanded = resultCardExpanded.value,
+                canContinue = lastCompletedRunContext?.request?.operation == AgentRuntimeWire.OP_CHAT,
+                onDrag = ::dragResultCard,
+                onDragStopped = ::settleResultCard,
+                onExpandedChange = ::expandResultCard,
+                onContinue = ::continueFromResult,
                 onClose = ::dismissAndStop,
             )
         }
@@ -910,7 +939,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 MiuixTheme(colors = if (isNightMode()) darkColorScheme() else lightColorScheme()) {
                     // 部分 ROM 会给 TYPE_ACCESSIBILITY_OVERLAY 分配软件 Canvas；Miuix 的
                     // RuntimeShader 只检查系统版本，因此系统浮层统一使用其普通圆角回退。
-                    CompositionLocalProvider(LocalSquircleEnabled provides false) {
+                    CompositionLocalProvider(
+                        LocalSquircleEnabled provides false,
+                        LocalUriHandler provides InAppBrowserUriHandler(this@AgentRuntimeService) {
+                            if (resultCardView != null) dismissAndStop()
+                        },
+                    ) {
                         content()
                     }
                 }
@@ -969,16 +1003,15 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             resultCardWindowHeightPx(),
             overlayType(),
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
-            // 半屏底部居中，窗口外触摸穿透
+            // 底部面板可获得输入焦点；不自动聚焦输入框，点击后才弹键盘。
             gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
             x = 0
             y = 0
-            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
 
     private fun overlayType(): Int =
@@ -1038,8 +1071,54 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
     }
 
+    private fun resultScreenHeightPx(): Int = windowManager?.currentWindowMetrics?.bounds?.height()
+        ?: resources.displayMetrics.heightPixels
+
     private fun resultCardWindowHeightPx(): Int =
-        (resources.displayMetrics.heightPixels * RESULT_CARD_HEIGHT_RATIO).toInt()
+        AgentResultSheetSizing.height(resultScreenHeightPx(), resultCardExpanded.value)
+
+    private fun updateResultCardHeight(height: Int) {
+        val view = resultCardView ?: return
+        val lp = resultCardParams ?: return
+        if (lp.height == height) return
+        lp.height = height
+        runCatching { windowManager?.updateViewLayout(view, lp) }.onFailure { throwable ->
+            AndroidAgentLogger.warnThrottled("runtime_result_resize_failed") {
+                "Agent result resize failed: type=${throwable.safeLogType()}"
+            }
+        }
+    }
+
+    private fun dragResultCard(deltaY: Float) {
+        resultResizeAnimator?.cancel()
+        val height = resultCardParams?.height ?: return
+        updateResultCardHeight(AgentResultSheetSizing.drag(height, deltaY, resultScreenHeightPx()))
+    }
+
+    private fun settleResultCard(velocityY: Float) {
+        val height = resultCardParams?.height ?: return
+        expandResultCard(AgentResultSheetSizing.settleExpanded(height, resultScreenHeightPx(), velocityY, dpToPx(600).toFloat()))
+    }
+
+    private fun expandResultCard(expanded: Boolean) {
+        resultResizeAnimator?.cancel()
+        resultCardExpanded.value = expanded
+        val from = resultCardParams?.height ?: return
+        val target = resultCardWindowHeightPx()
+        resultResizeAnimator = ValueAnimator.ofInt(from, target).apply {
+            duration = 180
+            addUpdateListener { updateResultCardHeight(it.animatedValue as Int) }
+            start()
+        }
+    }
+
+    private fun removeResultCard() {
+        resultResizeAnimator?.cancel()
+        resultResizeAnimator = null
+        resultCardView?.let { view -> runCatching { windowManager?.removeView(view) } }
+        resultCardView = null
+        resultCardParams = null
+    }
 
     private fun dpToPx(dp: Int): Int =
         (dp * resources.displayMetrics.density).toInt()
@@ -1047,8 +1126,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun enterFinalState(finalState: AgentOverlayState, keepVisible: Boolean = false) {
         state.value = finalState
 
-        if (hasExecutedForegroundTool) {
-            // 撤掉光球和小气泡，改显半屏结果卡片，不自动关闭，用户手动关闭
+        if (hasExecutedForegroundTool || isResultConversation) {
+            // 续聊即使只产生文字回答，也交付回同一结果面板。
             collapsed.value = true
             removeAmbientWindows()
             windowManager?.let(::showResultCard)
@@ -1071,6 +1150,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     private fun dismissAndStop() {
+        resultResizeAnimator?.cancel()
         resultCardView?.let { view -> runCatching { windowManager?.removeView(view) } }
         bubbleView?.let { view -> runCatching { windowManager?.removeView(view) } }
         orbView?.let { view -> runCatching { windowManager?.removeView(view) } }
@@ -1123,7 +1203,6 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         const val ACTION_KEEP_ALIVE = "io.github.mangi.eta.agent.runtime.KEEP_ALIVE"
         const val HIDE_DELAY_MS = 2_500L
         const val RESULT_REVIEW_DELAY_MS = 120_000L
-        const val RESULT_CARD_HEIGHT_RATIO = 0.5f
         const val MAX_ARCHIVED_USER_IMAGE_PREVIEWS = 4
     }
 

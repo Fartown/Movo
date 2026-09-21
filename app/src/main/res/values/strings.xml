@@ -1179,6 +1179,14 @@
   <string name="data_backup_failed">Backup operation failed</string>
   <string name="data_backup_file_open_failed">Unable to open the selected file</string>
   <string name="context_compaction">Context compaction</string>
-  <string name="context_compact_action">Compact context</string>
+  <string name="context_compact_action">Compact</string>
   <string name="context_usage_estimated">%1$s\nEstimated after compaction</string>
+  <string name="drawer_settings">Settings</string>
+  <string name="drawer_models">Models</string>
+  <string name="drawer_tools">Tools</string>
+  <string name="drawer_permissions">Access</string>
+  <string name="drawer_characters">Roles</string>
+  <string name="overlay_follow_up_hint">Continue chatting…</string>
+  <string name="overlay_result_expand">Expand</string>
+  <string name="overlay_result_collapse">Collapse</string>
 </resources>

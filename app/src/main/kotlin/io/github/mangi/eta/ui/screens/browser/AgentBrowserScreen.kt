@@ -105,6 +105,8 @@ import top.yukonga.miuix.kmp.window.WindowDialog
 @Composable
 internal fun AgentBrowserScreen(
     modifier: Modifier = Modifier,
+    initialUrl: String? = null,
+    onInitialUrlConsumed: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val keyboard = LocalSoftwareKeyboardController.current
@@ -213,6 +215,8 @@ internal fun AgentBrowserScreen(
 
         BrowserWindow(
             snapshot = snapshot,
+            initialUrl = initialUrl,
+            onInitialUrlConsumed = onInitialUrlConsumed,
             actionPending = actionPending,
             onBack = { launchBrowserAction { AgentBrowserSession.goBackFromUser() } },
             onForward = { launchBrowserAction { AgentBrowserSession.goForwardFromUser() } },
@@ -272,6 +276,8 @@ internal fun AgentBrowserScreen(
 @Composable
 private fun BrowserWindow(
     snapshot: BrowserSessionSnapshot,
+    initialUrl: String?,
+    onInitialUrlConsumed: () -> Unit,
     actionPending: Boolean,
     onBack: () -> Unit,
     onForward: () -> Unit,
@@ -316,7 +322,11 @@ private fun BrowserWindow(
                     )
                 ),
         ) {
-            BrowserWebViewHost(modifier = Modifier.fillMaxSize())
+            BrowserWebViewHost(
+                modifier = Modifier.fillMaxSize(),
+                initialUrl = initialUrl,
+                onInitialUrlConsumed = onInitialUrlConsumed,
+            )
 
             BrowserLoadingProgress(snapshot)
 
@@ -686,8 +696,13 @@ private fun BrowserFailedState(
 }
 
 @Composable
-private fun BrowserWebViewHost(modifier: Modifier = Modifier) {
+private fun BrowserWebViewHost(
+    modifier: Modifier = Modifier,
+    initialUrl: String?,
+    onInitialUrlConsumed: () -> Unit,
+) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val backgroundColor = MiuixTheme.colorScheme.surfaceContainer.toArgb()
     val container = remember(context) {
         FrameLayout(context).apply {
@@ -701,6 +716,14 @@ private fun BrowserWebViewHost(modifier: Modifier = Modifier) {
     DisposableEffect(container, context) {
         AgentBrowserSession.attachTo(container, context)
         onDispose { AgentBrowserSession.detachFrom(container) }
+    }
+    LaunchedEffect(container, initialUrl) {
+        val url = initialUrl ?: return@LaunchedEffect
+        // attachTo takes control and cancels the previous Agent operation. Only load
+        // the clicked source after that cancellation, otherwise first entry is blank.
+        onInitialUrlConsumed()
+        // Clearing the pending URL cancels this effect, not the host's loading job.
+        scope.launch(Dispatchers.IO) { AgentBrowserSession.navigateFromUser(context, url) }
     }
     AndroidView(
         factory = { container },

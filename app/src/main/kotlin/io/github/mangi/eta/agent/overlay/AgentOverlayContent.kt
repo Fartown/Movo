@@ -14,8 +14,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -28,7 +26,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -56,7 +53,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
@@ -73,15 +69,11 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.mikepenz.markdown.m3.Markdown
-import com.mikepenz.markdown.m3.markdownTypography
-import com.mikepenz.markdown.model.rememberMarkdownState
 import io.github.mangi.eta.R
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -574,135 +566,6 @@ private fun SupplementInput(
                 insideMargin = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                 colors = ButtonDefaults.textButtonColorsPrimary(),
             )
-        }
-    }
-}
-
-/**
- * 结束时半屏结果卡片窗口：Markdown 渲染完整结果，可滚动，底部对齐。
- * 窗口本身已由 Service 定为半屏尺寸，此处填满窗口。
- */
-@Composable
-internal fun AgentResultCard(
-    state: AgentOverlayState,
-    onClose: () -> Unit,
-) {
-    var visible by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) {
-        visible = true
-    }
-
-    val isFailed = state.phase == AgentOverlayPhase.FAILED
-    val dotColor = phaseAccent(state.phase)
-    val statusText = state.status.localizedText()
-    val statusLabel = stringResource(
-        if (isFailed) R.string.overlay_substatus_failed else R.string.overlay_substatus_finished,
-    )
-    val content = state.detailText.ifBlank { statusText }
-    val textColor = MiuixTheme.colorScheme.onSurface
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .navigationBarsPadding()
-            .padding(start = 12.dp, end = 12.dp, bottom = 20.dp),
-    ) {
-        AnimatedVisibility(
-            visible = visible,
-            enter = slideInVertically(
-                initialOffsetY = { it },
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioLowBouncy,
-                    stiffness = Spring.StiffnessMediumLow,
-                )
-            ) + fadeIn(animationSpec = tween(durationMillis = 200)),
-            exit = slideOutVertically(
-                targetOffsetY = { it },
-                animationSpec = tween(durationMillis = 180),
-            ) + fadeOut(animationSpec = tween(durationMillis = 180)),
-            modifier = Modifier.align(Alignment.BottomCenter),
-        ) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 360.dp)
-                    .shadow(8.dp, RoundedCornerShape(CardDefaults.CornerRadius)),
-                insideMargin = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    // 状态行降级为圆点 + 灰色小字，关闭用幽灵图标，视觉重心留给内容
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(dotColor),
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = statusLabel,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                            fontSize = 13.sp,
-                        )
-                        Spacer(modifier = Modifier.weight(1f))
-                        // 关闭直接交给 Service，不经 Compose 协程延迟
-                        IconButton(
-                            onClick = onClose,
-                            backgroundColor = Color.Transparent,
-                            minWidth = 32.dp,
-                            minHeight = 32.dp,
-                            cornerRadius = 16.dp,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Close,
-                                contentDescription = stringResource(R.string.action_close),
-                                modifier = Modifier.size(16.dp),
-                                tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Markdown 结果，可滚动
-                    val markdownState = rememberMarkdownState(content = content, retainState = true)
-                    val typography = markdownTypography(
-                        h1 = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Bold, color = textColor),
-                        h2 = TextStyle(fontSize = 18.sp, fontWeight = FontWeight.Bold, color = textColor),
-                        h3 = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.Bold, color = textColor),
-                        text = TextStyle(fontSize = 16.sp, lineHeight = 22.sp, color = textColor),
-                        paragraph = TextStyle(fontSize = 16.sp, lineHeight = 22.sp, color = textColor),
-                        ordered = TextStyle(fontSize = 16.sp, lineHeight = 22.sp, color = textColor),
-                        bullet = TextStyle(fontSize = 16.sp, lineHeight = 22.sp, color = textColor),
-                        list = TextStyle(fontSize = 16.sp, lineHeight = 22.sp, color = textColor),
-                        code = TextStyle(
-                            fontSize = 13.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = textColor,
-                        ),
-                    )
-                    Markdown(
-                        markdownState = markdownState,
-                        typography = typography,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 280.dp)
-                            .verticalScroll(rememberScrollState()),
-                        loading = {
-                            Text(text = content, color = textColor, fontSize = 16.sp, modifier = it)
-                        },
-                        error = {
-                            Text(text = content, color = textColor, fontSize = 16.sp, modifier = it)
-                        },
-                    )
-                }
-            }
         }
     }
 }

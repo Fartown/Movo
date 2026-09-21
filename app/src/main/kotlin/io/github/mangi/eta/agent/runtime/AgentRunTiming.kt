@@ -13,6 +13,8 @@ internal class AgentRunTiming(
     private val firstDeltaRounds = mutableSetOf<Int>()
 
     fun preparationFinished(skillCount: Int) {
+        io.github.mangi.eta.diagnostics.MemoryDiagnostics.record("runtime", "preparation.finished",
+            fields = mapOf("duration_ms" to elapsedSince(runStartedAt), "skills" to skillCount))
         logger.debug {
             "Agent runtime preparation finished: elapsed_ms=${elapsedSince(runStartedAt)}, " +
                 "skills=$skillCount"
@@ -39,6 +41,10 @@ internal class AgentRunTiming(
 
             is AgentEvent.AssistantBlockDelta -> {
                 if (firstDeltaRounds.add(event.round)) {
+                    io.github.mangi.eta.diagnostics.MemoryDiagnostics.record("model", "first_delta",
+                        context = io.github.mangi.eta.agent.model.ModelRequestTrace.current()?.context
+                            ?: io.github.mangi.eta.diagnostics.MemoryDiagnostics.context(),
+                        fields = mapOf("round" to event.round, "request_elapsed_ms" to elapsedSince(requestStartedAt[event.round])))
                     logger.debug {
                         "Agent provider first delta received: round=${event.round}, " +
                             "request_elapsed_ms=${elapsedSince(requestStartedAt[event.round])}, " +
