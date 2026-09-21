@@ -7,6 +7,7 @@ import io.github.mangi.eta.ui.model.AgentChatUiState
 import io.github.mangi.eta.ui.model.AgentMessageUi
 import io.github.mangi.eta.ui.model.SystemNoticeCode
 import io.github.mangi.eta.ui.model.SystemNoticeMessageUi
+import io.github.mangi.eta.ui.model.ThinkingMessageUi
 import io.github.mangi.eta.ui.model.ToolActivityMessageUi
 import io.github.mangi.eta.ui.model.ToolActivityStatusUi
 import org.junit.Assert.assertEquals
@@ -15,6 +16,106 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentPendingResultRecoveryTest {
+    @Test
+    fun reattachedContinuationKeepsPromptBeforeReplayAndCommitsItExactlyOnce() {
+        val runId = "run-reattached"
+        val previous = AgentMessageUi(id = "assistant-previous", content = "上一轮回答")
+        val prompt = AgentUiHandoffPayload.Supplement(index = 1, text = "继续观察", createdAt = 10L)
+        val beforeReplay = AgentPendingResultRecovery.restoreHandoffMessages(
+            runId = runId,
+            promptSupplement = prompt,
+            supplements = emptyList(),
+            messages = listOf(previous),
+        )
+        assertEquals(listOf(previous.id, "user-$runId-supplement-1"), beforeReplay.map { it.id })
+        val thinking = ThinkingMessageUi(id = "$runId-thinking-1-0", content = "观察中", isStreaming = false)
+        val answer = AgentMessageUi(id = "assistant-$runId-1-1", content = "观察完成")
+        val state = AgentChatUiState(
+            messages = beforeReplay + thinking + answer,
+            history = listOf(AgentModelClient.ConversationMessage(role = "assistant", content = previous.content)),
+            input = "", isStreaming = true, thinkingEnabled = false,
+        )
+        val result = AgentRuntimeWire.RunResult(
+            runId = runId, ok = true, content = answer.content,
+            transcript = listOf(AgentModelClient.ConversationMessage(role = "assistant", content = answer.content)),
+        )
+
+        val completed = AgentPendingResultRecovery.applyHandoffHistory(
+            state = state, runId = runId, result = result,
+            promptSupplement = prompt, supplements = emptyList(),
+        )
+
+        assertFalse(completed.alreadyApplied)
+        assertEquals(
+            listOf(previous.id, "user-$runId-supplement-1", thinking.id, answer.id),
+            completed.state.messages.map { it.id },
+        )
+        assertEquals(listOf("上一轮回答", "继续观察", "观察完成"), completed.state.history.map { it.content })
+        assertEquals(completed.state.history, completed.state.journal)
+        val replay = AgentPendingResultRecovery.apply(
+            state = completed.state, runId = runId, result = result,
+            promptSupplement = prompt, supplements = emptyList(),
+        )
+        assertTrue(replay.alreadyApplied)
+        assertEquals(completed.state, replay.state)
+    }
+
+    @Test
+    fun continuationPromptPrecedesRestoredCompletedTrace() {
+        val previous = AgentMessageUi(id = "assistant-previous-1", content = "上一轮回答")
+        val thinking = ThinkingMessageUi(
+            id = "run-next-thinking-1-0", content = "检查上一轮内容", isStreaming = false,
+        )
+        val tool = ToolActivityMessageUi(
+            id = "run-next-tool-1-call-1", toolName = "observe_screen",
+            status = ToolActivityStatusUi.Success, argumentsSummary = "观察屏幕",
+        )
+        val answer = AgentMessageUi(id = "assistant-run-next-2-1", content = "检查完成")
+        val prompt = AgentUiHandoffPayload.Supplement(index = 1, text = "继续检查", createdAt = 10L)
+        val result = AgentRuntimeWire.RunResult(
+            runId = "run-next", ok = true, content = "检查完成",
+            transcript = listOf(AgentModelClient.ConversationMessage(role = "assistant", content = "检查完成")),
+        )
+        val recovered = AgentPendingResultRecovery.apply(
+            state = AgentChatUiState(
+                messages = listOf(previous, thinking, tool, answer),
+                input = "", isStreaming = false, thinkingEnabled = false,
+            ),
+            runId = "run-next", result = result,
+            promptSupplement = prompt, supplements = emptyList(),
+        )
+
+        assertEquals(
+            listOf(previous.id, "user-run-next-supplement-1", thinking.id, tool.id, answer.id),
+            recovered.state.messages.map { it.id },
+        )
+        assertEquals(listOf("user", "assistant"), recovered.state.history.map { it.role })
+        val replay = AgentPendingResultRecovery.apply(
+            state = recovered.state, runId = "run-next", result = result,
+            promptSupplement = prompt, supplements = emptyList(),
+        )
+        assertTrue(replay.alreadyApplied)
+        assertEquals(recovered.state, replay.state)
+    }
+
+    @Test
+    fun missingSupplementPrecedesAlreadyCompletedAnswer() {
+        val recovered = AgentPendingResultRecovery.apply(
+            state = AgentChatUiState(
+                messages = listOf(AgentMessageUi(id = "assistant-run-done-1", content = "补充后的回答")),
+                input = "", isStreaming = false, thinkingEnabled = false,
+            ),
+            runId = "run-done",
+            result = AgentRuntimeWire.RunResult(runId = "run-done", ok = true, content = "补充后的回答"),
+            supplements = listOf(AgentUiHandoffPayload.Supplement(index = 1, text = "补充条件", createdAt = 10L)),
+        )
+
+        assertEquals(
+            listOf("user-run-done-supplement-1", "assistant-run-done-1"),
+            recovered.state.messages.map { it.id },
+        )
+    }
+
     @Test
     fun recoveryDoesNotReplaceFailedAttemptOrRetryNotice() {
         val partial = AgentMessageUi(id = "assistant-retry-run-1-0", content = "半截回答")

@@ -346,7 +346,7 @@ class OpenAiResponsesProviderTest {
 
             assertTrue(requestBody.get().contains("\"store\":false"))
             assertEquals("完整摘要", result.assistantMessage.getString("reasoning_content"))
-            assertTrue(result.assistantMessage.getString("content").contains("[[1]]"))
+            assertTrue(result.assistantMessage.getString("content").contains("[\\[1\\]]"))
             assertEquals("call_1", result.assistantMessage.getJSONArray("tool_calls").getJSONObject(0).getString("id"))
             assertNotNull(ResponsesEphemeralState.outputItems(result.assistantMessage))
             assertEquals(1, events.filterIsInstance<ProviderEvent.HostedToolStarted>().size)
@@ -559,7 +559,7 @@ class OpenAiResponsesProviderTest {
             ),
         )
         assertEquals(1, "https://example.com/a".toRegex().findAll(formatted).count())
-        assertTrue(formatted.contains("[[1]]"))
+        assertTrue(formatted.contains("[\\[1\\]]"))
         assertTrue(formatted.contains("来源："))
         assertTrue(formatted.contains("https://example.com/b"))
     }

@@ -46,7 +46,7 @@ class EtaBackupRepositoryTest {
 
     @Test
     fun exportAndImportRestoresProvidersConversationsAndMemory() = runBlocking {
-        ProviderRepository.ensureBuiltInsMerged()
+        ProviderRepository.ensureBuiltInsMerged(initialProvider = null)
         val provider = ProviderRepository.allProviders().first().withApiKey("sk-backup-test")
         ProviderRepository.updateProvider(provider)
         SettingsDataStore.setSelection(provider.id, provider.models.first().id)

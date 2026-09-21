@@ -64,6 +64,13 @@ internal class AgentRuntimeRunExecutor(
     fun execute(
         session: AgentRuntimeSession,
         request: AgentRuntimeWire.RunRequest,
+    ): Outcome = io.github.mangi.eta.diagnostics.MemoryDiagnostics.withRun {
+        executeTracked(session, request)
+    }
+
+    private fun executeTracked(
+        session: AgentRuntimeSession,
+        request: AgentRuntimeWire.RunRequest,
     ): Outcome {
         val runController = session.controller
         val archivedEvents = mutableListOf<AgentEvent>()
@@ -284,6 +291,12 @@ internal class AgentRuntimeRunExecutor(
             )
         } catch (throwable: Throwable) {
             cancelled = runController.isCancelled || throwable is AgentRunCancelledException
+            io.github.mangi.eta.diagnostics.MemoryDiagnostics.record(
+                "runtime", if (cancelled) "run.cancelled" else "run.failed",
+                if (cancelled) io.github.mangi.eta.diagnostics.DiagnosticLevel.INFO else io.github.mangi.eta.diagnostics.DiagnosticLevel.ERROR,
+                fields = mapOf("causes" to io.github.mangi.eta.diagnostics.MemoryDiagnostics.causes(throwable)) +
+                    io.github.mangi.eta.diagnostics.MemoryDiagnostics.environmentSnapshot(),
+            )
             val modelFailure = throwable as? AgentModelExecutionException
             val message = if (cancelled) {
                 "已停止"
@@ -388,6 +401,7 @@ internal class AgentRuntimeRunExecutor(
         checkpointRecorder?.accept(event)
         if (!session.emit(event)) return
         archivedEvents += event
+        recordDiagnosticEvent(event)
         if (event is AgentEvent.ModelRetryScheduled) {
             AndroidAgentLogger.warn("Agent runtime event: ${event.toLogLine()}")
         } else if (event !is AgentEvent.AssistantBlockDelta) {

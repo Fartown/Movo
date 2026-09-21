@@ -13,6 +13,8 @@ internal class AgentModelFailure(
     message: String,
     cause: Throwable? = null,
     val recoveryAllowed: Boolean = true,
+    val providerCode: String? = null,
+    val providerType: String? = null,
 ) : IllegalStateException(message, cause) {
     companion object {
         private val transientStatus = setOf(408, 429, 500, 502, 503, 504, 524, 529)
@@ -46,6 +48,8 @@ internal class AgentModelFailure(
                     429 -> "模型接口暂时限流（HTTP 429）。"
                     else -> "模型接口返回 HTTP $status"
                 },
+                providerCode = error?.optString("code"),
+                providerType = error?.optString("type"),
             )
         }
 
@@ -63,6 +67,8 @@ internal class AgentModelFailure(
                 retryable = !isPermanent(error, error.optString("message")) &&
                     codes.any { it in transientCodes || it.toIntOrNull() in transientStatus },
                 message = message,
+                providerCode = error.optString("code"),
+                providerType = error.optString("type"),
             )
         }
 

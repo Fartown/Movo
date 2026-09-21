@@ -1,0 +1,4 @@
+interface:
+  display_name: "云真机测试"
+  short_description: "Dora Android 云真机安装配置、功能验收、证据采集与中断恢复"
+  default_prompt: "使用 $cloud-device-test 在指定 Android 云真机完成实际功能验收，逐项采证并报告未覆盖项。"

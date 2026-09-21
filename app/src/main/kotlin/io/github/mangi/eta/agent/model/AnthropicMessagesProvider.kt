@@ -43,7 +43,9 @@ internal object AnthropicMessagesProvider : AgentProviderClient {
                 ProviderRequestHeaders.mergeInto(this, config.baseUrl, config.customHeaders, request.sessionId)
             }
             .build()
+        val trace = ModelRequestTrace.forRequest(request, id)
         val httpRequest = Request.Builder()
+            .tag(ModelRequestTrace::class.java, trace)
             .url(ProviderUrls.anthropicMessagesUrl(config.baseUrl))
             .headers(headers)
             .post(
@@ -65,15 +67,18 @@ internal object AnthropicMessagesProvider : AgentProviderClient {
                     val errorBody = response.peekBody(16_384).string()
                     throw AgentModelFailure.http(response.code, errorBody)
                 }
-                val assistant = readStreamingAssistantMessage(response.body.byteStream(), runController, onEvent)
+                val assistant = readStreamingAssistantMessage(response.body.byteStream(), runController, onEvent, trace)
                 onEvent(ProviderEvent.Completed(assistant.optString("finish_reason").ifBlank { null }))
+                if (ModelRequestTrace.current() !== trace) trace.success()
                 return ProviderResponse(assistant)
             }
         } catch (throwable: Throwable) {
+            if (ModelRequestTrace.current() !== trace) trace.failed(throwable, runController.isCancelled)
             runCatching { runController.throwIfCancelled() }
                 .getOrElse { interruption -> throw interruption }
             throw throwable
         } finally {
+            trace.close()
             binding.close()
         }
     }
@@ -213,7 +218,8 @@ internal object AnthropicMessagesProvider : AgentProviderClient {
     private fun readStreamingAssistantMessage(
         stream: InputStream,
         runController: AgentRunController,
-        onEvent: (ProviderEvent) -> Unit
+        onEvent: (ProviderEvent) -> Unit,
+        trace: ModelRequestTrace,
     ): JSONObject {
         val content = StringBuilder()
         val reasoning = StringBuilder()
@@ -222,7 +228,7 @@ internal object AnthropicMessagesProvider : AgentProviderClient {
         var finishReason: String? = null
         var usage: AgentTokenUsage? = null
 
-        readProviderSse(stream, runController) { event, payload ->
+        readProviderSse(stream, runController, trace) { event, payload ->
             val result = processEvent(
                 event = event,
                 payload = payload.trim(),
@@ -230,6 +236,7 @@ internal object AnthropicMessagesProvider : AgentProviderClient {
                 content = content,
                 reasoning = reasoning,
                 onEvent = onEvent,
+                trace = trace,
             )
             if (result.messageStop) sawMessageStop = true
             result.finishReason?.let { finishReason = it }
@@ -273,11 +280,13 @@ internal object AnthropicMessagesProvider : AgentProviderClient {
         blocks: MutableMap<Int, AnthropicBlock>,
         content: StringBuilder,
         reasoning: StringBuilder,
-        onEvent: (ProviderEvent) -> Unit
+        onEvent: (ProviderEvent) -> Unit,
+        trace: ModelRequestTrace,
     ): EventResult {
         if (payload == "[DONE]") return EventResult(messageStop = true)
         val json = JSONObject(payload)
         val type = json.optString("type").ifBlank { event }
+        trace.sseType(type)
 
         fun appendVisibleDelta(block: AnthropicBlock, text: String) {
             if (text.isEmpty()) return

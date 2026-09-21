@@ -1075,7 +1075,7 @@
   <string name="context_usage_previous_response">%1$s\n上轮实测</string>
   <string name="context_usage_estimated">%1$s\n压缩后估算</string>
   <string name="context_compaction">上下文压缩</string>
-  <string name="context_compact_action">压缩上下文</string>
+  <string name="context_compact_action">压缩</string>
   <string name="context_usage_description">上下文用量：%1$s</string>
   <string name="memory_budget_summary">每轮最多注入 %1$s 字符，详细内容由模型按需读取</string>
   <string name="memory_over_limit">已超过 1 MiB 上限，请删减</string>
@@ -1200,4 +1200,12 @@
   <string name="voice_mic_permission_denied">未授予麦克风权限</string>
   <string name="permission_microphone_title">麦克风</string>
   <string name="permission_microphone_summary">语音输入与唤醒词常听需要此权限</string>
+  <string name="drawer_settings">设置</string>
+  <string name="drawer_models">模型</string>
+  <string name="drawer_tools">工具</string>
+  <string name="drawer_permissions">权限</string>
+  <string name="drawer_characters">角色</string>
+  <string name="overlay_follow_up_hint">继续对话…</string>
+  <string name="overlay_result_expand">展开</string>
+  <string name="overlay_result_collapse">收起</string>
 </resources>

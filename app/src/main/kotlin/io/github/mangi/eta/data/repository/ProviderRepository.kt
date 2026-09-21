@@ -19,11 +19,16 @@ import io.github.mangi.eta.data.model.withModels
 import io.github.mangi.eta.data.model.withSortOrder
 import io.github.mangi.eta.data.provider.BuiltinProviders
 import io.github.mangi.eta.data.provider.OfficialModelCatalog
+import io.github.mangi.eta.data.provider.PackagedModelDefaults
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 internal object ProviderRepository {
+    private val defaultsMutex = Mutex()
+
     @Volatile
     private lateinit var applicationContext: Context
 
@@ -112,12 +117,19 @@ internal object ProviderRepository {
         repairSelection()
     }
 
-    suspend fun ensureBuiltInsMerged() {
+    suspend fun ensureBuiltInsMerged(
+        initialProvider: ProviderSetting? = PackagedModelDefaults.provider(),
+    ): Unit = defaultsMutex.withLock {
         val current = allProviders()
         if (current.isEmpty()) {
-            insertProviders(BuiltinProviders.PROVIDERS.map(::seedOfficialModelsIfEmpty))
+            insertProviders(
+                listOfNotNull(initialProvider) + BuiltinProviders.PROVIDERS.map(::seedOfficialModelsIfEmpty)
+            )
+            if (initialProvider != null) {
+                SettingsDataStore.setSelection(initialProvider.id, initialProvider.models.firstOrNull()?.id)
+            }
             repairSelection()
-            return
+            return@withLock
         }
 
         val existingIds = current.mapTo(mutableSetOf()) { it.id }

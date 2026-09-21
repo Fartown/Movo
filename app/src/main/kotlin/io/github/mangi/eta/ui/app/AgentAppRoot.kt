@@ -29,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.LayoutDirection
@@ -99,6 +100,8 @@ import top.yukonga.miuix.kmp.window.WindowDialog
 fun AgentAppRoot(
     assistantConversationKey: String? = null,
     onAssistantConversationOpened: (Boolean) -> Unit = {},
+    browserUrl: String? = null,
+    onBrowserOpened: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val uiScope = rememberCoroutineScope()
@@ -132,6 +135,11 @@ fun AgentAppRoot(
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val windowInfo = LocalWindowInfo.current
+    LaunchedEffect(windowInfo.isWindowFocused) {
+        // 关闭悬浮结果卡只恢复窗口焦点，前台 Activity 不一定再次收到 ON_RESUME。
+        if (windowInfo.isWindowFocused) agentState.refreshRuntimeResults()
     }
 
     var conversationPaneOpen by remember { mutableStateOf(false) }
@@ -192,6 +200,13 @@ fun AgentAppRoot(
     ) {
         conversationPaneOpen = restoreConversationPaneOnBack
         navigator.push(route)
+    }
+
+    LaunchedEffect(browserUrl) {
+        val url = browserUrl ?: return@LaunchedEffect
+        focusManager.clearFocus()
+        if (backStack.lastOrNull() != AppRoute.Browser) pushRoute(AppRoute.Browser)
+        // The browser host consumes the URL only after it has attached its WebView.
     }
 
     fun popRoute() {
@@ -394,7 +409,7 @@ fun AgentAppRoot(
             }
             entry<AppRoute.Browser>(swipeDismiss = swipeDismiss) {
                 RoutedShell(route = AppRoute.Browser) {
-                    AgentBrowserScreen()
+                    AgentBrowserScreen(initialUrl = browserUrl, onInitialUrlConsumed = onBrowserOpened)
                 }
             }
             entry<AppRoute.Terminal>(swipeDismiss = swipeDismiss) {
@@ -617,6 +632,9 @@ fun AgentAppRoot(
             }
             entry<AppRoute.AppearanceSettings>(swipeDismiss = swipeDismiss) {
                 AppearanceSettingsScreen(onBack = ::popRoute)
+            }
+            entry<AppRoute.Diagnostics>(swipeDismiss = swipeDismiss) {
+                io.github.mangi.eta.ui.screens.diagnostics.DiagnosticsScreen(onBack = ::popRoute)
             }
             entry<AppRoute.DataBackup>(swipeDismiss = swipeDismiss) {
                 DataBackupScreen(

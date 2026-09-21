@@ -174,6 +174,7 @@ Eta 先从现有 Android 上的模型、上下文与工具做起。真正落地�
 - [Agent Runtime](docs/AGENT_RUNTIME.md)：Agent Loop、Provider、steering、transcript 与结果恢复。
 - [HyperOS 系统入口](docs/HYPEROS_SYSTEM_ENTRY.md)：电源键、一圈即搜的适配条件与验证边界。
 - [终端原生组件](docs/TERMINAL_NATIVE.md)：PTY、PRoot 及随包源码的构建方式。
+- [随包默认模型](docs/BUILD_DEFAULTS.md)：从本地 `.env` 打包模型配置，安装后仍可编辑。
 
 ## 参考与致谢
 
