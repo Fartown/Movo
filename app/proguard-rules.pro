@@ -62,3 +62,10 @@
 
 # Sherpa JNI resolves these Kotlin config fields and result classes by name.
 -keep class com.k2fsa.sherpa.onnx.** { *; }
+-keep class com.bytedance.speech.speechengine.** { *; }
+
+# Same-signature Release instrumentation executes against the target's Kotlin runtime.
+# R8 otherwise removes stdlib methods used only by the separate test APK (e.g. file I/O),
+# causing linkage errors before any product test can run. Keep this shared library ABI;
+# application/Compose/SDK code still receives normal Release shrinking and optimization.
+-keep class kotlin.** { *; }

@@ -1199,7 +1199,7 @@
   <string name="voice_sensitivity_low">Low</string>
   <string name="voice_sensitivity_medium">Medium</string>
   <string name="voice_sensitivity_high">High</string>
-  <string name="voice_settings_doubao_section">Voice input</string>
+  <string name="voice_settings_doubao_section">Speech service</string>
   <string name="voice_settings_doubao_summary">Independent from LLM API keys. Prefer Api-Key (new console) or App-Key + Access-Key (legacy).</string>
   <string name="voice_settings_api_key">Api-Key</string>
   <string name="voice_settings_app_key">App-Key</string>
@@ -1241,8 +1241,8 @@
   <string name="voice_settings_load_failed">Could not load configuration. Tap to retry</string>
   <string name="voice_settings_configured">Configured · %1$s</string>
   <string name="voice_settings_not_configured">Not configured. Tap to add speech credentials</string>
-  <string name="voice_settings_probe_hint">Tests the saved configuration without opening the microphone.</string>
-  <string name="voice_settings_probe_success">Connected. Credentials and speech service are available</string>
+  <string name="voice_settings_probe_hint">Tests the saved credentials against the continuous voice conversation service without opening the microphone.</string>
+  <string name="voice_settings_probe_success">Connected. Continuous voice conversation is available</string>
   <string name="voice_settings_probe_timeout">Connection timed out. Check your network and try again</string>
   <string name="voice_settings_probe_network">Connection failed. Check the network and speech service address</string>
   <string name="voice_settings_probe_invalid">Unexpected speech service response. Please try again</string>
@@ -1252,9 +1252,9 @@
   <string name="voice_settings_phrase_hint">Chinese or English words, 2–32 characters.\nChanges apply when saved.</string>
   <string name="voice_settings_auth_mode">Authentication method</string>
   <string name="voice_settings_auth_hint">Choose the authentication method shown in your Doubao speech console. Speech credentials are separate from language model API keys.</string>
-  <string name="voice_settings_advanced">Advanced settings</string>
-  <string name="voice_settings_advanced_hint">Expand to use a custom Resource-Id</string>
-  <string name="voice_settings_resource_hint">Leave blank for the default: %1$s</string>
+  <string name="voice_settings_advanced">Advanced dictation settings</string>
+  <string name="voice_settings_advanced_hint">Only affects keyboard dictation; voice conversation needs no changes here</string>
+  <string name="voice_settings_resource_hint">Keyboard dictation resource. Leave blank for the default: %1$s</string>
   <string name="voice_settings_discard_hint">Leaving discards the unsaved changes on this page.</string>
   <string name="voice_settings_discard">Discard changes</string>
   <string name="voice_settings_keep_editing">Keep editing</string>

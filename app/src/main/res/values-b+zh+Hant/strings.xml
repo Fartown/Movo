@@ -1170,7 +1170,7 @@
   <string name="voice_sensitivity_low">低</string>
   <string name="voice_sensitivity_medium">中</string>
   <string name="voice_sensitivity_high">高</string>
-  <string name="voice_settings_doubao_section">語音輸入</string>
+  <string name="voice_settings_doubao_section">語音服務</string>
   <string name="voice_settings_doubao_summary">與大型模型 API Key 互相獨立。優先填寫新版主控台 Api-Key，或舊版 App-Key + Access-Key。</string>
   <string name="voice_settings_api_key">Api-Key</string>
   <string name="voice_settings_app_key">App-Key</string>
@@ -1212,8 +1212,8 @@
   <string name="voice_settings_load_failed">設定讀取失敗，點擊重試</string>
   <string name="voice_settings_configured">已設定 · %1$s</string>
   <string name="voice_settings_not_configured">尚未設定，點擊新增語音憑證</string>
-  <string name="voice_settings_probe_hint">測試已儲存的設定，不會開啟麥克風。</string>
-  <string name="voice_settings_probe_success">連線正常，憑證與語音服務可用</string>
+  <string name="voice_settings_probe_hint">驗證已儲存憑證能否連線連續語音對話服務，不會開啟麥克風。</string>
+  <string name="voice_settings_probe_success">連線正常，連續語音對話服務可用</string>
   <string name="voice_settings_probe_timeout">連線逾時，請檢查網路後重試</string>
   <string name="voice_settings_probe_network">連線失敗，請檢查網路與語音服務位址</string>
   <string name="voice_settings_probe_invalid">語音服務回應異常，請重試</string>
@@ -1223,9 +1223,9 @@
   <string name="voice_settings_phrase_hint">中文或英文單詞，長度 2–32 個字元。\n儲存後立即生效。</string>
   <string name="voice_settings_auth_mode">認證方式</string>
   <string name="voice_settings_auth_hint">選擇與你的豆包語音控制台一致的認證方式，只需填寫對應憑證。語音憑證與大模型 API Key 相互獨立。</string>
-  <string name="voice_settings_advanced">進階設定</string>
-  <string name="voice_settings_advanced_hint">使用自訂 Resource-Id 時再展開</string>
-  <string name="voice_settings_resource_hint">留空使用預設值：%1$s</string>
+  <string name="voice_settings_advanced">聽寫進階設定</string>
+  <string name="voice_settings_advanced_hint">僅影響鍵盤聽寫，連續語音對話無需修改</string>
+  <string name="voice_settings_resource_hint">鍵盤聽寫資源，留空使用預設值：%1$s</string>
   <string name="voice_settings_discard_hint">離開將放棄本頁尚未儲存的修改。</string>
   <string name="voice_settings_discard">放棄修改</string>
   <string name="voice_settings_keep_editing">繼續編輯</string>

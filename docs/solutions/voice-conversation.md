@@ -1,13 +1,16 @@
 ---
 title: Movo 连续语音对话方案
-status: proposed-after-partial-p0-validation
+status: implementation-under-device-validation
 owner: Codex
 updated: 2026-09-22
 ---
 
 # Movo 连续语音对话方案
 
-> 基于代码 `9b5b58dc476033511711cee2eaebe7c8c8c0458d`、2026-09-22 官方资料、第二轮设计复审、[P0 能力验证](../research/voice-conversation/P0能力验证.md)与 [Dialog 复用验证](../research/voice-conversation/DialogSDK复用验证.md)。独立 TTS 和 Dialog 委托模式均已有 DeepSeek 到实际扬声器的组件证据；Dialog 高音量回采识别与答案相同。产品尚未集成，连续对话、AEC 双讲、精确停声及首声目标尚未通过。
+> **实施更新（2026-09-22）**：产品已进入 Dialog SDK 委托模式集成和正式 App 真机回归。当前代码、与独立 ASR/TTS 基线的差异、首次失败及待验收门槛见[产品集成与验收记录](../research/voice-conversation/产品集成与验收记录.md)。下文保留原设计及目标契约，不将未验收的目标写成已完成。
+
+
+> 基于代码 `9b5b58dc476033511711cee2eaebe7c8c8c0458d`、2026-09-22 官方资料、第二轮设计复审、[P0 能力验证](../research/voice-conversation/P0能力验证.md)与 [Dialog 复用验证](../research/voice-conversation/DialogSDK复用验证.md)。这是集成前组件验证记录；当前产品实现与各项验收状态见上方实施记录，组件证据不能替代产品验收。
 >
 > 本文替代 [原听写方案](../voice-input-wake-word.md) 的交付范围。复审已统一正文、图、模块和协议，具体问题及修订依据见 [方案复审记录](../research/voice-conversation/方案复审记录.md)。
 
@@ -291,7 +294,7 @@ P0 以外放音量变化、耳机切换、用户和助手同时说话验证。�
 
 ### 5.6 答案与声音
 
-仅正常成功、属于当前会话且仍获准发声的最终 `RunResult.content` 可生成答案播报计划。排除 reasoning、工具 JSON、历史 replay；失败/取消的说明使用明确的系统状态文案，不能冒充成功回答。
+仅正常成功、属于当前会话且仍获准发声的最终 `RunResult.content` 可生成答案播报计划。排除 reasoning、工具 JSON、执行日志和历史 replay。按用户 2026-09-22 明确要求，只播报 LLM 正文；失败、取消和进度等系统状态仅显示在界面，不进入 TTS。
 
 语音模式要求主模型默认短口语回答，通常一至三句；保留原始最终正文，分句与 Markdown 规范化不另用模型重写。用户要求长内容时允许更长答复，分句播放并随时可打断；不得无提示截断。代码、表格等结构化内容保留在界面，用明确的展示提示代替盲念标点，不声称已朗读全文。
 

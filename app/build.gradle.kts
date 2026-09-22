@@ -58,9 +58,10 @@ android {
         applicationId = "io.github.mangi.eta"
         minSdk = 34
         targetSdk = 36
+        testInstrumentationRunner = "io.github.mangi.eta.voice.VoiceAcceptanceInstrumentation"
         // versionCode 规则：yyyyMMdd + 两位当日序号（01 起），发版时随 versionName 一起手动递增。
-        versionCode = 2026092206
-        versionName = "3.0.6"
+        versionCode = 2026092207
+        versionName = "3.0.7"
 
         mapOf(
             "ETA_DEFAULT_PROVIDER_NAME" to "默认模型",
@@ -137,6 +138,8 @@ android {
         checkReleaseBuilds = false
     }
 
+    testBuildType = if (providers.gradleProperty("voiceTestRelease").isPresent) "release" else "debug"
+
     testOptions {
         unitTests.isIncludeAndroidResources = true
     }
@@ -144,6 +147,7 @@ android {
 
 dependencies {
     implementation("com.k2fsa:sherpa-onnx:1.13.8@aar")
+    implementation("com.bytedance.speechengine:speechengine_tob:0.0.15.0@aar")
     implementation(libs.commons.compress)
     implementation(libs.xz)
     compileOnly(libs.libxposed.api)

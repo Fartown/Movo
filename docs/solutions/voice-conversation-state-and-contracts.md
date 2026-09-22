@@ -1,6 +1,9 @@
 # 连续语音：状态、协议与恢复契约
 
-版本：2026-09-22 复审版。本文是 [主方案](voice-conversation.md) 的目标契约，尚未实现。首期为现有 ASR + 本地 Agent + 官方独立 TTS SDK，播报最终稳定正文。不存在另一个默认 HTTP 播放实现。
+> **实施更新（2026-09-22）**：产品已进入 Dialog SDK 委托模式集成和正式 App 真机回归。当前代码、与独立 ASR/TTS 基线的差异、首次失败及待验收门槛见[产品集成与验收记录](../research/voice-conversation/产品集成与验收记录.md)。下文保留原设计及目标契约，不将未验收的目标写成已完成。
+
+
+版本：2026-09-22。本文保留 [主方案](voice-conversation.md) 的设计契约；当前采用 Dialog SDK 客户端委托播报，具体实现差异与未验收项以上方实施记录为准。只播报 LLM 最终稳定正文，无供应商自动降级。
 
 ## 1. 身份、所有权与不变量
 
@@ -23,7 +26,7 @@
 5. 旧回调可补记执行事实，但不能恢复声音、变更新字幕或释放新会话资源。
 6. 一次有效插话撤销旧声音权限，不自动取消执行。结束对话与取消任务是不同操作。
 7. 终态结果归档与播放进度分开；ACK不等待TTS、用户听完或下一轮开始。
-8. 音频自动播报只来自本会话实时许可的最终答案或受控状态文案；恢复/replay不会自动播放。
+8. 音频自动播报只来自本会话实时许可的 LLM 最终正文；系统状态仅显示在界面，恢复/replay不会自动播放。
 
 复用现有 `AGENT_UI_HANDOFF_SOURCE` 的 conversationId 及历史归档载荷，通过独立 `RunRequest.voice` 标记语音来源；不能另造不被解析的 handoff source。只设置 modelSessionId 而丢掉原 handoff，会使现有角色上下文、会话定位和归档链路不完整。
 
@@ -37,7 +40,7 @@
 | output | IDLE / PREPARING / PLAYING / PROVISIONAL_PAUSE / STOPPING / FAILED | TTS adapter报告、Controller授权 |
 | pending input | EMPTY / HELD / NEEDS_CLARIFICATION | Controller，一个槽，归档前不当成已执行用户消息 |
 
-执行和声音允许并行，例如RUNNING时可听插话；首期最终答案PLAYING时原run已经终态，但系统状态提示可能在RUNNING时播放。UI不能把这些压成唯一的“忙/闲”布尔值。
+执行和声音允许并行，例如RUNNING时可听插话；首期最终答案PLAYING时原run已经终态，系统状态提示只显示在界面。UI不能把这些压成唯一的“忙/闲”布尔值。
 
 ```mermaid
 stateDiagram-v2
@@ -98,7 +101,7 @@ flowchart TD
 
 正常成功的可信终态归档后，由Controller针对 `RunResult.content` 建立不可变朗读计划。若旧回答在插话时失去输出权限，即使稍后成功归档也不自动朗读。等待中的新话优先处理，旧答案保持文字可见。
 
-`AssistantBlockDelta`继续服务文字UI；不新增跨provider的 `AssistantSpeechCommitted` 事件。没有工具回合、reasoning或草稿的播报承诺。取消/失败说明仅陈述已知状态；部分工具完成以归档事实为准。
+`AssistantBlockDelta`继续服务文字UI；不新增跨provider的 `AssistantSpeechCommitted` 事件。不播报工具回合、reasoning或草稿。取消/失败说明只显示在界面、仅陈述已知状态；部分工具完成以归档事实为准。
 
 朗读计划保留原messageId、原文范围、规范化后的文本与未朗读结构化区域。语音风格在公共提示构建阶段加入，适用普通和角色会话，不覆盖用户模型、推理强度或角色设定。用户未要求长答时偏好一至三句；不会另调模型重写答案制造低延迟。
 
@@ -147,7 +150,7 @@ TTS重试不重跑Agent。确定没开始播放的槽可以按显式重试恢复
 | 无active run，普通新问句 | 创建下一run | 停旧朗读，提交新话 |
 | “别念了” | 不变 | 结束当前朗读，续听 |
 | “嗯/好”等反馈 | 不创建新run | 根据语境继续听或恢复回答，不当新任务 |
-| active run，“做到哪了” | 复用现有状态，不启第二run | 简短真实进度提示；无状态则说明仍在处理 |
+| active run，“做到哪了” | 复用现有状态，不启第二run | 界面显示真实进度；不播报系统状态 |
 | active run，明确取消/停止 | 针对拥有的run请求取消 | 输出权限立即撤销，显示“正在停止” |
 | active run，明确替换任务 | 取消后等待可信终态 | 新话进入唯一pending槽，待事实归档后提交 |
 | active run，普通新问题/补充 | 当前任务继续；首期不做same-run steering | 保留一个pending输入；旧任务完成后新run处理 |

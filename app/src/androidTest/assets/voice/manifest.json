@@ -1,0 +1,312 @@
+{
+  "schema": "movo-voice-fixtures/v1",
+  "provenance": "Offline macOS say synthetic speech; not a human recording, physical microphone, or AEC proof",
+  "format": {
+    "sample_rate_hz": 16000,
+    "channels": 1,
+    "encoding": "PCM_S16LE",
+    "frame_ms": 20,
+    "bytes_per_frame": 640
+  },
+  "voice": "Tingting",
+  "speech_rate_wpm": 165,
+  "leading_silence_ms": 250,
+  "trailing_silence_ms": 2500,
+  "speech_trim": "Each part trimmed to first/last sample with absolute amplitude >32; inserted pauses exclude macOS TTS leading/trailing padding. Threshold approx -60 dBFS, not a phonetic annotation.",
+  "playback_contract": "Feed 640-byte frames in real time. Keep SDK session open and continue zero frames after each clip; EOF must not send ASR end, stop, commit, or dispatch. Start next clip by actual LISTENING/PLAYER_END event, not an assumed model latency.",
+  "clips": [
+    {
+      "id": "wake_optional",
+      "text": "你好小莫。",
+      "pcm": "wake_optional.pcm",
+      "wav": "wake_optional.wav",
+      "duration_ms": 3740.0,
+      "speech_segment_end_ms": 1235.3125,
+      "bytes": 119680,
+      "frames_20ms": 187,
+      "sha256_pcm": "f5ec00e24c7ef15e0377d83861daecadf94380996d9290f03bdce07a6a325d42",
+      "sha256_wav": "15e886c18877d23e172e310ac2d3321e3fda79cd64fa6c781cc0d8126ffe3d5d",
+      "rms_int16": 2234.792,
+      "peak_int16": 18689,
+      "segments": [
+        {
+          "kind": "silence",
+          "start_ms": 0,
+          "end_ms": 250
+        },
+        {
+          "kind": "synthetic_speech",
+          "text": "你好小莫。",
+          "start_ms": 250.0,
+          "end_ms": 1235.3125,
+          "source": "wake_optional.part1.aiff",
+          "source_pcm_trim_samples": [
+            0,
+            15765
+          ]
+        },
+        {
+          "kind": "silence",
+          "start_ms": 1235.3125,
+          "end_ms": 3740.0
+        }
+      ]
+    },
+    {
+      "id": "r1_remember",
+      "text": "只在本次对话记住，暗号是蓝鲸四十七。请只回答记住了。",
+      "pcm": "r1_remember.pcm",
+      "wav": "r1_remember.wav",
+      "duration_ms": 8400.0,
+      "speech_segment_end_ms": 5893.75,
+      "bytes": 268800,
+      "frames_20ms": 420,
+      "sha256_pcm": "abe519e191e8aa4ab4fce2a9e3640726b7131db81983eb823fa575923524f71f",
+      "sha256_wav": "8f714f12694afcb54ec9885e2a76f99dd8451c830e61e097e7a4def1e2bb869c",
+      "rms_int16": 3118.557,
+      "peak_int16": 22318,
+      "segments": [
+        {
+          "kind": "silence",
+          "start_ms": 0,
+          "end_ms": 250
+        },
+        {
+          "kind": "synthetic_speech",
+          "text": "只在本次对话记住，",
+          "start_ms": 250.0,
+          "end_ms": 2015.9375,
+          "source": "r1_remember.part1.aiff",
+          "source_pcm_trim_samples": [
+            0,
+            28255
+          ]
+        },
+        {
+          "kind": "inserted_silence",
+          "duration_ms": 300,
+          "start_ms": 2015.9375,
+          "end_ms": 2315.9375
+        },
+        {
+          "kind": "synthetic_speech",
+          "text": "暗号是蓝鲸四十七。请只回答记住了。",
+          "start_ms": 2315.9375,
+          "end_ms": 5893.75,
+          "source": "r1_remember.part2.aiff",
+          "source_pcm_trim_samples": [
+            1,
+            57246
+          ]
+        },
+        {
+          "kind": "silence",
+          "start_ms": 5893.75,
+          "end_ms": 8400.0
+        }
+      ]
+    },
+    {
+      "id": "r2_pause_correction",
+      "text": "请告诉我刚才说的那个暗号，等一下，只读暗号，不要解释。",
+      "pcm": "r2_pause_correction.pcm",
+      "wav": "r2_pause_correction.wav",
+      "duration_ms": 9900.0,
+      "speech_segment_end_ms": 7398.9375,
+      "bytes": 316800,
+      "frames_20ms": 495,
+      "sha256_pcm": "59dc5fdfa48fbd0a578e916b2a200f992f6ada23c99c7c8078d58dccf0307b59",
+      "sha256_wav": "3f35cb0c603a4cbfaa77522344ade665857985b27a2afa93ff609d48159f122d",
+      "rms_int16": 3023.222,
+      "peak_int16": 21171,
+      "segments": [
+        {
+          "kind": "silence",
+          "start_ms": 0,
+          "end_ms": 250
+        },
+        {
+          "kind": "synthetic_speech",
+          "text": "请告诉我刚才说的那个",
+          "start_ms": 250.0,
+          "end_ms": 2432.875,
+          "source": "r2_pause_correction.part1.aiff",
+          "source_pcm_trim_samples": [
+            0,
+            34926
+          ]
+        },
+        {
+          "kind": "inserted_silence",
+          "duration_ms": 1200,
+          "start_ms": 2432.875,
+          "end_ms": 3632.875
+        },
+        {
+          "kind": "synthetic_speech",
+          "text": "暗号，等一下，只读暗号，不要解释。",
+          "start_ms": 3632.875,
+          "end_ms": 7398.9375,
+          "source": "r2_pause_correction.part2.aiff",
+          "source_pcm_trim_samples": [
+            1,
+            60258
+          ]
+        },
+        {
+          "kind": "silence",
+          "start_ms": 7398.9375,
+          "end_ms": 9900.0
+        }
+      ]
+    },
+    {
+      "id": "r3_long_reply",
+      "text": "请用六句话介绍火星，每句话尽量完整。",
+      "pcm": "r3_long_reply.pcm",
+      "wav": "r3_long_reply.wav",
+      "duration_ms": 6960.0,
+      "speech_segment_end_ms": 4446.9375,
+      "bytes": 222720,
+      "frames_20ms": 348,
+      "sha256_pcm": "5f3df5e8990019f36ecb3f60fe302962df16eb5783fab1ea2bfa7ce8e472b518",
+      "sha256_wav": "3e4c0c13c8beae408ee1f24156f0c2577fedc443245493981e2fe520ba09b086",
+      "rms_int16": 3305.424,
+      "peak_int16": 21961,
+      "segments": [
+        {
+          "kind": "silence",
+          "start_ms": 0,
+          "end_ms": 250
+        },
+        {
+          "kind": "synthetic_speech",
+          "text": "请用六句话介绍火星，每句话尽量完整。",
+          "start_ms": 250.0,
+          "end_ms": 4446.9375,
+          "source": "r3_long_reply.part1.aiff",
+          "source_pcm_trim_samples": [
+            0,
+            67151
+          ]
+        },
+        {
+          "kind": "silence",
+          "start_ms": 4446.9375,
+          "end_ms": 6960.0
+        }
+      ]
+    },
+    {
+      "id": "barge_in_replace",
+      "text": "停一下，别介绍火星了。只说刚才的暗号。",
+      "pcm": "barge_in_replace.pcm",
+      "wav": "barge_in_replace.wav",
+      "duration_ms": 6800.0,
+      "speech_segment_end_ms": 4281.0,
+      "bytes": 217600,
+      "frames_20ms": 340,
+      "sha256_pcm": "822e7a7f79e78eb7daec639588c7e264e0ea9c0caff5276a09a934a80b445c85",
+      "sha256_wav": "6fc3581c352a63cd3fd51ea9804d069c0eec915eb082d2017bb18506e2c2df10",
+      "rms_int16": 3009.787,
+      "peak_int16": 21593,
+      "segments": [
+        {
+          "kind": "silence",
+          "start_ms": 0,
+          "end_ms": 250
+        },
+        {
+          "kind": "synthetic_speech",
+          "text": "停一下，别介绍火星了。只说刚才的暗号。",
+          "start_ms": 250.0,
+          "end_ms": 4281.0,
+          "source": "barge_in_replace.part1.aiff",
+          "source_pcm_trim_samples": [
+            0,
+            64496
+          ]
+        },
+        {
+          "kind": "silence",
+          "start_ms": 4281.0,
+          "end_ms": 6800.0
+        }
+      ]
+    },
+    {
+      "id": "end_session",
+      "text": "结束对话。",
+      "pcm": "end_session.pcm",
+      "wav": "end_session.wav",
+      "duration_ms": 3660.0,
+      "speech_segment_end_ms": 1156.0625,
+      "bytes": 117120,
+      "frames_20ms": 183,
+      "sha256_pcm": "a8c3b41f49156af7ad3ed77f9ecc310c4eb86c11a024d029c33e9669f26f173d",
+      "sha256_wav": "6be90c11b1db397c4ac58085582f0a764ce9636915ce7beb7e506ad08ed46a6c",
+      "rms_int16": 2083.281,
+      "peak_int16": 18277,
+      "segments": [
+        {
+          "kind": "silence",
+          "start_ms": 0,
+          "end_ms": 250
+        },
+        {
+          "kind": "synthetic_speech",
+          "text": "结束对话。",
+          "start_ms": 250.0,
+          "end_ms": 1156.0625,
+          "source": "end_session.part1.aiff",
+          "source_pcm_trim_samples": [
+            0,
+            14497
+          ]
+        },
+        {
+          "kind": "silence",
+          "start_ms": 1156.0625,
+          "end_ms": 3660.0
+        }
+      ]
+    },
+    {
+      "id": "after_end_negative",
+      "text": "这句话不应该被发送给模型。",
+      "pcm": "after_end_negative.pcm",
+      "wav": "after_end_negative.wav",
+      "duration_ms": 5560.0,
+      "speech_segment_end_ms": 3054.9375,
+      "bytes": 177920,
+      "frames_20ms": 278,
+      "sha256_pcm": "213666c6535dea569f7e9cf48356f6acba8b6c3b0702d162e4fdbc1abcd3b045",
+      "sha256_wav": "652d0f24df3359edccceab1d1b6298f9b84df1ce92266f8f52b92fafcbefc2e5",
+      "rms_int16": 3048.165,
+      "peak_int16": 21614,
+      "segments": [
+        {
+          "kind": "silence",
+          "start_ms": 0,
+          "end_ms": 250
+        },
+        {
+          "kind": "synthetic_speech",
+          "text": "这句话不应该被发送给模型。",
+          "start_ms": 250.0,
+          "end_ms": 3054.9375,
+          "source": "after_end_negative.part1.aiff",
+          "source_pcm_trim_samples": [
+            0,
+            44879
+          ]
+        },
+        {
+          "kind": "silence",
+          "start_ms": 3054.9375,
+          "end_ms": 5560.0
+        }
+      ]
+    }
+  ]
+}

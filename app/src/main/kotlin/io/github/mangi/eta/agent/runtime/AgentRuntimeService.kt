@@ -262,6 +262,28 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         incoming: AgentRuntimeWire.IncomingRunRequest,
         replyTo: Messenger?,
     ) {
+        val request = incoming.request
+        val running = activeSession?.takeUnless { it.isTerminal }
+        val preparing = pendingStartRequest?.incoming?.request
+        // Voice turns must never replace a running tool task, including one from another entry.
+        val admission = AgentRuntimeAdmission.decide(
+            AgentRuntimeAdmission.Owner(request.runId, request.voiceSessionId.isNotBlank()),
+            running?.let { AgentRuntimeAdmission.Owner(it.runId, it.voiceSessionId.isNotBlank()) },
+            preparing?.let { AgentRuntimeAdmission.Owner(it.runId, it.voiceSessionId.isNotBlank()) },
+        )
+        if (admission == AgentRuntimeAdmission.Decision.ATTACH) {
+            incoming.close()
+            sendRequestIngestedTo(replyTo, request.runId)
+            attachRun(request.runId, replyTo)
+            return
+        }
+        if (admission == AgentRuntimeAdmission.Decision.BUSY) {
+            incoming.close()
+            sendRequestIngestedTo(replyTo, request.runId)
+            sendResultTo(replyTo, AgentRuntimeWire.RunResult(request.runId, false, "",
+                "当前任务仍在执行，请等完成后再说", resultKind = "rejected"))
+            return
+        }
         val generation = ++startRequestGeneration
         pendingStartRequest?.let { previous ->
             previous.incoming.close()
@@ -281,6 +303,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         thread(name = "agent-runtime-image-ingest") {
             val prepared = runCatching {
                 val request = AgentRuntimeImageTransfer.materialize(incoming)
+                if (request.voiceSessionId.isNotBlank() &&
+                    !VoiceRunReceiptStore(java.io.File(filesDir, "voice-run-receipts")).claim(request.runId)) {
+                    throw DuplicateVoiceRunException()
+                }
                 if (!AgentRuntimeRequestConfigResolver.requiresRuntimeConfig(request)) {
                     request
                 } else {
@@ -310,6 +336,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                         AndroidAgentLogger.warnThrottled("runtime_request_prepare_failed") {
                             "Agent runtime request preparation failed: type=${throwable.safeLogType()}"
                         }
+                        if (throwable is DuplicateVoiceRunException) {
+                            sendResultTo(replyTo, AgentRuntimeWire.RunResult(incoming.request.runId, false, "",
+                                "这个任务已经接收过，请查看原对话；不会重复执行", resultKind = "unconfirmed"))
+                            return@fold
+                        }
                         finishWithFailure(
                             when (throwable) {
                                 is AgentRuntimeImageTransfer.ImageTransferException ->
@@ -319,6 +350,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                                 else -> "Agent Runtime 无法准备请求"
                             },
                             replyTo,
+                            incoming.request.runId,
                         )
                     },
                 )
@@ -338,6 +370,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         activeSession?.controller?.cancel()
         val session = AgentRuntimeSession(
             runId = request.runId,
+            voiceSessionId = request.voiceSessionId,
             operation = request.operation,
             eventSink = { event -> sendEventTo(replyTo, event) },
             resultSink = { result -> sendResultTo(replyTo, result) },
@@ -613,7 +646,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun sendActiveRun(replyTo: Messenger?) {
         runCatching {
             val msg = Message.obtain(null, AgentRuntimeWire.MSG_QUERY_ACTIVE_RUN_RESPONSE)
-            msg.data = AgentRuntimeWire.ackBundle(activeSession?.runId.orEmpty())
+            msg.data = AgentRuntimeWire.ackBundle(activeSession?.takeUnless { it.isTerminal }?.runId ?: pendingStartRequest?.incoming?.request?.runId.orEmpty())
             replyTo?.send(msg)
         }.onFailure { throwable ->
             AndroidAgentLogger.warnThrottled("runtime_active_run_delivery_failed") {
@@ -697,10 +730,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun finishWithFailure(
         message: String,
         replyTo: Messenger? = null,
+        runId: String = "",
     ) {
         sendResultTo(
             replyTo,
-            AgentRuntimeWire.RunResult(runId = "", ok = false, content = "", error = message),
+            AgentRuntimeWire.RunResult(runId = runId, ok = false, content = "", error = message, resultKind = "rejected"),
         )
         if (activeSession != null) return
         enterFinalState(

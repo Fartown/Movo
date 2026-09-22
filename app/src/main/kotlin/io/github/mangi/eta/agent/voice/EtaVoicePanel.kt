@@ -115,6 +115,7 @@ internal data class EtaVoiceUiState(
     val messages: List<AgentChatMessageUi> = emptyList(),
     val phase: EtaVoicePhase = EtaVoicePhase.READY,
     val status: EtaVoiceStatus = EtaVoiceStatus.InputRequest,
+    val voiceStatus: String = "",
     val screenContext: EtaScreenContextUiState = EtaScreenContextUiState(),
 )
 
@@ -614,6 +615,12 @@ private fun AssistantComposer(
             animationSpec = folmeSpring(damping = 0.92f, response = 0.34f),
         ),
     ) {
+        if (state.voiceStatus.isNotBlank()) {
+            Text(text = state.voiceStatus,
+                color = colors.inputPrimary,
+                fontSize = 14.sp,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp))
+        }
         ScreenContextAttachment(
             state = state.screenContext,
             enabled = state.phase != EtaVoicePhase.PROCESSING,
@@ -808,7 +815,7 @@ private fun AssistantInputBar(
     onToggleListen: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val canSubmit = input.isNotBlank() && state.phase != EtaVoicePhase.PROCESSING
+    val canSubmit = input.isNotBlank() && state.phase != EtaVoicePhase.PROCESSING && !isListening
     Row(
         modifier = modifier
             .heightIn(min = 48.dp)
@@ -823,7 +830,7 @@ private fun AssistantInputBar(
     ) {
         IconButton(
             onClick = onToggleListen,
-            enabled = state.phase != EtaVoicePhase.PROCESSING,
+            enabled = isListening || state.phase != EtaVoicePhase.PROCESSING,
             minWidth = 36.dp,
             minHeight = 36.dp,
             cornerRadius = 18.dp,
@@ -839,9 +846,7 @@ private fun AssistantInputBar(
                 } else {
                     Icons.Rounded.Mic
                 },
-                contentDescription = stringResource(
-                    if (isListening) R.string.voice_listening else R.string.voice_tap_to_speak,
-                ),
+                contentDescription = if (isListening) "结束语音对话" else "开始语音对话",
                 modifier = Modifier.size(18.dp),
                 tint = if (isListening) {
                     MiuixTheme.colorScheme.primary

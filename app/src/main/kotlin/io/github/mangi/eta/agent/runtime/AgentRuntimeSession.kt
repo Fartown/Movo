@@ -14,6 +14,7 @@ import kotlin.concurrent.withLock
  */
 internal class AgentRuntimeSession(
     val runId: String,
+    val voiceSessionId: String = "",
     val controller: AgentRunController = AgentRunController(),
     eventSink: ((AgentEvent) -> Unit)? = null,
     resultSink: ((AgentRuntimeWire.RunResult) -> Unit)? = null,

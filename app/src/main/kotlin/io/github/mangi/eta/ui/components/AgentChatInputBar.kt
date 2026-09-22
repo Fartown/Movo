@@ -323,9 +323,7 @@ internal fun AgentChatInputBar(
                                 ) {
                                     Icon(
                                         imageVector = if (isListening) Icons.Rounded.Stop else Icons.Rounded.Mic,
-                                        contentDescription = stringResource(
-                                            if (isListening) R.string.voice_listening else R.string.voice_tap_to_speak,
-                                        ),
+                                        contentDescription = if (isListening) "结束语音对话" else "开始语音对话",
                                         modifier = Modifier.size(ChatInputActionIconSize),
                                         tint = if (isListening) {
                                             MiuixTheme.colorScheme.primary

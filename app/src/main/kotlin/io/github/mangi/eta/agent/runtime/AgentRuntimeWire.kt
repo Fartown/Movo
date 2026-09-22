@@ -158,6 +158,7 @@ internal object AgentRuntimeWire {
         val modelSessionId: String = "",
         val operation: String = OP_CHAT,
         val rewriteTargetMessageId: String? = null,
+        val voiceSessionId: String = "",
     ) {
         // 旧入口沿用会话 handoff；无持久会话的入口以首个 run 为会话起点。
         val effectiveModelSessionId: String
@@ -215,6 +216,7 @@ internal object AgentRuntimeWire {
         val contextSnapshotRef: String = "",
         val operation: String = OP_CHAT,
         val rewriteTargetMessageId: String? = null,
+        val resultKind: String = "terminal",
     )
 
     data class EntryHandoff(
@@ -286,6 +288,7 @@ internal object AgentRuntimeWire {
         putString(KEY_MODEL, request.config.model)
         putString(KEY_MODEL_DISPLAY_NAME, request.config.modelDisplayName)
         putString("operation", request.operation)
+        putString("voice_session_id", request.voiceSessionId)
         request.rewriteTargetMessageId?.let { putString("rewrite_target_message_id", it) }
         request.config.contextWindow?.let { putInt(KEY_CONTEXT_WINDOW, it) }
         AgentWireText.put(this, KEY_SYSTEM_PROMPT, request.config.systemPrompt, payloadDirectory)
@@ -403,6 +406,7 @@ internal object AgentRuntimeWire {
                 require(it.isNotBlank() && it.length <= 256) { "Invalid rewrite target" }
             },
             modelSessionId = bundle.getString(KEY_MODEL_SESSION_ID).orEmpty(),
+            voiceSessionId = bundle.getString("voice_session_id").orEmpty(),
             config = AgentModelClient.ModelConfig(
                 providerId = bundle.getString(KEY_PROVIDER_ID).orEmpty(),
                 providerName = bundle.getString(KEY_PROVIDER_NAME).orEmpty(),
@@ -496,6 +500,7 @@ internal object AgentRuntimeWire {
     private fun RunResult.toBundle(compactForDrain: Boolean, payloadDirectory: File? = null): Bundle = Bundle().apply {
         if (!compactForDrain) AgentWireText.put(this, "complete_result_json", json.encodeToString(this@toBundle), payloadDirectory)
         putString("operation", operation)
+        putString("result_kind", resultKind)
         rewriteTargetMessageId?.let { putString("rewrite_target_message_id", it) }
         if (compactForDrain && runId.isNotBlank()) {
             putString("context_snapshot_ref", runId)
@@ -529,6 +534,7 @@ internal object AgentRuntimeWire {
 
     fun runResultFromBundle(bundle: Bundle): RunResult =
         AgentWireText.read(bundle, "complete_result_json")?.let { json.decodeFromString<RunResult>(it) } ?: RunResult(
+            resultKind = bundle.getString("result_kind") ?: "terminal",
             contextSnapshot = AgentContextSnapshot.decode(bundle.getString("context_snapshot")),
             contextSnapshotRef = bundle.getString("context_snapshot_ref").orEmpty(),
             operation = bundle.getString("operation") ?: OP_CHAT,

@@ -12,6 +12,24 @@ import org.junit.Test
 
 class AgentRoleplayRuntimeTest {
     @Test
+    fun voiceStyleIsAppliedToCharacterWithoutReplacingPersonaOrEnteringHistory() {
+        val originalConfig = config()
+        val response = AgentModelClient.complete(
+            config = originalConfig, prompt = "你好", roleplayContext = roleplay(), voiceConversation = true,
+            provider = provider { request ->
+                val text = request.messages.toString()
+                assertTrue(text.contains("林舟"))
+                assertTrue(text.contains("当前通过语音对话交流"))
+                assertFalse(text.contains("PROVIDER_IDENTITY"))
+                assertEquals(originalConfig.model, request.config.model)
+                reply("你好。")
+            }, toolExecutor = { error("本次不应执行工具") },
+        )
+        assertTrue(response.transcript.none { it.role == "system" || it.content.contains("当前通过语音对话交流") })
+        assertFalse(originalConfig.systemPrompt.contains("当前通过语音对话交流"))
+    }
+
+    @Test
     fun continuationPromptAndLaterSteeringKeepTheirUiSupplementIdentifiers() {
         val controller = AgentRunController()
         controller.steer("后一条补充")

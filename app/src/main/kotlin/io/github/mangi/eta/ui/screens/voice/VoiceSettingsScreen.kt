@@ -291,7 +291,7 @@ internal fun VoiceSettingsScreen(onBack: () -> Unit) {
                             testing = true
                             testResult = null
                             testJob = scope.launch {
-                                try { testResult = withContext(Dispatchers.IO) { DoubaoConnectionProbe.test(saved) }
+                                try { testResult = withContext(Dispatchers.IO) { io.github.mangi.eta.agent.voice.conversation.DialogConnectionProbe.test(context, saved) }
                                 } catch (cancel: CancellationException) { throw cancel
                                 } catch (_: Exception) { testResult = DoubaoConnectionProbe.Result.NetworkError
                                 } finally { testing = false }

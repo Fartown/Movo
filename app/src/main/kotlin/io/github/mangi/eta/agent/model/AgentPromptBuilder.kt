@@ -17,8 +17,9 @@ internal object AgentPromptBuilder {
         memoryContext: AgentMemoryContext = AgentMemoryContext.DISABLED,
         rootAvailable: Boolean = false,
         roleplayContext: RoleplayRunContext? = null,
+        voiceConversation: Boolean = false,
     ): JSONArray {
-        val messages = buildSystemMessages(config, skillContext, memoryContext, rootAvailable, roleplayContext)
+        val messages = buildSystemMessages(config, skillContext, memoryContext, rootAvailable, roleplayContext, voiceConversation)
         history.forEach { item ->
             runCatching { AgentConversationCodec.toJsonObject(item) }.getOrNull()?.let(messages::put)
         }
@@ -32,6 +33,7 @@ internal object AgentPromptBuilder {
         memoryContext: AgentMemoryContext,
         rootAvailable: Boolean,
         roleplayContext: RoleplayRunContext? = null,
+        voiceConversation: Boolean = false,
     ): JSONArray {
         val messages = JSONArray()
         if (roleplayContext == null && config.systemPrompt.isNotBlank()) {
@@ -140,6 +142,9 @@ internal object AgentPromptBuilder {
             )
         }
         roleplayContext?.personaMessage()?.let(messages::put)
+        if (voiceConversation) messages.put(systemMessage(
+            "当前通过语音对话交流。未要求长答时尽量用一至三句自然口语回答；保持用户要求、角色设定和工具执行规则。",
+        ))
         buildMemorySystemMessage(memoryContext, writable = roleplayContext == null)?.let(messages::put)
         buildSkillSystemMessage(skillContext)?.let(messages::put)
         return messages

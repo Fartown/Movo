@@ -26,6 +26,10 @@ dependencyResolutionManagement {
             metadataSources { artifact() }
             content { includeModule("com.k2fsa", "sherpa-onnx") }
         }
+        maven {
+            url = uri("https://artifact.bytedance.com/repository/Volcengine/")
+            content { includeGroup("com.bytedance.speechengine") }
+        }
     }
 }
 

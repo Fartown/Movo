@@ -60,17 +60,18 @@ internal class AgentRuntimeClient(
         )
 
         val lease = AgentRuntimeConnection.acquire(context, logger)
-            ?: return AgentRuntimeWire.RunResult("", false, "", "Agent Runtime 服务绑定失败")
+            ?: return AgentRuntimeWire.RunResult(request.runId, false, "", "Agent Runtime 服务绑定失败", resultKind = "rejected")
         val serviceMessenger = lease.messenger
         val deathRecipient = IBinder.DeathRecipient {
             if (resultRef.get() == null) {
                 resultRef.set(
-                    AgentRuntimeWire.toBundle(AgentRuntimeWire.RunResult(request.runId, false, "", "Agent Runtime 服务连接已断开", contextSnapshotRef = request.runId))
+                    AgentRuntimeWire.toBundle(AgentRuntimeWire.RunResult(request.runId, false, "", "Agent Runtime 服务连接已断开", contextSnapshotRef = request.runId, resultKind = "unconfirmed"))
                 )
                 resultLatch.countDown()
             }
         }
 
+        var requestMayHaveBeenSent = false
         try {
             lease.binder.linkToDeath(deathRecipient, 0)
             val msg = Message.obtain(null, AgentRuntimeWire.MSG_START_RUN)
@@ -78,10 +79,11 @@ internal class AgentRuntimeClient(
             val preparedImages = AgentRuntimeImageTransfer.prepare(context, request.images)
             preparedImagesRef.set(preparedImages)
             msg.data = AgentRuntimeWire.toBundle(request, preparedImages.images, context.cacheDir)
+            requestMayHaveBeenSent = true
             AgentWireText.send(serviceMessenger, msg)
             // 最终结果或 Binder 断连负责唤醒；正常长任务不因客户端等待时长被取消。
             resultLatch.await()
-            return resultRef.get()?.let(AgentRuntimeWire::runResultFromBundle) ?: AgentRuntimeWire.RunResult("", false, "", "Agent Runtime 未返回结果")
+            return resultRef.get()?.let(AgentRuntimeWire::runResultFromBundle) ?: AgentRuntimeWire.RunResult(request.runId, false, "", "Agent Runtime 未返回结果", resultKind = "unconfirmed")
         } catch (interrupted: InterruptedException) {
             Thread.currentThread().interrupt()
             runCatching {
@@ -89,12 +91,13 @@ internal class AgentRuntimeClient(
                 cancelMessage.data = AgentRuntimeWire.ackBundle(request.runId)
                 serviceMessenger.send(cancelMessage)
             }
-            return AgentRuntimeWire.RunResult(request.runId, false, "", "Agent Runtime 等待被中断", contextSnapshotRef = request.runId)
+            return AgentRuntimeWire.RunResult(request.runId, false, "", "Agent Runtime 等待被中断", contextSnapshotRef = request.runId, resultKind = "unconfirmed")
         } catch (throwable: Throwable) {
             logger.warn("Agent runtime start request failed: type=${throwable.safeLogType()}")
             return AgentRuntimeWire.RunResult(
                 runId = request.runId,
                 contextSnapshotRef = request.runId,
+                resultKind = if (requestMayHaveBeenSent) "unconfirmed" else "rejected",
                 ok = false,
                 content = "",
                 error = when (throwable) {
