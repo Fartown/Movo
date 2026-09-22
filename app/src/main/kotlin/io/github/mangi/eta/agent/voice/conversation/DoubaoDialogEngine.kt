@@ -195,11 +195,11 @@ internal class DoubaoDialogEngine(
                 if (id.isNotBlank() && id == questionId) return
                 questionId = id
                 turn++
-                if (outputTurn != null && !playbackPaused) {
-                    directive(D.DIRECTIVE_PAUSE_PLAYER, "")
-                    playbackPaused = true
-                    pausedAt = SystemClock.elapsedRealtime()
-                }
+                // Dialog has already interrupted the previous round. Pausing its player here
+                // freezes the native output queue: R14 replayed 240 ms of that old queue on
+                // resume, even after the replacement's decoded audio arrived. Let the SDK
+                // consume its own round transition; only revoke our old output ownership.
+                decoderForClient = false
                 // Never select server-generated answers. Default cloud output stays behind this gate.
                 directive(D.DIRECTIVE_DIALOG_USE_CLIENT_TRIGGER_TTS, "")
                 log("input.started", mapOf("turn" to turn))
@@ -263,8 +263,8 @@ internal class DoubaoDialogEngine(
         synthesisEnded = false
         expectedDurationMs = 0
         outputRequestedAt = SystemClock.elapsedRealtime()
-        // ASR_INFO selected client TTS. After interruption, keep the player paused until
-        // the matching client's actual decoded audio, not just its metadata or request.
+        // ASR_INFO selected client TTS. Dialog handles interruption between ASR rounds;
+        // submitting text must not resume a deliberately paused native queue.
         // Bounded chunks keep a long answer off the JNI argument boundary without truncating it.
         val chunks = text.codePoints().toArray().toList().chunked(400).map { points ->
             String(points.toIntArray(), 0, points.size)
@@ -278,21 +278,28 @@ internal class DoubaoDialogEngine(
         log("output.requested", mapOf("turn" to id, "chars" to text.length))
     }
 
-    fun pause() = execute { if (outputTurn != null && !playbackPaused) {
+    fun pause() = execute { if (outputTurn == turn && !playbackPaused) {
         playbackPaused = true; pausedAt = SystemClock.elapsedRealtime()
         directive(D.DIRECTIVE_PAUSE_PLAYER, "")
     } }
-    fun resume() = execute { if (outputTurn != null && playbackPaused) {
+    fun resume() = execute { if (outputTurn == turn && playbackPaused) {
         if (outputStarted) {
             val pausedFor = SystemClock.elapsedRealtime() - pausedAt
             outputStartedAt += pausedFor
             lastSoundAt += pausedFor
         }
         playbackPaused = false; directive(D.DIRECTIVE_RESUME_PLAYER, "")
+    } else if (outputTurn != null && outputTurn != turn) {
+        // A vendor ASR round cannot resume the previous reply, including an empty/noise round.
+        // Settle the old playback state without replaying its text or creating a second task.
+        val interrupted = outputTurn!!
+        outputTurn = null
+        log("output.superseded", mapOf("turn" to interrupted))
+        emit { onPlaybackFinished(interrupted) }
     } }
     fun discard() = execute {
         if (outputTurn != null) {
-            if (!playbackPaused) {
+            if (outputTurn == turn && !playbackPaused) {
                 directive(D.DIRECTIVE_PAUSE_PLAYER, "")
                 playbackPaused = true
             }
@@ -307,7 +314,7 @@ internal class DoubaoDialogEngine(
 
     private fun playerAudio(audible: Boolean) {
         val id = outputTurn ?: return
-        if (playbackPaused) return
+        if (playbackPaused || id != turn) return
         if (audible) {
             lastSoundAt = SystemClock.elapsedRealtime()
             if (!outputStarted) {
@@ -333,6 +340,7 @@ internal class DoubaoDialogEngine(
 
     private fun checkPlayback() {
         val id = outputTurn ?: return
+        if (id != turn) return // SDK has superseded this output; wait for the input policy.
         val now = SystemClock.elapsedRealtime()
         if (!outputStarted && now - outputRequestedAt > 20_000) {
             outputTurn = null
