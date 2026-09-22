@@ -86,6 +86,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Permissions may have changed in system settings while this activity was paused.
+        io.github.mangi.eta.agent.voice.EtaWakeWordController.refresh(this)
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)

@@ -129,12 +129,18 @@ internal fun AgentChatInputBar(
     onCancelMessageEdit: () -> Unit,
     isListening: Boolean = false,
     onToggleListen: (() -> Unit)? = null,
+    dictationText: String? = null,
     modifier: Modifier = Modifier,
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
     val focusRequester = remember { FocusRequester() }
     val textFieldState = rememberTextFieldState(initialText = input)
     var wasEditingMessage by remember { mutableStateOf(isEditingMessage) }
+    LaunchedEffect(dictationText) {
+        // Dictation is an external edit; initialText alone does not update an existing field.
+        // Null means no new transcript, so errors/cancellation retain the editable draft.
+        dictationText?.let { textFieldState.setTextAndPlaceCursorAtEnd(it) }
+    }
     val canSend = textFieldState.text.isNotBlank() ||
         pendingImages.isNotEmpty() ||
         pendingFileReferences.isNotEmpty()

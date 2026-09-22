@@ -10,7 +10,6 @@ import io.github.mangi.eta.core.safeLogType
 import io.github.mangi.eta.data.model.DoubaoSpeechCredentials
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
@@ -31,13 +30,14 @@ internal class DoubaoBidirectionalAsrEngine(
 ) : EtaAsrEngine {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val running = AtomicBoolean(false)
-    private val sequence = AtomicInteger(1)
+    private var audioStream: SaucAudioStream? = null
+    private var stopping = false
     private var listener: EtaAsrEngine.Listener? = null
     private var webSocket: WebSocket? = null
     private var pcmCapture: AsrPcmCapture? = null
     private var latestText: String = ""
     private var definiteText: String = ""
-    private var startedAudio = false
+    private val finalTimeout = Runnable { failAndStop("等待豆包语音结果超时，请重试") }
 
     override fun isRunning(): Boolean = running.get()
 
@@ -46,8 +46,7 @@ internal class DoubaoBidirectionalAsrEngine(
         this.listener = listener
         latestText = ""
         definiteText = ""
-        startedAudio = false
-        sequence.set(1)
+        stopping = false
         val normalized = credentials.normalized()
         if (!normalized.hasUsableAuth()) {
             failAndStop(context.getString(R.string.voice_doubao_credentials_required))
@@ -85,86 +84,78 @@ internal class DoubaoBidirectionalAsrEngine(
                     if (!logId.isNullOrBlank()) {
                         AndroidAgentLogger.info("Doubao ASR connected logid=${logId.take(24)}")
                     }
-                    val frame = DoubaoSaucProtocol.encodeFullClientRequest(
-                        DoubaoSaucProtocol.defaultFullClientJson(),
-                        sequence = sequence.getAndIncrement(),
-                    )
-                    webSocket.send(frame.toByteString())
-                    startPcm(webSocket)
+                    mainHandler.post {
+                        if (!running.get() || stopping) {
+                            webSocket.cancel()
+                            return@post
+                        }
+                        val stream = SaucAudioStream { webSocket.send(it.toByteString()) }
+                        audioStream = stream
+                        if (stream.start()) startPcm(stream) else failAndStop("音频发送失败")
+                    }
                 }
 
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                    handleServerBytes(bytes.toByteArray())
+                    mainHandler.post {
+                        if (running.get()) handleServerBytes(bytes.toByteArray())
+                    }
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     AndroidAgentLogger.warn("Doubao ASR failure: type=${t.safeLogType()}")
-                    failAndStop(
-                        message = "豆包语音连接失败",
-                    )
+                    mainHandler.post { failAndStop("豆包语音连接失败") }
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    finishSession()
+                    mainHandler.post {
+                        if (running.get()) failAndStop("豆包语音连接已关闭，请重试")
+                    }
                 }
             },
         )
     }
 
     override fun stop(submitFinal: Boolean) {
-        if (!running.get()) return
-        val socket = webSocket
-        val seq = sequence.getAndIncrement()
+        if (!running.get() || stopping) return
+        stopping = true
         pcmCapture?.stop()
         pcmCapture = null
-        if (socket != null && submitFinal) {
-            runCatching {
-                socket.send(
-                    DoubaoSaucProtocol.encodeAudioOnlyRequest(
-                        pcm = ByteArray(0),
-                        sequence = seq,
-                        isLast = true,
-                    ).toByteString(),
-                )
+        if (submitFinal && audioStream != null) {
+            if (audioStream?.finish() == true) {
+                // Wait for the server's final result instead of cutting it off after 600 ms.
+                mainHandler.postDelayed(finalTimeout, 5_000L)
+            } else {
+                failAndStop("音频发送失败")
             }
-            mainHandler.postDelayed({
-                socket.close(1000, "done")
-                finishSession(submitFinal = true)
-            }, 600)
         } else {
-            socket?.cancel()
-            finishSession(submitFinal = submitFinal)
+            finishSession(submitFinal = false)
         }
     }
 
     override fun cancel() {
+        running.set(false)
+        stopping = true
+        mainHandler.removeCallbacksAndMessages(null)
+        audioStream?.cancel()
+        audioStream = null
         pcmCapture?.stop()
         pcmCapture = null
         webSocket?.cancel()
         webSocket = null
-        running.set(false)
         listener = null
     }
 
-    private fun startPcm(socket: WebSocket) {
-        startedAudio = true
+    private fun startPcm(stream: SaucAudioStream) {
         val capture = AsrPcmCapture(
             context = context,
             onPacket = { packet ->
                 if (!running.get()) return@AsrPcmCapture
-                val seq = sequence.getAndIncrement()
-                val ok = socket.send(
-                    DoubaoSaucProtocol.encodeAudioOnlyRequest(
-                        pcm = packet,
-                        sequence = seq,
-                        isLast = false,
-                    ).toByteString(),
-                )
+                val ok = stream.audio(packet)
                 if (!ok) {
-                    failAndStop("音频发送失败")
+                    mainHandler.post { failAndStop("音频发送失败") }
                 }
             },
-            onError = { message -> failAndStop(message) },
+            onError = { message -> mainHandler.post { failAndStop(message) } },
         )
         pcmCapture = capture
         capture.start()
@@ -184,7 +175,7 @@ internal class DoubaoBidirectionalAsrEngine(
                 val text = frame.result.text.trim()
                 if (text.isNotEmpty()) {
                     latestText = text
-                    mainHandler.post { listener?.onPartial(text) }
+                    listener?.onPartial(text)
                 }
                 val definite = frame.result.utterances
                     .filter { it.definite }
@@ -203,6 +194,9 @@ internal class DoubaoBidirectionalAsrEngine(
 
     private fun failAndStop(message: String) {
         if (!running.getAndSet(false)) return
+        mainHandler.removeCallbacksAndMessages(null)
+        audioStream?.cancel()
+        audioStream = null
         pcmCapture?.stop()
         pcmCapture = null
         webSocket?.cancel()
@@ -217,14 +211,18 @@ internal class DoubaoBidirectionalAsrEngine(
 
     private fun finishSession(submitFinal: Boolean = true) {
         if (!running.getAndSet(false) && listener == null) return
+        mainHandler.removeCallbacksAndMessages(null)
+        audioStream?.cancel()
+        audioStream = null
         pcmCapture?.stop()
         pcmCapture = null
+        webSocket?.close(1000, "done")
         webSocket = null
         val current = listener
         listener = null
         val finalText = when {
-            definiteText.isNotBlank() -> definiteText
             latestText.isNotBlank() -> latestText
+            definiteText.isNotBlank() -> definiteText
             else -> ""
         }
         mainHandler.post {

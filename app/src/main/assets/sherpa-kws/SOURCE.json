@@ -1,0 +1,19 @@
+{
+  "upstream": "https://github.com/k2-fsa/sherpa-onnx/releases/tag/kws-models",
+  "model": "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20",
+  "archive_sha256": "68447f4fbc67e70eee3a93961f36e81e98f47aef73ce7e7ca00885c6cd3616a6",
+  "files": {
+    "decoder.onnx": "63a22dd60f40fff082ac3e09afa507f6787da36df76ded2fbe145fa233e22c21",
+    "en.phone": "f7000ec3a90544c0c7c16090d8951779c2b322e14dad5006290f498567d439ea",
+    "encoder.int8.onnx": "408bbd740838c42d5bf6d1c5b80b3c88b616c7860b92d980328b5b068c76ae48",
+    "joiner.int8.onnx": "190d4067b4cc20b72a42a1916e69d92052000fb7051a427ebb1bc72a69207dc1",
+    "tokens.txt": "2d3f32311f9b692b964da3c90e830258d3e78e013cb0c992dbfb15cd5a1a71b0",
+    "zh.phone": "035a62de68cbec2fc5b61ac3beaff6f9980ee0cb6fee2ad8a3d791b681542afa",
+    "PINYIN_LICENSE.txt": "1e6c90014b4912815c296ee64bb6f6280af47e6d4c5d80e86232dfc5defe764c"
+  },
+  "chinese_lexicon": {
+    "source": "https://github.com/mozillazg/python-pinyin/tree/v0.55.0",
+    "generator": "scripts/generate-wake-lexicon.py",
+    "license": "PINYIN_LICENSE.txt"
+  }
+}

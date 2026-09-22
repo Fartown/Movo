@@ -8,11 +8,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.media.AudioManager
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.speech.SpeechRecognizer
 import io.github.mangi.eta.R
 import io.github.mangi.eta.agent.voice.wake.WakeEngineFactory
 import io.github.mangi.eta.agent.voice.wake.WakeWordEngine
@@ -41,28 +39,11 @@ internal class EtaWakeWordService : Service() {
     private var currentPhrase: String = WakePhraseRules.DEFAULT
     private var sensitivity: WakeSensitivity = WakeSensitivity.Medium
     private var foregroundActive = false
-    private var audioManager: AudioManager? = null
-    private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { change ->
-        when (change) {
-            AudioManager.AUDIOFOCUS_LOSS,
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK,
-            -> {
-                coordinator.onCallInterrupted()
-                wakeEngine?.pause()
-            }
-            AudioManager.AUDIOFOCUS_GAIN -> {
-                if (coordinator.onCallResumed()) {
-                    wakeEngine?.resume()
-                }
-            }
-        }
-    }
+    private var wakeError: String? = null
 
     override fun onCreate() {
         super.onCreate()
         instance = this
-        audioManager = getSystemService(AudioManager::class.java)
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(
@@ -71,7 +52,7 @@ internal class EtaWakeWordService : Service() {
                 NotificationManager.IMPORTANCE_LOW,
             ),
         )
-        ensureForeground()
+        if (!ensureForeground()) return
         scope.launch {
             VoiceSettingsRepository.wakeSettingsFlow().collectLatest { settings ->
                 currentPhrase = settings.effectivePhrase()
@@ -89,6 +70,11 @@ internal class EtaWakeWordService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!EtaWakeWordController.hasMicPermission(this)) {
+            stopWakeListening()
+            stopSelfSafe()
+            return START_NOT_STICKY
+        }
         when (intent?.action) {
             ACTION_STOP -> {
                 scope.launch {
@@ -108,45 +94,49 @@ internal class EtaWakeWordService : Service() {
                 refreshNotification()
             }
             else -> {
-                ensureForeground()
-                refreshNotification()
+                if (ensureForeground()) refreshNotification()
             }
         }
-        return START_STICKY
+        return if (foregroundActive) START_STICKY else START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
         if (instance === this) instance = null
+        clearForegroundNotification()
         stopWakeListening()
+        mainHandler.removeCallbacksAndMessages(null)
         scope.cancel()
-        abandonAudioFocus()
         super.onDestroy()
     }
 
-    private fun ensureForeground() {
-        if (foregroundActive) return
-        try {
+    private fun ensureForeground(): Boolean {
+        if (!EtaWakeWordController.hasMicPermission(this)) {
+            stopSelfSafe()
+            return false
+        }
+        if (foregroundActive) return true
+        return try {
             startForeground(
                 NOTIFICATION_ID,
                 notification(),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
             )
             foregroundActive = true
+            true
         } catch (failure: RuntimeException) {
             AndroidAgentLogger.warn("Wake FGS start failed: type=${failure.safeLogType()}")
-            stopSelf()
+            stopSelfSafe()
+            false
         }
     }
 
     private fun startWakeListening() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            AndroidAgentLogger.warn("Wake recognition unavailable on device")
-        }
-        requestAudioFocus()
-        coordinator.onWakeEnabled()
+        val mayListen = coordinator.onWakeEnabled()
         if (wakeEngine == null) {
+            if (!mayListen) return
+            wakeError = null
             val engine = WakeEngineFactory.create(this)
             wakeEngine = engine
             engine.start(
@@ -157,15 +147,21 @@ internal class EtaWakeWordService : Service() {
                         handleWakeDetected(phrase)
                     }
 
+                    override fun onListeningChanged(listening: Boolean) {
+                        if (listening) wakeError = null
+                        refreshNotification()
+                    }
+
                     override fun onError(message: String) {
                         AndroidAgentLogger.warn("Wake engine: $message")
-                        refreshNotification(statusOverride = message)
+                        wakeError = message
+                        refreshNotification()
                     }
                 },
             )
         } else {
             wakeEngine?.updateKeywords(currentPhrase, sensitivity)
-            wakeEngine?.resume()
+            if (mayListen) wakeEngine?.resume()
         }
         refreshNotification()
     }
@@ -174,7 +170,6 @@ internal class EtaWakeWordService : Service() {
         coordinator.onWakeDisabled()
         wakeEngine?.stop()
         wakeEngine = null
-        abandonAudioFocus()
     }
 
     private fun handleWakeDetected(phrase: String) {
@@ -191,15 +186,10 @@ internal class EtaWakeWordService : Service() {
         } else {
             EtaAssistantOverlayService.requestAutoListen(this)
         }
-        // Auto dictation is started by overlay when autoListen is set.
-        mainHandler.postDelayed({
-            if (coordinator.currentPhase() == EtaMicSessionCoordinator.Phase.Dictating) {
-                // Overlay owns dictation UI; resume wake after timeout if still paused.
-            }
-        }, 30_000L)
+        // The overlay resumes wake listening after its dictation session ends.
     }
 
-    private fun notification(statusOverride: String? = null): Notification {
+    private fun notification(): Notification {
         val open = PendingIntent.getActivity(
             this,
             0,
@@ -212,10 +202,11 @@ internal class EtaWakeWordService : Service() {
             Intent(this, EtaWakeWordService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val text = statusOverride ?: getString(
-            R.string.wake_notification_waiting,
-            currentPhrase,
-        )
+        val text = wakeError ?: when {
+            coordinator.shouldPauseWakeForDictation() -> "语音输入中，唤醒监听已暂停"
+            wakeEngine?.isRunning() == true -> getString(R.string.wake_notification_waiting, currentPhrase)
+            else -> "正在启动本地唤醒"
+        }
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(getString(R.string.wake_notification_title))
@@ -233,29 +224,27 @@ internal class EtaWakeWordService : Service() {
             .build()
     }
 
-    private fun refreshNotification(statusOverride: String? = null) {
+    private fun refreshNotification() {
         if (!foregroundActive) return
+        if (!EtaWakeWordController.hasMicPermission(this)) {
+            stopWakeListening()
+            stopSelfSafe()
+            return
+        }
         getSystemService(NotificationManager::class.java)
-            .notify(NOTIFICATION_ID, notification(statusOverride))
+            .notify(NOTIFICATION_ID, notification())
     }
 
-    private fun requestAudioFocus() {
-        audioManager?.requestAudioFocus(
-            audioFocusChangeListener,
-            AudioManager.STREAM_MUSIC,
-            AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
-        )
-    }
-
-    private fun abandonAudioFocus() {
-        audioManager?.abandonAudioFocus(audioFocusChangeListener)
-    }
-
-    private fun stopSelfSafe() {
+    private fun clearForegroundNotification() {
         if (foregroundActive) {
             foregroundActive = false
             stopForeground(STOP_FOREGROUND_REMOVE)
         }
+        getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
+    }
+
+    private fun stopSelfSafe() {
+        clearForegroundNotification()
         stopSelf()
     }
 
@@ -272,30 +261,38 @@ internal class EtaWakeWordService : Service() {
         fun isRunning(): Boolean = instance != null
 
         fun start(context: Context) {
+            if (!EtaWakeWordController.hasMicPermission(context)) {
+                stop(context)
+                return
+            }
             val app = context.applicationContext
             val intent = Intent(app, EtaWakeWordService::class.java)
             app.startForegroundService(intent)
         }
 
         fun stop(context: Context) {
-            val app = context.applicationContext
-            app.startService(
-                Intent(app, EtaWakeWordService::class.java).setAction(ACTION_STOP),
-            )
+            if (instance != null) dispatchToRunningService(ACTION_STOP)
+            else {
+                context.applicationContext.stopService(Intent(context, EtaWakeWordService::class.java))
+                context.getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
+            }
         }
 
         fun pauseWake(context: Context) {
-            val app = context.applicationContext
-            app.startService(
-                Intent(app, EtaWakeWordService::class.java).setAction(ACTION_PAUSE_WAKE),
-            )
+            dispatchToRunningService(ACTION_PAUSE_WAKE)
         }
 
         fun resumeWake(context: Context) {
-            val app = context.applicationContext
-            app.startService(
-                Intent(app, EtaWakeWordService::class.java).setAction(ACTION_RESUME_WAKE),
-            )
+            dispatchToRunningService(ACTION_RESUME_WAKE)
+        }
+
+        private fun dispatchToRunningService(action: String) {
+            val service = instance ?: return
+            val dispatch = Runnable {
+                if (instance === service) service.onStartCommand(Intent().setAction(action), 0, 0)
+            }
+            if (Looper.myLooper() == Looper.getMainLooper()) dispatch.run()
+            else service.mainHandler.post(dispatch)
         }
 
         fun syncFromSettings(context: Context, enabled: Boolean, micGranted: Boolean) {

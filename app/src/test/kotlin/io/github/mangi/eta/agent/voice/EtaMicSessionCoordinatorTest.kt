@@ -24,7 +24,6 @@ class EtaMicSessionCoordinatorTest {
         assertFalse(coordinator.onWakeDetected())
         assertEquals(EtaMicSessionCoordinator.Phase.WakeCooldown, coordinator.currentPhase())
 
-        coordinator.onWakeEnabled()
         now = 4_000L
         assertTrue(coordinator.onWakeDetected())
     }

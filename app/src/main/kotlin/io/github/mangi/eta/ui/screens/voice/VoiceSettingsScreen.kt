@@ -29,6 +29,7 @@ import androidx.core.content.ContextCompat
 import io.github.mangi.eta.R
 import io.github.mangi.eta.agent.model.AgentHttpClient
 import io.github.mangi.eta.agent.voice.EtaWakeWordController
+import io.github.mangi.eta.agent.voice.wake.WakeKeywordEncoder
 import io.github.mangi.eta.agent.voice.asr.DoubaoSaucProtocol
 import io.github.mangi.eta.data.model.DoubaoCredentialRules
 import io.github.mangi.eta.data.model.DoubaoSpeechCredentials
@@ -81,7 +82,10 @@ internal fun VoiceSettingsScreen(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) {
-            EtaWakeWordController.refresh(context)
+            scope.launch {
+                VoiceSettingsRepository.setWakeEnabled(true)
+                EtaWakeWordController.refresh(context)
+            }
         } else {
             Toast.makeText(context, context.getString(R.string.voice_mic_permission_denied), Toast.LENGTH_SHORT).show()
         }
@@ -155,15 +159,17 @@ internal fun VoiceSettingsScreen(
                     Button(
                         onClick = {
                             scope.launch {
-                                val saved = VoiceSettingsRepository.setWakePhrase(phraseDraft)
-                                phraseDraft = saved
-                                if (phraseDraft.trim() != saved && phraseDraft.trim().isNotEmpty()) {
-                                    Toast.makeText(
-                                        context,
-                                        context.getString(R.string.voice_settings_phrase_invalid_fallback),
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
+                                val draft = phraseDraft.trim()
+                                val validation = withContext(Dispatchers.IO) {
+                                    runCatching { WakeKeywordEncoder.load(context).encode(draft) }
                                 }
+                                if (validation.isFailure) {
+                                    Toast.makeText(context, validation.exceptionOrNull()?.message
+                                        ?: "无法保存唤醒词，请重试", Toast.LENGTH_SHORT).show()
+                                    return@launch
+                                }
+                                phraseDraft = VoiceSettingsRepository.setWakePhrase(draft)
+                                shortWarn = WakePhraseRules.isShortPhraseWarning(phraseDraft)
                                 EtaWakeWordController.refresh(context)
                             }
                         },

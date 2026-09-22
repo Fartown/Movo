@@ -876,9 +876,11 @@ private fun AgentChatBottomBar(
         }
     }
     androidx.compose.runtime.DisposableEffect(Unit) {
-        onDispose { dictation.cancel() }
+        onDispose {
+            dictation.cancel()
+            io.github.mangi.eta.agent.voice.EtaWakeWordService.resumeWake(context)
+        }
     }
-    val composedInput = liveTranscript ?: input
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -938,7 +940,8 @@ private fun AgentChatBottomBar(
                 .padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
         ) {
             AgentChatInputBar(
-                input = composedInput,
+                input = input,
+                dictationText = liveTranscript,
                 modelPickerState = modelPickerState,
                 isCompacting = isCompacting,
                 contextUsage = contextUsage,
@@ -971,7 +974,6 @@ private fun AgentChatBottomBar(
                 onToggleListen = {
                     if (isListening) {
                         dictation.stop(submitFinal = true)
-                        io.github.mangi.eta.agent.voice.EtaWakeWordService.resumeWake(context)
                     } else if (!isStreaming) {
                         val granted = androidx.core.content.ContextCompat.checkSelfPermission(
                             context,
@@ -1184,7 +1186,7 @@ private fun startChatDictation(
 
             override fun onFinal(text: String) {
                 setListening(false)
-                setTranscript(null)
+                setTranscript("")
                 io.github.mangi.eta.agent.voice.EtaWakeWordService.resumeWake(context)
                 if (text.isNotBlank()) onSubmit(text)
             }

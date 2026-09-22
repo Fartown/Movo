@@ -323,9 +323,11 @@ internal class EtaAssistantOverlayService : Service(), LifecycleOwner, SavedStat
 
     private fun stopDictation(submitFinal: Boolean) {
         dictationController?.stop(submitFinal)
-        dictationController = null
-        isListening = false
-        EtaWakeWordService.resumeWake(this)
+        if (!submitFinal) {
+            dictationController = null
+            isListening = false
+            EtaWakeWordService.resumeWake(this)
+        }
     }
 
     private fun showWindow() {

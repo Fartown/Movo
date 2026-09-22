@@ -60,29 +60,43 @@ internal class AsrPcmCapture(
             return
         }
         audioRecord = recorder
-        recorder.startRecording()
+        try {
+            recorder.startRecording()
+        } catch (error: RuntimeException) {
+            audioRecord = null
+            recorder.release()
+            running.set(false)
+            onError("无法启动麦克风")
+            return
+        }
         recordThread = thread(name = "eta-asr-pcm", isDaemon = true) {
             val packet = ByteArray(DoubaoSaucProtocol.PACKET_BYTES)
-            while (running.get()) {
-                val read = recorder.read(packet, 0, packet.size)
-                if (read > 0) {
-                    onPacket(if (read == packet.size) packet.copyOf() else packet.copyOf(read))
-                } else if (read < 0) {
-                    onError("麦克风读取失败 ($read)")
-                    break
+            try {
+                while (running.get()) {
+                    val read = recorder.read(packet, 0, packet.size)
+                    if (read > 0) {
+                        onPacket(packet.copyOf(read))
+                    } else if (read < 0) {
+                        if (running.get()) onError("麦克风读取失败 ($read)")
+                        break
+                    }
                 }
+            } catch (error: RuntimeException) {
+                if (running.get()) onError("麦克风读取失败")
+            } finally {
+                running.set(false)
+                runCatching { recorder.stop() }
+                recorder.release()
             }
         }
     }
 
     fun stop() {
         running.set(false)
-        recordThread?.join(500)
+        // Unblock a pending read before joining. The recording thread owns release().
+        audioRecord?.runCatching { stop() }
+        if (recordThread !== Thread.currentThread()) recordThread?.join(1_000)
         recordThread = null
-        audioRecord?.runCatching {
-            stop()
-            release()
-        }
         audioRecord = null
     }
 }

@@ -57,12 +57,12 @@ internal class EtaMicSessionCoordinator(
     fun onWakeDetected(): Boolean {
         val now = clock()
         val current = phase.get()
-        if (current != Phase.ListeningWake) return false
+        if (current != Phase.ListeningWake && current != Phase.WakeCooldown) return false
         if (lastWakeAt.get() > 0L && now - lastWakeAt.get() < cooldownMs) {
-            phase.set(Phase.WakeCooldown)
+            phase.compareAndSet(current, Phase.WakeCooldown)
             return false
         }
-        if (!phase.compareAndSet(Phase.ListeningWake, Phase.Dictating)) return false
+        if (!phase.compareAndSet(current, Phase.Dictating)) return false
         lastWakeAt.set(now)
         return true
     }
@@ -70,6 +70,7 @@ internal class EtaMicSessionCoordinator(
     fun onDictationStarted(): Boolean {
         return phase.get() == Phase.Dictating ||
             phase.compareAndSet(Phase.ListeningWake, Phase.Dictating) ||
+            phase.compareAndSet(Phase.WakeCooldown, Phase.Dictating) ||
             phase.compareAndSet(Phase.Idle, Phase.Dictating)
     }
 

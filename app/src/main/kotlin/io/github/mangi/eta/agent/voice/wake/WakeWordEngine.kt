@@ -16,6 +16,7 @@ internal interface WakeWordEngine {
     interface Listener {
         fun onDetected(phrase: String)
         fun onError(message: String)
+        fun onListeningChanged(listening: Boolean) = Unit
     }
 }
 

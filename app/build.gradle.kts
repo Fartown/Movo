@@ -59,8 +59,8 @@ android {
         minSdk = 34
         targetSdk = 36
         // versionCode 规则：yyyyMMdd + 两位当日序号（01 起），发版时随 versionName 一起手动递增。
-        versionCode = 2026091202
-        versionName = "3.0.4"
+        versionCode = 2026092202
+        versionName = "3.0.5"
 
         mapOf(
             "ETA_DEFAULT_PROVIDER_NAME" to "默认模型",
@@ -143,6 +143,7 @@ android {
 }
 
 dependencies {
+    implementation("com.k2fsa:sherpa-onnx:1.13.8@aar")
     implementation(libs.commons.compress)
     implementation(libs.xz)
     compileOnly(libs.libxposed.api)

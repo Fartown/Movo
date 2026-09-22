@@ -37,7 +37,7 @@ pending 和事实时间使用同一台主机的带时区毫秒或微秒时间。
 
 update 只更新 `foreground`、`lease`、`artifact`、`config`、`remaining`、`resources`、`notes`。lease 包含实际到期时间，artifact/config 仅含版本/来源/非敏感指纹，resources 记录本轮创建或用户已有及保留要求，不写 Key。
 
-锁默认放 `~/.cache/cloud-device-test/locks/`。同一检查点可重入，不自动到期/抢占。换设备需新检查点；其他 owner/run 拒绝。锁不能拦截绕过脚本的 ADB/用户操作，每步仍需核对画面。
+锁默认放 `~/.cache/cloud-device-test/locks/`。同一检查点可重入，不自动到期/抢占。换设备需新检查点；其他 owner/run 拒绝。锁不能拦截绕过脚本的 ADB/用户操作，每步仍需核对画面。`checkpoint.py release` 仅释放本机动作锁，不释放 Dora 租约，也不代表用户同意释放设备。平台租约默认保留；释放前在 checkpoint 的 notes/resources 中记录用户明确确认的原话、对应设备及范围，恢复执行时必须核对该确认，不能从任务已完成或锁已释放推断授权。
 
 ## 原生环境和 test-workflow
 
