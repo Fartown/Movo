@@ -61,6 +61,8 @@ internal class DoubaoDialogEngine(
     private var questionId = ""
     private var outputTurn: Long? = null
     private var outputReplyId = ""
+    private var decoderTurn = 0L
+    private var decoderForClient = false
     private var synthesisEnded = false
     private var outputStarted = false
     private var lastSoundAt = 0L
@@ -121,6 +123,7 @@ internal class DoubaoDialogEngine(
             if (input == null) D.RECORDER_TYPE_RECORDER else D.RECORDER_TYPE_STREAM)
         sdk.setOptionBoolean(D.PARAMS_KEY_DIALOG_ENABLE_PLAYER_BOOL, true)
         sdk.setOptionBoolean(D.PARAMS_KEY_DIALOG_ENABLE_PLAYER_AUDIO_CALLBACK_BOOL, true)
+        sdk.setOptionBoolean(D.PARAMS_KEY_DIALOG_ENABLE_DECODER_AUDIO_CALLBACK_BOOL, true)
         sdk.setOptionBoolean(D.PARAMS_KEY_DIALOG_ENABLE_RECORDER_AUDIO_CALLBACK_BOOL, true)
         sdk.setOptionBoolean(D.PARAMS_KEY_ENABLE_WS_RECONNECT_BOOL, false)
         sdk.setOptionInt(D.PARAMS_KEY_AUDIO_STREAM_TYPE_INT, AudioManager.STREAM_MUSIC)
@@ -135,6 +138,12 @@ internal class DoubaoDialogEngine(
                 val size = len.coerceIn(0, data?.size ?: 0)
                 if (type == D.MESSAGE_TYPE_DIALOG_RECORDER_AUDIO) {
                     if (input == null && data != null) recordActivity(data, size)
+                    return
+                }
+                if (type == D.MESSAGE_TYPE_DECODER_AUDIO_DATA) {
+                    // Production only observes arrival. Raw PCM is copied solely by instrumentation.
+                    val capture = if (decoderObserver != null && data != null) data.copyOf(size) else null
+                    execute { decodedAudio(size, capture) }
                     return
                 }
                 if (type == D.MESSAGE_TYPE_DIALOG_PLAYER_AUDIO) {
@@ -212,16 +221,11 @@ internal class DoubaoDialogEngine(
                     "client_text" to (json.optString("tts_type") == "chat_tts_text"),
                     "current_question" to (json.optString("question_id") == questionId),
                     "requested" to (outputTurn != null)))
-                if (outputTurn != null && json.optString("tts_type") == "chat_tts_text" &&
-                    json.optString("question_id") == questionId) {
+                decoderTurn = turn
+                decoderForClient = outputTurn != null && json.optString("tts_type") == "chat_tts_text" &&
+                    json.optString("question_id") == questionId
+                if (decoderForClient) {
                     outputReplyId = json.optString("reply_id")
-                    if (playbackPaused) {
-                        // Keep old queued audio paused until the SDK has switched to this reply.
-                        // Resuming when sending the text replays the previous answer's tail.
-                        directive(D.DIRECTIVE_RESUME_PLAYER, "")
-                        playbackPaused = false
-                        log("output.resumed.for.reply", mapOf("turn" to outputTurn))
-                    }
                 }
             }
             D.MESSAGE_TYPE_DIALOG_TTS_SENTENCE_END -> {
@@ -254,12 +258,13 @@ internal class DoubaoDialogEngine(
         if (id != turn || text.isBlank()) return@execute
         outputTurn = id
         outputReplyId = ""
+        decoderForClient = false
         outputStarted = false
         synthesisEnded = false
         expectedDurationMs = 0
         outputRequestedAt = SystemClock.elapsedRealtime()
         // ASR_INFO selected client TTS. After interruption, keep the player paused until
-        // the matching client's TTS_SENTENCE_START, not merely until this request is sent.
+        // the matching client's actual decoded audio, not just its metadata or request.
         // Bounded chunks keep a long answer off the JNI argument boundary without truncating it.
         val chunks = text.codePoints().toArray().toList().chunked(400).map { points ->
             String(points.toIntArray(), 0, points.size)
@@ -311,6 +316,18 @@ internal class DoubaoDialogEngine(
                 log("output.audible", mapOf("turn" to id))
                 emit { onPlaybackStarted(id) }
             }
+        }
+    }
+
+    private fun decodedAudio(size: Int, capture: ByteArray?) {
+        val owned = decoderForClient && outputTurn == decoderTurn && outputReplyId.isNotBlank()
+        if (capture != null) decoderObserver?.invoke(decoderTurn, owned, capture)
+        if (size > 0 && owned && playbackPaused) {
+            // TTS_SENTENCE_START can precede audio. Wait until the new decoded buffer is
+            // available so resuming cannot expose the previous answer's buffered tail.
+            directive(D.DIRECTIVE_RESUME_PLAYER, "")
+            playbackPaused = false
+            log("output.resumed.for.audio", mapOf("turn" to outputTurn))
         }
     }
 
@@ -391,6 +408,7 @@ internal class DoubaoDialogEngine(
         private val environmentLock = Any()
         private var environmentPrepared = false
         @Keep @JvmStatic var playerObserver: ((ByteArray) -> Unit)? = null
+        @Keep @JvmStatic var decoderObserver: ((Long, Boolean, ByteArray) -> Unit)? = null
         @Keep @JvmStatic var pcmInputFactory: (() -> PcmInput)? = null
     }
 }

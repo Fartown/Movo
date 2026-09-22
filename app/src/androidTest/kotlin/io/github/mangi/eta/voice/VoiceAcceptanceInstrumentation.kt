@@ -35,6 +35,9 @@ class VoiceAcceptanceInstrumentation : Instrumentation() {
         val player = File(directory, "player-24000-mono-s16le.pcm").outputStream()
         val playerChunks = JSONArray()
         var playerBytes = 0L
+        val decoder = File(directory, "decoder-24000-mono-s16le.pcm").outputStream()
+        val decoderChunks = JSONArray()
+        var decoderBytes = 0L
         try {
             VoiceConversationController.observer = { name, turn, text, status ->
                 events += Event(SystemClock.elapsedRealtime() - startAt, name, turn, text, status)
@@ -45,6 +48,13 @@ class VoiceAcceptanceInstrumentation : Instrumentation() {
                     .put("offset_bytes", playerBytes).put("byte_count", bytes.size))
                 player.write(bytes)
                 playerBytes += bytes.size
+            } }
+            DoubaoDialogEngine.decoderObserver = { turn, owned, bytes -> synchronized(decoder) {
+                decoderChunks.put(JSONObject().put("elapsed_ms", SystemClock.elapsedRealtime() - startAt)
+                    .put("turn", turn).put("owned", owned).put("offset_bytes", decoderBytes)
+                    .put("byte_count", bytes.size))
+                decoder.write(bytes)
+                decoderBytes += bytes.size
             } }
             if (options.getString("mode") != "physical") DoubaoDialogEngine.pcmInputFactory = { source }
             startActivitySync(Intent(targetContext, io.github.mangi.eta.ui.MainActivity::class.java)
@@ -128,10 +138,15 @@ class VoiceAcceptanceInstrumentation : Instrumentation() {
             source.close()
             DoubaoDialogEngine.pcmInputFactory = null
             DoubaoDialogEngine.playerObserver = null
+            DoubaoDialogEngine.decoderObserver = null
             VoiceConversationController.observer = null
             synchronized(player) {
                 player.close()
                 File(directory, "player-chunks.json").writeText(playerChunks.toString(2))
+            }
+            synchronized(decoder) {
+                decoder.close()
+                File(directory, "decoder-chunks.json").writeText(decoderChunks.toString(2))
             }
             runOnMainSync {
                 VoiceInstrumentationAccess.restore(targetContext, oldConversation)
