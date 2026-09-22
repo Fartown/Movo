@@ -89,6 +89,11 @@ internal object WakePhraseRules {
 internal object DoubaoCredentialRules {
     fun validate(credentials: DoubaoSpeechCredentials): Validation {
         val n = credentials.normalized()
+        if (listOf(n.apiKey, n.appKey, n.accessKey, n.resourceId).any { value ->
+                value.any { it.code < 0x20 || it.code > 0x7e }
+            }) {
+            return Validation.Invalid("凭证和资源 ID 不能包含换行、中文或不可见字符")
+        }
         if (!n.hasUsableAuth()) {
             return Validation.Invalid("缺少豆包语音凭证（Api-Key 或 App-Key+Access-Key）")
         }

@@ -25,6 +25,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -124,6 +126,7 @@ internal class EtaWakeWordService : Service() {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
             )
             foregroundActive = true
+            mutableListeningState.value = WakeListeningState.Starting
             true
         } catch (failure: RuntimeException) {
             AndroidAgentLogger.warn("Wake FGS start failed: type=${failure.safeLogType()}")
@@ -231,11 +234,18 @@ internal class EtaWakeWordService : Service() {
             stopSelfSafe()
             return
         }
+        mutableListeningState.value = when {
+            wakeError != null -> WakeListeningState.Failed(wakeError!!)
+            coordinator.shouldPauseWakeForDictation() -> WakeListeningState.Dictating
+            wakeEngine?.isRunning() == true -> WakeListeningState.Listening
+            else -> WakeListeningState.Starting
+        }
         getSystemService(NotificationManager::class.java)
             .notify(NOTIFICATION_ID, notification())
     }
 
     private fun clearForegroundNotification() {
+        mutableListeningState.value = WakeListeningState.Stopped
         if (foregroundActive) {
             foregroundActive = false
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -249,6 +259,8 @@ internal class EtaWakeWordService : Service() {
     }
 
     companion object {
+        private val mutableListeningState = MutableStateFlow<WakeListeningState>(WakeListeningState.Stopped)
+        val listeningState = mutableListeningState.asStateFlow()
         private const val CHANNEL = "eta_wake_word"
         private const val NOTIFICATION_ID = 1108
         const val ACTION_STOP = "io.github.mangi.eta.action.STOP_WAKE_WORD"
@@ -273,6 +285,7 @@ internal class EtaWakeWordService : Service() {
         fun stop(context: Context) {
             if (instance != null) dispatchToRunningService(ACTION_STOP)
             else {
+                mutableListeningState.value = WakeListeningState.Stopped
                 context.applicationContext.stopService(Intent(context, EtaWakeWordService::class.java))
                 context.getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
             }
@@ -303,4 +316,12 @@ internal class EtaWakeWordService : Service() {
             }
         }
     }
+}
+
+internal sealed interface WakeListeningState {
+    data object Stopped : WakeListeningState
+    data object Starting : WakeListeningState
+    data object Listening : WakeListeningState
+    data object Dictating : WakeListeningState
+    data class Failed(val message: String) : WakeListeningState
 }
