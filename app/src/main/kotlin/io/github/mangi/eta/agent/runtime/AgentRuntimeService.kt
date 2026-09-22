@@ -5,7 +5,6 @@ import java.util.concurrent.RejectedExecutionException
 import android.app.Service
 import android.app.ActivityOptions
 import android.app.PendingIntent
-import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
@@ -47,8 +46,6 @@ import io.github.mangi.eta.agent.overlay.AgentHapticFeedback
 import io.github.mangi.eta.agent.overlay.AgentOverlayBubble
 import io.github.mangi.eta.agent.overlay.AgentOverlayGlow
 import io.github.mangi.eta.agent.overlay.AgentOverlayOrb
-import io.github.mangi.eta.agent.overlay.AgentResultCard
-import io.github.mangi.eta.agent.overlay.AgentResultSheetSizing
 import io.github.mangi.eta.agent.overlay.AgentOverlayPhase
 import io.github.mangi.eta.agent.overlay.AgentOverlayState
 import io.github.mangi.eta.agent.overlay.AgentOverlayStatus
@@ -59,6 +56,7 @@ import io.github.mangi.eta.core.AndroidAgentLogger
 import io.github.mangi.eta.core.ModuleConfig
 import io.github.mangi.eta.core.safeLogType
 import io.github.mangi.eta.data.repository.RuntimeConfigRepository
+import io.github.mangi.eta.ui.AgentConversationSheetActivity
 import io.github.mangi.eta.ui.markdown.InAppBrowserUriHandler
 import kotlin.concurrent.thread
 import kotlinx.coroutines.runBlocking
@@ -100,12 +98,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private var glowView: ComposeView? = null
     private var orbView: ComposeView? = null
     private var bubbleView: ComposeView? = null
-    private var resultCardView: ComposeView? = null
     private var glowParams: WindowManager.LayoutParams? = null
     private var orbParams: WindowManager.LayoutParams? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
-    private var resultCardParams: WindowManager.LayoutParams? = null
-    private var resultResizeAnimator: ValueAnimator? = null
     private val resultConversationOpening = mutableStateOf(false)
     private var resultConversationTarget: AgentConversationTarget? = null
     private var resultConversationRunId: String? = null
@@ -157,7 +152,6 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         clearResultHandoff()
         io.github.mangi.eta.diagnostics.MemoryDiagnostics.record("lifecycle", "runtime.destroyed",
             fields = mapOf("run_active" to (activeSession?.isTerminal == false)))
-        resultResizeAnimator?.cancel()
         startRequestGeneration++
         pendingStartRequest?.let { pending ->
             pending.incoming.close()
@@ -177,15 +171,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         activeSession = null
         resultIo.shutdownNow()
         mainHandler.removeCallbacksAndMessages(null)
-        resultCardView?.let { view -> runCatching { windowManager?.removeView(view) } }
         bubbleView?.let { view -> runCatching { windowManager?.removeView(view) } }
         orbView?.let { view -> runCatching { windowManager?.removeView(view) } }
         glowView?.let { view -> runCatching { windowManager?.removeView(view) } }
-        resultCardView = null
         bubbleView = null
         orbView = null
         glowView = null
-        resultCardParams = null
         bubbleParams = null
         orbParams = null
         glowParams = null
@@ -340,9 +331,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         replyTo: Messenger? = null,
         fromResultCard: Boolean = false,
     ) {
-        removeResultCard()
-        isResultConversation = fromResultCard
+        clearResultHandoff()
         resultConversationTarget = AgentConversationTarget.from(request.handoff)
+        isResultConversation = fromResultCard || AgentConversationSheetActivity.isConversationVisible(resultConversationTarget)
         resultConversationRunId = request.runId
         activeSession?.controller?.cancel()
         val session = AgentRuntimeSession(
@@ -434,11 +425,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         val revealsForegroundOperation = AgentOverlayVisibilityPolicy.shouldRevealFor(event)
         val requiresEntrySurfaceDismissal =
             AgentOverlayVisibilityPolicy.shouldDismissEntrySurfaceFor(event)
-        val entrySurfaceReady = if (requiresEntrySurfaceDismissal && entrySurfaceGuard != null) {
-            runCatching { entrySurfaceGuard.dismissOnce() }.getOrDefault(false)
-        } else {
-            true
-        }
+        val entrySurfaceReady = (!requiresEntrySurfaceDismissal || entrySurfaceGuard == null ||
+            runCatching { entrySurfaceGuard.dismissOnce() }.getOrDefault(false)) &&
+            (!requiresEntrySurfaceDismissal || !isResultConversation ||
+                AgentConversationSheetActivity.hideForDeviceOperation())
         mainHandler.post {
             if (activeSession !== session) return@post
             if (
@@ -918,30 +908,6 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         bubbleParams = lp
     }
 
-    private fun showResultCard(wm: WindowManager) {
-        if (resultCardView != null) return
-        val card = createOverlayComposeView {
-            AgentResultCard(
-                state = state.value,
-                canOpenConversation = resultConversationTarget != null,
-                openingConversation = resultConversationOpening.value,
-                onDrag = ::dragResultCard,
-                onDragStopped = ::settleResultCard,
-                onOpenConversation = ::openResultConversation,
-                onClose = ::dismissAndStop,
-            )
-        }
-        val lp = resultCardLayoutParams()
-        runCatching { wm.addView(card, lp) }.onFailure { throwable ->
-            AndroidAgentLogger.warnThrottled("runtime_result_card_add_view_failed") {
-                "Agent runtime result card addView failed: type=${throwable.safeLogType()}"
-            }
-            return
-        }
-        resultCardView = card
-        resultCardParams = lp
-    }
-
     private fun createOverlayComposeView(content: @Composable () -> Unit): ComposeView =
         ComposeView(overlayContext()).apply {
             setViewTreeLifecycleOwner(this@AgentRuntimeService)
@@ -952,9 +918,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                     // RuntimeShader 只检查系统版本，因此系统浮层统一使用其普通圆角回退。
                     CompositionLocalProvider(
                         LocalSquircleEnabled provides false,
-                        LocalUriHandler provides InAppBrowserUriHandler(this@AgentRuntimeService) {
-                            if (resultCardView != null) dismissAndStop()
-                        },
+                        LocalUriHandler provides InAppBrowserUriHandler(this@AgentRuntimeService),
                     ) {
                         content()
                     }
@@ -1006,23 +970,6 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             x = dpToPx(72)
             y = (resources.displayMetrics.heightPixels * 0.6f).toInt()
             windowAnimations = 0
-        }
-
-    private fun resultCardLayoutParams(): WindowManager.LayoutParams =
-        WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            resultCardWindowHeightPx(),
-            overlayType(),
-            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            // The preview never owns a separate composer; continuation uses the App chat.
-            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            x = 0
-            y = 0
-            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
 
     private fun overlayType(): Int =
@@ -1082,51 +1029,6 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
     }
 
-    private fun resultScreenHeightPx(): Int = windowManager?.currentWindowMetrics?.bounds?.height()
-        ?: resources.displayMetrics.heightPixels
-
-    private fun resultCardWindowHeightPx(): Int =
-        AgentResultSheetSizing.height(resultScreenHeightPx(), expanded = false)
-
-    private fun updateResultCardHeight(height: Int) {
-        val view = resultCardView ?: return
-        val lp = resultCardParams ?: return
-        if (lp.height == height) return
-        lp.height = height
-        runCatching { windowManager?.updateViewLayout(view, lp) }.onFailure { throwable ->
-            AndroidAgentLogger.warnThrottled("runtime_result_resize_failed") {
-                "Agent result resize failed: type=${throwable.safeLogType()}"
-            }
-        }
-    }
-
-    private fun dragResultCard(deltaY: Float) {
-        if (resultConversationOpening.value) return
-        resultResizeAnimator?.cancel()
-        val height = resultCardParams?.height ?: return
-        updateResultCardHeight(AgentResultSheetSizing.drag(height, deltaY, resultScreenHeightPx()))
-    }
-
-    private fun settleResultCard(velocityY: Float) {
-        val height = resultCardParams?.height ?: return
-        if (height - resultCardWindowHeightPx() >= dpToPx(48) ||
-            AgentResultSheetSizing.settleExpanded(height, resultScreenHeightPx(), velocityY, dpToPx(600).toFloat())) {
-            openResultConversation()
-        }
-        collapseResultPreview()
-    }
-
-    private fun collapseResultPreview() {
-        resultResizeAnimator?.cancel()
-        val from = resultCardParams?.height ?: return
-        val target = resultCardWindowHeightPx()
-        resultResizeAnimator = ValueAnimator.ofInt(from, target).apply {
-            duration = 180
-            addUpdateListener { updateResultCardHeight(it.animatedValue as Int) }
-            start()
-        }
-    }
-
     private fun openResultConversation() {
         if (resultConversationOpening.value || activeSession != null || pendingStartRequest != null) return
         val target = resultConversationTarget ?: return
@@ -1152,7 +1054,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             }
             val pendingIntent = PendingIntent.getActivity(
                 this, 0x524553,
-                AgentConversationHandoff.intent(this, target, runId, receiver),
+                AgentConversationHandoff.intent(this, target, runId, receiver)
+                    .setClass(this, AgentConversationSheetActivity::class.java),
                 PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                 creatorOptions.toBundle(),
             )
@@ -1173,8 +1076,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun failResultHandoff(token: Any) {
         if (resultHandoffToken !== token) return
         clearResultHandoff()
-        collapseResultPreview()
-        AndroidAgentLogger.warn("Agent result conversation not ready; preview retained")
+        AndroidAgentLogger.warn("Agent conversation sheet not ready; runtime overlay retained")
         Toast.makeText(this, R.string.overlay_result_open_failed, Toast.LENGTH_LONG).show()
     }
 
@@ -1184,15 +1086,6 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         resultConversationOpening.value = false
     }
 
-    private fun removeResultCard() {
-        clearResultHandoff()
-        resultResizeAnimator?.cancel()
-        resultResizeAnimator = null
-        resultCardView?.let { view -> runCatching { windowManager?.removeView(view) } }
-        resultCardView = null
-        resultCardParams = null
-    }
-
     private fun dpToPx(dp: Int): Int =
         (dp * resources.displayMetrics.density).toInt()
 
@@ -1200,10 +1093,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         state.value = finalState
 
         if (hasExecutedForegroundTool || isResultConversation) {
-            // 续聊即使只产生文字回答，也交付回同一结果面板。
+            // Keep a visible runtime surface until the conversation acknowledges readiness.
             collapsed.value = true
-            removeAmbientWindows()
-            windowManager?.let(::showResultCard)
+            if (!AgentConversationSheetActivity.isConversationVisible(resultConversationTarget)) ensureOverlayVisible()
+            openResultConversation()
             mainHandler.removeCallbacksAndMessages(hideToken)
         } else {
             dismissAndStop()
@@ -1224,19 +1117,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     private fun dismissAndStop() {
         clearResultHandoff()
-        resultResizeAnimator?.cancel()
-        resultCardView?.let { view -> runCatching { windowManager?.removeView(view) } }
-        bubbleView?.let { view -> runCatching { windowManager?.removeView(view) } }
-        orbView?.let { view -> runCatching { windowManager?.removeView(view) } }
-        glowView?.let { view -> runCatching { windowManager?.removeView(view) } }
-        resultCardView = null
-        bubbleView = null
-        orbView = null
-        glowView = null
-        resultCardParams = null
-        bubbleParams = null
-        orbParams = null
-        glowParams = null
+        removeAmbientWindows()
         windowManager = null
         stopSelf()
     }

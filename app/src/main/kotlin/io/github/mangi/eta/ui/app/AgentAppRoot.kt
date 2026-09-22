@@ -50,8 +50,6 @@ import io.github.mangi.eta.data.repository.RuntimeConfigRepository
 import io.github.mangi.eta.ui.AppearanceSettingsScreen
 import io.github.mangi.eta.ui.SettingsScreen
 import io.github.mangi.eta.ui.components.MiuixDialogActions
-import io.github.mangi.eta.ui.model.AgentChatAction
-import io.github.mangi.eta.ui.model.AgentHomeAction
 import io.github.mangi.eta.ui.model.AgentMemoryAction
 import io.github.mangi.eta.ui.model.AgentSkillsAction
 import io.github.mangi.eta.ui.model.AgentSystemEnhanceAction
@@ -64,14 +62,12 @@ import io.github.mangi.eta.ui.pages.providers.ModelProviderDetailScreen
 import io.github.mangi.eta.ui.pages.providers.ModelProviderListScreen
 import io.github.mangi.eta.ui.screens.backup.DataBackupScreen
 import io.github.mangi.eta.ui.screens.browser.AgentBrowserScreen
-import io.github.mangi.eta.ui.screens.chat.AgentChatScreen
 import io.github.mangi.eta.ui.screens.characters.CharacterLibraryScreen
 import io.github.mangi.eta.ui.screens.characters.CharacterDetailScreen
 import io.github.mangi.eta.ui.screens.characters.CharacterEditorScreen
 import io.github.mangi.eta.ui.screens.characters.CharacterPersonaScreen
 import io.github.mangi.eta.ui.screens.characters.CharacterMemoryScreen
 import io.github.mangi.eta.ui.screens.enhance.SystemEnhanceScreen
-import io.github.mangi.eta.ui.screens.home.AgentHomeScreen
 import io.github.mangi.eta.ui.screens.mcp.McpServerDetailScreen
 import io.github.mangi.eta.ui.screens.mcp.McpServersScreen
 import io.github.mangi.eta.ui.screens.memory.AgentMemoryScreen
@@ -151,8 +147,6 @@ internal fun AgentAppRoot(
     var conversationRenameTarget by remember { mutableStateOf<ConversationSummaryUi?>(null) }
     var conversationDeleteTarget by remember { mutableStateOf<ConversationSummaryUi?>(null) }
     var conversationExportTarget by remember { mutableStateOf<ConversationSummaryUi?>(null) }
-    var messageDeleteTarget by remember { mutableStateOf<MessageMutationTarget?>(null) }
-    var messageRegenerateTarget by remember { mutableStateOf<MessageMutationTarget?>(null) }
     val conversationExportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/markdown"),
     ) { uri ->
@@ -339,95 +333,19 @@ internal fun AgentAppRoot(
         ) {
             entry<AppRoute.Home>(swipeDismiss = swipeDismiss) {
                 RoutedShell(route = AppRoute.Home) {
-                    AgentHomeScreen(
-                        state = agentState.homeState,
-                        modelPickerState = agentState.modelPickerState,
-                        conversationKey = agentState.conversationPaneState.selectedConversationId,
-                        onAction = { action ->
-                            when (action) {
-                                is AgentHomeAction.ReasoningEffortChanged ->
-                                    agentState.updateReasoningEffort(action.effort)
-                                AgentHomeAction.CompactContext -> agentState.compactCurrentContext()
-                                is AgentHomeAction.ModelSelected -> agentState.selectModel(action.modelId)
-                                is AgentHomeAction.SubmitMessage -> { requestExecutionNotifications(); agentState.sendCurrentMessage(action.text) }
-                                AgentHomeAction.StopRun -> agentState.stopCurrentRun()
-                                is AgentHomeAction.ImageAttached -> agentState.attachImage(action.uri)
-                                is AgentHomeAction.RemoveImage -> agentState.removePendingImage(action.id)
-                                is AgentHomeAction.FilesAttached -> agentState.attachFiles(action.uris)
-                                is AgentHomeAction.FolderAttached -> agentState.attachFolder(action.uri)
-                                is AgentHomeAction.FilePathAttached -> agentState.attachFilePath(action.path)
-                                is AgentHomeAction.RemoveFileReference ->
-                                    agentState.removePendingFileReference(action.id)
-                                is AgentHomeAction.EditMessage -> agentState.beginMessageEdit(action.id)
-                                AgentHomeAction.CancelMessageEdit -> agentState.cancelMessageEdit()
-                                is AgentHomeAction.DeleteMessage -> {
-                                    agentState.messageRevisionImpact(action.id)?.let { impact ->
-                                        messageDeleteTarget = MessageMutationTarget(action.id, impact.laterTurnCount)
-                                    }
-                                }
-                                is AgentHomeAction.RegenerateMessage -> {
-                                    val impact = agentState.messageRevisionImpact(action.id)
-                                    if (agentState.homeState.roleplay != null || impact?.laterTurnCount == 0) {
-                                        agentState.regenerateMessage(action.id)
-                                    } else if (impact != null) {
-                                        messageRegenerateTarget = MessageMutationTarget(action.id, impact.laterTurnCount)
-                                    }
-                                }
-                                is AgentHomeAction.SelectReplyCandidate -> agentState.selectReplyCandidate(action.id, action.index)
-                                AgentHomeAction.OpenTools -> pushRoute(AppRoute.Tools)
-                                AgentHomeAction.OpenSkills -> pushRoute(AppRoute.Skills)
-                                AgentHomeAction.OpenPermissions -> pushRoute(AppRoute.Permissions)
-                                AgentHomeAction.OpenSystemEnhance -> pushRoute(AppRoute.SystemEnhance)
-                                AgentHomeAction.OpenSettings -> pushRoute(AppRoute.Settings)
-                                AgentHomeAction.OpenBrowser -> pushRoute(AppRoute.Browser)
-                                AgentHomeAction.ExpandRunTrace -> Unit
-                            }
-                        },
+                    AgentConversationContent(
+                        agentState = agentState,
+                        onOpenBrowser = { pushRoute(AppRoute.Browser) },
                         isDrawerOpen = conversationPaneOpen,
                     )
                 }
             }
             entry<AppRoute.Chat>(swipeDismiss = swipeDismiss) {
                 RoutedShell(route = AppRoute.Chat) {
-                    AgentChatScreen(
-                        state = agentState.homeState,
-                        modelPickerState = agentState.modelPickerState,
-                        conversationKey = agentState.conversationPaneState.selectedConversationId,
-                        onAction = { action ->
-                            when (action) {
-                                AgentChatAction.NavigateBack -> popRoute()
-                                is AgentChatAction.ReasoningEffortChanged ->
-                                    agentState.updateReasoningEffort(action.effort)
-                                AgentChatAction.CompactContext -> agentState.compactCurrentContext()
-                                is AgentChatAction.ModelSelected -> agentState.selectModel(action.modelId)
-                                is AgentChatAction.SubmitMessage -> { requestExecutionNotifications(); agentState.sendCurrentMessage(action.text) }
-                                AgentChatAction.StopRun -> agentState.stopCurrentRun()
-                                AgentChatAction.OpenBrowser -> pushRoute(AppRoute.Browser)
-                                is AgentChatAction.ImageAttached -> agentState.attachImage(action.uri)
-                                is AgentChatAction.RemoveImage -> agentState.removePendingImage(action.id)
-                                is AgentChatAction.FilesAttached -> agentState.attachFiles(action.uris)
-                                is AgentChatAction.FolderAttached -> agentState.attachFolder(action.uri)
-                                is AgentChatAction.FilePathAttached -> agentState.attachFilePath(action.path)
-                                is AgentChatAction.RemoveFileReference ->
-                                    agentState.removePendingFileReference(action.id)
-                                is AgentChatAction.EditMessage -> agentState.beginMessageEdit(action.id)
-                                AgentChatAction.CancelMessageEdit -> agentState.cancelMessageEdit()
-                                is AgentChatAction.DeleteMessage -> {
-                                    agentState.messageRevisionImpact(action.id)?.let { impact ->
-                                        messageDeleteTarget = MessageMutationTarget(action.id, impact.laterTurnCount)
-                                    }
-                                }
-                                is AgentChatAction.RegenerateMessage -> {
-                                    val impact = agentState.messageRevisionImpact(action.id)
-                                    if (agentState.homeState.roleplay != null || impact?.laterTurnCount == 0) {
-                                        agentState.regenerateMessage(action.id)
-                                    } else if (impact != null) {
-                                        messageRegenerateTarget = MessageMutationTarget(action.id, impact.laterTurnCount)
-                                    }
-                                }
-                                is AgentChatAction.SelectReplyCandidate -> agentState.selectReplyCandidate(action.id, action.index)
-                            }
-                        },
+                    AgentConversationContent(
+                        agentState = agentState,
+                        onOpenBrowser = { pushRoute(AppRoute.Browser) },
+                        onNavigateBack = { popRoute() },
                     )
                 }
             }
@@ -795,62 +713,4 @@ internal fun AgentAppRoot(
         }
     }
 
-    messageDeleteTarget?.let { target ->
-        WindowDialog(
-            show = true,
-            title = stringResource(R.string.conversation_delete_message_title),
-            summary = if (target.laterTurnCount == 0) {
-                stringResource(R.string.conversation_delete_message_body)
-            } else {
-                pluralStringResource(
-                    R.plurals.conversation_delete_later_turns,
-                    target.laterTurnCount,
-                    target.laterTurnCount,
-                )
-            },
-            onDismissRequest = { messageDeleteTarget = null },
-        ) {
-            MiuixDialogActions(
-                confirmText = stringResource(R.string.action_delete),
-                destructive = true,
-                onCancel = { messageDeleteTarget = null },
-                onConfirm = {
-                    agentState.deleteMessageTurn(target.messageId)
-                    messageDeleteTarget = null
-                },
-            )
-        }
-    }
-
-    messageRegenerateTarget?.let { target ->
-        WindowDialog(
-            show = true,
-            title = stringResource(R.string.conversation_regenerate_title),
-            summary = if (target.laterTurnCount == 0) {
-                stringResource(R.string.conversation_regenerate_current_turn)
-            } else {
-                pluralStringResource(
-                    R.plurals.conversation_regenerate_later_turns,
-                    target.laterTurnCount,
-                    target.laterTurnCount,
-                )
-            },
-            onDismissRequest = { messageRegenerateTarget = null },
-        ) {
-            MiuixDialogActions(
-                confirmText = stringResource(R.string.action_regenerate),
-                destructive = true,
-                onCancel = { messageRegenerateTarget = null },
-                onConfirm = {
-                    agentState.regenerateMessage(target.messageId)
-                    messageRegenerateTarget = null
-                },
-            )
-        }
-    }
 }
-
-private data class MessageMutationTarget(
-    val messageId: String,
-    val laterTurnCount: Int,
-)

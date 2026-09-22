@@ -64,7 +64,8 @@ internal class ModelRequestTrace(
     }
 
     fun record(event: String, level: DiagnosticLevel = DiagnosticLevel.INFO, fields: Map<String, Any?> = emptyMap()) {
-        MemoryDiagnostics.record("model", event, level, context, snapshot() + fields)
+        // Keep event-specific diagnosis before the bounded field budget is consumed by environment metadata.
+        MemoryDiagnostics.record("model", event, level, context, fields + snapshot())
     }
 
     fun success() {

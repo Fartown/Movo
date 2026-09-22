@@ -61,7 +61,8 @@ internal sealed interface AgentEvent {
         val reasonCode: String,
     ) : AgentEvent {
         val displayMessage: String
-            get() = "模型请求暂时中断，${delayMs / 1000} 秒后重试（$attempt/$maxAttempts）；此前工具结果已保留。" +
+            get() = (if (reasonCode == "MODEL_EMPTY_RESPONSE") "模型服务未返回正文，" else "模型请求暂时中断，") +
+                "${delayMs / 1000} 秒后重试（$attempt/$maxAttempts）；此前工具结果已保留。" +
                 "\n原因：${modelFailureHint(reasonCode)}（${reasonCode.toSafeLogToken()}）。可在设置 → 运行日志查看详情。"
 
         override fun toLogLine(): String =
@@ -222,6 +223,12 @@ internal sealed interface AgentEvent {
 }
 
 internal fun modelFailureHint(code: String): String = when {
+    code == "MODEL_EMPTY_RESPONSE" -> "服务端已完成但未返回正文或工具"
+    code == "MODEL_REFUSAL" -> "模型拒绝回答"
+    code == "MODEL_OUTPUT_LIMIT" -> "模型输出达到长度上限"
+    code == "MODEL_OUTPUT_INCOMPLETE" -> "模型输出未完成"
+    code == "RESPONSE_OUTPUT_MISMATCH" -> "响应文本与终态解析不一致"
+    code == "RESPONSE_UNSUPPORTED_OUTPUT" -> "响应输出结构不受支持"
     code == "MODEL_TIMEOUT" -> "等待模型数据超时"
     code == "MODEL_CONNECTION_FAILED" -> "网络连接中断"
     code == "STREAM_INCOMPLETE" -> "响应流缺少结束事件"

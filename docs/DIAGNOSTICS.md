@@ -30,6 +30,21 @@
 
 `MODEL_TIMEOUT` 可能发生在连接、写入或读取阶段，需同时看 stage。读取等待上限为 300 秒，不是整个任务的总时限。`STREAM_INCOMPLETE` 表示缺少协议终态；例如 Responses 的 `[DONE]` 不能代替 `response.completed`，日志会分别记录这两种事件。`HTTP_429`、`HTTP_503` 等表示服务商返回了对应状态。
 
+## 已完成却没有正文
+
+Responses 请求额外记录“模型响应内容检查”（`response.output`），仍只保存类型、计数与编号：
+
+- `stream_text_chars` / `stream_text_done_chars`：正文增量及完成事件里的字符数。
+- `terminal_item_types` / `terminal_part_types`：最终输出项与内容类型计数；未知类型统一记为 other，不保留任意服务端文本。
+- `terminal_text_chars` / `parsed_text_chars` / `parsed_tool_calls`：终态原始正文长度与实际解析结果。
+- `response_id` / `server_request_id` / `incomplete_reason`：关联服务商日志与协议终止原因。
+
+`MODEL_EMPTY_RESPONSE` 表示服务端发了完成事件，但既没有正文，也没有本地工具调用；不是网络超时。它在模型请求边界内失败，不再先记为成功、再由任务循环报“返回为空”。只有可安全重放时才沿用最多3次、2/4/8秒重试；已经启动托管工具的请求不自动重放。失败尝试不加入成功会话上下文，之前的工具结果保留。
+
+`RESPONSE_OUTPUT_MISMATCH` 表示流中或终态有文字而最终解析为空；`RESPONSE_UNSUPPORTED_OUTPUT` 表示输出结构不受支持；`MODEL_REFUSAL` 表示拒绝，`MODEL_OUTPUT_LIMIT` 表示达到输出上限。这些不会当作临时空答自动重试。结构摘要受原有2,000条/4MiB、单条4KiB限制，不保存正文、思考文本或凭据。
+
+2026-09-22，直接请求同一方舟`deepseek-v4-1-flash-260910`模型，在脱离Android的最小请求中复现了仅reasoning的completed响应：默认思考流式3/3为空，非流式1/3为空；显式`reasoning.effort=none`的3次对照均返回完整短文本。关闭思考是该次验证有效的绕过方式，不代表供应商问题已永久修复；不要仅凭“Off”的UI外观判断已生效，模型能力为未知时默认不发送reasoning参数。精确请求、结构摘要和边界见`tmp/tasks/2026-09-22-empty-response-root-cause/findings.md`。
+
 每次调用都有新的重试预算，因此一个长任务可以在不同 Q 编号下多次出现 1/3。成功的工具结果仍按原行为保留。摘要子请求即使不投递聊天事件，也会进入内存日志。取消单列为 `attempt.cancelled`，不标成模型失败。
 
 ## 真机诊断示例

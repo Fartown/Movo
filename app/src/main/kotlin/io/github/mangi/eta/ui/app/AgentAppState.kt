@@ -413,6 +413,7 @@ internal class AgentAppState(
             AgentConversationStore.load(appContext)
         }
         withContext(Dispatchers.Main.immediate) {
+            io.github.mangi.eta.ui.components.AgentConversationDraftStore.shared.clear()
             selectedConversationId = snapshot.selectedConversationId
             conversationsById = snapshot.conversationsById
             conversationTitles = snapshot.titles
@@ -719,7 +720,7 @@ internal class AgentAppState(
             if (state == null || (requiredRunId != null && !AgentRuntimeHistoryReducer.wasApplied(state, requiredRunId))) {
                 false
             } else {
-                selectConversation(conversationId)
+                if (selectedConversationId != conversationId) selectConversation(conversationId)
                 true
             }
         }
@@ -846,6 +847,7 @@ internal class AgentAppState(
 
     fun createConversation() {
         if (homeState.messageEdit != null) cancelMessageEdit()
+        io.github.mangi.eta.ui.components.AgentConversationDraftStore.shared.remove(null)
         fileAttachmentOwnerVersion += 1
         selectedConversationId = null
         homeState = emptyChatState(defaultThinkingEnabled).withCurrentReasoningCapabilities()
@@ -893,6 +895,7 @@ internal class AgentAppState(
     }
 
     fun deleteConversation(conversationId: String) {
+        io.github.mangi.eta.ui.components.AgentConversationDraftStore.shared.remove(conversationId)
         val wasSelected = selectedConversationId == conversationId
         conversationsById = conversationsById - conversationId
         conversationTitles = conversationTitles - conversationId
@@ -1004,9 +1007,6 @@ internal class AgentAppState(
         val runtimePrompt = AgentFileReferencePromptCodec.format(prompt, fileReferences)
 
         val edit = homeState.messageEdit
-        if (edit == null && selectedConversationId?.isReadOnlyExternalArchiveConversation() == true) {
-            moveCurrentDraftToNewConversation()
-        }
 
         val editBoundary = edit?.let {
             AgentConversationRevisionReducer.boundary(homeState, it.targetMessageId)
@@ -1014,6 +1014,9 @@ internal class AgentAppState(
         if (edit != null && editBoundary == null) {
             cancelMessageEdit()
             return
+        }
+        io.github.mangi.eta.ui.components.AgentConversationDraftStore.shared.get(selectedConversationId).edit {
+            replace(0, length, "")
         }
 
         val conversationId = selectedConversationId ?: newConversationId().also {
@@ -1085,7 +1088,7 @@ internal class AgentAppState(
             }
             updateCurrentConversation(homeState.copy(
                 input = content, pendingImages = emptyList(), pendingFileReferences = emptyList(),
-                messageEdit = MessageEditUiState(messageId, homeState.input, homeState.pendingImages,
+                messageEdit = MessageEditUiState(messageId, io.github.mangi.eta.ui.components.AgentConversationDraftStore.shared.get(selectedConversationId, homeState.input).text.toString(), homeState.pendingImages,
                     homeState.pendingFileReferences, hasLaterTurns = false, preserveFollowingMessages = true),
             ))
             return
@@ -1113,7 +1116,7 @@ internal class AgentAppState(
                 pendingFileReferences = fileReferences,
                 messageEdit = MessageEditUiState(
                     targetMessageId = boundary.userMessage.id,
-                    previousInput = homeState.input,
+                    previousInput = io.github.mangi.eta.ui.components.AgentConversationDraftStore.shared.get(selectedConversationId, homeState.input).text.toString(),
                     previousImages = homeState.pendingImages,
                     previousFileReferences = homeState.pendingFileReferences,
                     hasLaterTurns = boundary.laterTurnCount > 0,
@@ -2431,26 +2434,18 @@ internal class AgentAppState(
     }
 
     private fun updateCurrentConversation(state: AgentChatHomeUiState) {
+        if (state.input != homeState.input || state.messageEdit != homeState.messageEdit) {
+            io.github.mangi.eta.ui.components.AgentConversationDraftStore.shared.get(selectedConversationId).edit {
+                replace(0, length, state.input)
+                selection = androidx.compose.ui.text.TextRange(state.input.length)
+            }
+        }
         val conversationId = selectedConversationId
         if (conversationId == null) {
             homeState = state
         } else {
             updateConversation(conversationId, state)
         }
-    }
-
-    private fun moveCurrentDraftToNewConversation() {
-        val draft = homeState
-        selectedConversationId = null
-        homeState = emptyChatState(defaultThinkingEnabled).copy(
-            input = draft.input,
-            thinkingEnabled = draft.reasoningEffort.enablesReasoning,
-            reasoningEffort = draft.reasoningEffort,
-            availableReasoningEfforts = currentReasoningCapabilities?.selectableEfforts.orEmpty(),
-            pendingImages = draft.pendingImages,
-            pendingFileReferences = draft.pendingFileReferences,
-        )
-        conversationPaneState = conversationPaneState.copy(selectedConversationId = null)
     }
 
     private fun updateConversation(
@@ -2626,9 +2621,6 @@ private data class ContentMatchCacheEntry(
 )
 
 private const val EXTERNAL_ARCHIVE_CONVERSATION_PREFIX = "archive-"
-
-private fun String.isReadOnlyExternalArchiveConversation(): Boolean =
-    startsWith(EXTERNAL_ARCHIVE_CONVERSATION_PREFIX)
 
 private fun archiveConversationId(source: String, conversationKey: String): String {
     val prefix = if (source == AgentRuntimeWire.ETA_VOICE_HANDOFF_SOURCE) {

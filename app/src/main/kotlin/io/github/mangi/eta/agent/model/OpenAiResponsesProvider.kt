@@ -100,6 +100,7 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
         if (stream == null) error("模型接口未返回响应流")
         val streamedText = StringBuilder()
         val streamedReasoning = StringBuilder()
+        val outputDiagnostics = ResponsesOutputDiagnostics()
         val toolCalls = linkedMapOf<String, StreamingFunctionCall>()
         val hostedTools = linkedMapOf<String, Boolean>()
         val contentBlocks = mutableListOf<StreamingContentBlock>()
@@ -212,6 +213,7 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
             throwEventError(event)
             val type = event.optString("type").ifBlank { eventName }
             trace.sseType(type)
+            outputDiagnostics.observe(type, event)
             when (type) {
                 "response.output_text.delta" -> {
                     val delta = event.optString("delta")
@@ -459,6 +461,7 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
         if (hasTerminalOutput) {
             ResponsesEphemeralState.attachOutputItems(assistant, output)
         }
+        outputDiagnostics.validate(trace, terminalType, finalResponse, assistant, streamedText.length, streamedReasoning.length)
         return assistant
     }
 

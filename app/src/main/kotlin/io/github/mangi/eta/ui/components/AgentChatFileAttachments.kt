@@ -60,7 +60,7 @@ import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.theme.LocalDismissState
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.window.WindowDialog
-import top.yukonga.miuix.kmp.window.WindowListPopup
+import top.yukonga.miuix.kmp.overlay.OverlayListPopup
 
 internal val ChatInputPopupMargin = 8.dp
 internal val ChatInputActionSize = 40.dp
@@ -117,7 +117,7 @@ internal fun AgentAttachmentPickerButton(
                 tint = MiuixTheme.colorScheme.onSurface,
             )
         }
-        WindowListPopup(
+        OverlayListPopup(
             show = showPopup && popupAnchorTopPx > 0,
             popupPositionProvider = remember(popupAnchorTopPx) {
                 InputPopupPositionProvider(popupAnchorTopPx)

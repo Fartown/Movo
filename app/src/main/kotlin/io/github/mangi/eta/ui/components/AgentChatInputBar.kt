@@ -88,7 +88,7 @@ import top.yukonga.miuix.kmp.squircle.squircleBorder
 import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.theme.LocalDismissState
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowListPopup
+import top.yukonga.miuix.kmp.overlay.OverlayListPopup
 
 private val SendButtonVisualSize = ChatInputActionIconSize
 private val SendIconSize = 16.dp
@@ -134,7 +134,8 @@ internal fun AgentChatInputBar(
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
     val focusRequester = remember { FocusRequester() }
-    val textFieldState = rememberTextFieldState(initialText = input)
+    val conversationComposer = LocalConversationComposer.current
+    val textFieldState = conversationComposer ?: rememberTextFieldState(initialText = input)
     var wasEditingMessage by remember { mutableStateOf(isEditingMessage) }
     LaunchedEffect(dictationText) {
         // Dictation is an external edit; initialText alone does not update an existing field.
@@ -155,7 +156,7 @@ internal fun AgentChatInputBar(
     LaunchedEffect(isEditingMessage) {
         // 编辑态由外部业务状态驱动；普通输入只保留在本地，避免每个字符把聊天舞台
         // 的消息流、滚动和 Markdown 一起带入重组。
-        if (isEditingMessage || wasEditingMessage) {
+        if (conversationComposer == null && (isEditingMessage || wasEditingMessage)) {
             textFieldState.setTextAndPlaceCursorAtEnd(input)
         }
         if (isEditingMessage) {
@@ -166,7 +167,7 @@ internal fun AgentChatInputBar(
     }
 
     LaunchedEffect(isStreaming, isCompacting) {
-        if (isStreaming && !isCompacting) {
+        if (conversationComposer == null && isStreaming && !isCompacting) {
             // 发送按钮、建议词和外部恢复都可能启动流式任务，统一清掉本地草稿。
             textFieldState.clearText()
         }
@@ -251,6 +252,10 @@ internal fun AgentChatInputBar(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
+                        // Reserve the action row before measuring a multiline editor. In a
+                        // half-height window with the IME open, text scrolls within the space
+                        // left over instead of measuring the send/stop controls down to zero.
+                        .weight(1f, fill = false)
                         .defaultMinSize(minHeight = 40.dp)
                         .padding(horizontal = 8.dp, vertical = 5.dp),
                     contentAlignment = Alignment.TopStart,
@@ -478,7 +483,7 @@ private fun ThinkingEffortChip(
                 tint = contentColor,
             )
         }
-        WindowListPopup(
+        OverlayListPopup(
             show = showPopup && menuEnabled && popupAnchorTopPx > 0,
             popupPositionProvider = popupPositionProvider,
             alignment = PopupPositionProvider.Align.TopStart,

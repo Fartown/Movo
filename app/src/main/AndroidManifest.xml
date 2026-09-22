@@ -68,6 +68,16 @@
         </activity>
 
         <activity
+            android:name=".ui.AgentConversationSheetActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="io.github.mangi.eta.conversation"
+            android:configChanges="orientation|screenSize|smallestScreenSize|keyboard|keyboardHidden"
+            android:theme="@style/Theme.EtaConversationSheet"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
             android:name=".agent.voice.EtaVoiceAssistActivity"
             android:excludeFromRecents="true"
             android:exported="true"

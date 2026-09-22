@@ -134,7 +134,7 @@ class OpenAiResponsesProviderTest {
                     "response.completed",
                     JSONObject().put(
                         "response",
-                        JSONObject().put("status", "completed").put("output", JSONArray().put(item)),
+                        JSONObject().put("status", "completed").put("output", JSONArray().put(item).put(messageItem("msg_answer", "答案"))),
                     ),
                 ),
             )

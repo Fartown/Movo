@@ -59,8 +59,8 @@ android {
         minSdk = 34
         targetSdk = 36
         // versionCode 规则：yyyyMMdd + 两位当日序号（01 起），发版时随 versionName 一起手动递增。
-        versionCode = 2026092205
-        versionName = "3.0.5"
+        versionCode = 2026092206
+        versionName = "3.0.6"
 
         mapOf(
             "ETA_DEFAULT_PROVIDER_NAME" to "默认模型",

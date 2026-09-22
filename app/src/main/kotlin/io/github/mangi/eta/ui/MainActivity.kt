@@ -118,7 +118,7 @@ class MainActivity : ComponentActivity() {
         }
         if (intent?.action == InAppBrowserUriHandler.ACTION_OPEN_BROWSER) {
             browserUrl = intent.getStringExtra(InAppBrowserUriHandler.EXTRA_BROWSER_URL)
-                ?.let(::normalizeBrowserLink)
+                ?.let { if (it.isBlank()) "" else normalizeBrowserLink(it) }
             return
         }
         if (intent?.action != EtaAssistantOverlayService.ACTION_OPEN_CONVERSATION) return

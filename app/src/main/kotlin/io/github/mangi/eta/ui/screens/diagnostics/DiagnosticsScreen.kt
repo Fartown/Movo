@@ -155,6 +155,7 @@ private fun DiagnosticEntry.title(): String = when (event) {
     "http.first_byte" -> "已收到首批响应数据"
     "sse.done_marker" -> "收到 [DONE] 标记"
     "sse.terminal" -> "收到模型终态事件"
+    "response.output" -> "模型响应内容检查"
     "run.started" -> "任务开始"
     "run.completed" -> "任务完成"
     "run.failed" -> "任务失败"

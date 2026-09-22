@@ -722,6 +722,7 @@ private fun BrowserWebViewHost(
         // attachTo takes control and cancels the previous Agent operation. Only load
         // the clicked source after that cancellation, otherwise first entry is blank.
         onInitialUrlConsumed()
+        if (url.isBlank()) return@LaunchedEffect
         // Clearing the pending URL cancels this effect, not the host's loading job.
         scope.launch(Dispatchers.IO) { AgentBrowserSession.navigateFromUser(context, url) }
     }

@@ -154,6 +154,7 @@ internal fun AgentChatBody(
     onOpenBrowser: () -> Unit,
     characterName: String? = null,
     isDrawerOpen: Boolean = false,
+    initiallyShowLatestMessage: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val scrollState = rememberLazyListState()
@@ -172,6 +173,13 @@ internal fun AgentChatBody(
             targetMessageId = messageEdit?.takeUnless { it.preserveFollowingMessages }?.targetMessageId,
         ).filterNot { message ->
             message is AgentMessageUi && message.content.isBlank()
+        }
+    }
+    // Initial result presentation starts at the latest turn. Window resizing and onResume do
+    // not restart this effect, so a reader's position remains untouched afterwards.
+    LaunchedEffect(Unit) {
+        if (initiallyShowLatestMessage) {
+            scrollState.requestScrollToItem(visibleMessages.toTimelineEntries().size)
         }
     }
     val currentBrowserMessageId = remember(
@@ -895,6 +903,9 @@ private fun AgentChatBottomBar(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    // Measure the composer before this decorative fade. Editing hints and
+                    // attachment chips still need room for a readable line above the IME.
+                    .weight(1f, fill = false)
                     .height(ChatBottomFrostHeight)
                     // DstIn 让真实磨砂在顶部透明、靠近输入框时逐渐变实，消除硬裁切线。
                     .graphicsLayer {
@@ -921,6 +932,7 @@ private fun AgentChatBottomBar(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .weight(1f, fill = false)
                     .height(16.dp)
                     .background(
                         Brush.verticalGradient(
