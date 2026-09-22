@@ -32,6 +32,15 @@ class VoiceAcceptanceInstrumentation : Instrumentation() {
         var oldConversation: String? = null
         var result = "FAIL"
         var failure = ""
+        val diagnosticFindings = mutableListOf<String>()
+        fun requireCodeword(text: String, message: String) {
+            if (text.contains("蓝鲸") && (text.contains("47") || text.contains("四十七"))) return
+            val issue = "$message: $text"
+            // Keep the same verdict, but collect later playback evidence even when the model
+            // itself returns an incomplete body. This mode never converts a core failure to PASS.
+            if (options.getString("mode") == "playback_diagnostic") diagnosticFindings += issue
+            else error(issue)
+        }
         val player = File(directory, "player-24000-mono-s16le.pcm").outputStream()
         val playerChunks = JSONArray()
         var playerBytes = 0L
@@ -91,9 +100,7 @@ class VoiceAcceptanceInstrumentation : Instrumentation() {
                 // "我记着了" is valid speech and must not prevent the actual context test from running.
                 check(first.text.isNotBlank()) { "First model answer is empty" }
                 val second = round("r2_pause_correction")
-                check(second.text.contains("蓝鲸") && (second.text.contains("47") || second.text.contains("四十七"))) {
-                    "Conversation context lost: ${second.text}"
-                }
+                requireCodeword(second.text, "Conversation context lost")
                 val begin = events.size
                 feed("r3_long_reply")
                 val third = awaitEvent("dispatch", begin)
@@ -104,10 +111,7 @@ class VoiceAcceptanceInstrumentation : Instrumentation() {
                 val replacement = awaitEvent("dispatch", interruptAt)
                 check(replacement.turn > third.turn)
                 val replacementAnswer = awaitEvent("answer", interruptAt, replacement.turn)
-                check(replacementAnswer.text.contains("蓝鲸") &&
-                    (replacementAnswer.text.contains("47") || replacementAnswer.text.contains("四十七"))) {
-                    "Barge-in lost the complete codeword: ${replacementAnswer.text}"
-                }
+                requireCodeword(replacementAnswer.text, "Barge-in lost the complete codeword")
                 awaitEvent("speaking", interruptAt, replacement.turn)
                 awaitEvent("listening", interruptAt, replacement.turn)
                 check(events.drop(interruptAt).none { it.name == "speaking" && it.turn == third.turn }) {
@@ -129,6 +133,7 @@ class VoiceAcceptanceInstrumentation : Instrumentation() {
                     "Speech differs from the final LLM body for turn ${spoken.turn}"
                 }
             }
+            check(diagnosticFindings.isEmpty()) { diagnosticFindings.joinToString("; ") }
             result = "PASS"
         } catch (t: Throwable) {
             failure = "${t.javaClass.simpleName}: ${t.message}"
@@ -162,6 +167,8 @@ class VoiceAcceptanceInstrumentation : Instrumentation() {
             File(directory, "voice-diagnostics.json").writeText(VoiceInstrumentationAccess.diagnostics())
             File(directory, "result.json").writeText(JSONObject()
                 .put("result", result).put("failure", failure)
+                .put("mode", options.getString("mode", "core"))
+                .put("diagnostic_findings", JSONArray(diagnosticFindings))
                 .put("input", if (options.getString("mode") == "physical") "SDK physical microphone" else "Paced synthetic PCM; no end directive")
                 .put("physical_aec_double_talk", "UNVERIFIED")
                 .put("elapsed_ms", SystemClock.elapsedRealtime() - startAt)
