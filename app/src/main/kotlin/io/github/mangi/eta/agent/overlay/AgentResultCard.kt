@@ -5,7 +5,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -14,43 +13,27 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.ExpandLess
-import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -65,52 +48,40 @@ import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
-/** Resizable result surface. Reading scrolls independently; only its header resizes the window. */
+/** A result preview. Expanding, swiping up and continuing all open the original App conversation. */
 @Composable
 internal fun AgentResultCard(
     state: AgentOverlayState,
-    expanded: Boolean,
-    canContinue: Boolean,
+    canOpenConversation: Boolean,
+    openingConversation: Boolean,
     onDrag: (Float) -> Unit,
     onDragStopped: (Float) -> Unit,
-    onExpandedChange: (Boolean) -> Unit,
-    onContinue: (String) -> Boolean,
+    onOpenConversation: () -> Unit,
     onClose: () -> Unit,
 ) {
-    var draft by remember { mutableStateOf("") }
-    var submitting by remember { mutableStateOf(false) }
-    val keyboard = LocalSoftwareKeyboardController.current
-    val focusManager = LocalFocusManager.current
     val colors = MiuixTheme.colorScheme
     val content = state.detailText.ifBlank { state.status.localizedText() }
     val bodyStyle = TextStyle(fontSize = 16.sp, lineHeight = 26.sp, color = colors.onSurface)
-    val toggleLabel = stringResource(if (expanded) R.string.overlay_result_collapse else R.string.overlay_result_expand)
-    val send: () -> Unit = {
-        val text = draft.trim()
-        if (canContinue && text.isNotEmpty() && !submitting) {
-            submitting = true
-            keyboard?.hide()
-            focusManager.clearFocus()
-            if (onContinue(text)) draft = "" else submitting = false
-        }
-    }
+    val openLabel = stringResource(R.string.overlay_result_open_conversation)
+    val canOpen = canOpenConversation && !openingConversation
 
     Box(
-        Modifier.fillMaxSize().imePadding().navigationBarsPadding()
+        Modifier.fillMaxSize().navigationBarsPadding()
             .padding(horizontal = 10.dp, vertical = 8.dp),
     ) {
-        Card(modifier = Modifier.fillMaxSize(), insideMargin = PaddingValues(0.dp)) {
+        Card(modifier = Modifier.fillMaxSize().draggable(
+            state = rememberDraggableState(onDelta = onDrag),
+            orientation = Orientation.Vertical,
+            enabled = canOpen,
+            onDragStopped = { onDragStopped(it) },
+        ), insideMargin = PaddingValues(0.dp)) {
             Column(Modifier.fillMaxSize()) {
                 Column(
-                    Modifier.fillMaxWidth().draggable(
-                        state = rememberDraggableState(onDelta = onDrag),
-                        orientation = Orientation.Vertical,
-                        onDragStopped = { onDragStopped(it) },
-                    ),
+                    Modifier.fillMaxWidth(),
                 ) {
                     Box(
                         Modifier.fillMaxWidth().height(24.dp)
-                            .clickable(onClickLabel = toggleLabel) { onExpandedChange(!expanded) },
+                            .clickable(enabled = canOpen, onClickLabel = openLabel, onClick = onOpenConversation),
                         contentAlignment = Alignment.Center,
                     ) {
                         Box(Modifier.width(32.dp).height(4.dp).clip(CircleShape).background(colors.outline))
@@ -125,11 +96,11 @@ internal fun AgentResultCard(
                             color = colors.onSurfaceVariantSummary, fontSize = 13.sp,
                             modifier = Modifier.weight(1f),
                         )
-                        IconButton(onClick = { onExpandedChange(!expanded) }, minWidth = 48.dp, minHeight = 48.dp) {
-                            Icon(if (expanded) Icons.Rounded.ExpandMore else Icons.Rounded.ExpandLess, toggleLabel,
+                        IconButton(onClick = onOpenConversation, enabled = canOpen, minWidth = 48.dp, minHeight = 48.dp) {
+                            Icon(Icons.Rounded.OpenInFull, openLabel,
                                 Modifier.size(20.dp), tint = colors.onSurfaceVariantActions)
                         }
-                        IconButton(onClick = { keyboard?.hide(); onClose() }, minWidth = 48.dp, minHeight = 48.dp) {
+                        IconButton(onClick = onClose, minWidth = 48.dp, minHeight = 48.dp) {
                             Icon(Icons.Rounded.Close, stringResource(R.string.action_close), Modifier.size(20.dp), tint = colors.onSurfaceVariantActions)
                         }
                     }
@@ -145,46 +116,31 @@ internal fun AgentResultCard(
                         textDecoration = TextDecoration.Underline,
                     )),
                 )
-                Markdown(
-                    annotator = rememberCitationMarkdownAnnotator(),
-                    markdownState = rememberMarkdownState(content = content, retainState = true),
-                    typography = typography,
-                    modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
-                        .padding(horizontal = 18.dp, vertical = 8.dp),
-                    loading = { Text(content, style = bodyStyle, modifier = it) },
-                    error = { Text(content, style = bodyStyle, modifier = it) },
-                )
-                if (canContinue) {
+                Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
+                    Markdown(
+                        annotator = rememberCitationMarkdownAnnotator(),
+                        markdownState = rememberMarkdownState(content = content, retainState = true),
+                        typography = typography,
+                        modifier = Modifier.fillMaxWidth()
+                            .padding(horizontal = 18.dp, vertical = 8.dp),
+                        loading = { Text(content, style = bodyStyle, modifier = it) },
+                        error = { Text(content, style = bodyStyle, modifier = it) },
+                    )
+                }
+                if (canOpenConversation) {
                     Row(
                         Modifier.padding(12.dp).fillMaxWidth().clip(RoundedCornerShape(18.dp))
-                            .background(colors.surfaceContainer).padding(start = 14.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                            .background(colors.surfaceContainer)
+                            .clickable(enabled = canOpen, onClick = onOpenConversation)
+                            .padding(horizontal = 16.dp, vertical = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        BasicTextField(
-                            value = draft, onValueChange = { draft = it },
-                            modifier = Modifier.weight(1f).heightIn(min = 40.dp, max = 112.dp)
-                                .onFocusChanged { if (it.isFocused) onExpandedChange(true) },
-                            enabled = !submitting,
-                            textStyle = bodyStyle.copy(lineHeight = 22.sp),
-                            cursorBrush = SolidColor(colors.primary),
-                            maxLines = 4,
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                            keyboardActions = KeyboardActions(onSend = { send() }),
-                            decorationBox = { field ->
-                                Box(Modifier.padding(vertical = 9.dp), contentAlignment = Alignment.CenterStart) {
-                                    if (draft.isEmpty()) Text(stringResource(R.string.overlay_follow_up_hint),
-                                        style = bodyStyle.copy(color = colors.onSurfaceVariantSummary, lineHeight = 22.sp))
-                                    field()
-                                }
-                            },
+                        Text(
+                            stringResource(if (openingConversation) R.string.overlay_result_opening_conversation
+                                else R.string.overlay_result_continue_conversation),
+                            modifier = Modifier.weight(1f), style = bodyStyle,
                         )
-                        IconButton(onClick = send, enabled = draft.isNotBlank() && !submitting, minWidth = 48.dp, minHeight = 48.dp) {
-                            Box(Modifier.size(34.dp).clip(CircleShape).background(if (draft.isNotBlank()) colors.primary else colors.surfaceContainerHigh), contentAlignment = Alignment.Center) {
-                                Icon(Icons.Rounded.ArrowUpward, stringResource(R.string.overlay_send), Modifier.size(20.dp),
-                                    tint = if (draft.isNotBlank()) colors.onPrimary else colors.onSurfaceVariantActions)
-                            }
-                        }
+                        Icon(Icons.AutoMirrored.Rounded.ArrowForward, null, Modifier.size(20.dp), tint = colors.primary)
                     }
                 }
             }

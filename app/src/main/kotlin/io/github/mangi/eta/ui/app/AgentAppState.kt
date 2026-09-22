@@ -35,6 +35,7 @@ import io.github.mangi.eta.agent.roleplay.RoleplayMessageLink
 import io.github.mangi.eta.agent.roleplay.RoleplayMessageState
 import io.github.mangi.eta.data.repository.CharacterRepository
 import io.github.mangi.eta.agent.runtime.AgentEvent
+import io.github.mangi.eta.agent.runtime.AgentConversationTarget
 import io.github.mangi.eta.agent.runtime.AgentExecutionService
 import io.github.mangi.eta.agent.runtime.AgentExternalArchivePayload
 import io.github.mangi.eta.agent.runtime.AgentRunArchiveStore
@@ -101,6 +102,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 internal class AgentAppState(
@@ -119,6 +122,7 @@ internal class AgentAppState(
     private val persistenceLock = Any()
     private var persistenceJob: Job? = null
     private val runtimeRecoveryInProgress = AtomicBoolean(false)
+    private val runtimeRecoveryMutex = Mutex()
     private val defaultThinkingEnabled = agentBooleanForUi(Prefs.Keys.AGENT_THINKING_ENABLED)
     private val initialConversations = AgentConversationStore.load(appContext)
     private var skillNoticeSequence = 0L
@@ -170,8 +174,7 @@ internal class AgentAppState(
         runtimeRecoveryInProgress.set(true)
         scope.launch(Dispatchers.IO) {
             try {
-                recoverRuntimeRuns()
-                importArchivedExternalRuns()
+                recoverRuntimeState()
             } finally {
                 runtimeRecoveryInProgress.set(false)
             }
@@ -228,8 +231,7 @@ internal class AgentAppState(
         if (!runtimeRecoveryInProgress.compareAndSet(false, true)) return
         scope.launch(Dispatchers.IO) {
             try {
-                recoverRuntimeRuns()
-                importArchivedExternalRuns()
+                recoverRuntimeState()
             } finally {
                 runtimeRecoveryInProgress.set(false)
             }
@@ -426,6 +428,11 @@ internal class AgentAppState(
             )
             refreshConversationSummaries()
         }
+    }
+
+    private suspend fun recoverRuntimeState() = runtimeRecoveryMutex.withLock {
+        recoverRuntimeRuns()
+        importArchivedExternalRuns()
     }
 
     /** 用 checkpoint、终态 outbox 与 active session 一次性对账，避免用进程存活推断 run 状态。 */
@@ -662,7 +669,7 @@ internal class AgentAppState(
                             setConversationStreaming(runId, false)
                         }
                     }
-                    recoverRuntimeRuns()
+                    recoverRuntimeState()
                 }
                 AgentRuntimeClient.AttachOutcome.Unavailable -> withContext(Dispatchers.Main) {
                     if (currentRunId == runId) {
@@ -697,14 +704,19 @@ internal class AgentAppState(
     }
 
     suspend fun openAssistantConversation(conversationKey: String): Boolean {
-        if (conversationKey.isBlank()) return false
-        importArchivedExternalRuns()
+        return openResultConversation(AgentConversationTarget(AgentRuntimeWire.ETA_VOICE_HANDOFF_SOURCE, conversationKey))
+    }
+
+    suspend fun openResultConversation(target: AgentConversationTarget, requiredRunId: String? = null): Boolean {
+        if (target.key.isBlank() || target.source.isBlank()) return false
+        // Resume and focus recovery can already be in flight. Await it, then include the latest
+        // terminal result before selecting the existing chat; never fall back to a new conversation.
+        withContext(Dispatchers.IO) { recoverRuntimeState() }
         return withContext(Dispatchers.Main.immediate) {
-            val conversationId = archiveConversationId(
-                source = AgentRuntimeWire.ETA_VOICE_HANDOFF_SOURCE,
-                conversationKey = conversationKey,
-            )
-            if (conversationsById[conversationId] == null) {
+            val conversationId = if (target.source == AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE) target.key
+                else archiveConversationId(source = target.source, conversationKey = target.key)
+            val state = conversationsById[conversationId]
+            if (state == null || (requiredRunId != null && !AgentRuntimeHistoryReducer.wasApplied(state, requiredRunId))) {
                 false
             } else {
                 selectConversation(conversationId)

@@ -25,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -43,6 +44,7 @@ import io.github.mangi.eta.R
 import io.github.mangi.eta.agent.device.BoundedRootCommandExecutor
 import io.github.mangi.eta.agent.device.DeviceLocationProvider
 import io.github.mangi.eta.agent.device.RootAccess
+import io.github.mangi.eta.agent.runtime.AgentConversationHandoff
 import io.github.mangi.eta.core.AndroidAgentLogger
 import io.github.mangi.eta.data.repository.RuntimeConfigRepository
 import io.github.mangi.eta.ui.AppearanceSettingsScreen
@@ -85,6 +87,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.nav.core.NavDisplay
 import top.yukonga.miuix.kmp.nav.core.NavDisplayEffects
@@ -97,9 +100,11 @@ import top.yukonga.miuix.kmp.window.WindowDialog
  * Agent App 根组件：持有本地导航栈，并把 Screen actions 交给 [AgentAppState]。
  */
 @Composable
-fun AgentAppRoot(
+internal fun AgentAppRoot(
     assistantConversationKey: String? = null,
     onAssistantConversationOpened: (Boolean) -> Unit = {},
+    resultConversationHandoff: AgentConversationHandoff.Request? = null,
+    onResultConversationOpened: (AgentConversationHandoff.Request, Boolean) -> Unit = { _, _ -> },
     browserUrl: String? = null,
     onBrowserOpened: () -> Unit = {},
 ) {
@@ -192,6 +197,25 @@ fun AgentAppRoot(
             navigator.replace(AppRoute.Chat)
         }
         onAssistantConversationOpened(opened)
+    }
+
+    LaunchedEffect(resultConversationHandoff) {
+        val request = resultConversationHandoff ?: return@LaunchedEffect
+        val opened = try {
+            withTimeoutOrNull(8_000) { agentState.openResultConversation(request.target, request.runId) } == true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
+        if (opened) {
+            focusManager.clearFocus()
+            conversationPaneOpen = false
+            navigator.replace(AppRoute.Chat)
+            // Let the original chat compose before removing the covering result window.
+            withFrameNanos { }
+        }
+        onResultConversationOpened(request, opened)
     }
 
     fun pushRoute(

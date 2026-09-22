@@ -16,6 +16,7 @@ import androidx.compose.runtime.setValue
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.lifecycle.lifecycleScope
+import io.github.mangi.eta.agent.runtime.AgentConversationHandoff
 import io.github.mangi.eta.agent.voice.EtaAssistantOverlayService
 import io.github.mangi.eta.data.model.AppearanceThemeMode
 import io.github.mangi.eta.data.repository.AppearanceSettingsRepository
@@ -29,6 +30,7 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var assistantConversationKey by mutableStateOf<String?>(null)
+    private var resultConversationHandoff by mutableStateOf<AgentConversationHandoff.Request?>(null)
     private var browserUrl by mutableStateOf<String?>(null)
     private var appliedPredictiveBackEnabled = true
 
@@ -67,6 +69,14 @@ class MainActivity : ComponentActivity() {
                     CompositionLocalProvider(LocalUriHandler provides InAppBrowserUriHandler(this@MainActivity)) {
                         AgentAppRoot(
                             assistantConversationKey = assistantConversationKey,
+                            resultConversationHandoff = resultConversationHandoff,
+                            onResultConversationOpened = { request, opened ->
+                                request.acknowledge(opened)
+                                if (resultConversationHandoff === request) {
+                                    resultConversationHandoff = null
+                                    AgentConversationHandoff.consume(intent)
+                                }
+                            },
                             browserUrl = browserUrl,
                             onBrowserOpened = {
                                 browserUrl = null
@@ -74,6 +84,7 @@ class MainActivity : ComponentActivity() {
                             },
                             onAssistantConversationOpened = { opened ->
                                 assistantConversationKey = null
+                                intent.removeExtra(EtaAssistantOverlayService.EXTRA_CONVERSATION_KEY)
                                 if (opened) {
                                     EtaAssistantOverlayService.notifyHandoffReady(this@MainActivity)
                                 }
@@ -99,6 +110,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun updateAssistantHandoff(intent: Intent?) {
+        if (intent?.action == AgentConversationHandoff.ACTION_OPEN) {
+            assistantConversationKey = null
+            browserUrl = null
+            resultConversationHandoff = AgentConversationHandoff.from(intent)
+            return
+        }
         if (intent?.action == InAppBrowserUriHandler.ACTION_OPEN_BROWSER) {
             browserUrl = intent.getStringExtra(InAppBrowserUriHandler.EXTRA_BROWSER_URL)
                 ?.let(::normalizeBrowserLink)

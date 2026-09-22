@@ -1223,6 +1223,10 @@
   <string name="drawer_permissions">Access</string>
   <string name="drawer_characters">Roles</string>
   <string name="overlay_follow_up_hint">Continue chatting…</string>
-  <string name="overlay_result_expand">Expand</string>
+    <string name="overlay_result_expand">Expand</string>
+    <string name="overlay_result_open_conversation">Open full conversation</string>
+    <string name="overlay_result_continue_conversation">View history and continue</string>
+    <string name="overlay_result_opening_conversation">Opening conversation…</string>
+    <string name="overlay_result_open_failed">Could not open the conversation. Your result is still here; please try again.</string>
   <string name="overlay_result_collapse">Collapse</string>
 </resources>

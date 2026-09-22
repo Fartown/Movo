@@ -1194,6 +1194,10 @@
   <string name="drawer_permissions">權限</string>
   <string name="drawer_characters">角色</string>
   <string name="overlay_follow_up_hint">繼續對話…</string>
-  <string name="overlay_result_expand">展開</string>
+    <string name="overlay_result_expand">展開</string>
+    <string name="overlay_result_open_conversation">全螢幕查看對話</string>
+    <string name="overlay_result_continue_conversation">查看記錄並繼續對話</string>
+    <string name="overlay_result_opening_conversation">正在開啟對話…</string>
+    <string name="overlay_result_open_failed">暫時無法開啟對話，結果已保留，請重試。</string>
   <string name="overlay_result_collapse">收起</string>
 </resources>
