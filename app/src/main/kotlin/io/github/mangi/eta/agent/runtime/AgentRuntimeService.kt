@@ -3,24 +3,32 @@ package io.github.mangi.eta.agent.runtime
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import android.app.Service
+import android.app.ActivityOptions
+import android.app.PendingIntent
+import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.os.Handler
+import android.os.Build
+import android.os.Bundle
 import android.os.IBinder
 import android.os.Looper
 import android.os.Message
 import android.os.Messenger
 import android.os.Process
+import android.os.ResultReceiver
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -30,6 +38,7 @@ import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import io.github.mangi.eta.EtaApp
+import io.github.mangi.eta.R
 import io.github.mangi.eta.agent.accessibility.AgentAccessibilityService
 import io.github.mangi.eta.agent.device.RootAccess
 import io.github.mangi.eta.agent.media.AgentImageCodec
@@ -39,6 +48,7 @@ import io.github.mangi.eta.agent.overlay.AgentOverlayBubble
 import io.github.mangi.eta.agent.overlay.AgentOverlayGlow
 import io.github.mangi.eta.agent.overlay.AgentOverlayOrb
 import io.github.mangi.eta.agent.overlay.AgentResultCard
+import io.github.mangi.eta.agent.overlay.AgentResultSheetSizing
 import io.github.mangi.eta.agent.overlay.AgentOverlayPhase
 import io.github.mangi.eta.agent.overlay.AgentOverlayState
 import io.github.mangi.eta.agent.overlay.AgentOverlayStatus
@@ -49,6 +59,7 @@ import io.github.mangi.eta.core.AndroidAgentLogger
 import io.github.mangi.eta.core.ModuleConfig
 import io.github.mangi.eta.core.safeLogType
 import io.github.mangi.eta.data.repository.RuntimeConfigRepository
+import io.github.mangi.eta.ui.markdown.InAppBrowserUriHandler
 import kotlin.concurrent.thread
 import kotlinx.coroutines.runBlocking
 import top.yukonga.miuix.kmp.squircle.LocalSquircleEnabled
@@ -94,6 +105,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private var orbParams: WindowManager.LayoutParams? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var resultCardParams: WindowManager.LayoutParams? = null
+    private var resultResizeAnimator: ValueAnimator? = null
+    private val resultConversationOpening = mutableStateOf(false)
+    private var resultConversationTarget: AgentConversationTarget? = null
+    private var resultConversationRunId: String? = null
+    private var resultHandoffToken: Any? = null
+    private var isResultConversation = false
 
     private val state = mutableStateOf(AgentOverlayState.Initial)
     private val collapsed = mutableStateOf(true)
@@ -126,6 +143,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        io.github.mangi.eta.diagnostics.MemoryDiagnostics.record("lifecycle", "runtime.unbound",
+            fields = mapOf("run_active" to (activeSession?.isTerminal == false)))
         if (activeSession?.isTerminal == false) {
             AndroidAgentLogger.debug {
                 "Agent runtime client unbound while run is active; detached run continues"
@@ -135,6 +154,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     override fun onDestroy() {
+        clearResultHandoff()
+        io.github.mangi.eta.diagnostics.MemoryDiagnostics.record("lifecycle", "runtime.destroyed",
+            fields = mapOf("run_active" to (activeSession?.isTerminal == false)))
+        resultResizeAnimator?.cancel()
         startRequestGeneration++
         pendingStartRequest?.let { pending ->
             pending.incoming.close()
@@ -315,7 +338,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun startRun(
         request: AgentRuntimeWire.RunRequest,
         replyTo: Messenger? = null,
+        fromResultCard: Boolean = false,
     ) {
+        removeResultCard()
+        isResultConversation = fromResultCard
+        resultConversationTarget = AgentConversationTarget.from(request.handoff)
+        resultConversationRunId = request.runId
         activeSession?.controller?.cancel()
         val session = AgentRuntimeSession(
             runId = request.runId,
@@ -358,6 +386,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             }
         }
 
+        if (fromResultCard) ensureOverlayVisible()
         thread(name = "agent-runtime") {
             try {
                 executeRun(session, request)
@@ -385,14 +414,14 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             session = session,
             result = outcome.result,
             entrySurfaceGuard = outcome.entrySurfaceGuard,
-            completedContext = outcome.response?.let { completedResponse ->
-                outcome.completedRequest?.let { completedRequest ->
-                    CompletedRunContext(
-                        request = completedRequest,
-                        response = completedResponse,
-                    )
-                }
-            },
+            completedContext = CompletedRunContext(
+                request = outcome.completedRequest ?: request.withActiveSupplements(),
+                response = outcome.response ?: AgentModelClient.ModelResponse.Text(
+                    content = outcome.result.content,
+                    transcript = outcome.result.transcript.ifEmpty { session.transcript },
+                    contextSnapshot = outcome.result.contextSnapshot ?: session.contextSnapshot,
+                ),
+            ),
         )
     }
 
@@ -771,18 +800,24 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             }
         }
 
-        val completed = lastCompletedRunContext ?: return
-        if (completed.request.operation != AgentRuntimeWire.OP_CHAT ||
-            completed.request.handoff?.source != AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE) {
+        continueFromResult(supplementText)
+    }
+
+    private fun continueFromResult(text: String): Boolean {
+        val supplementText = text.trim()
+        if (supplementText.isEmpty() || activeSession != null || pendingStartRequest != null) return false
+        val completed = lastCompletedRunContext ?: return false
+        if (completed.request.operation != AgentRuntimeWire.OP_CHAT) {
             state.value = state.value.copy(status = AgentOverlayStatus.ContinuationUnavailable)
-            return
+            return false
         }
         val continuationRequest = AgentContinuationBuilder.build(
             request = completed.request,
             response = completed.response,
             supplement = supplementText,
         )
-        startRun(continuationRequest)
+        startRun(continuationRequest, fromResultCard = true)
+        return true
     }
 
     private fun recordSupplementEvent(text: String): AgentEvent.UserSupplementReceived {
@@ -888,6 +923,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         val card = createOverlayComposeView {
             AgentResultCard(
                 state = state.value,
+                canOpenConversation = resultConversationTarget != null,
+                openingConversation = resultConversationOpening.value,
+                onDrag = ::dragResultCard,
+                onDragStopped = ::settleResultCard,
+                onOpenConversation = ::openResultConversation,
                 onClose = ::dismissAndStop,
             )
         }
@@ -910,7 +950,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 MiuixTheme(colors = if (isNightMode()) darkColorScheme() else lightColorScheme()) {
                     // 部分 ROM 会给 TYPE_ACCESSIBILITY_OVERLAY 分配软件 Canvas；Miuix 的
                     // RuntimeShader 只检查系统版本，因此系统浮层统一使用其普通圆角回退。
-                    CompositionLocalProvider(LocalSquircleEnabled provides false) {
+                    CompositionLocalProvider(
+                        LocalSquircleEnabled provides false,
+                        LocalUriHandler provides InAppBrowserUriHandler(this@AgentRuntimeService) {
+                            if (resultCardView != null) dismissAndStop()
+                        },
+                    ) {
                         content()
                     }
                 }
@@ -969,16 +1014,15 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             resultCardWindowHeightPx(),
             overlayType(),
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
-            // 半屏底部居中，窗口外触摸穿透
+            // The preview never owns a separate composer; continuation uses the App chat.
             gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
             x = 0
             y = 0
-            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
 
     private fun overlayType(): Int =
@@ -1038,8 +1082,116 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
     }
 
+    private fun resultScreenHeightPx(): Int = windowManager?.currentWindowMetrics?.bounds?.height()
+        ?: resources.displayMetrics.heightPixels
+
     private fun resultCardWindowHeightPx(): Int =
-        (resources.displayMetrics.heightPixels * RESULT_CARD_HEIGHT_RATIO).toInt()
+        AgentResultSheetSizing.height(resultScreenHeightPx(), expanded = false)
+
+    private fun updateResultCardHeight(height: Int) {
+        val view = resultCardView ?: return
+        val lp = resultCardParams ?: return
+        if (lp.height == height) return
+        lp.height = height
+        runCatching { windowManager?.updateViewLayout(view, lp) }.onFailure { throwable ->
+            AndroidAgentLogger.warnThrottled("runtime_result_resize_failed") {
+                "Agent result resize failed: type=${throwable.safeLogType()}"
+            }
+        }
+    }
+
+    private fun dragResultCard(deltaY: Float) {
+        if (resultConversationOpening.value) return
+        resultResizeAnimator?.cancel()
+        val height = resultCardParams?.height ?: return
+        updateResultCardHeight(AgentResultSheetSizing.drag(height, deltaY, resultScreenHeightPx()))
+    }
+
+    private fun settleResultCard(velocityY: Float) {
+        val height = resultCardParams?.height ?: return
+        if (height - resultCardWindowHeightPx() >= dpToPx(48) ||
+            AgentResultSheetSizing.settleExpanded(height, resultScreenHeightPx(), velocityY, dpToPx(600).toFloat())) {
+            openResultConversation()
+        }
+        collapseResultPreview()
+    }
+
+    private fun collapseResultPreview() {
+        resultResizeAnimator?.cancel()
+        val from = resultCardParams?.height ?: return
+        val target = resultCardWindowHeightPx()
+        resultResizeAnimator = ValueAnimator.ofInt(from, target).apply {
+            duration = 180
+            addUpdateListener { updateResultCardHeight(it.animatedValue as Int) }
+            start()
+        }
+    }
+
+    private fun openResultConversation() {
+        if (resultConversationOpening.value || activeSession != null || pendingStartRequest != null) return
+        val target = resultConversationTarget ?: return
+        val runId = resultConversationRunId ?: return
+        val token = Any()
+        resultHandoffToken = token
+        resultConversationOpening.value = true
+        val receiver = object : ResultReceiver(mainHandler) {
+            override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                if (resultHandoffToken !== token || resultConversationRunId != runId) return
+                if (resultCode == AgentConversationHandoff.RESULT_READY) {
+                    dismissAndStop()
+                } else {
+                    failResultHandoff(token)
+                }
+            }
+        }
+        runCatching {
+            val creatorOptions = ActivityOptions.makeBasic().apply {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+                    pendingIntentCreatorBackgroundActivityStartMode = ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                }
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                this, 0x524553,
+                AgentConversationHandoff.intent(this, target, runId, receiver),
+                PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                creatorOptions.toBundle(),
+            )
+            val senderOptions = ActivityOptions.makeBasic().apply {
+                pendingIntentBackgroundActivityStartMode = if (Build.VERSION.SDK_INT >= 36)
+                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_IF_VISIBLE
+                else ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+            }
+            pendingIntent.send(senderOptions.toBundle())
+        }.onFailure {
+            AndroidAgentLogger.warn("Agent result conversation launch failed")
+            failResultHandoff(token)
+            return
+        }
+        mainHandler.postDelayed({ failResultHandoff(token) }, token, 10_000)
+    }
+
+    private fun failResultHandoff(token: Any) {
+        if (resultHandoffToken !== token) return
+        clearResultHandoff()
+        collapseResultPreview()
+        AndroidAgentLogger.warn("Agent result conversation not ready; preview retained")
+        Toast.makeText(this, R.string.overlay_result_open_failed, Toast.LENGTH_LONG).show()
+    }
+
+    private fun clearResultHandoff() {
+        resultHandoffToken?.let { mainHandler.removeCallbacksAndMessages(it) }
+        resultHandoffToken = null
+        resultConversationOpening.value = false
+    }
+
+    private fun removeResultCard() {
+        clearResultHandoff()
+        resultResizeAnimator?.cancel()
+        resultResizeAnimator = null
+        resultCardView?.let { view -> runCatching { windowManager?.removeView(view) } }
+        resultCardView = null
+        resultCardParams = null
+    }
 
     private fun dpToPx(dp: Int): Int =
         (dp * resources.displayMetrics.density).toInt()
@@ -1047,8 +1199,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun enterFinalState(finalState: AgentOverlayState, keepVisible: Boolean = false) {
         state.value = finalState
 
-        if (hasExecutedForegroundTool) {
-            // 撤掉光球和小气泡，改显半屏结果卡片，不自动关闭，用户手动关闭
+        if (hasExecutedForegroundTool || isResultConversation) {
+            // 续聊即使只产生文字回答，也交付回同一结果面板。
             collapsed.value = true
             removeAmbientWindows()
             windowManager?.let(::showResultCard)
@@ -1071,6 +1223,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     private fun dismissAndStop() {
+        clearResultHandoff()
+        resultResizeAnimator?.cancel()
         resultCardView?.let { view -> runCatching { windowManager?.removeView(view) } }
         bubbleView?.let { view -> runCatching { windowManager?.removeView(view) } }
         orbView?.let { view -> runCatching { windowManager?.removeView(view) } }
@@ -1123,7 +1277,6 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         const val ACTION_KEEP_ALIVE = "io.github.mangi.eta.agent.runtime.KEEP_ALIVE"
         const val HIDE_DELAY_MS = 2_500L
         const val RESULT_REVIEW_DELAY_MS = 120_000L
-        const val RESULT_CARD_HEIGHT_RATIO = 0.5f
         const val MAX_ARCHIVED_USER_IMAGE_PREVIEWS = 4
     }
 

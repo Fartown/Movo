@@ -1,6 +1,7 @@
 package io.github.mangi.eta.agent.runtime
 
 import io.github.mangi.eta.agent.model.AgentModelClient
+import io.github.mangi.eta.agent.model.AgentToolBatchRecovery
 import java.util.UUID
 
 /** 用完整增量 transcript 构造已完成 run 的后续用户回合。 */
@@ -15,7 +16,9 @@ internal object AgentContinuationBuilder {
         require(request.operation == AgentRuntimeWire.OP_CHAT) { "该运行不是可继续的对话回合" }
         val uiPayload = request.handoff?.takeIf { it.source == AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE }
             ?.let { AgentUiHandoffPayload.from(it.payload) }
-        val baseHistory = response.contextSnapshot?.messages ?: (request.history +
+        val baseHistory = response.contextSnapshot?.let { snapshot ->
+            snapshot.messages + response.transcript.drop(snapshot.consumedTranscriptMessages ?: response.transcript.size)
+        } ?: (request.history +
             AgentModelClient.buildUserHistoryMessage(request.prompt, request.images).copy(
                 messageId = uiPayload?.promptMessageId(request.runId) ?: "user-${request.runId}",
             ) +
@@ -45,7 +48,7 @@ internal object AgentContinuationBuilder {
             modelSessionId = request.effectiveModelSessionId,
             prompt = supplement,
             images = emptyList(),
-            history = baseHistory,
+            history = AgentToolBatchRecovery.completeInterrupted(baseHistory),
             handoff = handoff,
         )
     }

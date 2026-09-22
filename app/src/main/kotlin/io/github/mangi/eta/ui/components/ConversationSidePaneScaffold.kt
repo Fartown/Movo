@@ -43,16 +43,16 @@ import androidx.compose.foundation.shape.AbsoluteRoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.TheaterComedy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.Extension
-import androidx.compose.material.icons.rounded.Inventory2
-import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Schedule
-import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.TheaterComedy
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -83,6 +83,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -146,9 +147,8 @@ private object DrawerMetrics {
     val EmptyVerticalPadding = 28.dp
     val DockTopGap = 10.dp
     val DockEntryCornerRadius = 12.dp
-    val DockEntryIconSize = 20.dp
-    val DockEntryLabelGap = 3.dp
-    val DockEntryVerticalPadding = 5.dp
+    val DockEntryIconSize = 18.dp
+    val DockEntryLabelGap = 6.dp
 }
 
 private enum class ConversationPaneAnchor {
@@ -778,46 +778,17 @@ private fun PaneDock(
     onOpenCharacters: () -> Unit,
     onOpenPermissions: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        DockEntry(
-            icon = Icons.Rounded.Settings,
-            label = "设置",
-            onClick = onOpenSettings,
-            modifier = Modifier.weight(1f),
-        )
-        DockEntry(
-            icon = Icons.Rounded.Memory,
-            label = "模型",
-            onClick = onOpenModelProviders,
-            modifier = Modifier.weight(1f),
-        )
-        DockEntry(
-            icon = Icons.Rounded.Inventory2,
-            label = "工具",
-            onClick = onOpenTools,
-            modifier = Modifier.weight(1f),
-        )
-        DockEntry(
-            icon = Icons.Rounded.Extension,
-            label = "Skills",
-            onClick = onOpenSkills,
-            modifier = Modifier.weight(1f),
-        )
-        DockEntry(
-            icon = Icons.Rounded.Lock,
-            label = "权限",
-            onClick = onOpenPermissions,
-            modifier = Modifier.weight(1f),
-        )
-        DockEntry(
-            icon = Icons.Rounded.TheaterComedy,
-            label = "角色",
-            onClick = onOpenCharacters,
-            modifier = Modifier.weight(1f),
-        )
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            DockEntry(Icons.Outlined.Settings, stringResource(R.string.drawer_settings), onOpenSettings, Modifier.weight(1f))
+            DockEntry(Icons.Outlined.Memory, stringResource(R.string.drawer_models), onOpenModelProviders, Modifier.weight(1f))
+            DockEntry(Icons.Outlined.Inventory2, stringResource(R.string.drawer_tools), onOpenTools, Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            DockEntry(Icons.Outlined.Extension, "Skills", onOpenSkills, Modifier.weight(1f))
+            DockEntry(Icons.Outlined.Lock, stringResource(R.string.drawer_permissions), onOpenPermissions, Modifier.weight(1f))
+            DockEntry(Icons.Outlined.TheaterComedy, stringResource(R.string.drawer_characters), onOpenCharacters, Modifier.weight(1f))
+        }
     }
 }
 
@@ -828,24 +799,28 @@ private fun DockEntry(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
+    Row(
         modifier = modifier
             .clip(RoundedCornerShape(DrawerMetrics.DockEntryCornerRadius))
+            .background(MiuixTheme.colorScheme.surfaceContainer)
             .clickable(onClickLabel = label, onClick = onClick)
-            .padding(vertical = DrawerMetrics.DockEntryVerticalPadding),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .heightIn(min = 48.dp)
+            .padding(horizontal = 6.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
             modifier = Modifier.size(DrawerMetrics.DockEntryIconSize),
-            tint = MiuixTheme.colorScheme.onSurface,
+            tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
         )
-        Spacer(modifier = Modifier.height(DrawerMetrics.DockEntryLabelGap))
+        Spacer(modifier = Modifier.width(DrawerMetrics.DockEntryLabelGap))
         Text(
             text = label,
             style = MiuixTheme.textStyles.footnote1,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            fontSize = 12.sp,
+            color = MiuixTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )

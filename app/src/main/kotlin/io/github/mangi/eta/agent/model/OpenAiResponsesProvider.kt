@@ -45,7 +45,9 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
             }
             .also { ProviderRequestHeaders.mergeInto(it, config.baseUrl, config.customHeaders, request.sessionId) }
             .build()
+        val trace = ModelRequestTrace.forRequest(request, id)
         val httpRequest = Request.Builder()
+            .tag(ModelRequestTrace::class.java, trace)
             .url(ProviderUrls.openAiResponsesUrl(config.baseUrl))
             .headers(headers)
             .post(body)
@@ -66,15 +68,19 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
                     stream = response.body.byteStream(),
                     runController = runController,
                     onEvent = onEvent,
+                    trace = trace,
                 )
                 onEvent(ProviderEvent.Completed(assistant.optString("finish_reason").ifBlank { null }))
+                if (ModelRequestTrace.current() !== trace) trace.success()
                 return ProviderResponse(assistant)
             }
         } catch (throwable: Throwable) {
+            if (ModelRequestTrace.current() !== trace) trace.failed(throwable, runController.isCancelled)
             runCatching { runController.throwIfCancelled() }
                 .getOrElse { interruption -> throw interruption }
             throw throwable
         } finally {
+            trace.close()
             binding.close()
         }
     }
@@ -89,6 +95,7 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
         stream: java.io.InputStream?,
         runController: AgentRunController,
         onEvent: (ProviderEvent) -> Unit,
+        trace: ModelRequestTrace,
     ): JSONObject {
         if (stream == null) error("模型接口未返回响应流")
         val streamedText = StringBuilder()
@@ -197,13 +204,15 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
             }
         }
 
-        readProviderSse(stream, runController) { eventName, data ->
+        readProviderSse(stream, runController, trace) { eventName, data ->
             val payload = data.trim()
             if (payload == "[DONE]") return@readProviderSse true
             sawEvent = true
             val event = JSONObject(payload)
             throwEventError(event)
-            when (val type = event.optString("type").ifBlank { eventName }) {
+            val type = event.optString("type").ifBlank { eventName }
+            trace.sseType(type)
+            when (type) {
                 "response.output_text.delta" -> {
                     val delta = event.optString("delta")
                     if (delta.isNotEmpty()) {

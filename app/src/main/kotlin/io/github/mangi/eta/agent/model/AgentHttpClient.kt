@@ -20,6 +20,8 @@ internal object AgentHttpClient {
         client.newBuilder()
             .readTimeout(MODEL_READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             .retryOnConnectionFailure(false)
+            .eventListenerFactory { call -> call.request().tag(ModelRequestTrace::class.java) ?: okhttp3.EventListener.NONE }
+            .addInterceptor(ModelRequestTrace.bodyObserver)
             .build()
     }
 

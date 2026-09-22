@@ -35,6 +35,7 @@ import io.github.mangi.eta.agent.roleplay.RoleplayMessageLink
 import io.github.mangi.eta.agent.roleplay.RoleplayMessageState
 import io.github.mangi.eta.data.repository.CharacterRepository
 import io.github.mangi.eta.agent.runtime.AgentEvent
+import io.github.mangi.eta.agent.runtime.AgentConversationTarget
 import io.github.mangi.eta.agent.runtime.AgentExecutionService
 import io.github.mangi.eta.agent.runtime.AgentExternalArchivePayload
 import io.github.mangi.eta.agent.runtime.AgentRunArchiveStore
@@ -101,6 +102,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 internal class AgentAppState(
@@ -119,6 +122,7 @@ internal class AgentAppState(
     private val persistenceLock = Any()
     private var persistenceJob: Job? = null
     private val runtimeRecoveryInProgress = AtomicBoolean(false)
+    private val runtimeRecoveryMutex = Mutex()
     private val defaultThinkingEnabled = agentBooleanForUi(Prefs.Keys.AGENT_THINKING_ENABLED)
     private val initialConversations = AgentConversationStore.load(appContext)
     private var skillNoticeSequence = 0L
@@ -170,8 +174,7 @@ internal class AgentAppState(
         runtimeRecoveryInProgress.set(true)
         scope.launch(Dispatchers.IO) {
             try {
-                recoverRuntimeRuns()
-                importArchivedExternalRuns()
+                recoverRuntimeState()
             } finally {
                 runtimeRecoveryInProgress.set(false)
             }
@@ -228,8 +231,7 @@ internal class AgentAppState(
         if (!runtimeRecoveryInProgress.compareAndSet(false, true)) return
         scope.launch(Dispatchers.IO) {
             try {
-                recoverRuntimeRuns()
-                importArchivedExternalRuns()
+                recoverRuntimeState()
             } finally {
                 runtimeRecoveryInProgress.set(false)
             }
@@ -428,6 +430,11 @@ internal class AgentAppState(
         }
     }
 
+    private suspend fun recoverRuntimeState() = runtimeRecoveryMutex.withLock {
+        recoverRuntimeRuns()
+        importArchivedExternalRuns()
+    }
+
     /** 用 checkpoint、终态 outbox 与 active session 一次性对账，避免用进程存活推断 run 状态。 */
     private suspend fun recoverRuntimeRuns() {
         val client = AgentRuntimeClient(appContext, AndroidAgentLogger)
@@ -621,9 +628,8 @@ internal class AgentAppState(
 
     private fun startReattachedRun(checkpoint: AgentRunCheckpointStore.Checkpoint) {
         val runId = checkpoint.runId
-        val conversationId = AgentUiHandoffPayload
-            .from(checkpoint.handoff.payload)
-            .conversationId
+        val handoff = AgentUiHandoffPayload.from(checkpoint.handoff.payload)
+        val conversationId = handoff.conversationId
         val existing = conversationsById[conversationId] ?: return
         if (currentRunId != null || AgentRuntimeHistoryReducer.wasApplied(existing, runId)) return
 
@@ -631,7 +637,12 @@ internal class AgentAppState(
         currentRunId = runId
         val restored = if (checkpoint.operation == AgentRuntimeWire.OP_REWRITE_REPLY) {
             RoleplayConversationReducer.restorePendingRewrite(existing, runId, checkpoint.rewriteTargetMessageId)
-        } else existing
+        } else existing.copy(messages = AgentPendingResultRecovery.restoreHandoffMessages(
+            runId = runId,
+            promptSupplement = handoff.promptSupplement,
+            supplements = handoff.supplements,
+            messages = existing.messages,
+        ))
         updateConversation(conversationId, restored.copy(isStreaming = true, isCompacting = checkpoint.operation == AgentRuntimeWire.OP_COMPACT))
         refreshConversationSummaries()
         currentRunJob = scope.launch(Dispatchers.IO) {
@@ -647,6 +658,7 @@ internal class AgentAppState(
                         runId = runId,
                         result = outcome.result,
                         acknowledgeRuntimeResult = true,
+                        recoveredHandoff = handoff,
                     )
                 }
                 AgentRuntimeClient.AttachOutcome.NotActive -> {
@@ -657,7 +669,7 @@ internal class AgentAppState(
                             setConversationStreaming(runId, false)
                         }
                     }
-                    recoverRuntimeRuns()
+                    recoverRuntimeState()
                 }
                 AgentRuntimeClient.AttachOutcome.Unavailable -> withContext(Dispatchers.Main) {
                     if (currentRunId == runId) {
@@ -692,14 +704,19 @@ internal class AgentAppState(
     }
 
     suspend fun openAssistantConversation(conversationKey: String): Boolean {
-        if (conversationKey.isBlank()) return false
-        importArchivedExternalRuns()
+        return openResultConversation(AgentConversationTarget(AgentRuntimeWire.ETA_VOICE_HANDOFF_SOURCE, conversationKey))
+    }
+
+    suspend fun openResultConversation(target: AgentConversationTarget, requiredRunId: String? = null): Boolean {
+        if (target.key.isBlank() || target.source.isBlank()) return false
+        // Resume and focus recovery can already be in flight. Await it, then include the latest
+        // terminal result before selecting the existing chat; never fall back to a new conversation.
+        withContext(Dispatchers.IO) { recoverRuntimeState() }
         return withContext(Dispatchers.Main.immediate) {
-            val conversationId = archiveConversationId(
-                source = AgentRuntimeWire.ETA_VOICE_HANDOFF_SOURCE,
-                conversationKey = conversationKey,
-            )
-            if (conversationsById[conversationId] == null) {
+            val conversationId = if (target.source == AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE) target.key
+                else archiveConversationId(source = target.source, conversationKey = target.key)
+            val state = conversationsById[conversationId]
+            if (state == null || (requiredRunId != null && !AgentRuntimeHistoryReducer.wasApplied(state, requiredRunId))) {
                 false
             } else {
                 selectConversation(conversationId)
@@ -2175,6 +2192,7 @@ internal class AgentAppState(
         runId: String,
         result: AgentRuntimeWire.RunResult,
         acknowledgeRuntimeResult: Boolean = false,
+        recoveredHandoff: AgentUiHandoffPayload? = null,
     ) {
         flushPendingRunDelta(runId)
         val rewriting = result.operation == AgentRuntimeWire.OP_REWRITE_REPLY || isReplyRewrite(runId)
@@ -2202,7 +2220,20 @@ internal class AgentAppState(
                 runMessageProjector.finalizeRun(runId, messages),
                 if (result.ok) "上下文压缩完成" else result.error ?: "上下文压缩已停止")
         }
-        if (result.contextSnapshotRef.isBlank()) {
+        if (recoveredHandoff != null && result.contextSnapshotRef.isBlank()) {
+            // 在途重连与终态 outbox 恢复必须合并同一份追问及 history，保存后才能确认消费。
+            val conversationId = conversationIdForRun(runId)
+            val state = conversationsById[conversationId]
+            if (conversationId != null && state != null) {
+                updateConversation(conversationId, AgentPendingResultRecovery.applyHandoffHistory(
+                    state = state,
+                    runId = runId,
+                    result = result,
+                    promptSupplement = recoveredHandoff.promptSupplement,
+                    supplements = recoveredHandoff.supplements,
+                ).state)
+            }
+        } else if (result.contextSnapshotRef.isBlank()) {
             applyConversationHistoryResult(runId, result.transcript, result.contextSnapshot, !result.ok || result.contextSnapshot != null)
         }
         when {
@@ -2765,6 +2796,10 @@ private fun buildPermissionHealthState(context: Context): PermissionHealthUiStat
     val locationAccess = DeviceLocationProvider.accessState(context)
     val notificationHistoryEnabled = io.github.mangi.eta.agent.device.AgentNotificationHistoryService.isEnabled(context)
     val usageAccessEnabled = io.github.mangi.eta.agent.tool.AgentPersonalContextTools.hasUsageAccess(context)
+    val microphoneEnabled = androidx.core.content.ContextCompat.checkSelfPermission(
+        context,
+        android.Manifest.permission.RECORD_AUDIO,
+    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
     return PermissionHealthUiState(
         items = listOf(
@@ -2781,6 +2816,13 @@ private fun buildPermissionHealthState(context: Context): PermissionHealthUiStat
                 summary = "",
                 status = if (overlayEnabled) PermissionStatusUi.Available else PermissionStatusUi.Missing,
                 primaryActionLabel = if (overlayEnabled) null else context.getString(R.string.state_ui_to_authorize_762ec4),
+            ),
+            PermissionHealthItemUi(
+                id = "microphone",
+                title = context.getString(R.string.permission_microphone_title),
+                summary = context.getString(R.string.permission_microphone_summary),
+                status = if (microphoneEnabled) PermissionStatusUi.Available else PermissionStatusUi.Missing,
+                primaryActionLabel = if (microphoneEnabled) null else context.getString(R.string.state_ui_to_authorize_762ec4),
             ),
             PermissionHealthItemUi(
                 id = "app_list",

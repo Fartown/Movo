@@ -2,6 +2,7 @@ package io.github.mangi.eta.agent.model
 
 import io.github.mangi.eta.agent.runtime.AgentEvent
 import io.github.mangi.eta.agent.runtime.AgentRunController
+import io.github.mangi.eta.diagnostics.DiagnosticLevel
 
 /** 重试只包围模型请求；完整响应返回前不提交历史或执行本地工具。 */
 internal class AgentModelRetry(
@@ -27,6 +28,8 @@ internal class AgentModelRetry(
             onEvent(AgentEvent.RoundStarted(round, request.messages.length()))
             var hostedToolStarted = false
             var callbackFailed = false
+            val trace = ModelRequestTrace(request, provider.id, round, retries + 1)
+            val traceBinding = ModelRequestTrace.bind(trace)
             try {
                 val response = provider.complete(request, controller) { event ->
                     if (event is ProviderEvent.HostedToolStarted) hostedToolStarted = true
@@ -37,8 +40,10 @@ internal class AgentModelRetry(
                         throw failure
                     }
                 }
+                trace.success()
                 return Result(round, response)
             } catch (failure: Exception) {
+                trace.failed(failure, controller.isCancelled || Thread.currentThread().isInterrupted, callbackFailed)
                 controller.throwIfCancelled()
                 if (callbackFailed || Thread.currentThread().isInterrupted) throw failure
                 val classified = AgentModelFailure.transport(failure) ?: throw failure
@@ -55,12 +60,19 @@ internal class AgentModelRetry(
                 }
                 retries += 1
                 val delayMs = BASE_DELAY_MS shl (retries - 1)
+                trace.record("retry.scheduled", DiagnosticLevel.WARN, mapOf(
+                    "code" to classified.code, "retry_number" to retries,
+                    "max_retries" to MAX_RETRIES, "delay_ms" to delayMs,
+                ))
                 onEvent(AgentEvent.ModelRetryScheduled(round, retries, MAX_RETRIES, delayMs.toInt(), classified.code))
                 waitBeforeRetry(controller, delayMs)
                 controller.throwIfCancelled()
                 // 展示保留失败尝试，模型上下文与最终思考摘要只接纳成功尝试。
                 discardAttemptReasoning()
                 round += 1
+            } finally {
+                trace.close()
+                traceBinding.close()
             }
         }
     }

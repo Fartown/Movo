@@ -212,12 +212,27 @@ internal fun SettingsScreen(
                         onClick = { onNavigate(AppRoute.ModelProviders) },
                     )
 
+                    ArrowPreference(
+                        title = stringResource(R.string.voice_settings_title),
+                        summary = stringResource(R.string.voice_settings_entry_summary),
+                        startAction = {
+                            PreferenceIcon(icon = Icons.Rounded.Mic)
+                        },
+                        onClick = { onNavigate(AppRoute.VoiceSettings) },
+                    )
+
                     SwitchPref(
                         context = context,
                         prefs = agentPrefs,
                         title = stringResource(R.string.ui_deep_thinking_enabled_by_default_c032d6),
                         key = Prefs.Keys.AGENT_THINKING_ENABLED,
                         icon = Icons.Rounded.Psychology,
+                    )
+                    ArrowPreference(
+                        title = "运行日志",
+                        summary = "查看模型重试、网络与后台状态 · 仅保存在内存",
+                        startAction = { PreferenceIcon(icon = Icons.Rounded.Description) },
+                        onClick = { onNavigate(AppRoute.Diagnostics) },
                     )
                 }
             }

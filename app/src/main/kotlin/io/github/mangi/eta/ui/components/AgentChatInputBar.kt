@@ -39,6 +39,7 @@ import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -126,12 +127,20 @@ internal fun AgentChatInputBar(
     onAttachFilePath: (String) -> Unit,
     onRemoveFileReference: (String) -> Unit,
     onCancelMessageEdit: () -> Unit,
+    isListening: Boolean = false,
+    onToggleListen: (() -> Unit)? = null,
+    dictationText: String? = null,
     modifier: Modifier = Modifier,
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
     val focusRequester = remember { FocusRequester() }
     val textFieldState = rememberTextFieldState(initialText = input)
     var wasEditingMessage by remember { mutableStateOf(isEditingMessage) }
+    LaunchedEffect(dictationText) {
+        // Dictation is an external edit; initialText alone does not update an existing field.
+        // Null means no new transcript, so errors/cancellation retain the editable draft.
+        dictationText?.let { textFieldState.setTextAndPlaceCursorAtEnd(it) }
+    }
     val canSend = textFieldState.text.isNotBlank() ||
         pendingImages.isNotEmpty() ||
         pendingFileReferences.isNotEmpty()
@@ -298,6 +307,29 @@ internal fun AgentChatInputBar(
                                 onAttachFolder = onAttachFolder,
                                 onAttachFilePath = onAttachFilePath,
                             )
+
+                            if (onToggleListen != null) {
+                                Spacer(modifier = Modifier.width(2.dp))
+                                IconButton(
+                                    onClick = onToggleListen,
+                                    enabled = !isStreaming,
+                                    minWidth = ChatInputActionSize,
+                                    minHeight = ChatInputActionSize,
+                                ) {
+                                    Icon(
+                                        imageVector = if (isListening) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                                        contentDescription = stringResource(
+                                            if (isListening) R.string.voice_listening else R.string.voice_tap_to_speak,
+                                        ),
+                                        modifier = Modifier.size(ChatInputActionIconSize),
+                                        tint = if (isListening) {
+                                            MiuixTheme.colorScheme.primary
+                                        } else {
+                                            MiuixTheme.colorScheme.onSurface
+                                        },
+                                    )
+                                }
+                            }
 
                             Spacer(modifier = Modifier.width(2.dp))
 

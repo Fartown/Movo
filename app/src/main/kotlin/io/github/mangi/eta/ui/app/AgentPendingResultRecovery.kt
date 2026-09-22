@@ -27,29 +27,16 @@ internal object AgentPendingResultRecovery {
         if (result.operation == AgentRuntimeWire.OP_REWRITE_REPLY || runId in state.roleplayMessages.pendingRewrites) {
             return Outcome(RoleplayConversationReducer.applyRewrite(state, runId, result), runId in state.appliedRuntimeRunIds)
         }
-        val stateWithSupplements = state.copy(messages = mergeSupplements(
-            runId, listOfNotNull(promptSupplement) + supplements, state.messages,
-        ))
-        val content = result.content.takeIf { result.ok && it.isNotBlank() }
-        val history = AgentRuntimeHistoryReducer.apply(
-            state = stateWithSupplements,
+        val history = applyHandoffHistory(
+            state = state,
             runId = runId,
-            snapshot = result.contextSnapshot?.let { snapshot ->
-                snapshot.copy(consumedTranscriptMessages = snapshot.consumedTranscriptMessages?.let {
-                    it + if (promptSupplement != null) 1 else 0
-                })
-            },
-            retainPendingSupplements = !result.ok || result.contextSnapshot != null,
-            additions = listOfNotNull(
-                promptSupplement?.let { supplement ->
-                    AgentModelClient.buildUserHistoryMessage(
-                        text = supplement.text,
-                        images = emptyList(),
-                    ).copy(messageId = supplementMessageId(runId, supplement.index))
-                }
-            ) + result.transcript,
+            result = result,
+            promptSupplement = promptSupplement,
+            supplements = supplements,
         )
         if (history.alreadyApplied) return Outcome(state, alreadyApplied = true)
+        val stateWithSupplements = history.state
+        val content = result.content.takeIf { result.ok && it.isNotBlank() }
         if (result.operation == AgentRuntimeWire.OP_COMPACT) {
             return Outcome(history.state.copy(isStreaming = false, isCompacting = false,
                 messages = AgentRunMessageProjector.mergeCompactionResultNotice(
@@ -121,6 +108,70 @@ internal object AgentPendingResultRecovery {
         is AgentMessageUi -> copy(id = id)
         is SystemNoticeMessageUi -> copy(id = id)
         else -> this
+    }
+
+    fun applyHandoffHistory(
+        state: AgentChatHomeUiState,
+        runId: String,
+        result: AgentRuntimeWire.RunResult,
+        promptSupplement: AgentUiHandoffPayload.Supplement?,
+        supplements: List<AgentUiHandoffPayload.Supplement>,
+    ): AgentRuntimeHistoryReducer.Outcome = AgentRuntimeHistoryReducer.apply(
+        state = state.copy(messages = restoreHandoffMessages(
+            runId = runId,
+            promptSupplement = promptSupplement,
+            supplements = supplements,
+            messages = state.messages,
+        )),
+        runId = runId,
+        snapshot = result.contextSnapshot?.let { snapshot ->
+            snapshot.copy(consumedTranscriptMessages = snapshot.consumedTranscriptMessages?.let {
+                it + if (promptSupplement != null) 1 else 0
+            })
+        },
+        retainPendingSupplements = !result.ok || result.contextSnapshot != null,
+        additions = listOfNotNull(
+            promptSupplement?.let { supplement ->
+                AgentModelClient.buildUserHistoryMessage(
+                    text = supplement.text,
+                    images = emptyList(),
+                ).copy(messageId = supplementMessageId(runId, supplement.index))
+            }
+        ) + result.transcript,
+    )
+
+    fun restoreHandoffMessages(
+        runId: String,
+        promptSupplement: AgentUiHandoffPayload.Supplement?,
+        supplements: List<AgentUiHandoffPayload.Supplement>,
+        messages: List<AgentChatMessageUi>,
+    ): List<AgentChatMessageUi> = mergeSupplements(
+        runId = runId,
+        supplements = supplements,
+        messages = mergePromptSupplement(runId, promptSupplement, messages),
+        beforeLatestAssistant = true,
+    )
+
+    private fun mergePromptSupplement(
+        runId: String,
+        prompt: AgentUiHandoffPayload.Supplement?,
+        messages: List<AgentChatMessageUi>,
+    ): List<AgentChatMessageUi> {
+        if (prompt == null) return messages
+        val promptId = supplementMessageId(runId, prompt.index)
+        if (messages.any { it.id == promptId }) return messages
+        // checkpoint 回放可能已将回复标记为完成；续聊的问题必须位于整段运行轨迹之前。
+        val firstRunIndex = messages.indexOfFirst {
+            it.id == "assistant-$runId" || it.id.startsWith("assistant-$runId-") ||
+                it.id.startsWith("$runId-thinking-") || it.id.startsWith("$runId-tool-") ||
+                it.id.startsWith("user-$runId-supplement-") || it.id == interruptedNoticeId(runId)
+        }
+        return messages.toMutableList().also {
+            it.add(
+                if (firstRunIndex >= 0) firstRunIndex else it.size,
+                UserMessageUi(id = promptId, content = prompt.text),
+            )
+        }
     }
 
     fun mergeSupplements(

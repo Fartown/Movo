@@ -5,6 +5,33 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+// .env stores literal, single-line values; CI environment variables take precedence.
+// Read through Gradle providers so changing .env invalidates the configuration cache.
+val packagedModelEnv = providers.fileContents(rootProject.layout.projectDirectory.file(".env"))
+    .asText.orElse("").get().lineSequence()
+    .map(String::trim)
+    .filter { it.isNotEmpty() && !it.startsWith("#") }
+    .associate { line ->
+        require('=' in line) { ".env entries must use NAME=value" }
+        val name = line.substringBefore('=').trim().removePrefix("export ").trim()
+        val value = line.substringAfter('=').trim()
+        name to when {
+            value.startsWith('"') && value.endsWith('"') -> value.removeSurrounding("\"")
+            value.startsWith('\'') && value.endsWith('\'') -> value.removeSurrounding("'")
+            else -> value
+        }
+    }
+
+fun packagedModelValue(name: String, fallback: String = ""): String =
+    providers.environmentVariable(name).orNull ?: packagedModelEnv[name] ?: fallback
+
+fun javaStringLiteral(value: String): String = "\"" + value
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+    .replace("\n", "\\n")
+    .replace("\r", "\\r")
+    .replace("\t", "\\t") + "\""
+
 val releaseStoreFile = System.getenv("ETA_RELEASE_STORE_FILE")
 val releaseStorePassword = System.getenv("ETA_RELEASE_STORE_PASSWORD")
 val releaseKeyAlias = System.getenv("ETA_RELEASE_KEY_ALIAS")
@@ -32,8 +59,21 @@ android {
         minSdk = 34
         targetSdk = 36
         // versionCode 规则：yyyyMMdd + 两位当日序号（01 起），发版时随 versionName 一起手动递增。
-        versionCode = 2026091202
-        versionName = "3.0.4"
+        versionCode = 2026092205
+        versionName = "3.0.5"
+
+        mapOf(
+            "ETA_DEFAULT_PROVIDER_NAME" to "默认模型",
+            "ETA_DEFAULT_BASE_URL" to "",
+            "ETA_DEFAULT_API_KEY" to "",
+            "ETA_DEFAULT_MODEL_ID" to "",
+            "ETA_DEFAULT_MODEL_NAME" to "",
+            "ETA_DEFAULT_ENDPOINT_MODE" to "responses",
+            "ETA_DEFAULT_CONTEXT_WINDOW" to "",
+            "ETA_DEFAULT_HOSTED_WEB_SEARCH" to "false",
+        ).forEach { (name, fallback) ->
+            buildConfigField("String", name, javaStringLiteral(packagedModelValue(name, fallback)))
+        }
     }
 
     signingConfigs {
@@ -69,7 +109,7 @@ android {
     }
 
     buildFeatures {
-        buildConfig = false
+        buildConfig = true
         compose = true
     }
 
@@ -103,6 +143,7 @@ android {
 }
 
 dependencies {
+    implementation("com.k2fsa:sherpa-onnx:1.13.8@aar")
     implementation(libs.commons.compress)
     implementation(libs.xz)
     compileOnly(libs.libxposed.api)

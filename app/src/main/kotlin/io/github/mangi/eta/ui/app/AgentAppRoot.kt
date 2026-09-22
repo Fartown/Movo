@@ -25,10 +25,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.LayoutDirection
@@ -42,6 +44,7 @@ import io.github.mangi.eta.R
 import io.github.mangi.eta.agent.device.BoundedRootCommandExecutor
 import io.github.mangi.eta.agent.device.DeviceLocationProvider
 import io.github.mangi.eta.agent.device.RootAccess
+import io.github.mangi.eta.agent.runtime.AgentConversationHandoff
 import io.github.mangi.eta.core.AndroidAgentLogger
 import io.github.mangi.eta.data.repository.RuntimeConfigRepository
 import io.github.mangi.eta.ui.AppearanceSettingsScreen
@@ -84,6 +87,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.nav.core.NavDisplay
 import top.yukonga.miuix.kmp.nav.core.NavDisplayEffects
@@ -96,9 +100,13 @@ import top.yukonga.miuix.kmp.window.WindowDialog
  * Agent App 根组件：持有本地导航栈，并把 Screen actions 交给 [AgentAppState]。
  */
 @Composable
-fun AgentAppRoot(
+internal fun AgentAppRoot(
     assistantConversationKey: String? = null,
     onAssistantConversationOpened: (Boolean) -> Unit = {},
+    resultConversationHandoff: AgentConversationHandoff.Request? = null,
+    onResultConversationOpened: (AgentConversationHandoff.Request, Boolean) -> Unit = { _, _ -> },
+    browserUrl: String? = null,
+    onBrowserOpened: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val uiScope = rememberCoroutineScope()
@@ -114,6 +122,12 @@ fun AgentAppRoot(
     ) {
         agentState.refreshPermissionHealth()
     }
+    val microphonePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {
+        agentState.refreshPermissionHealth()
+        io.github.mangi.eta.agent.voice.EtaWakeWordController.refresh(context)
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -126,6 +140,11 @@ fun AgentAppRoot(
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val windowInfo = LocalWindowInfo.current
+    LaunchedEffect(windowInfo.isWindowFocused) {
+        // 关闭悬浮结果卡只恢复窗口焦点，前台 Activity 不一定再次收到 ON_RESUME。
+        if (windowInfo.isWindowFocused) agentState.refreshRuntimeResults()
     }
 
     var conversationPaneOpen by remember { mutableStateOf(false) }
@@ -180,12 +199,38 @@ fun AgentAppRoot(
         onAssistantConversationOpened(opened)
     }
 
+    LaunchedEffect(resultConversationHandoff) {
+        val request = resultConversationHandoff ?: return@LaunchedEffect
+        val opened = try {
+            withTimeoutOrNull(8_000) { agentState.openResultConversation(request.target, request.runId) } == true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
+        if (opened) {
+            focusManager.clearFocus()
+            conversationPaneOpen = false
+            navigator.replace(AppRoute.Chat)
+            // Let the original chat compose before removing the covering result window.
+            withFrameNanos { }
+        }
+        onResultConversationOpened(request, opened)
+    }
+
     fun pushRoute(
         route: AppRoute,
         restoreConversationPaneOnBack: Boolean = conversationPaneOpen,
     ) {
         conversationPaneOpen = restoreConversationPaneOnBack
         navigator.push(route)
+    }
+
+    LaunchedEffect(browserUrl) {
+        val url = browserUrl ?: return@LaunchedEffect
+        focusManager.clearFocus()
+        if (backStack.lastOrNull() != AppRoute.Browser) pushRoute(AppRoute.Browser)
+        // The browser host consumes the URL only after it has attached its WebView.
     }
 
     fun popRoute() {
@@ -388,7 +433,7 @@ fun AgentAppRoot(
             }
             entry<AppRoute.Browser>(swipeDismiss = swipeDismiss) {
                 RoutedShell(route = AppRoute.Browser) {
-                    AgentBrowserScreen()
+                    AgentBrowserScreen(initialUrl = browserUrl, onInitialUrlConsumed = onBrowserOpened)
                 }
             }
             entry<AppRoute.Terminal>(swipeDismiss = swipeDismiss) {
@@ -502,6 +547,9 @@ fun AgentAppRoot(
                                             )
                                         }
                                     }
+                                    "microphone" -> {
+                                        microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                    }
                                     "background" -> {
                                         if (RootAccess.isGranted && Build.MANUFACTURER.lowercase() in setOf("oppo", "realme", "oneplus")) {
                                             uiScope.launch(Dispatchers.IO) {
@@ -603,8 +651,14 @@ fun AgentAppRoot(
                     onBack = ::popRoute
                 )
             }
+            entry<AppRoute.VoiceSettings>(swipeDismiss = swipeDismiss) {
+                io.github.mangi.eta.ui.screens.voice.VoiceSettingsScreen(onBack = ::popRoute)
+            }
             entry<AppRoute.AppearanceSettings>(swipeDismiss = swipeDismiss) {
                 AppearanceSettingsScreen(onBack = ::popRoute)
+            }
+            entry<AppRoute.Diagnostics>(swipeDismiss = swipeDismiss) {
+                io.github.mangi.eta.ui.screens.diagnostics.DiagnosticsScreen(onBack = ::popRoute)
             }
             entry<AppRoute.DataBackup>(swipeDismiss = swipeDismiss) {
                 DataBackupScreen(

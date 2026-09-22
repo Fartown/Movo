@@ -15,6 +15,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
+import android.widget.Toast
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
 import androidx.compose.runtime.Composable
@@ -108,6 +109,9 @@ internal class EtaAssistantOverlayService : Service(), LifecycleOwner, SavedStat
     private var inputText by mutableStateOf("")
     private var inputFocusRequestKey by mutableIntStateOf(-1)
     private var uiState by mutableStateOf(EtaVoiceUiState())
+    private var pendingAutoListen = false
+    private var isListening by mutableStateOf(false)
+    private var dictationController: io.github.mangi.eta.agent.voice.asr.EtaDictationController? = null
 
     override val lifecycle: Lifecycle get() = lifecycleRegistry
     override val savedStateRegistry: SavedStateRegistry
@@ -124,7 +128,18 @@ internal class EtaAssistantOverlayService : Service(), LifecycleOwner, SavedStat
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_SHOW -> showEntry()
+            ACTION_SHOW -> {
+                pendingAutoListen = intent.getBooleanExtra(EXTRA_AUTO_LISTEN, false)
+                showEntry()
+            }
+            ACTION_AUTO_LISTEN -> {
+                pendingAutoListen = true
+                if (windowView != null) {
+                    startDictation(fromWake = true)
+                } else {
+                    showEntry()
+                }
+            }
             ACTION_HANDOFF_READY -> finishHandoff()
             else -> showEntry()
         }
@@ -139,11 +154,13 @@ internal class EtaAssistantOverlayService : Service(), LifecycleOwner, SavedStat
         entryCaptureJob = null
         screenContextAttachment = null
         cancelCurrentRun()
+        stopDictation(submitFinal = false)
         removeWindow()
         scope.cancel()
         cancellationExecutor.shutdown()
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         if (activeService === this) activeService = null
+        EtaWakeWordService.resumeWake(this)
         super.onDestroy()
     }
 
@@ -243,7 +260,74 @@ internal class EtaAssistantOverlayService : Service(), LifecycleOwner, SavedStat
             stopSelf()
             return
         }
-        showKeyboard()
+        if (pendingAutoListen) {
+            pendingAutoListen = false
+            startDictation(fromWake = true)
+        } else {
+            showKeyboard()
+        }
+    }
+
+    private fun toggleDictation() {
+        if (isListening) {
+            stopDictation(submitFinal = true)
+        } else {
+            startDictation(fromWake = false)
+        }
+    }
+
+    private fun startDictation(fromWake: Boolean) {
+        if (activeRunId != null || isListening) return
+        EtaWakeWordService.pauseWake(this)
+        isListening = true
+        updateSoftInput(visible = false)
+        val controller = io.github.mangi.eta.agent.voice.asr.EtaDictationController(this)
+        dictationController = controller
+        controller.start(
+            object : io.github.mangi.eta.agent.voice.asr.EtaAsrEngine.Listener {
+                override fun onPartial(text: String) {
+                    if (text.isNotBlank()) inputText = text
+                }
+
+                override fun onFinal(text: String) {
+                    isListening = false
+                    dictationController = null
+                    if (text.isNotBlank()) {
+                        inputText = text
+                        if (fromWake) {
+                            submitPrompt(text)
+                        }
+                    }
+                    EtaWakeWordService.resumeWake(this@EtaAssistantOverlayService)
+                }
+
+                override fun onError(message: String) {
+                    isListening = false
+                    dictationController = null
+                    AndroidAgentLogger.warn("Overlay dictation failed")
+                    Toast.makeText(this@EtaAssistantOverlayService, message, Toast.LENGTH_LONG).show()
+                    showKeyboard()
+                    EtaWakeWordService.resumeWake(this@EtaAssistantOverlayService)
+                }
+
+                override fun onEnded() {
+                    if (isListening) {
+                        isListening = false
+                        dictationController = null
+                        EtaWakeWordService.resumeWake(this@EtaAssistantOverlayService)
+                    }
+                }
+            },
+        )
+    }
+
+    private fun stopDictation(submitFinal: Boolean) {
+        dictationController?.stop(submitFinal)
+        if (!submitFinal) {
+            dictationController = null
+            isListening = false
+            EtaWakeWordService.resumeWake(this)
+        }
     }
 
     private fun showWindow() {
@@ -263,11 +347,13 @@ internal class EtaAssistantOverlayService : Service(), LifecycleOwner, SavedStat
                         state = uiState,
                         input = inputText,
                         inputFocusRequestKey = inputFocusRequestKey,
+                        isListening = isListening,
                         onInputChange = { inputText = it },
                         onScreenContextSelect = ::selectScreenContext,
                         onScreenContextRemove = ::removeScreenContext,
                         onSubmit = ::submitInput,
                         onStop = ::stopCurrentRun,
+                        onToggleListen = ::toggleDictation,
                         onClose = ::dismissAndStop,
                         canOpenConversation = activeRunId == null &&
                             uiState.messages.any { message ->
@@ -995,10 +1081,26 @@ internal class EtaAssistantOverlayService : Service(), LifecycleOwner, SavedStat
             }
         }
 
-        fun show(context: Context) {
+        const val ACTION_AUTO_LISTEN = "io.github.mangi.eta.agent.voice.AUTO_LISTEN"
+        const val EXTRA_AUTO_LISTEN = "io.github.mangi.eta.agent.voice.extra.AUTO_LISTEN"
+
+        fun show(context: Context, autoListen: Boolean = false) {
             context.applicationContext.startService(
                 Intent(context.applicationContext, EtaAssistantOverlayService::class.java)
-                    .setAction(ACTION_SHOW),
+                    .setAction(ACTION_SHOW)
+                    .putExtra(EXTRA_AUTO_LISTEN, autoListen),
+            )
+        }
+
+        fun requestAutoListen(context: Context) {
+            val service = activeService
+            if (service != null) {
+                mainHandler.post { service.startDictation(fromWake = true) }
+                return
+            }
+            context.applicationContext.startService(
+                Intent(context.applicationContext, EtaAssistantOverlayService::class.java)
+                    .setAction(ACTION_AUTO_LISTEN),
             )
         }
 

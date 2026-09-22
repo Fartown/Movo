@@ -11,6 +11,7 @@ import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Memory
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.QueryStats
@@ -78,6 +79,7 @@ private fun PermissionItemRow(
         "background" -> Icons.Rounded.History
         "app_list" -> Icons.Rounded.Dashboard
         "location" -> Icons.Rounded.LocationOn
+        "microphone" -> Icons.Rounded.Mic
         "notification_history" -> Icons.Rounded.NotificationsActive
         "usage_access" -> Icons.Rounded.QueryStats
         "notifications" -> Icons.Rounded.Notifications

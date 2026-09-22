@@ -43,7 +43,12 @@ internal class AgentExecutionService : Service() {
         try {
             startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
             foregroundActive = true
+            io.github.mangi.eta.diagnostics.DiagnosticsEnvironment.executionService = true
+            io.github.mangi.eta.diagnostics.MemoryDiagnostics.record("lifecycle", "execution_service.foreground")
         } catch (failure: RuntimeException) {
+            io.github.mangi.eta.diagnostics.MemoryDiagnostics.record("lifecycle", "execution_service.rejected",
+                io.github.mangi.eta.diagnostics.DiagnosticLevel.ERROR,
+                fields = mapOf("causes" to io.github.mangi.eta.diagnostics.MemoryDiagnostics.causes(failure)))
             startRejected = true
             AndroidAgentLogger.warn("Execution service foreground failed: type=${failure.safeLogType()}")
             stopTasks(startFailed = true)
@@ -63,6 +68,8 @@ internal class AgentExecutionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        io.github.mangi.eta.diagnostics.DiagnosticsEnvironment.executionService = false
+        io.github.mangi.eta.diagnostics.MemoryDiagnostics.record("lifecycle", "execution_service.destroyed")
         if (instance === this) instance = null
         // 销毁时同样收回本服务拥有的任务。回收在独立有界工作线程上完成，不阻塞 Main。
         stopQueue.close(leases.drainOwner(owner))
@@ -70,6 +77,8 @@ internal class AgentExecutionService : Service() {
     }
 
     private fun stopTasks(startFailed: Boolean = false) {
+        io.github.mangi.eta.diagnostics.MemoryDiagnostics.record("lifecycle", "execution_service.stop_requested",
+            fields = mapOf("start_failed" to startFailed))
         val callbacks = leases.drain(startFailed)
         stopQueue.submit(callbacks) {
             mainHandler.post { if (instance === this) refreshNotification() }
@@ -79,6 +88,7 @@ internal class AgentExecutionService : Service() {
     private fun refreshNotification() {
         if (leases.closeOwnerIfIdle(owner)) {
             foregroundActive = false
+            io.github.mangi.eta.diagnostics.DiagnosticsEnvironment.executionService = false
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         } else {

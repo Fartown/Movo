@@ -58,7 +58,9 @@ internal object OpenAiChatCompletionsProvider : AgentProviderClient {
             .toString()
             .toRequestBody(JSON_MEDIA_TYPE)
 
+        val trace = ModelRequestTrace.forRequest(request, id)
         val httpRequest = Request.Builder()
+            .tag(ModelRequestTrace::class.java, trace)
             .url(url)
             .headers(headers)
             .post(requestBody)
@@ -81,15 +83,18 @@ internal object OpenAiChatCompletionsProvider : AgentProviderClient {
                     throw AgentModelFailure.http(code, errorBody)
                 }
 
-                val assistantMessage = readStreamingAssistantMessage(response.body.byteStream(), runController, onEvent)
+                val assistantMessage = readStreamingAssistantMessage(response.body.byteStream(), runController, onEvent, trace)
                 onEvent(ProviderEvent.Completed(assistantMessage.optString("finish_reason").ifBlank { null }))
+                if (ModelRequestTrace.current() !== trace) trace.success()
                 return ProviderResponse(assistantMessage)
             }
         } catch (throwable: Throwable) {
+            if (ModelRequestTrace.current() !== trace) trace.failed(throwable, runController.isCancelled)
             runCatching { runController.throwIfCancelled() }
                 .getOrElse { interruption -> throw interruption }
             throw throwable
         } finally {
+            trace.close()
             binding.close()
         }
     }
@@ -124,7 +129,8 @@ internal object OpenAiChatCompletionsProvider : AgentProviderClient {
     private fun readStreamingAssistantMessage(
         stream: java.io.InputStream?,
         runController: AgentRunController,
-        onEvent: (ProviderEvent) -> Unit
+        onEvent: (ProviderEvent) -> Unit,
+        trace: ModelRequestTrace,
     ): JSONObject {
         if (stream == null) error("模型接口未返回响应流")
         val content = StringBuilder()
@@ -166,7 +172,7 @@ internal object OpenAiChatCompletionsProvider : AgentProviderClient {
             onEvent(ProviderEvent.BlockDelta(kind, block.contentIndex, delta))
         }
 
-        readProviderSse(stream, runController) { _, data ->
+        readProviderSse(stream, runController, trace) { _, data ->
             sawStreamData = true
             val payload = data.trim()
             if (payload == "[DONE]") {
