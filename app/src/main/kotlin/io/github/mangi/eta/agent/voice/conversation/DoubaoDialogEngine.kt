@@ -215,6 +215,13 @@ internal class DoubaoDialogEngine(
                 if (outputTurn != null && json.optString("tts_type") == "chat_tts_text" &&
                     json.optString("question_id") == questionId) {
                     outputReplyId = json.optString("reply_id")
+                    if (playbackPaused) {
+                        // Keep old queued audio paused until the SDK has switched to this reply.
+                        // Resuming when sending the text replays the previous answer's tail.
+                        directive(D.DIRECTIVE_RESUME_PLAYER, "")
+                        playbackPaused = false
+                        log("output.resumed.for.reply", mapOf("turn" to outputTurn))
+                    }
                 }
             }
             D.MESSAGE_TYPE_DIALOG_TTS_SENTENCE_END -> {
@@ -251,9 +258,8 @@ internal class DoubaoDialogEngine(
         synthesisEnded = false
         expectedDurationMs = 0
         outputRequestedAt = SystemClock.elapsedRealtime()
-        if (playbackPaused) directive(D.DIRECTIVE_RESUME_PLAYER, "")
-        playbackPaused = false
-        // ASR_INFO already selected client TTS for this vendor round. Initial playback is not paused.
+        // ASR_INFO selected client TTS. After interruption, keep the player paused until
+        // the matching client's TTS_SENTENCE_START, not merely until this request is sent.
         // Bounded chunks keep a long answer off the JNI argument boundary without truncating it.
         val chunks = text.codePoints().toArray().toList().chunked(400).map { points ->
             String(points.toIntArray(), 0, points.size)
@@ -310,8 +316,13 @@ internal class DoubaoDialogEngine(
 
     private fun checkPlayback() {
         val id = outputTurn ?: return
-        if (playbackPaused) return
         val now = SystemClock.elapsedRealtime()
+        if (!outputStarted && now - outputRequestedAt > 20_000) {
+            outputTurn = null
+            fail("没有收到可播放的语音，回答文字已保留，请重试语音连接")
+            return
+        }
+        if (playbackPaused) return
         // Dialog doesn't reliably emit the standalone-TTS player's finish event. Require the
         // matching reply's synthesis end, its full duration, and a quiet real-time player tail.
         if (outputStarted && synthesisEnded && expectedDurationMs > 0 &&
@@ -319,9 +330,6 @@ internal class DoubaoDialogEngine(
             outputTurn = null
             log("output.drained", mapOf("turn" to id))
             emit { onPlaybackFinished(id) }
-        } else if (!outputStarted && now - outputRequestedAt > 20_000) {
-            outputTurn = null
-            fail("没有收到可播放的语音，回答文字已保留，请重试语音连接")
         } else if (outputStarted && now - lastSoundAt > 20_000) {
             // Missing end/duration metadata must not leave the assistant stuck in SPEAKING forever.
             outputTurn = null
