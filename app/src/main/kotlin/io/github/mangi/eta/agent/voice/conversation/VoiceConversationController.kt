@@ -37,6 +37,10 @@ internal class VoiceConversationController(
 
     fun start() {
         if (busy) return
+        // The controller survives while its overlay stays open. A new connection must not
+        // inherit the previous session's expired idle/utterance deadlines (R15 UI regression).
+        idleSince = 0
+        utteranceSince = 0
         turns.start()
         sessionId = UUID.randomUUID().toString()
         val current = ++generation
