@@ -1170,6 +1170,10 @@
   <string name="drawer_permissions">权限</string>
   <string name="drawer_characters">角色</string>
   <string name="overlay_follow_up_hint">继续对话…</string>
-  <string name="overlay_result_expand">展开</string>
+    <string name="overlay_result_expand">展开</string>
+    <string name="overlay_result_open_conversation">全屏查看对话</string>
+    <string name="overlay_result_continue_conversation">查看记录并继续对话</string>
+    <string name="overlay_result_opening_conversation">正在打开对话…</string>
+    <string name="overlay_result_open_failed">暂时无法打开对话，结果已保留，请重试。</string>
   <string name="overlay_result_collapse">收起</string>
 </resources>
