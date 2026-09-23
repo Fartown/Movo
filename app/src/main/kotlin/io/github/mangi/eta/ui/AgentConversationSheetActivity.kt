@@ -58,7 +58,10 @@ import top.yukonga.miuix.kmp.basic.Text
 internal class AgentConversationSheetActivity : ComponentActivity() {
     private val agentState by lazy { AgentAppSession.get(application) }
     private var request by mutableStateOf<AgentConversationHandoff.Request?>(null)
+    /** 助手入口：没有 run handoff，直接承载当前这条共享会话。 */
+    private var assistantMode by mutableStateOf(false)
     private var ready by mutableStateOf(false)
+    private var autoListen by mutableStateOf(false)
     private var expanded by mutableStateOf(false)
     private var resizeAnimator: ValueAnimator? = null
     private var windowHeight = 0
@@ -67,11 +70,26 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
     private var dragHeight = 0f
     private var pendingKeyboardLift: Int? = null
     private var afterHidden: (() -> Unit)? = null
+    private val microphonePermission = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { allowed ->
+        if (allowed && !isFinishing) io.github.mangi.eta.agent.voice.session.VoiceEntry.startInPlace(this)
+        else Toast.makeText(this, "未获得麦克风权限，可以继续文字输入", Toast.LENGTH_LONG).show()
+    }
+
+    private fun startVoiceInput() {
+        if (androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO)
+            == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            io.github.mangi.eta.agent.voice.session.VoiceEntry.startInPlace(this)
+        } else microphonePermission.launch(android.Manifest.permission.RECORD_AUDIO)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        assistantMode = intent.action == ACTION_ASSISTANT
+        autoListen = intent.getBooleanExtra(io.github.mangi.eta.agent.voice.EtaAssistantVoiceService.EXTRA_AUTO_LISTEN, false)
         request = AgentConversationHandoff.from(intent)
-        if (request == null) { finish(); return }
+        if (request == null && !assistantMode) { finish(); return }
         current = WeakReference(this)
         enableEdgeToEdge()
         window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
@@ -102,14 +120,26 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                         LaunchedEffect(imeBottom, navigationBottom) {
                             avoidKeyboard(imeBottom, navigationBottom)
                         }
-                        LaunchedEffect(request) {
-                            val opening = request ?: return@LaunchedEffect
+                        LaunchedEffect(request, assistantMode) {
+                            val opening = request
+                            if (opening == null) {
+                                // 助手入口不新建会话：语音和文字共用当前这条，界面只是它的另一个容器。
+                                ready = runCatching { agentState.voiceConversationId() }.isSuccess
+                                if (!ready) finish()
+                                return@LaunchedEffect
+                            }
                             val opened = agentState.openResultConversation(opening.target, opening.runId)
                             ready = opened
                             opening.acknowledge(opened)
                             if (!opened) {
                                 Toast.makeText(this@AgentConversationSheetActivity, R.string.overlay_result_open_failed, Toast.LENGTH_LONG).show()
                                 finish()
+                            }
+                        }
+                        LaunchedEffect(ready, autoListen) {
+                            if (ready && autoListen) {
+                                autoListen = false
+                                startVoiceInput()
                             }
                         }
                         BackHandler { if (expanded) settle(false) else finish() }
@@ -145,6 +175,12 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.action == ACTION_ASSISTANT) {
+            assistantMode = true
+            autoListen = intent.getBooleanExtra(io.github.mangi.eta.agent.voice.EtaAssistantVoiceService.EXTRA_AUTO_LISTEN, false)
+            request = null
+            return
+        }
         val next = AgentConversationHandoff.from(intent) ?: return
         // Keep the existing body mounted when the same conversation completes another turn.
         val currentConversation = next.target.source == AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE &&
@@ -246,6 +282,8 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
     }
 
     companion object {
+        /** 系统入口（唤醒词 / 电源键 / 助手手势）打开助手界面时使用。 */
+        const val ACTION_ASSISTANT = "io.github.mangi.eta.ui.ASSISTANT"
         private const val STATE_EXPANDED = "sheet_expanded"
         @Volatile private var current = WeakReference<AgentConversationSheetActivity>(null)
 
@@ -255,6 +293,13 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
             return target != null && (target == activity.request?.target ||
                 target.source == AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE &&
                 target.key == activity.agentState.conversationPaneState.selectedConversationId)
+        }
+
+        /** 助手浮层是否正在显示当前这条共享会话。 */
+        fun isAssistantVisible(): Boolean {
+            val activity = current.get() ?: return false
+            return activity.assistantMode &&
+                activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
         }
 
         /** Tool dispatch waits for onStop, so screenshots cannot capture the conversation itself. */

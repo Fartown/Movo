@@ -39,6 +39,7 @@ import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.runtime.Composable
@@ -50,6 +51,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.focus.FocusRequester
@@ -71,6 +74,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.mangi.eta.R
+import io.github.mangi.eta.agent.voice.session.VoiceSessionUiState
 import io.github.mangi.eta.data.model.ReasoningEffort
 import io.github.mangi.eta.ui.model.AgentContextUsageUi
 import io.github.mangi.eta.ui.model.AgentModelPickerUiState
@@ -130,10 +134,20 @@ internal fun AgentChatInputBar(
     isListening: Boolean = false,
     onToggleListen: (() -> Unit)? = null,
     dictationText: String? = null,
+    voice: VoiceSessionUiState = VoiceSessionUiState(),
+    onStopSpeaking: () -> Unit = {},
+    onEndVoice: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
     val focusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    val queued = LocalQueuedConversationInput.current
+    fun enterText() {
+        onEndVoice()
+        focusRequester.requestFocus()
+        keyboard?.show()
+    }
     val conversationComposer = LocalConversationComposer.current
     val textFieldState = conversationComposer ?: rememberTextFieldState(initialText = input)
     var wasEditingMessage by remember { mutableStateOf(isEditingMessage) }
@@ -197,6 +211,28 @@ internal fun AgentChatInputBar(
             PendingImageStrip(
                 images = pendingImages,
                 onRemoveImage = onRemoveImage,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+        }
+
+        queued.text?.let { text ->
+            Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                Text("下一条：$text", maxLines = 3, style = MiuixTheme.textStyles.body2)
+                Row {
+                    Text("编辑", modifier = Modifier.clickable { queued.edit(); enterText() }.padding(12.dp))
+                    Text("撤回", modifier = Modifier.clickable(onClick = queued.discard).padding(12.dp))
+                }
+            }
+        }
+        AnimatedVisibility(
+            visible = voice.active,
+            enter = fadeIn(tween(160)),
+            exit = fadeOut(tween(100)) + shrinkVertically(tween(160)),
+        ) {
+            AgentVoiceStatusStrip(
+                voice = voice,
+                onStopSpeaking = onStopSpeaking,
+                onEndVoice = ::enterText,
                 modifier = Modifier.padding(bottom = 8.dp),
             )
         }
@@ -271,7 +307,8 @@ internal fun AgentChatInputBar(
                         state = textFieldState,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .focusRequester(focusRequester),
+                            .focusRequester(focusRequester)
+                            .onFocusChanged { if (it.isFocused && voice.active) onEndVoice() },
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
                         textStyle = TextStyle(
                             color = MiuixTheme.colorScheme.onSurface,
@@ -316,14 +353,19 @@ internal fun AgentChatInputBar(
                             if (onToggleListen != null) {
                                 Spacer(modifier = Modifier.width(2.dp))
                                 IconButton(
-                                    onClick = onToggleListen,
-                                    enabled = !isStreaming,
+                                    onClick = {
+                                        if (voice.active) enterText() else {
+                                            focusManager.clearFocus(); keyboard?.hide(); onToggleListen()
+                                        }
+                                    },
+                                    // 任务通道与语音通道正交：有任务在跑也能开语音，说的话会排队。
+                                    enabled = true,
                                     minWidth = ChatInputActionSize,
                                     minHeight = ChatInputActionSize,
                                 ) {
                                     Icon(
-                                        imageVector = if (isListening) Icons.Rounded.Stop else Icons.Rounded.Mic,
-                                        contentDescription = if (isListening) "结束语音对话" else "开始语音对话",
+                                        imageVector = if (isListening) Icons.Rounded.Keyboard else Icons.Rounded.Mic,
+                                        contentDescription = if (isListening) "切回文字输入" else "开始语音对话",
                                         modifier = Modifier.size(ChatInputActionIconSize),
                                         tint = if (isListening) {
                                             MiuixTheme.colorScheme.primary
@@ -364,26 +406,20 @@ internal fun AgentChatInputBar(
                             onModelSelected = onModelSelected,
                         )
 
+                        if (isStreaming) {
+                            IconButton(onClick = onStop, minWidth = ChatInputActionSize, minHeight = ChatInputActionSize) {
+                                Icon(Icons.Rounded.Stop, "取消当前任务", Modifier.size(StopIconSize))
+                            }
+                        }
                         IconButton(
-                            onClick = if (isStreaming) {
-                                onStop
-                            } else {
-                                {
-                                    if (canSend) {
-                                        val submittedText = textFieldState.text.toString()
-                                        textFieldState.clearText()
-                                        onSubmit(submittedText)
-                                    }
-                                }
-                            },
-                            enabled = isStreaming || canSend,
+                            onClick = { if (canSend) onSubmit(textFieldState.text.toString()) },
+                            enabled = canSend,
                             minWidth = ChatInputActionSize,
                             minHeight = ChatInputActionSize,
                         ) {
                             // 保留统一的点击区域，仅让可见圆形与相邻操作图标保持同一尺寸。
                             val sendButtonColor by animateColorAsState(
                                 targetValue = when {
-                                    isStreaming -> MiuixTheme.colorScheme.onSurface
                                     canSend -> MiuixTheme.colorScheme.primary
                                     else -> MiuixTheme.colorScheme.surfaceContainerHigh
                                 },
@@ -398,7 +434,7 @@ internal fun AgentChatInputBar(
                                 contentAlignment = Alignment.Center,
                             ) {
                                 AnimatedContent(
-                                    targetState = isStreaming,
+                                    targetState = queued.busy,
                                     transitionSpec = {
                                         (fadeIn(tween(130)) + scaleIn(tween(160), initialScale = 0.72f))
                                             .togetherWith(
@@ -409,21 +445,16 @@ internal fun AgentChatInputBar(
                                     label = "send_stop_icon",
                                 ) { streaming ->
                                     Icon(
-                                        imageVector = if (streaming) {
-                                            Icons.Rounded.Stop
-                                        } else {
-                                            Icons.Rounded.ArrowUpward
-                                        },
+                                        imageVector = Icons.Rounded.ArrowUpward,
                                         contentDescription = when {
-                                            streaming -> stringResource(R.string.chat_stop)
+                                            streaming -> "排队发送"
                                             isEditingMessage && preserveFollowingMessages -> "保存消息"
                                             else -> stringResource(R.string.chat_send)
                                         },
                                         modifier = Modifier.size(
-                                            if (streaming) StopIconSize else SendIconSize
+                                            SendIconSize
                                         ),
                                         tint = when {
-                                            streaming -> MiuixTheme.colorScheme.surface
                                             canSend -> MiuixTheme.colorScheme.onPrimary
                                             else -> MiuixTheme.colorScheme.onSurfaceVariantActions
                                         },

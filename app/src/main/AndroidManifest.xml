@@ -70,6 +70,7 @@
         <activity
             android:name=".ui.AgentConversationSheetActivity"
             android:exported="false"
+            android:showWhenLocked="true"
             android:excludeFromRecents="true"
             android:launchMode="singleTask"
             android:taskAffinity="io.github.mangi.eta.conversation"
@@ -125,8 +126,11 @@
                 android:resource="@xml/recognition_service" />
         </service>
 
+        <receiver
+            android:name=".agent.voice.session.AssistantEntryReceiver"
+            android:exported="false" />
         <service
-            android:name=".agent.voice.EtaAssistantOverlayService"
+            android:name=".agent.voice.EtaAssistantVoiceService"
             android:foregroundServiceType="microphone"
             android:exported="false" />
 

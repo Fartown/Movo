@@ -12,6 +12,8 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import io.github.mangi.eta.R
+import io.github.mangi.eta.agent.voice.session.VoiceEntry
+import io.github.mangi.eta.agent.voice.session.VoiceSurfaceTracker
 import io.github.mangi.eta.agent.voice.wake.WakeEngineFactory
 import io.github.mangi.eta.agent.voice.wake.WakeWordEngine
 import io.github.mangi.eta.core.AndroidAgentLogger
@@ -54,6 +56,8 @@ internal class EtaWakeWordService : Service() {
                 NotificationManager.IMPORTANCE_LOW,
             ),
         )
+        // New app-initiated starts are gated in start(). A system sticky restart must
+        // still be allowed to restore an already established foreground listener.
         if (!ensureForeground()) return
         scope.launch {
             VoiceSettingsRepository.wakeSettingsFlow().collectLatest { settings ->
@@ -96,7 +100,7 @@ internal class EtaWakeWordService : Service() {
                 refreshNotification()
             }
             else -> {
-                if (ensureForeground()) refreshNotification()
+                if (ensureForeground(force = startId > 0)) refreshNotification()
             }
         }
         return if (foregroundActive) START_STICKY else START_NOT_STICKY
@@ -113,12 +117,12 @@ internal class EtaWakeWordService : Service() {
         super.onDestroy()
     }
 
-    private fun ensureForeground(): Boolean {
+    private fun ensureForeground(force: Boolean = false): Boolean {
         if (!EtaWakeWordController.hasMicPermission(this)) {
             stopSelfSafe()
             return false
         }
-        if (foregroundActive) return true
+        if (foregroundActive && !force) return true
         return try {
             startForeground(
                 NOTIFICATION_ID,
@@ -182,14 +186,9 @@ internal class EtaWakeWordService : Service() {
         }
         wakeEngine?.pause()
         refreshNotification()
-        // Prefer VIS session; fall back to overlay show.
-        val sessionOk = EtaVoiceInteractionService.requestSession()
-        if (!sessionOk) {
-            EtaAssistantOverlayService.show(this, autoListen = true)
-        } else {
-            EtaAssistantOverlayService.requestAutoListen(this)
-        }
-        // The overlay resumes wake listening after its dictation session ends.
+        // 已经在 Movo 界面里就就地进语音模态，不再盖一层浮层。
+        VoiceEntry.startFromSystemEntry(this, autoListen = true)
+        // 语音宿主服务在 SDK 真正销毁后恢复唤醒监听。
     }
 
     private fun notification(): Notification {
@@ -277,9 +276,18 @@ internal class EtaWakeWordService : Service() {
                 stop(context)
                 return
             }
+            // An existing foreground listener observes settings itself. Reissuing an FGS
+            // start is unnecessary and creates another promotion deadline on some devices.
+            if (instance?.foregroundActive == true) return
+            if (!VoiceSurfaceTracker.appVisible) return
             val app = context.applicationContext
             val intent = Intent(app, EtaWakeWordService::class.java)
-            app.startForegroundService(intent)
+            try {
+                app.startForegroundService(intent)
+            } catch (failure: RuntimeException) {
+                AndroidAgentLogger.warn("Wake service launch failed: type=${failure.safeLogType()}")
+                mutableListeningState.value = WakeListeningState.Failed("暂时无法开启唤醒，请返回应用后重试")
+            }
         }
 
         fun stop(context: Context) {

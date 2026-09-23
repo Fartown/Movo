@@ -60,8 +60,8 @@ android {
         targetSdk = 36
         testInstrumentationRunner = "io.github.mangi.eta.voice.VoiceAcceptanceInstrumentation"
         // versionCode 规则：yyyyMMdd + 两位当日序号（01 起），发版时随 versionName 一起手动递增。
-        versionCode = 2026092207
-        versionName = "3.0.7"
+        versionCode = 2026092305
+        versionName = "3.0.8"
 
         mapOf(
             "ETA_DEFAULT_PROVIDER_NAME" to "默认模型",

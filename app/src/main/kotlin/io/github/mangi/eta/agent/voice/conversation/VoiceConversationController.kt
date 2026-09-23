@@ -9,14 +9,26 @@ import io.github.mangi.eta.data.repository.VoiceSettingsRepository
 import io.github.mangi.eta.diagnostics.MemoryDiagnostics
 import java.util.UUID
 
+/** Recording boundary; orchestration can be exercised without opening native audio. */
+internal interface VoiceConversationSession {
+    val active: Boolean
+    val busy: Boolean
+    fun start()
+    fun end(message: String = "语音对话已结束")
+    fun stopSpeaking()
+    fun result(turn: Long, answer: String, confirmed: Boolean = true, failure: String? = null)
+    fun runtimeEvent(turn: Long, event: io.github.mangi.eta.agent.runtime.AgentEvent)
+}
+
 /** Main-thread owner of one continuous voice session; windows may come and go independently. */
 @Keep
 internal class VoiceConversationController(
     private val context: Context,
     private val host: Host,
-) {
+) : VoiceConversationSession {
     interface Host {
-        fun onState(active: Boolean, status: String, transcript: String)
+        /** event 是控制器的稳定事件名；界面据此派生通道状态，不解析状态文案。 */
+        fun onState(event: String, active: Boolean, status: String, transcript: String)
         fun submit(turn: VoiceTurnCoordinator.Turn, sessionId: String)
         fun cancelTask()
         fun onClosed()
@@ -32,10 +44,10 @@ internal class VoiceConversationController(
     private var idleSince = 0L
     private var utteranceSince = 0L
     private var commit: Runnable? = null
-    val active: Boolean get() = turns.active
-    val busy: Boolean get() = engine != null || turns.running != null
+    override val active: Boolean get() = turns.active
+    override val busy: Boolean get() = engine != null || turns.running != null
 
-    fun start() {
+    override fun start() {
         if (busy) return
         // The controller survives while its overlay stays open. A new connection must not
         // inherit the previous session's expired idle/utterance deadlines (R15 UI regression).
@@ -103,7 +115,7 @@ internal class VoiceConversationController(
         }).also { it.start(VoiceSettingsRepository.loadDoubaoCredentials()) }
     }
 
-    fun result(turn: Long, answer: String, confirmed: Boolean = true, failure: String? = null) {
+    override fun result(turn: Long, answer: String, confirmed: Boolean, failure: String?) {
         if (!confirmed) {
             // Never retry a possibly accepted task. Keep the run identity until reconciliation.
             end("任务连接中断，执行状态待确认，请到对话记录查看；不会自动重发")
@@ -116,7 +128,7 @@ internal class VoiceConversationController(
         publish("result", turn)
     }
 
-    fun runtimeEvent(turn: Long, event: io.github.mangi.eta.agent.runtime.AgentEvent) {
+    override fun runtimeEvent(turn: Long, event: io.github.mangi.eta.agent.runtime.AgentEvent) {
         when (event) {
             is io.github.mangi.eta.agent.runtime.AgentEvent.ToolStarted ->
                 observer?.invoke("tool.started", turn, event.name, "")
@@ -132,7 +144,17 @@ internal class VoiceConversationController(
         }
     }
 
-    fun end(message: String = "语音对话已结束") {
+    /** 停止当前播报，不结束语音通道、不取消任务。 */
+    override fun stopSpeaking() {
+        if (!turns.active) return
+        val actions = turns.stopSpeaking()
+        if (actions.isEmpty()) return
+        apply(actions)
+        status = "已停止播报，你可以继续说"
+        publish("listening")
+    }
+
+    override fun end(message: String) {
         status = message
         apply(turns.end())
         publish("ended")
@@ -160,6 +182,8 @@ internal class VoiceConversationController(
                 host.cancelTask()
             }
             VoiceTurnCoordinator.Action.EndSession -> {
+                // Retain partial/pending text before close can synchronously notify onClosed.
+                publish("ended")
                 commit?.let(main::removeCallbacks)
                 generation++
                 val closing = engine
@@ -198,7 +222,7 @@ internal class VoiceConversationController(
     }
 
     private fun publish(event: String, turn: Long = turns.latestTurnId) {
-        host.onState(active, status, turns.transcript)
+        host.onState(event, active, status, turns.transcript)
         MemoryDiagnostics.record("voice", "conversation.$event", fields = mapOf(
             "session" to sessionId, "turn" to turn, "active" to active, "chars" to turns.transcript.length))
         observer?.invoke(event, turn, turns.transcript, status)

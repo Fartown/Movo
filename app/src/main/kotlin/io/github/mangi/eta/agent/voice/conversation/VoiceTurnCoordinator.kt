@@ -161,6 +161,15 @@ internal class VoiceTurnCoordinator {
         return listOf(Action.Speak(speaking!!))
     }
 
+    /** 界面上的"停止播报"：只停这次朗读，会话与任务都继续。与语音命令"别念了"同一条路径。 */
+    fun stopSpeaking(): List<Action> {
+        if (!active || (speaking == null && deferredAnswer == null)) return emptyList()
+        speaking = null
+        responseOwner = null
+        deferredAnswer = null
+        return listOf(Action.DiscardSpeech)
+    }
+
     fun playbackFinished(id: Long) {
         if (speaking?.id == id) speaking = null
     }

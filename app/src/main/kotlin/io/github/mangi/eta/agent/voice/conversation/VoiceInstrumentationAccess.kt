@@ -2,7 +2,7 @@ package io.github.mangi.eta.agent.voice.conversation
 
 import android.content.Context
 import androidx.annotation.Keep
-import io.github.mangi.eta.agent.voice.EtaAssistantOverlayService
+import io.github.mangi.eta.agent.voice.session.VoiceEntry
 import io.github.mangi.eta.config.Prefs
 import io.github.mangi.eta.diagnostics.MemoryDiagnostics
 import io.github.mangi.eta.ui.app.AgentAppSession
@@ -20,11 +20,11 @@ internal object VoiceInstrumentationAccess {
         val state = AgentAppSession.get(context)
         val previous = state.conversationPaneState.selectedConversationId
         state.createConversation()
-        EtaAssistantOverlayService.show(context, autoListen = true)
+        VoiceEntry.startFromSystemEntry(context, autoListen = true)
         return previous
     }
 
-    fun end(context: Context) = EtaAssistantOverlayService.dismiss(context)
+    fun end(context: Context) = VoiceEntry.end(context)
 
     fun restore(context: Context, conversationId: String?) {
         val state = AgentAppSession.get(context)

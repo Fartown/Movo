@@ -1,6 +1,14 @@
 package io.github.mangi.eta.ui.app
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import io.github.mangi.eta.ui.components.LocalQueuedConversationInput
+import io.github.mangi.eta.ui.components.QueuedConversationInput
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import io.github.mangi.eta.agent.voice.session.VoiceSurfaceTracker
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -23,11 +31,28 @@ internal fun AgentConversationContent(
     onNavigateBack: () -> Unit = {},
     isDrawerOpen: Boolean = false,
     initiallyShowLatestMessage: Boolean = false,
+    isTopRoute: Boolean = true,
 ) {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle, isTopRoute) {
+        val owner = Any()
+        val observer = LifecycleEventObserver { _, _ ->
+            VoiceSurfaceTracker.setChatVisible(owner, isTopRoute && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+        }
+        lifecycle.addObserver(observer)
+        VoiceSurfaceTracker.setChatVisible(owner, isTopRoute && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+        onDispose { lifecycle.removeObserver(observer); VoiceSurfaceTracker.setChatVisible(owner, false) }
+    }
     val requestNotifications = rememberExecutionNotificationRequest()
     val conversationId = agentState.conversationPaneState.selectedConversationId
     var deleteTarget by remember(conversationId) { mutableStateOf<ConversationMutationTarget?>(null) }
     var regenerateTarget by remember(conversationId) { mutableStateOf<ConversationMutationTarget?>(null) }
+    val queued = agentState.queuedTextSubmission?.takeIf { it.conversationId == conversationId }
+    CompositionLocalProvider(LocalQueuedConversationInput provides QueuedConversationInput(
+        text = queued?.text?.ifBlank { "待发送附件" }, busy = agentState.voiceRuntimeBusy,
+        edit = { agentState.withdrawQueuedText(edit = true) },
+        discard = { agentState.withdrawQueuedText(edit = false) },
+    )) {
     AgentChatScreen(
         state = agentState.homeState,
         modelPickerState = agentState.modelPickerState,
@@ -70,6 +95,7 @@ internal fun AgentConversationContent(
             }
         },
     )
+    }
     deleteTarget?.let { target ->
         WindowDialog(
             show = true,

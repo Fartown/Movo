@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.os.Bundle
 import android.service.voice.VoiceInteractionSession
 import android.view.View
+import io.github.mangi.eta.agent.voice.session.VoiceEntry
 
 /**
  * 系统数字助理的入口桥接。
@@ -37,16 +38,16 @@ internal class EtaVoiceInteractionSession(context: Context) : VoiceInteractionSe
 
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
-        EtaAssistantOverlayService.show(context)
+        VoiceEntry.startFromSystemEntry(context, autoListen = false)
     }
 
     override fun onBackPressed() {
-        EtaAssistantOverlayService.dismiss(context)
+        EtaAssistantVoiceService.dismiss(context)
         hide()
     }
 
     override fun onCloseSystemDialogs() {
-        EtaAssistantOverlayService.dismiss(context)
+        EtaAssistantVoiceService.dismiss(context)
         hide()
     }
 

@@ -27,7 +27,7 @@ import io.github.mangi.eta.agent.tool.AgentToolRequirements
 import io.github.mangi.eta.agent.tool.AgentToolCapabilities
 import io.github.mangi.eta.agent.tool.PendingSkillConflictCapabilityParser
 import io.github.mangi.eta.agent.tool.ToolExecutionDecision
-import io.github.mangi.eta.agent.voice.EtaAssistantOverlayService
+import io.github.mangi.eta.agent.voice.EtaAssistantVoiceService
 import io.github.mangi.eta.core.AndroidAgentLogger
 import io.github.mangi.eta.core.safeLogType
 import io.github.mangi.eta.data.repository.AgentMemoryRepository
@@ -88,7 +88,7 @@ internal class AgentRuntimeRunExecutor(
                 handoff = request.handoff,
                 logger = AndroidAgentLogger,
                 etaVoiceSurfaceDismissal = {
-                    EtaAssistantOverlayService.dismissForForegroundOperation(appContext)
+                    EtaAssistantVoiceService.dismissForForegroundOperation(appContext)
                 },
             )
             val skillIndexService = SkillRuntime.createIndexService(appContext)

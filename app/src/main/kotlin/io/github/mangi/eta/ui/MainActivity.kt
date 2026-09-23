@@ -17,7 +17,6 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.lifecycle.lifecycleScope
 import io.github.mangi.eta.agent.runtime.AgentConversationHandoff
-import io.github.mangi.eta.agent.voice.EtaAssistantOverlayService
 import io.github.mangi.eta.data.model.AppearanceThemeMode
 import io.github.mangi.eta.data.repository.AppearanceSettingsRepository
 import io.github.mangi.eta.ui.app.AgentAppRoot
@@ -29,7 +28,6 @@ import io.github.mangi.eta.ui.markdown.normalizeBrowserLink
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
-    private var assistantConversationKey by mutableStateOf<String?>(null)
     private var resultConversationHandoff by mutableStateOf<AgentConversationHandoff.Request?>(null)
     private var browserUrl by mutableStateOf<String?>(null)
     private var appliedPredictiveBackEnabled = true
@@ -68,7 +66,6 @@ class MainActivity : ComponentActivity() {
                 ) {
                     CompositionLocalProvider(LocalUriHandler provides InAppBrowserUriHandler(this@MainActivity)) {
                         AgentAppRoot(
-                            assistantConversationKey = assistantConversationKey,
                             resultConversationHandoff = resultConversationHandoff,
                             onResultConversationOpened = { request, opened ->
                                 request.acknowledge(opened)
@@ -81,13 +78,6 @@ class MainActivity : ComponentActivity() {
                             onBrowserOpened = {
                                 browserUrl = null
                                 intent.removeExtra(InAppBrowserUriHandler.EXTRA_BROWSER_URL)
-                            },
-                            onAssistantConversationOpened = { opened ->
-                                assistantConversationKey = null
-                                intent.removeExtra(EtaAssistantOverlayService.EXTRA_CONVERSATION_KEY)
-                                if (opened) {
-                                    EtaAssistantOverlayService.notifyHandoffReady(this@MainActivity)
-                                }
                             },
                         )
                     }
@@ -111,7 +101,6 @@ class MainActivity : ComponentActivity() {
 
     private fun updateAssistantHandoff(intent: Intent?) {
         if (intent?.action == AgentConversationHandoff.ACTION_OPEN) {
-            assistantConversationKey = null
             browserUrl = null
             resultConversationHandoff = AgentConversationHandoff.from(intent)
             return
@@ -121,10 +110,6 @@ class MainActivity : ComponentActivity() {
                 ?.let { if (it.isBlank()) "" else normalizeBrowserLink(it) }
             return
         }
-        if (intent?.action != EtaAssistantOverlayService.ACTION_OPEN_CONVERSATION) return
-        assistantConversationKey = intent.getStringExtra(
-            EtaAssistantOverlayService.EXTRA_CONVERSATION_KEY,
-        )?.takeIf(String::isNotBlank)
     }
 
     private fun updateApplicationNightMode(themeMode: AppearanceThemeMode) {

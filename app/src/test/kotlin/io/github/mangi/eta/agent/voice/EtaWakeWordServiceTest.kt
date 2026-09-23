@@ -30,6 +30,21 @@ class EtaWakeWordServiceTest {
         return manager
     }
 
+    @Test fun coldBackgroundEntryDefersWakeServiceUntilAnActivityIsVisible() {
+        shadowOf(context).grantPermissions(Manifest.permission.RECORD_AUDIO)
+        EtaWakeWordService.start(context)
+        assertNull(shadowOf(context).nextStartedService)
+        val activity = android.app.Activity()
+        io.github.mangi.eta.agent.voice.session.VoiceSurfaceTracker.onActivityResumed(activity)
+        try {
+            EtaWakeWordService.start(context)
+            assertEquals(EtaWakeWordService::class.java.name,
+                shadowOf(context).nextStartedService?.component?.className)
+        } finally {
+            io.github.mangi.eta.agent.voice.session.VoiceSurfaceTracker.onActivityPaused(activity)
+        }
+    }
+
     @Test fun restartWithoutMicrophonePermissionStopsAndRemovesStaleNotification() {
         val manager = staleNotification()
         val controller = Robolectric.buildService(EtaWakeWordService::class.java).create()

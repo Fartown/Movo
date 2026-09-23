@@ -74,6 +74,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.R
 import io.github.mangi.eta.agent.browser.AgentBrowserSession
+import io.github.mangi.eta.agent.voice.session.VoiceEntry
+import io.github.mangi.eta.agent.voice.session.VoiceSessionManager
 import io.github.mangi.eta.data.model.ReasoningEffort
 import io.github.mangi.eta.ui.app.AgentConversationRevisionReducer
 import io.github.mangi.eta.ui.app.LocalBlurEnabled
@@ -861,15 +863,10 @@ private fun AgentChatBottomBar(
     onCancelMessageEdit: () -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    fun startVoiceConversation() {
-        if (!android.provider.Settings.canDrawOverlays(context)) {
-            android.widget.Toast.makeText(context, "请先允许 Movo 显示语音对话窗口", android.widget.Toast.LENGTH_LONG).show()
-            context.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                android.net.Uri.parse("package:${context.packageName}")))
-            return
-        }
-        io.github.mangi.eta.agent.voice.EtaAssistantOverlayService.show(context, autoListen = true)
-    }
+    // 语音是进程内唯一的会话状态，和浏览器快照一样直接观察，不逐层透传。
+    val voice by VoiceSessionManager.state.collectAsState()
+    // 语音就地开始：不开新窗口，也不需要悬浮窗权限。
+    fun startVoiceConversation() = VoiceEntry.startInPlace(context)
     val micPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
     ) { granted -> if (granted) startVoiceConversation() }
@@ -937,7 +934,6 @@ private fun AgentChatBottomBar(
         ) {
             AgentChatInputBar(
                 input = input,
-                dictationText = null,
                 modelPickerState = modelPickerState,
                 isCompacting = isCompacting,
                 contextUsage = contextUsage,
@@ -950,7 +946,11 @@ private fun AgentChatBottomBar(
                 isEditingMessage = messageEdit != null,
                 editHasLaterTurns = messageEdit?.hasLaterTurns == true,
                 preserveFollowingMessages = messageEdit?.preserveFollowingMessages == true,
-                onSubmit = onSubmit,
+                onSubmit = { text ->
+                    // 手动发送说明用户改用手了：本轮不播报，模态降回文字。
+                    if (voice.active) VoiceSessionManager.switchToText()
+                    onSubmit(text)
+                },
                 onReasoningEffortChange = onReasoningEffortChange,
                 onCompactContext = onCompactContext,
                 canCompactContext = canCompactContext,
@@ -963,9 +963,12 @@ private fun AgentChatBottomBar(
                 onAttachFilePath = onAttachFilePath,
                 onRemoveFileReference = onRemoveFileReference,
                 onCancelMessageEdit = onCancelMessageEdit,
-                isListening = false,
+                isListening = voice.active,
                 onToggleListen = {
-                    if (!isStreaming) {
+                    // 任务在跑也允许开语音：说的话会排队等当前任务结束，不再拒绝。
+                    if (voice.active) {
+                        VoiceSessionManager.switchToText()
+                    } else {
                         val granted = androidx.core.content.ContextCompat.checkSelfPermission(
                             context, android.Manifest.permission.RECORD_AUDIO,
                         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -973,6 +976,9 @@ private fun AgentChatBottomBar(
                         else micPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
                     }
                 },
+                voice = voice,
+                onStopSpeaking = VoiceSessionManager::stopSpeaking,
+                onEndVoice = VoiceSessionManager::switchToText,
                 modifier = Modifier.fillMaxWidth(),
             )
         }

@@ -7,6 +7,7 @@ import io.github.mangi.eta.agent.skill.SkillRuntime
 import io.github.mangi.eta.agent.device.RootAccess
 import io.github.mangi.eta.agent.terminal.TerminalRuntime
 import io.github.mangi.eta.agent.voice.EtaWakeWordController
+import io.github.mangi.eta.agent.voice.session.VoiceSurfaceTracker
 import io.github.mangi.eta.config.Prefs
 import io.github.mangi.eta.core.AndroidAgentLogger
 import io.github.mangi.eta.core.safeLogType
@@ -54,6 +55,7 @@ class EtaApp : Application(), XposedServiceHelper.OnServiceListener {
         RootAccess.initialize(this)
         SettingsDataStore.init(this)
         VoiceSettingsRepository.init(this)
+        VoiceSurfaceTracker.install(this)
         EtaWakeWordController.startObserving(this)
         val predictiveBackEnabled = runBlocking(Dispatchers.IO) {
             AppearanceSettingsRepository.settings().predictiveBackEnabled

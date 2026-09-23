@@ -25,6 +25,25 @@ class VoiceTurnCoordinatorTest {
             assertTrue(s.trulyIdle)
         }
     }
+    @Test fun stopSpeakingDiscardsPlaybackAndKeepsTheSessionListening() {
+        val s = session()
+        s.say(1, "念一段给我听")
+        assertEquals(listOf(Action.Speak(VoiceTurnCoordinator.Turn(1, "好的，这是一段"))), s.runtimeFinished(1, "好的，这是一段"))
+        assertEquals(listOf(Action.DiscardSpeech), s.stopSpeaking())
+        assertTrue(s.active)
+        assertTrue(s.trulyIdle)
+        // 已经停过的播报不会再被停第二次，也不会凭空产生动作。
+        assertTrue(s.stopSpeaking().isEmpty())
+    }
+
+    @Test fun stopSpeakingNeverTouchesARunningTask() {
+        val s = session()
+        s.say(1, "帮我跑个任务")
+        assertNotNull(s.running)
+        assertTrue(s.stopSpeaking().isEmpty())
+        assertNotNull(s.running)
+    }
+
     @Test fun resumedSpeechBeforeCommitMergesIntoOneTurnAndOldTimerDoesNothing() {
         val s = session()
         s.speechStarted(1); s.partial(1, "请告诉我那个"); s.speechEnded(1)

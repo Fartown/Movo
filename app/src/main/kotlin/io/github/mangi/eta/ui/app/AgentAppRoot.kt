@@ -97,8 +97,6 @@ import top.yukonga.miuix.kmp.window.WindowDialog
  */
 @Composable
 internal fun AgentAppRoot(
-    assistantConversationKey: String? = null,
-    onAssistantConversationOpened: (Boolean) -> Unit = {},
     resultConversationHandoff: AgentConversationHandoff.Request? = null,
     onResultConversationOpened: (AgentConversationHandoff.Request, Boolean) -> Unit = { _, _ -> },
     browserUrl: String? = null,
@@ -182,15 +180,6 @@ internal fun AgentAppRoot(
 
     LaunchedEffect(Unit) {
         RuntimeConfigRepository.ensureDefaults(EtaApp.serviceInstance)
-    }
-
-    LaunchedEffect(assistantConversationKey) {
-        val conversationKey = assistantConversationKey ?: return@LaunchedEffect
-        val opened = agentState.openAssistantConversation(conversationKey)
-        if (opened) {
-            navigator.replace(AppRoute.Chat)
-        }
-        onAssistantConversationOpened(opened)
     }
 
     LaunchedEffect(resultConversationHandoff) {
@@ -334,6 +323,7 @@ internal fun AgentAppRoot(
             entry<AppRoute.Home>(swipeDismiss = swipeDismiss) {
                 RoutedShell(route = AppRoute.Home) {
                     AgentConversationContent(
+                        isTopRoute = navigator.current() == AppRoute.Home || navigator.current() == AppRoute.Chat,
                         agentState = agentState,
                         onOpenBrowser = { pushRoute(AppRoute.Browser) },
                         isDrawerOpen = conversationPaneOpen,
@@ -343,6 +333,7 @@ internal fun AgentAppRoot(
             entry<AppRoute.Chat>(swipeDismiss = swipeDismiss) {
                 RoutedShell(route = AppRoute.Chat) {
                     AgentConversationContent(
+                        isTopRoute = navigator.current() == AppRoute.Home || navigator.current() == AppRoute.Chat,
                         agentState = agentState,
                         onOpenBrowser = { pushRoute(AppRoute.Browser) },
                         onNavigateBack = { popRoute() },

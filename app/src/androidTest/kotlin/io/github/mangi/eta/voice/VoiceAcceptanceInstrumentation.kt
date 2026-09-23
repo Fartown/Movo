@@ -73,7 +73,31 @@ class VoiceAcceptanceInstrumentation : Instrumentation() {
                 oldConversation = VoiceInstrumentationAccess.begin(targetContext)
             }
             waitFor("ready", 25_000) { events.any { it.name == "listening" } }
-            if (options.getString("mode") == "physical") {
+            if (options.getString("mode") == "interaction_hold") {
+                // Test-only source for native UI mode-switch acceptance. Cloud ASR, the real
+                // SessionManager/AppState and keyboard actions remain unchanged. This is
+                // explicitly synthetic PCM, not evidence of physical microphone/AEC quality.
+                val done = File(targetContext.getExternalFilesDir(null), "voice-interaction-finish")
+                done.delete()
+                val from = events.size
+                repeat(5) { feed(options.getString("utterance", "r1_remember")) }
+                waitFor("nonempty transcript", 30_000) {
+                    events.drop(from).any { it.name == "transcript" && it.text.isNotBlank() }
+                }
+                sendStatus(1, Bundle().apply {
+                    putString("phase", "transcript_ready_for_ui_action")
+                    putString("evidence", directory.absolutePath)
+                    putString("finish_marker", done.absolutePath)
+                })
+                waitFor("user switches to text", 60_000) { events.drop(from).any { it.name == "ended" } }
+                check(events.drop(from).none { it.name == "dispatch" }) {
+                    "Utterance was submitted before the UI switch; this run cannot prove partial draft retention"
+                }
+                val deadline = SystemClock.elapsedRealtime() + 180_000
+                while (!done.exists() && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(100)
+                check(done.exists()) { "UI executor did not acknowledge completing screenshots and draft assertions" }
+                done.delete()
+            } else if (options.getString("mode") == "physical") {
                 SystemClock.sleep(7000)
                 check(events.none { it.name == "dispatch" }) { "Unexpected task during microphone silence" }
             } else if (options.getString("mode") == "cancel") {
