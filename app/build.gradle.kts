@@ -42,6 +42,7 @@ val hasReleaseSigning = listOf(
     releaseKeyAlias,
     releaseKeyPassword
 ).all { !it.isNullOrBlank() }
+val voiceTestRelease = providers.gradleProperty("voiceTestRelease").isPresent
 
 java {
     toolchain {
@@ -60,8 +61,8 @@ android {
         targetSdk = 36
         testInstrumentationRunner = "io.github.mangi.eta.voice.VoiceAcceptanceInstrumentation"
         // versionCode 规则：yyyyMMdd + 两位当日序号（01 起），发版时随 versionName 一起手动递增。
-        versionCode = 2026092305
-        versionName = "3.0.8"
+        versionCode = 2026092306
+        versionName = "3.0.9"
 
         mapOf(
             "ETA_DEFAULT_PROVIDER_NAME" to "默认模型",
@@ -101,6 +102,21 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (voiceTestRelease) {
+                proguardFile("proguard-voice-test.pro")
+            }
+        }
+    }
+
+    // Distribute the matching ABI instead of shipping four copies of native speech libraries.
+    // The universal package is opt-in for compatibility checks: -PuniversalApk=true.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+            isUniversalApk = providers.gradleProperty("universalApk")
+                .map(String::toBoolean).getOrElse(false)
         }
     }
 
@@ -121,6 +137,9 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
+            // Kotlin uses sherpa-onnx-jni + onnxruntime; the standalone C/C++ wrappers
+            // are not dependencies of that JNI library.
+            excludes += setOf("**/libsherpa-onnx-c-api.so", "**/libsherpa-onnx-cxx-api.so")
             keepDebugSymbols += setOf("**/libproot_exec.so", "**/libproot_loader.so", "**/libeta_pty.so")
         }
         resources {
@@ -138,7 +157,7 @@ android {
         checkReleaseBuilds = false
     }
 
-    testBuildType = if (providers.gradleProperty("voiceTestRelease").isPresent) "release" else "debug"
+    testBuildType = if (voiceTestRelease) "release" else "debug"
 
     testOptions {
         unitTests.isIncludeAndroidResources = true

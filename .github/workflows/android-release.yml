@@ -74,8 +74,8 @@ jobs:
       - name: 验证并整理 APK
         id: apk
         run: |
-          debug_apk="app/build/outputs/apk/debug/app-debug.apk"
-          release_apk="app/build/outputs/apk/release/app-release.apk"
+          debug_apk="app/build/outputs/apk/debug/app-arm64-v8a-debug.apk"
+          release_apk="app/build/outputs/apk/release/app-arm64-v8a-release.apk"
           output_dir="$RUNNER_TEMP/apks"
           apksigner_path="$(find "$ANDROID_HOME/build-tools" \
             -type f -name apksigner | sort -V | tail -n 1)"
@@ -93,12 +93,25 @@ jobs:
             exit 1
           fi
 
-          "$apksigner_path" verify "$release_apk"
           mkdir -p "$output_dir"
+          mkdir -p "$output_dir/other-abis"
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            apk="app/build/outputs/apk/release/app-$abi-release.apk"
+            "$apksigner_path" verify "$apk"
+            if [[ "$abi" != "arm64-v8a" ]]; then
+              cp "$apk" "$output_dir/other-abis/"
+            fi
+          done
           cp "$debug_apk" "$output_dir/app-debug.apk"
           cp "$release_apk" "$output_dir/app-release.apk"
+          python3 scripts/apk-size-report.py \
+            app/build/outputs/apk/release/app-*-release.apk \
+            --output "$output_dir/apk-sizes.json" \
+            --max-arm64-mb 34 >> "$GITHUB_STEP_SUMMARY"
           echo "debug_path=$output_dir/app-debug.apk" >> "$GITHUB_OUTPUT"
           echo "release_path=$output_dir/app-release.apk" >> "$GITHUB_OUTPUT"
+          echo "other_abis_path=$output_dir/other-abis" >> "$GITHUB_OUTPUT"
+          echo "sizes_path=$output_dir/apk-sizes.json" >> "$GITHUB_OUTPUT"
 
       - name: 上传 Debug APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -113,5 +126,21 @@ jobs:
         with:
           path: ${{ steps.apk.outputs.release_path }}
           archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 上传其他架构 Release APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-other-abis
+          path: ${{ steps.apk.outputs.other_abis_path }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 上传 APK 体积报告
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: apk-size-report
+          path: ${{ steps.apk.outputs.sizes_path }}
           if-no-files-found: error
           retention-days: 14
