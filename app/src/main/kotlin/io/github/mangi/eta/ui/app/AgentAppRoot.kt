@@ -194,7 +194,7 @@ internal fun AgentAppRoot(
         if (opened) {
             focusManager.clearFocus()
             conversationPaneOpen = false
-            navigator.replace(AppRoute.Chat)
+            navigator.popToHome()
             // Let the original chat compose before removing the covering result window.
             withFrameNanos { }
         }
@@ -331,14 +331,8 @@ internal fun AgentAppRoot(
                 }
             }
             entry<AppRoute.Chat>(swipeDismiss = swipeDismiss) {
-                RoutedShell(route = AppRoute.Chat) {
-                    AgentConversationContent(
-                        isTopRoute = navigator.current() == AppRoute.Home || navigator.current() == AppRoute.Chat,
-                        agentState = agentState,
-                        onOpenBrowser = { pushRoute(AppRoute.Browser) },
-                        onNavigateBack = { popRoute() },
-                    )
-                }
+                // Restore old saved navigation into the one canonical conversation page.
+                LaunchedEffect(Unit) { navigator.popToHome() }
             }
             entry<AppRoute.Browser>(swipeDismiss = swipeDismiss) {
                 RoutedShell(route = AppRoute.Browser) {

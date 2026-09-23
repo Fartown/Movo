@@ -30,11 +30,12 @@ internal object AgentConversationHandoff {
     private const val EXTRA_SOURCE = "conversation_source"
     private const val EXTRA_KEY = "conversation_key"
     private const val EXTRA_RUN_ID = "conversation_run_id"
+    private const val EXTRA_CURRENT_CONVERSATION = "current_conversation"
     private const val EXTRA_RECEIVER = "conversation_receiver"
 
     data class Request(
         val target: AgentConversationTarget,
-        val runId: String,
+        val runId: String?,
         val receiver: ResultReceiver?,
     ) {
         fun acknowledge(opened: Boolean) {
@@ -42,12 +43,13 @@ internal object AgentConversationHandoff {
         }
     }
 
-    fun intent(context: Context, target: AgentConversationTarget, runId: String, receiver: ResultReceiver): Intent =
+    fun intent(context: Context, target: AgentConversationTarget, runId: String?, receiver: ResultReceiver): Intent =
         Intent(context, MainActivity::class.java)
             .setAction(ACTION_OPEN)
             .putExtra(EXTRA_SOURCE, target.source)
             .putExtra(EXTRA_KEY, target.key)
             .putExtra(EXTRA_RUN_ID, runId)
+            .putExtra(EXTRA_CURRENT_CONVERSATION, runId == null)
             .putExtra(EXTRA_RECEIVER, receiver)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
 
@@ -55,7 +57,13 @@ internal object AgentConversationHandoff {
         if (intent?.action != ACTION_OPEN) return null
         val source = intent.getStringExtra(EXTRA_SOURCE)?.takeIf(String::isNotBlank) ?: return null
         val key = intent.getStringExtra(EXTRA_KEY)?.takeIf(String::isNotBlank) ?: return null
-        val runId = intent.getStringExtra(EXTRA_RUN_ID)?.takeIf(String::isNotBlank) ?: return null
+        val runId = intent.getStringExtra(EXTRA_RUN_ID)
+        // A voice sheet can open the existing app conversation before any task has finished.
+        // Result handoffs still require a nonblank run ID and retain history validation.
+        if (runId == null) {
+            if (!intent.getBooleanExtra(EXTRA_CURRENT_CONVERSATION, false) ||
+                source != AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE) return null
+        } else if (runId.isBlank()) return null
         return Request(AgentConversationTarget(source, key), runId,
             intent.getParcelableExtra(EXTRA_RECEIVER, ResultReceiver::class.java))
     }
@@ -63,6 +71,6 @@ internal object AgentConversationHandoff {
     fun consume(intent: Intent) {
         if (intent.action != ACTION_OPEN) return
         intent.action = null
-        listOf(EXTRA_SOURCE, EXTRA_KEY, EXTRA_RUN_ID, EXTRA_RECEIVER).forEach(intent::removeExtra)
+        listOf(EXTRA_SOURCE, EXTRA_KEY, EXTRA_RUN_ID, EXTRA_CURRENT_CONVERSATION, EXTRA_RECEIVER).forEach(intent::removeExtra)
     }
 }

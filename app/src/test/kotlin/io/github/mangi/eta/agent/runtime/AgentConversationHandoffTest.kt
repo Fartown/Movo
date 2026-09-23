@@ -75,6 +75,35 @@ class AgentConversationHandoffTest {
     }
 
     @Test
+    fun assistantSheetCanOpenItsExistingConversationBeforeAnyRunCompletes() {
+        val target = AgentConversationTarget(AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE, "voice-chat")
+        val received = mutableListOf<Int>()
+        val intent = AgentConversationHandoff.intent(RuntimeEnvironment.getApplication(), target, null, receiver(received))
+        val request = AgentConversationHandoff.from(intent)!!
+        assertEquals(MainActivity::class.java.name, intent.component?.className)
+        assertEquals(target, request.target)
+        assertNull(request.runId)
+        request.acknowledge(true)
+        assertEquals(listOf(AgentConversationHandoff.RESULT_READY), received)
+        AgentConversationHandoff.consume(intent)
+        assertFalse(intent.hasExtra("current_conversation"))
+        assertNull(AgentConversationHandoff.from(intent))
+    }
+
+    @Test
+    fun resultLinksCannotSilentlyLoseTheirRunValidation() {
+        val target = AgentConversationTarget(AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE, "original-chat")
+        val intent = AgentConversationHandoff.intent(RuntimeEnvironment.getApplication(), target, "run-1", receiver(mutableListOf()))
+        intent.removeExtra("conversation_run_id")
+        assertNull(AgentConversationHandoff.from(intent))
+        assertNull(AgentConversationHandoff.from(AgentConversationHandoff.intent(
+            RuntimeEnvironment.getApplication(), target, " ", receiver(mutableListOf()))))
+        assertNull(AgentConversationHandoff.from(AgentConversationHandoff.intent(
+            RuntimeEnvironment.getApplication(), AgentConversationTarget("external_assistant", "archive-chat"),
+            null, receiver(mutableListOf()))))
+    }
+
+    @Test
     fun normalAppLaunchesAndIncompleteLinksDoNotSelectAConversation() {
         assertNull(AgentConversationHandoff.from(Intent(Intent.ACTION_MAIN)))
         assertNull(AgentConversationHandoff.from(Intent(AgentConversationHandoff.ACTION_OPEN)))

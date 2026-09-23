@@ -17,7 +17,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.CloseFullscreen
 import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -46,10 +45,9 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 @OptIn(ExperimentalComposeUiApi::class)
 internal fun AgentConversationSheet(
     title: String,
-    expanded: Boolean,
     onDrag: (Float) -> Unit,
     onDragStopped: (Float) -> Unit,
-    onToggleExpanded: () -> Unit,
+    onOpenConversation: () -> Unit,
     onClose: () -> Unit,
     content: @Composable () -> Unit,
 ) {
@@ -94,6 +92,7 @@ internal fun AgentConversationSheet(
                                     if (event.actionMasked == MotionEvent.ACTION_UP)
                                         velocity.calculateVelocity().y else 0f,
                                 )
+                                else if (event.actionMasked == MotionEvent.ACTION_UP) onOpenConversation()
                                 true
                             }
                             MotionEvent.ACTION_POINTER_UP -> {
@@ -110,10 +109,10 @@ internal fun AgentConversationSheet(
                 }
                 Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(title, color = colors.onSurface, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    IconButton(onClick = onToggleExpanded, minWidth = 48.dp, minHeight = 48.dp) {
+                    IconButton(onClick = onOpenConversation, minWidth = 48.dp, minHeight = 48.dp) {
                         Icon(
-                            if (expanded) Icons.Rounded.CloseFullscreen else Icons.Rounded.OpenInFull,
-                            stringResource(if (expanded) R.string.overlay_result_collapse else R.string.overlay_result_expand),
+                            Icons.Rounded.OpenInFull,
+                            stringResource(R.string.overlay_result_expand),
                             Modifier.size(20.dp), tint = colors.onSurfaceVariantActions,
                         )
                     }

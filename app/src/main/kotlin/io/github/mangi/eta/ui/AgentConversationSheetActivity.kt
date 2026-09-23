@@ -9,6 +9,7 @@ import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.ResultReceiver
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.Toast
@@ -51,10 +52,11 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.Text
 
-/** A resizable host of the original conversation. Resizing never navigates or resets Compose. */
+/** Compact viewport of the conversation. Expansion hands off to the original MainActivity page. */
 internal class AgentConversationSheetActivity : ComponentActivity() {
     private val agentState by lazy { AgentAppSession.get(application) }
     private var request by mutableStateOf<AgentConversationHandoff.Request?>(null)
@@ -62,7 +64,7 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
     private var assistantMode by mutableStateOf(false)
     private var ready by mutableStateOf(false)
     private var autoListen by mutableStateOf(false)
-    private var expanded by mutableStateOf(false)
+    private var mainHandoffToken: Any? = null
     private var resizeAnimator: ValueAnimator? = null
     private var windowHeight = 0
     private var keyboardLift = 0
@@ -98,8 +100,7 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         window.setGravity(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
         window.attributes = window.attributes.apply { windowAnimations = 0; dimAmount = 0f }
         window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-        expanded = savedInstanceState?.getBoolean(STATE_EXPANDED) ?: false
-        updateHeight(AgentResultSheetSizing.height(screenHeight(), expanded))
+        updateHeight(AgentResultSheetSizing.height(screenHeight(), false))
         MemoryDiagnostics.record("conversation", "sheet.created")
         lifecycleScope.launch {
             val initialAppearance = AppearanceSettingsRepository.settings()
@@ -142,15 +143,14 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                                 startVoiceInput()
                             }
                         }
-                        BackHandler { if (expanded) settle(false) else finish() }
+                        BackHandler { finish() }
                         val pane = agentState.conversationPaneState
                         AgentConversationSheet(
                             title = pane.conversations.firstOrNull { it.id == pane.selectedConversationId }?.title
                                 ?: getString(R.string.app_name),
-                            expanded = expanded,
                             onDrag = ::drag,
                             onDragStopped = ::endDrag,
-                            onToggleExpanded = { settle(!expanded) },
+                            onOpenConversation = ::openInApp,
                             onClose = ::finish,
                         ) {
                             if (ready) {
@@ -202,6 +202,7 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        mainHandoffToken = null
         resizeAnimator?.cancel()
         afterHidden?.invoke()
         afterHidden = null
@@ -209,15 +210,10 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    override fun onSaveInstanceState(outState: Bundle) {
-        outState.putBoolean(STATE_EXPANDED, expanded)
-        super.onSaveInstanceState(outState)
-    }
-
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         resizeAnimator?.cancel()
-        updateHeight(AgentResultSheetSizing.height(screenHeight(), expanded, keyboardLift))
+        updateHeight(AgentResultSheetSizing.height(screenHeight(), false, keyboardLift))
     }
 
     private fun screenHeight(): Int = windowManager.maximumWindowMetrics.bounds.height()
@@ -234,7 +230,7 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         // The original composer already consumes IME insets. Lift this same window by the
         // keyboard's extra height so attachments and text retain their space above it.
         // This does not expand the sheet or replace its conversation composition.
-        updateHeight(AgentResultSheetSizing.height(screenHeight(), expanded, keyboardLift))
+        updateHeight(AgentResultSheetSizing.height(screenHeight(), false, keyboardLift))
     }
 
     private fun updateHeight(height: Int) {
@@ -263,13 +259,52 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
 
     private fun settle(full: Boolean) {
         resizeAnimator?.cancel()
-        expanded = full
-        val height = AgentResultSheetSizing.height(screenHeight(), full, keyboardLift)
-        MemoryDiagnostics.record("conversation", "sheet.resized", fields = mapOf("expanded" to full))
+        if (full) {
+            openInApp()
+            return
+        }
+        val height = AgentResultSheetSizing.height(screenHeight(), false, keyboardLift)
         resizeAnimator = ValueAnimator.ofInt(windowHeight, height).apply {
             duration = 220
             addUpdateListener { updateHeight(it.animatedValue as Int) }
             start()
+        }
+    }
+
+    private fun openInApp() {
+        if (!ready || mainHandoffToken != null) return
+        val opening = request
+        val target = opening?.target ?: if (assistantMode) {
+            agentState.conversationPaneState.selectedConversationId?.let {
+                AgentConversationTarget(AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE, it)
+            }
+        } else null
+        if (target == null) return
+        val token = Any()
+        mainHandoffToken = token
+        fun failed() {
+            if (mainHandoffToken !== token) return
+            mainHandoffToken = null
+            settle(false)
+            Toast.makeText(this, R.string.overlay_result_open_failed, Toast.LENGTH_LONG).show()
+        }
+        val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+            override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                if (mainHandoffToken !== token) return
+                if (resultCode == AgentConversationHandoff.RESULT_READY) {
+                    mainHandoffToken = null
+                    finish()
+                } else failed()
+            }
+        }
+        // MainActivity owns the original Home conversation route and all of its top-bar actions.
+        // Both hosts already share AgentAppSession and the conversation-keyed composer draft.
+        runCatching {
+            startActivity(AgentConversationHandoff.intent(this, target, opening?.runId, receiver))
+        }.onFailure { failed() }
+        lifecycleScope.launch {
+            delay(10_000)
+            failed()
         }
     }
 
@@ -284,7 +319,6 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
     companion object {
         /** 系统入口（唤醒词 / 电源键 / 助手手势）打开助手界面时使用。 */
         const val ACTION_ASSISTANT = "io.github.mangi.eta.ui.ASSISTANT"
-        private const val STATE_EXPANDED = "sheet_expanded"
         @Volatile private var current = WeakReference<AgentConversationSheetActivity>(null)
 
         fun isConversationVisible(target: AgentConversationTarget?): Boolean {

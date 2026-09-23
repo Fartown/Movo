@@ -122,7 +122,10 @@ internal fun DiagnosticsScreen(onBack: () -> Unit) {
                         color = if (entry.level == DiagnosticLevel.ERROR) MiuixTheme.colorScheme.error else MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     Text(entry.title(), style = MiuixTheme.textStyles.body1)
                     val code = entry.field("code")
-                    if (code != null && code != "unknown") Text("${modelFailureHint(code)} · $code", style = MiuixTheme.textStyles.body2)
+                    if (code != null && code != "unknown") {
+                        val hint = if (code == "OK") "响应内容检查通过" else modelFailureHint(code)
+                        Text("$hint · $code", style = MiuixTheme.textStyles.body2)
+                    }
                     Text(listOfNotNull(entry.field("stage"), entry.field("purpose"), entry.field("duration_ms")?.let { "${it}ms" }).joinToString(" · "),
                         style = MiuixTheme.textStyles.footnote1)
                     if (expanded == entry.sequence) {
