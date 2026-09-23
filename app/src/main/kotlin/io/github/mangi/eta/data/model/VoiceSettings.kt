@@ -47,12 +47,21 @@ internal data class VoiceWakeSettings(
     val wakeEnabled: Boolean = false,
     val wakePhrase: String = DEFAULT_WAKE_PHRASE,
     val sensitivity: WakeSensitivity = WakeSensitivity.Medium,
+    val listenScope: WakeListenScope = WakeListenScope.AppOpen,
 ) {
     fun effectivePhrase(): String = WakePhraseRules.normalizeOrDefault(wakePhrase)
 
     companion object {
         const val DEFAULT_WAKE_PHRASE = "小王同学"
     }
+}
+
+/** Where wake listening runs while the screen is on. The screen-off pause applies to both. */
+internal enum class WakeListenScope {
+    /** Only while an Eta screen is visible, like in-app wake in map apps. */
+    AppOpen,
+    /** Also over other apps; the microphone stays open whenever the screen is on. */
+    ScreenOn,
 }
 
 internal enum class WakeSensitivity {

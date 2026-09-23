@@ -6,15 +6,18 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import com.k2fsa.sherpa.onnx.FeatureConfig
 import com.k2fsa.sherpa.onnx.KeywordSpotter
 import com.k2fsa.sherpa.onnx.KeywordSpotterConfig
 import com.k2fsa.sherpa.onnx.OnlineModelConfig
+import com.k2fsa.sherpa.onnx.OnlineStream
 import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
 import io.github.mangi.eta.core.AndroidAgentLogger
 import io.github.mangi.eta.core.safeLogType
 import io.github.mangi.eta.data.model.WakePhraseRules
 import io.github.mangi.eta.data.model.WakeSensitivity
+import io.github.mangi.eta.diagnostics.MemoryDiagnostics
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -151,10 +154,14 @@ internal class SherpaWakeEngine(private val context: Context) : WakeWordEngine {
     }
 
     private fun listen(spotter: KeywordSpotter, target: String, configVersion: Int, session: Int) {
-        val stream = spotter.createStream()
+        // Created only while the energy gate is open; quiet audio never reaches the model.
+        var stream: OnlineStream? = null
         var audio: AudioRecord? = null
         var detected = false
         val callbackGeneration = delivery
+        val usage = WakeUsage()
+        val samples = ShortArray(1_600)
+        val gate = WakeEnergyGate(samples.size)
         try {
             synchronized(control) {
                 if (!enabled || paused || epoch != session || version != configVersion) return
@@ -169,21 +176,42 @@ internal class SherpaWakeEngine(private val context: Context) : WakeWordEngine {
                 recording = true
             }
             notifyState(session)
-            val samples = ShortArray(1_600)
             while (enabled && !paused && epoch == session && version == configVersion) {
                 val count = audio!!.read(samples, 0, samples.size)
                 if (!enabled || paused || epoch != session || version != configVersion) break
                 check(count >= 0) { "唤醒麦克风读取失败 ($count)" }
                 if (count == 0) continue
-                stream.acceptWaveform(FloatArray(count) { samples[it] / 32768.0f }, 16_000)
-                while (spotter.isReady(stream)) {
-                    spotter.decode(stream)
-                    if (spotter.getResult(stream).keyword.isNotBlank()) {
-                        synchronized(control) { paused = true }
-                        detected = true
-                        break
+                usage.heard(count)
+                val active = when (gate.offer(samples, count)) {
+                    WakeEnergyGate.Action.Skip -> null
+                    WakeEnergyGate.Action.Closed -> {
+                        stream?.release()
+                        stream = null
+                        null
+                    }
+                    WakeEnergyGate.Action.Opened -> spotter.createStream().also { opened ->
+                        stream = opened
+                        usage.opened()
+                        gate.drainPreRoll { chunk, length ->
+                            opened.acceptWaveform(FloatArray(length) { chunk[it] / 32768.0f }, 16_000)
+                            usage.modelled(length)
+                        }
+                    }
+                    WakeEnergyGate.Action.Feed -> stream
+                }
+                if (active != null) {
+                    active.acceptWaveform(FloatArray(count) { samples[it] / 32768.0f }, 16_000)
+                    usage.modelled(count)
+                    while (spotter.isReady(active)) {
+                        spotter.decode(active)
+                        if (spotter.getResult(active).keyword.isNotBlank()) {
+                            synchronized(control) { paused = true }
+                            detected = true
+                            break
+                        }
                     }
                 }
+                usage.reportIfDue(gate.noiseFloorDb)
             }
         } finally {
             synchronized(control) {
@@ -193,7 +221,8 @@ internal class SherpaWakeEngine(private val context: Context) : WakeWordEngine {
                 recording = false
                 released.countDown()
             }
-            stream.release()
+            stream?.release()
+            usage.report(gate.noiseFloorDb)
             notifyState(session)
         }
         if (detected) {
@@ -226,6 +255,45 @@ internal class SherpaWakeEngine(private val context: Context) : WakeWordEngine {
             }
         }
         return directory
+    }
+}
+
+/**
+ * Resource usage of one listening session, measured on the worker thread. Durations and
+ * counts only, never audio. cpu_ms covers reading, gating and inference on this thread.
+ */
+private class WakeUsage {
+    private val cpuStartMs = SystemClock.currentThreadTimeMillis()
+    private var heardSamples = 0L
+    private var modelSamples = 0L
+    private var gateOpens = 0
+    private var reportedSamples = 0L
+
+    fun heard(count: Int) { heardSamples += count }
+    fun modelled(count: Int) { modelSamples += count }
+    fun opened() { gateOpens++ }
+
+    fun reportIfDue(floorDb: Double) {
+        if (heardSamples - reportedSamples >= REPORT_EVERY_SAMPLES) report(floorDb)
+    }
+
+    fun report(floorDb: Double) {
+        if (heardSamples == reportedSamples) return
+        reportedSamples = heardSamples
+        val fields = mapOf(
+            "audio_s" to heardSamples / SAMPLE_RATE,
+            "model_s" to modelSamples / SAMPLE_RATE,
+            "gate_opens" to gateOpens,
+            "cpu_ms" to SystemClock.currentThreadTimeMillis() - cpuStartMs,
+            "floor_db" to if (floorDb.isNaN()) null else Math.round(floorDb * 10) / 10.0,
+        )
+        MemoryDiagnostics.record("voice", "wake.usage", fields = fields)
+        AndroidAgentLogger.info("Wake usage: $fields")
+    }
+
+    private companion object {
+        const val SAMPLE_RATE = 16_000L
+        const val REPORT_EVERY_SAMPLES = 10 * 60 * SAMPLE_RATE
     }
 }
 

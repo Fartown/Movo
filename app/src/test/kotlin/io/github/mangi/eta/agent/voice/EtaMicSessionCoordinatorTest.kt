@@ -39,6 +39,68 @@ class EtaMicSessionCoordinatorTest {
     }
 
     @Test
+    fun screenOff_stopsWakeCapture_untilScreenOn() {
+        val coordinator = EtaMicSessionCoordinator()
+        coordinator.onWakeEnabled()
+        assertTrue(coordinator.mayCaptureWake())
+        assertTrue(coordinator.onScreenChanged(on = false))
+        assertFalse(coordinator.onScreenChanged(on = false))
+        assertFalse(coordinator.mayCaptureWake())
+        assertEquals(EtaMicSessionCoordinator.Phase.ListeningWake, coordinator.currentPhase())
+        assertTrue(coordinator.onScreenChanged(on = true))
+        assertTrue(coordinator.mayCaptureWake())
+    }
+
+    @Test
+    fun dictationEndingWhileScreenOff_waitsForScreenOn() {
+        val coordinator = EtaMicSessionCoordinator()
+        coordinator.onWakeEnabled()
+        assertTrue(coordinator.onWakeDetected())
+        coordinator.onScreenChanged(on = false)
+        coordinator.onDictationFinished(resumeWake = true)
+        assertFalse(coordinator.mayCaptureWake())
+        coordinator.onScreenChanged(on = true)
+        assertTrue(coordinator.mayCaptureWake())
+    }
+
+    @Test
+    fun screenOnDuringDictation_keepsWakeCapturePaused() {
+        val coordinator = EtaMicSessionCoordinator()
+        coordinator.onWakeEnabled()
+        assertTrue(coordinator.onWakeDetected())
+        coordinator.onScreenChanged(on = false)
+        coordinator.onScreenChanged(on = true)
+        assertFalse(coordinator.mayCaptureWake())
+    }
+
+    @Test
+    fun appOpenScope_capturesOnlyWhileEtaIsVisible() {
+        val coordinator = EtaMicSessionCoordinator()
+        coordinator.onWakeEnabled()
+        assertTrue(coordinator.mayCaptureWake())
+        assertTrue(coordinator.onAppVisibilityChanged(visible = false))
+        assertTrue(coordinator.isWaitingForApp())
+        assertFalse(coordinator.mayCaptureWake())
+        assertTrue(coordinator.onAppVisibilityChanged(visible = true))
+        assertTrue(coordinator.mayCaptureWake())
+    }
+
+    @Test
+    fun screenOnScope_keepsCapturingOverOtherApps_butStillPausesWhenScreenIsOff() {
+        val coordinator = EtaMicSessionCoordinator()
+        coordinator.onWakeEnabled()
+        assertTrue(coordinator.setListenInBackground(allowed = true))
+        coordinator.onAppVisibilityChanged(visible = false)
+        assertFalse(coordinator.isWaitingForApp())
+        assertTrue(coordinator.mayCaptureWake())
+        coordinator.onScreenChanged(on = false)
+        assertFalse(coordinator.mayCaptureWake())
+        coordinator.onScreenChanged(on = true)
+        assertTrue(coordinator.setListenInBackground(allowed = false))
+        assertFalse(coordinator.mayCaptureWake())
+    }
+
+    @Test
     fun disable_returnsIdle() {
         val coordinator = EtaMicSessionCoordinator()
         coordinator.onWakeEnabled()

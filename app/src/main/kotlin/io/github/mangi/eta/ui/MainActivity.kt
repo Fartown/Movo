@@ -3,6 +3,7 @@ package io.github.mangi.eta.ui
 import android.app.UiModeManager
 import android.content.Intent
 import android.os.Bundle
+import android.service.quicksettings.TileService
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -30,6 +31,7 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     private var resultConversationHandoff by mutableStateOf<AgentConversationHandoff.Request?>(null)
     private var browserUrl by mutableStateOf<String?>(null)
+    private var openVoiceSettings by mutableStateOf(false)
     private var appliedPredictiveBackEnabled = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -79,6 +81,8 @@ class MainActivity : ComponentActivity() {
                                 browserUrl = null
                                 intent.removeExtra(InAppBrowserUriHandler.EXTRA_BROWSER_URL)
                             },
+                            openVoiceSettings = openVoiceSettings,
+                            onVoiceSettingsOpened = { openVoiceSettings = false },
                         )
                     }
                 }
@@ -108,6 +112,11 @@ class MainActivity : ComponentActivity() {
         if (intent?.action == InAppBrowserUriHandler.ACTION_OPEN_BROWSER) {
             browserUrl = intent.getStringExtra(InAppBrowserUriHandler.EXTRA_BROWSER_URL)
                 ?.let { if (it.isBlank()) "" else normalizeBrowserLink(it) }
+            return
+        }
+        // Long press on the wake Quick Settings tile, or the tile asking for mic permission.
+        if (intent?.action == TileService.ACTION_QS_TILE_PREFERENCES) {
+            openVoiceSettings = true
             return
         }
     }

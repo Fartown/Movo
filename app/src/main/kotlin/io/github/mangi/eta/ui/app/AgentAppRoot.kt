@@ -101,6 +101,8 @@ internal fun AgentAppRoot(
     onResultConversationOpened: (AgentConversationHandoff.Request, Boolean) -> Unit = { _, _ -> },
     browserUrl: String? = null,
     onBrowserOpened: () -> Unit = {},
+    openVoiceSettings: Boolean = false,
+    onVoiceSettingsOpened: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val uiScope = rememberCoroutineScope()
@@ -214,6 +216,13 @@ internal fun AgentAppRoot(
         focusManager.clearFocus()
         if (backStack.lastOrNull() != AppRoute.Browser) pushRoute(AppRoute.Browser)
         // The browser host consumes the URL only after it has attached its WebView.
+    }
+
+    LaunchedEffect(openVoiceSettings) {
+        if (!openVoiceSettings) return@LaunchedEffect
+        focusManager.clearFocus()
+        if (backStack.lastOrNull() != AppRoute.VoiceSettings) pushRoute(AppRoute.VoiceSettings)
+        onVoiceSettingsOpened()
     }
 
     fun popRoute() {

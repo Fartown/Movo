@@ -1,6 +1,7 @@
 package io.github.mangi.eta.agent.voice
 
 import io.github.mangi.eta.data.model.WakePhraseRules
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
@@ -23,6 +24,9 @@ internal class EtaMicSessionCoordinator(
     private val phase = AtomicReference(Phase.Idle)
     private val lastWakeAt = AtomicLong(0L)
     private val activePhrase = AtomicReference(WakePhraseRules.DEFAULT)
+    private val screenOn = AtomicBoolean(true)
+    private val appVisible = AtomicBoolean(true)
+    private val listenInBackground = AtomicBoolean(false)
 
     fun currentPhase(): Phase = phase.get()
 
@@ -84,4 +88,24 @@ internal class EtaMicSessionCoordinator(
         phase.get() == Phase.ListeningWake || phase.get() == Phase.WakeCooldown
 
     fun shouldPauseWakeForDictation(): Boolean = phase.get() == Phase.Dictating
+
+    /** @return true if the screen state changed. */
+    fun onScreenChanged(on: Boolean): Boolean = screenOn.getAndSet(on) != on
+
+    fun isScreenOn(): Boolean = screenOn.get()
+
+    /** @return true if Eta's visibility changed. */
+    fun onAppVisibilityChanged(visible: Boolean): Boolean = appVisible.getAndSet(visible) != visible
+
+    /** @return true if the listen scope changed. */
+    fun setListenInBackground(allowed: Boolean): Boolean = listenInBackground.getAndSet(allowed) != allowed
+
+    /** Scope is limited to Eta's own screens and none is visible. */
+    fun isWaitingForApp(): Boolean = !listenInBackground.get() && !appVisible.get()
+
+    /**
+     * An open wake recording keeps the device awake, so capture only while the screen is on,
+     * and only while Eta is visible unless the user chose to listen over other apps.
+     */
+    fun mayCaptureWake(): Boolean = screenOn.get() && !isWaitingForApp() && shouldRunWakeEngine()
 }
