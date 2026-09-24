@@ -236,6 +236,16 @@ internal fun AgentChatInputBar(
                 modifier = Modifier.padding(bottom = 8.dp),
             )
         }
+        // 退出动画期间 notice 已被清空，沿用最后一条文案，避免提示条空白收起。
+        var lastVoiceNotice by remember { mutableStateOf("") }
+        voice.notice?.let { if (it != lastVoiceNotice) lastVoiceNotice = it }
+        AnimatedVisibility(
+            visible = !voice.active && voice.notice != null,
+            enter = fadeIn(tween(160)),
+            exit = fadeOut(tween(100)) + shrinkVertically(tween(160)),
+        ) {
+            AgentVoiceNotice(text = lastVoiceNotice, modifier = Modifier.padding(bottom = 8.dp))
+        }
 
         AnimatedVisibility(
             visible = isEditingMessage,

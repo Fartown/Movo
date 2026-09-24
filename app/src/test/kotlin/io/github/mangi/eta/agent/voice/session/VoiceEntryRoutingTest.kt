@@ -12,6 +12,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowToast
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], application = Application::class)
@@ -50,6 +51,18 @@ class VoiceEntryRoutingTest {
         systemEntry(autoListen = true)
         assertEquals(AgentConversationSheetActivity::class.java.name, shadowOf(context as Application).nextStartedActivity?.component?.className)
         assertNull(shadowOf(context as Application).nextStartedService)
+    }
+    @Test fun startingWithoutMicrophonePermissionNeverStartsTheForegroundService() {
+        shadowOf(context as Application).denyPermissions(android.Manifest.permission.RECORD_AUDIO)
+        VoiceEntry.startInPlace(context)
+        assertNull(shadowOf(context as Application).nextStartedService)
+        assertEquals("需要麦克风权限才能开始语音", ShadowToast.getTextOfLatestToast())
+    }
+    @Test fun startingWithPermissionStartsTheMicrophoneService() {
+        shadowOf(context as Application).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        VoiceEntry.startInPlace(context)
+        assertEquals(io.github.mangi.eta.agent.voice.EtaAssistantVoiceService.ACTION_START_VOICE,
+            shadowOf(context as Application).nextStartedService?.action)
     }
     @Test fun alreadyVisibleChatUsesTheExistingHostAndPausedChatIsNotVisible() {
         VoiceSurfaceTracker.onActivityResumed(activity)

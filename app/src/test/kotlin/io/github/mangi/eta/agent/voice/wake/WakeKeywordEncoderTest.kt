@@ -12,9 +12,9 @@ class WakeKeywordEncoderTest {
 
     @Test fun bundledDictionaryEncodesDefaultAndCustomPhrasesWithModelTokens() {
         val tokens = File(assets, "tokens.txt").readLines().map { it.substringBefore(' ') }.toSet()
-        val default = encoder.encode("小王同学")
+        val default = encoder.encode("小O小O")
         val custom = encoder.encode("你好小莫")
-        assertTrue(default.contains("x iǎo w áng t óng x ué"))
+        assertTrue(default.contains("x iǎo OW1 x iǎo OW1"))
         assertTrue(custom.contains("n ǐ h ǎo x iǎo m ò"))
         assertTrue(default.none { it in custom })
         (default + custom + encoder.encode("hello world")).forEach { phrase ->

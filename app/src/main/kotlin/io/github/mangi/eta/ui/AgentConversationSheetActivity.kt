@@ -72,6 +72,7 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
     private var dragHeight = 0f
     private var pendingKeyboardLift: Int? = null
     private var afterHidden: (() -> Unit)? = null
+    private val keyguardGate = KeyguardContentGate(this, ::finish)
     private val microphonePermission = registerForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
     ) { allowed ->
@@ -93,6 +94,7 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         request = AgentConversationHandoff.from(intent)
         if (request == null && !assistantMode) { finish(); return }
         current = WeakReference(this)
+        if (assistantMode) keyguardGate.check()
         enableEdgeToEdge()
         window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL)
@@ -121,12 +123,22 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                         LaunchedEffect(imeBottom, navigationBottom) {
                             avoidKeyboard(imeBottom, navigationBottom)
                         }
-                        LaunchedEffect(request, assistantMode) {
+                        LaunchedEffect(request, assistantMode, keyguardGate.locked) {
+                            // 锁屏时不加载会话，解锁成功后本 effect 会重新执行。
+                            if (keyguardGate.locked) return@LaunchedEffect
                             val opening = request
                             if (opening == null) {
                                 // 助手入口不新建会话：语音和文字共用当前这条，界面只是它的另一个容器。
-                                ready = runCatching { agentState.voiceConversationId() }.isSuccess
-                                if (!ready) finish()
+                                val opened = runCatching { agentState.voiceConversationId() }
+                                ready = opened.isSuccess
+                                opened.onFailure { failure ->
+                                    Toast.makeText(
+                                        this@AgentConversationSheetActivity,
+                                        failure.message ?: getString(R.string.overlay_result_open_failed),
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                    finish()
+                                }
                                 return@LaunchedEffect
                             }
                             val opened = agentState.openResultConversation(opening.target, opening.runId)
@@ -137,8 +149,8 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                                 finish()
                             }
                         }
-                        LaunchedEffect(ready, autoListen) {
-                            if (ready && autoListen) {
+                        LaunchedEffect(ready, autoListen, keyguardGate.locked) {
+                            if (ready && autoListen && !keyguardGate.locked) {
                                 autoListen = false
                                 startVoiceInput()
                             }
@@ -147,13 +159,14 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                         val pane = agentState.conversationPaneState
                         AgentConversationSheet(
                             title = pane.conversations.firstOrNull { it.id == pane.selectedConversationId }?.title
+                                ?.takeUnless { keyguardGate.locked }
                                 ?: getString(R.string.app_name),
                             onDrag = ::drag,
                             onDragStopped = ::endDrag,
                             onOpenConversation = ::openInApp,
                             onClose = ::finish,
                         ) {
-                            if (ready) {
+                            if (ready && !keyguardGate.locked) {
                                 AgentConversationContent(
                                     agentState = agentState,
                                     onOpenBrowser = ::openBrowser,
@@ -162,7 +175,10 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                                 )
                             } else {
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    Text(getString(R.string.overlay_result_opening_conversation))
+                                    Text(getString(
+                                        if (keyguardGate.locked) R.string.overlay_unlock_to_continue
+                                        else R.string.overlay_result_opening_conversation,
+                                    ))
                                 }
                             }
                         }
@@ -179,6 +195,7 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
             assistantMode = true
             autoListen = intent.getBooleanExtra(io.github.mangi.eta.agent.voice.EtaAssistantVoiceService.EXTRA_AUTO_LISTEN, false)
             request = null
+            keyguardGate.check()
             return
         }
         val next = AgentConversationHandoff.from(intent) ?: return
@@ -272,7 +289,7 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
     }
 
     private fun openInApp() {
-        if (!ready || mainHandoffToken != null) return
+        if (!ready || keyguardGate.locked || mainHandoffToken != null) return
         val opening = request
         val target = opening?.target ?: if (assistantMode) {
             agentState.conversationPaneState.selectedConversationId?.let {
@@ -327,13 +344,6 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
             return target != null && (target == activity.request?.target ||
                 target.source == AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE &&
                 target.key == activity.agentState.conversationPaneState.selectedConversationId)
-        }
-
-        /** 助手浮层是否正在显示当前这条共享会话。 */
-        fun isAssistantVisible(): Boolean {
-            val activity = current.get() ?: return false
-            return activity.assistantMode &&
-                activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
         }
 
         /** Tool dispatch waits for onStop, so screenshots cannot capture the conversation itself. */

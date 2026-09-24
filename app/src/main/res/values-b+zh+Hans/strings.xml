@@ -1183,7 +1183,7 @@
   <string name="voice_settings_wake_enabled_summary">打开 App 并授权麦克风后，亮屏时本地常听唤醒词，息屏时暂停以免耗电；环境音不会上传云端。</string>
   <string name="voice_settings_wake_phrase">唤醒词</string>
   <string name="voice_settings_phrase_short_warn">过短的唤醒词更容易误触发</string>
-  <string name="voice_settings_phrase_invalid_fallback">唤醒词无效，已恢复默认「小王同学」</string>
+  <string name="voice_settings_phrase_invalid_fallback">唤醒词无效，已恢复默认「小O小O」</string>
   <string name="voice_settings_save_phrase">保存唤醒词</string>
   <string name="voice_settings_restore_default_phrase">恢复默认唤醒词</string>
   <string name="voice_settings_sensitivity">唤醒灵敏度</string>
@@ -1219,6 +1219,7 @@
     <string name="overlay_result_continue_conversation">查看记录并继续对话</string>
     <string name="overlay_result_opening_conversation">正在打开对话…</string>
     <string name="overlay_result_open_failed">暂时无法打开对话，结果已保留，请重试。</string>
+    <string name="overlay_unlock_to_continue">解锁后继续</string>
   <string name="overlay_result_collapse">收起</string>
   <string name="voice_settings_phrase_saved">唤醒词已保存，立即生效</string>
   <string name="voice_settings_loading">正在读取…</string>

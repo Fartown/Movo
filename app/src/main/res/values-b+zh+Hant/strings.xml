@@ -1171,7 +1171,7 @@
   <string name="voice_settings_wake_enabled_summary">開啟 App 並授權麥克風後，亮屏時於本機常聽喚醒詞，螢幕關閉時暫停以免耗電；環境音不會上傳雲端。</string>
   <string name="voice_settings_wake_phrase">喚醒詞</string>
   <string name="voice_settings_phrase_short_warn">過短的喚醒詞更容易誤觸發</string>
-  <string name="voice_settings_phrase_invalid_fallback">喚醒詞無效，已恢復預設「小王同學」</string>
+  <string name="voice_settings_phrase_invalid_fallback">喚醒詞無效，已恢復預設「小O小O」</string>
   <string name="voice_settings_save_phrase">儲存喚醒詞</string>
   <string name="voice_settings_restore_default_phrase">恢復預設喚醒詞</string>
   <string name="voice_settings_sensitivity">喚醒靈敏度</string>
@@ -1207,6 +1207,7 @@
     <string name="overlay_result_continue_conversation">查看記錄並繼續對話</string>
     <string name="overlay_result_opening_conversation">正在開啟對話…</string>
     <string name="overlay_result_open_failed">暫時無法開啟對話，結果已保留，請重試。</string>
+    <string name="overlay_unlock_to_continue">解鎖後繼續</string>
   <string name="overlay_result_collapse">收起</string>
   <string name="voice_settings_phrase_saved">喚醒詞已儲存，立即生效</string>
   <string name="voice_settings_loading">正在讀取…</string>

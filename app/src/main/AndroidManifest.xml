@@ -81,7 +81,6 @@
         <activity
             android:name=".ui.AgentConversationSheetActivity"
             android:exported="false"
-            android:showWhenLocked="true"
             android:excludeFromRecents="true"
             android:launchMode="singleTask"
             android:taskAffinity="io.github.mangi.eta.conversation"

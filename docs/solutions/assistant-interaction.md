@@ -1,13 +1,13 @@
 ---
 title: Movo 助手交互统一方案（对话 / 浮窗 / 语音）
-status: stage-a-b-implemented-pending-device-validation
+status: stage-a-b-implemented-defects-fixed-pending-device-validation
 owner: Claude
 updated: 2026-09-23
 ---
 
 # Movo 助手交互统一方案（对话 / 浮窗 / 语音）
 
-> 2026-09-23 后续修复：代码审查指出的 F1–F9 已进入修复与回归，当前行为以[统一交互修复与回归](../research/assistant-interaction/统一交互修复与回归.md)为准。以下阶段 A/B 的初次实现记录保留，不能替代本轮测试结果。
+> 2026-09-23 后续修复：代码审查指出的 F1–F9 已进入修复与回归，过程与真机证据见[统一交互修复与回归](../research/assistant-interaction/统一交互修复与回归.md)；随后的第三轮缺陷修复（锁屏、结束原因、通知刷新、前台服务契约）见 7.5。第 5、6、7 节已按当前代码更新。
 
 > 针对反馈"无论是对话、浮窗，还是语音，交互乱七八糟"。本文不推翻已经真机验证通过的连续语音对话能力（见[产品集成与验收记录](../research/voice-conversation/产品集成与验收记录.md)），只重构**入口、界面形态与模态切换**这一层。
 >
@@ -163,7 +163,7 @@ stateDiagram-v2
 | 场景 | 应该落到哪个面 | 与现状的差异 |
 |---|---|---|
 | 用户已经在 Movo App 里，点麦克风 | **就地在 App 聊天页进入语音模态**，不弹任何新窗口，不要悬浮窗权限 | 改（P5） |
-| 唤醒词 / 电源键 / 助手手势，此时在别的 App | **浮层 Sheet（半屏）+ 语音对话模态** | 形态从"全屏悬浮窗"降为"半屏 Sheet"，可上拖全屏 |
+| 唤醒词 / 电源键 / 助手手势，此时在别的 App | **浮层 Sheet（半屏）+ 语音对话模态** | 形态从"全屏悬浮窗"降为"半屏 Sheet"；上拖进入 App 会话页（见 7.2） |
 | 唤醒词，此时正在 Movo App 前台 | **就地在 App 页进入语音模态**，不再盖浮层 | 改 |
 | Agent 需要操作屏幕（GUI 工具） | **最小化为胶囊**（一个可点的小悬浮球/条 + 前台通知），语音通道不断 | 改（P8），当前是直接隐藏 |
 | 任务完成 | 胶囊自动展开回浮层 Sheet；若用户已在 App 页则就地更新 | 复用现有 handoff |
@@ -177,12 +177,12 @@ stateDiagram-v2
 |---|---|---|
 | 文字（输入框有草稿） | 点麦克风 | 进语音对话；**草稿原样保留**，字幕显示在独立的字幕行，不写进输入框 |
 | 文字 | 长按麦克风 | 进语音听写；松手后转写**追加**到草稿末尾，光标落在末尾，不自动发送 |
-| 语音对话（我在听） | 点键盘图标或点输入框 | 静音收音、保持连接 8s、升起键盘；已有的未提交转写落入草稿 |
+| 语音对话（我在听） | 点键盘图标或点输入框 | 静音收音、保持连接 8s、升起键盘；已有的未提交转写落入草稿（**实际：关闭声音通道**，见 7.2） |
 | 语音对话（正在播报） | 点键盘图标 | 立即停播报，其余同上 |
 | 语音对话（正在播报） | 开口说话 | barge-in：让出声音、丢弃余下播报、接住新话（**已实现，保持**） |
 | 语音对话 | 打字并发送 | 作为同一会话的一轮正常提交；本轮答案**默认不播报**（用户在用手），模态自动降为文字 |
 | 语音对话 | 说"结束对话" / 点结束 / 通知里结束 | 关声音通道，**面不关闭**，回到文字态；任务继续（**已实现，保持**） |
-| 任意模态 | 任务执行中再输入 | 排队为 pending，任务结束后接着处理（**已实现**）；不再拒绝开语音 |
+| 任意模态 | 任务执行中再输入 | 排队为 pending，任务结束后接着处理（**语音与文字都已实现**；文字同一时间只排一条，可编辑或撤回）；不再拒绝开语音 |
 | 任意模态 | 切换呈现面（App 页 ↔ 浮层 ↔ 胶囊） | 会话、草稿、语音状态、任务全部不变 |
 
 ### 3.5 播报与字幕策略（对齐 Siri 的三档正交设计）
@@ -254,20 +254,50 @@ Modality      = Text | Dictation | Conversation
 | C2 | 语音控制条四控件 + 命令提示行 | `EtaVoicePanel.kt:806-930` |
 | C3 | 播报/字幕三开关设置项 | `VoiceSettings.kt`、`VoiceSettingsRepository.kt`、`VoiceSettingsScreen.kt` |
 
+## 5. 验收用例
+
+改完必须免触屏或单手完成，且每条都要真机留证。判据已按当前实现修订（原判据中胶囊、保持连接、播报设置都没有实现）。"真机状态"一列引用[统一交互修复与回归](../research/assistant-interaction/统一交互修复与回归.md)的记录，本文没有复核。
+
+| 编号 | 用例 | 通过判据 | 真机状态 |
+|---|---|---|---|
+| I1 | 浮层里先打字问一句，再点麦克风说一句 | 两句在**同一条会话**里，模型回答体现出前一句上下文；App 会话列表里能看到这两轮 | 未单独验证 |
+| I2 | 输入框里手打半句草稿，点麦克风 | 草稿**完整保留**，字幕出现在独立行 | 第二轮 r3 通过（新会话首次分配 ID） |
+| I3 | 语音对话进行中，点键盘或输入框打字发送 | 发送成功，本轮不播报；声音通道关闭，未说完的话留在输入框；再点麦克风重新连接 | 第二轮 r4 通过（半句保留 + 手打合并） |
+| I4 | 任务执行中点麦克风 / 打字发送 | 能开语音、能排一条文字；任务完成后接着处理；不报"当前任务尚未结束" | 第二轮 r5 通过（文字排队、编辑、撤回） |
+| I5 | 语音播报中点"停止播报" | 声音立刻停，会话继续，任务不受影响 | 未验证 |
+| I6 | 语音对话中触发 GUI 工具 | 浮层让开屏幕，运行浮球和语音通知可见，语音仍可用；任务完成后结果浮层回来 | 未验证 |
+| I7 | App 聊天页点麦克风；在设置页说唤醒词 | 聊天页就地进入语音，不要悬浮窗权限；设置页唤醒打开浮层后收音 | 第二轮 r5 通过（设置页唤醒） |
+| I8 | 唤醒 → 浮层 → 上拖或点标题栏 | 进入 App 首页的同一条会话，草稿与语音状态不变，浮层关闭 | 未验证 |
+| I9 | 播报设置为"从不播报"后语音对话 | 阶段 C，**未实现** | — |
+| I10 | 锁屏时说唤醒词，或用锁屏助手手势 | 先出现解锁界面；解锁前看不到会话标题和历史，也不开始收音；取消解锁即关闭；解锁后正常进入，唤醒词入口自动收音；之后再锁屏，浮层退到锁屏后面 | **未验证**（第三轮新增） |
+| I11 | 语音因网络失败、45 秒无声、切换会话等原因结束 | 输入框上方出现结束原因并停留约 8 秒，读屏会播报；自己点键盘或直接发送时不出现 | **未验证**（第三轮新增） |
+
+现有已通过的连续对话用例（自动提交、补话合并、多轮、插话替换、口述结束、结束后不再提交、真实唤醒）必须全部回归，不得因本次重构回退。第二轮 r5 的原始 `core` 用例仍有一次模型正文少字的失败，见修复与回归文档。
+
+## 6. 未决问题
+
+1. **锁屏与后台启动的真机行为**。浮层已不再静态声明 `showWhenLocked`：锁屏唤起时先在锁屏上方请求解锁，解锁后才加载会话（7.5）。`requestDismissKeyguard` 在 MIUI / ColorOS 的半屏透明 Activity 上的表现、以及 `MODE_BACKGROUND_ACTIVITY_START_ALLOWED` 在各 ROM 上是否稳定，必须实测。
+2. **再切回语音的重连时延**。切回文字会关闭 Dialog 连接，来回切的代价是一次重连。实测时延后再决定是否值得做「静音保持」。
+3. ~~语音只跟随当前选中会话~~ —— 已解决：切换、新建、删除会话前先结束语音，未发出的话退回原会话草稿（第二轮 F2）。
+4. **语音听写模态是否保留**。当前产品链路只有"语音对话"一种：`EtaDictationController`（`asr/EtaAsrSessionFactory.kt:20`）仍在仓库里，但主代码已不再引用它，只剩单元测试在用。长按麦克风做听写需要把它重新接回或基于 Dialog 链路重做。
+5. **待拍板的交互取舍**（第三轮审查提出，本轮未改）：输入框麦克风改为听写、另设连续对话入口；长按电源键是否直接收音；用户关闭浮层时是否结束语音；从别的 App 唤起时续上一条会话还是新建；"切回文字"与重复的键盘按钮。
+
 ## 7. 实现记录（2026-09-23）
 
-用户选定「A + B 一起做，浮层统一用 Sheet Activity」。以下是实际落地情况，与第 3、4 节设计有差异的地方单独说明原因。
+用户选定「A + B 一起做，浮层统一用 Sheet Activity」。以下是实际落地情况，与第 3、4 节设计有差异的地方单独说明原因。7.1–7.3 已按第二、三轮修复后的代码更新；7.4 保留第一轮的验证记录。
 
 ### 7.1 新增与删除
 
 | 变更 | 文件 |
 |---|---|
 | 新增：进程内唯一语音会话，任何界面都只是观察者 | `agent/voice/session/VoiceSessionManager.kt` |
-| 新增：语音通道状态与事件映射（正交于任务与呈现面） | `agent/voice/session/VoiceSessionUiState.kt` |
+| 新增：语音通道状态、事件映射与结束原因提示 | `agent/voice/session/VoiceSessionUiState.kt` |
 | 新增：所有语音入口的唯一收口 | `agent/voice/session/VoiceEntry.kt` |
-| 新增：Movo 自己的界面是否在前台 | `agent/voice/session/VoiceSurfaceTracker.kt` |
-| 新增：字幕 + 停止播报 + 切回文字的可见控件 | `ui/components/AgentVoiceStatusStrip.kt` |
-| 重建：原 `EtaAssistantOverlayService`（1125 行）缩为只做麦克风前台服务和系统入口桥接 | `agent/voice/EtaAssistantVoiceService.kt`（约 260 行） |
+| 新增：系统入口从 `:voice_session` 进程转交主进程 | `agent/voice/session/AssistantEntryReceiver.kt` |
+| 新增：聊天页是否在屏幕上（`chatVisible`） | `agent/voice/session/VoiceSurfaceTracker.kt` |
+| 新增：锁屏时先解锁再显示会话 | `ui/KeyguardContentGate.kt` |
+| 新增：字幕 + 停止播报 + 切回文字的可见控件，结束原因提示 | `ui/components/AgentVoiceStatusStrip.kt` |
+| 重建：原 `EtaAssistantOverlayService`（1125 行）缩为只持有麦克风前台服务 | `agent/voice/EtaAssistantVoiceService.kt` |
 | 删除：悬浮窗内那套独立的迷你会话渲染 | 原 `agent/voice/EtaVoicePanel.kt`（946 行） |
 | 删除：助手私有会话向 App 的 handoff 链路 | `MainActivity`、`AgentAppRoot`、`AgentAppState.openAssistantConversation` |
 
@@ -277,53 +307,41 @@ Modality      = Text | Dictation | Conversation
 |---|---|---|
 | B4 新增最小化悬浮胶囊 | **没做**。改为复用既有的运行期无障碍浮球（`AgentRuntimeService.ensureOverlayVisible`）+ 语音前台通知实时反映状态 | `ScreenshotWindowPolicy.decide` 只排除本包的 `TYPE_ACCESSIBILITY_OVERLAY`；新增一个 `TYPE_APPLICATION_OVERLAY` 胶囊会被 GUI Agent 截进图里并挡住点击。既有浮球本来就是无障碍浮层，天然被排除 |
 | 3.4 切回文字时「保持连接 8s」 | **改为直接关闭声音通道** | `DoubaoDialogEngine` 没有静音接口（只有作用于播放器的 pause/resume/discard）。伪造静音要改 SDK 适配层且本轮无法实测。代价是再切回语音需要重连；好处是打字期间不占麦克风 |
-| 屏幕上下文仍是浮窗私有附件 | **改为共享会话上的普通待发送附件** | `AgentAppState.attachScreenContext` / `consumePendingVoiceImages`。用户可以在输入框上方像普通图片一样移除它，不再需要单独的选中/移除状态机；原 `EtaScreenContextStateReducer` 及其单测随面板一起删除 |
+| 系统入口附带屏幕上下文 | **已取消**。入口不再截屏，`attachScreenContext` 已删除 | 第一轮把截图挂成待发送附件，会随下一句语音或文字静默发出，唤醒几次就堆几张，且截图会过期。需要屏幕内容时应做成浮层上的显式按钮（未做） |
+| 3.3 浮层可上拖全屏 | **上拖或点标题栏进入 App 首页的同一条会话**，浮层随即关闭（`65d1674`） | 完整页面由 MainActivity 承载，Sheet 不再维护第二套全屏形态 |
 | C1 三状态模型 | **只做了语音这一维**（`VoiceChannel`）。控制器里的中文状态文案保留原样 | 那些文案和阈值已有真机验收记录，本轮不重写；`EtaVoicePhase` / `EtaVoiceStatus` 随面板删除，`voiceStatus: String` 变成 `VoiceSessionUiState.statusText` |
 | C2 / C3 | **未做**。控制条已有「停止播报 / 切回文字」两个可见按钮和命令提示行；播报与字幕的三个设置项未做 | 用户选定范围是 A + B |
 
-### 7.3 关键行为改动
+### 7.3 关键行为
 
-- **一条会话**：浮层和 App 页都渲染 `AgentConversationContent`（即聊天页同一套组件），语音与文字写同一条 `conversationId`。悬浮窗私有的 `eta_assistant_<uuid>` 会话链路已不存在。
-- **字幕不再占用输入框**：`VoiceSessionUiState.transcript` 走独立的状态条，输入框草稿完全由用户掌握。
-- **任务在跑也能开语音**：`voiceConversationId()` 不再因 `isStreaming` 抛错，麦克风按钮不再 `enabled = !isStreaming`。语音轮次遇到 `rejected` 时留在 `VoiceSessionManager.queuedTurn`，等 `homeState.isStreaming` 变 false 后自动补发。
-  拒绝的原因也可能是**另一条会话**在跑——那时本会话的 `isStreaming` 根本不会变化，光靠状态订阅唤不醒重试，而"拒绝就立刻重发"又会打转。所以补发是 600 ms 定时重试、最多 3 次；仍然失败就把这句话原样存回输入框草稿并在状态里说明，**任何路径都不会把用户说过的话丢掉**（语音通道关闭时同样先回收排队语音）。
-- **语音态下可以打字发送**：发送即把模态降回文字（本轮不播报），不再被 `return` 掉。
-- **App 前台不再弹悬浮窗**：`VoiceEntry` 按 `VoiceSurfaceTracker.appVisible` 决定就地进语音还是打开浮层；就地路径不需要 `SYSTEM_ALERT_WINDOW`。
-- **唤醒路由**：`EtaWakeWordService` 统一走 `VoiceEntry.startFromSystemEntry`，Movo 在前台时不再盖浮层。
+- **一条会话**：浮层和 App 页都渲染 `AgentConversationContent`（即聊天页同一套组件），语音与文字写同一条 `conversationId`。悬浮窗私有的 `eta_assistant_<uuid>` 会话链路已不存在。切换、新建、删除会话前先结束语音，未发出的话退回原会话草稿。
+- **字幕不再占用输入框**：`VoiceSessionUiState.transcript` 走独立的状态条。手动发送只消费本次提交的文字，切模态时追加进来的半句保留在输入框。
+- **任务在跑也能输入**：语音按全局 `voiceRuntimeBusy` 等待，任务结束后自动提交；文字同一时间可排一条，可编辑或撤回，完成后发回原会话。万一语音提交仍被拒绝（竞态），这句话和它的附件原样退回草稿并结束语音，**不自动重试**——拒绝后的请求可能已被归档，重发有重复执行的风险。
+- **语音态下可以打字发送**：发送或点输入框即把模态降回文字（本轮不播报）。
+- **界面路由**：系统入口在主进程判断 `chatVisible`，聊天页可见就地进语音，否则打开浮层；打开浮层本身不启动前台服务，页面可见后才开始收音。
+- **锁屏**：见 7.5。**结束原因**：见 7.5。
 
-### 7.4 已验证与未验证
+### 7.4 第一轮（阶段 A/B 初次实现）的验证记录
 
 | 项目 | 状态 |
 |---|---|
 | `:app:compileDebugKotlin` / `:app:compileReleaseKotlin` / `:app:assembleDebug` | 通过 |
 | 完整单测 | 1115 项，12 项失败 |
 | 改动前后失败集合对照 | **完全相同**。基线 `d517a01` 跑同一批测试类同样失败这 12 项（图片编解码 6 项、Binder 图片传输 2 项、工具需求/目录排序 2 项、Breeno 内联图片 1 项、root shell 取消 1 项），全部是本机环境性失败，与本次改动无关 |
-| 新增单测（7 项，全部通过） | `VoiceSessionUiStateTest` 5 项（事件→通道映射、未知事件不回退、active/speaking 派生）、`VoiceTurnCoordinatorTest` 2 项（停止播报只丢播报、不碰正在执行的任务） |
-| **真机验收** | **未做**。第 5 节 I1–I9 全部待验证；已通过的连续对话用例也必须整轮回归 |
+| 新增单测（7 项，全部通过） | `VoiceSessionUiStateTest` 5 项、`VoiceTurnCoordinatorTest` 2 项 |
+| 真机验收 | 第一轮未做；第二轮在小米 15 上的结果见修复与回归文档 |
 
-真机未验证意味着以下几项只有代码依据、没有设备证据：浮层从 overlay 改成 Activity 之后的锁屏显示（已加 `android:showWhenLocked`，与原 `FLAG_SHOW_WHEN_LOCKED` 对齐）、后台启动 Activity 是否被 ROM 拦截、输入法与半屏 Sheet 的高度协同、以及唤醒进入时截图与 Sheet 出现的先后顺序。
+### 7.5 第三轮缺陷修复（2026-09-23）
 
-## 5. 验收用例
+来源：对第二轮提交 `02415cd`、`65d1674` 的复核，只修不涉及产品取舍的缺陷。
 
-改完必须免触屏或单手完成，且每条都要真机留证。**下表目前全部未验证**——代码已就绪，设备回归还没做。
-
-| 编号 | 用例 | 通过判据 |
+| 问题 | 修复 | 位置 |
 |---|---|---|
-| I1 | 浮层里先打字问一句，再点麦克风说一句 | 两句在**同一条会话**里，模型回答体现出前一句上下文；App 会话列表里能看到这两轮 |
-| I2 | 输入框里手打半句草稿，点麦克风 | 草稿**完整保留**，字幕出现在独立行 |
-| I3 | 语音对话进行中，点键盘打字发送 | 发送成功，本轮不播报，语音连接未断，再点麦克风可立刻回到语音态 |
-| I4 | 任务执行中点麦克风 | 能开语音；说的话排队，任务完成后接着处理；不报"当前任务尚未结束" |
-| I5 | 语音播报中点"停止播报" | 声音立刻停，会话继续，任务不受影响 |
-| I6 | 语音对话中触发 GUI 工具 | 出现胶囊，语音仍可用，任务完成后胶囊展开回浮层 |
-| I7 | App 前台时点麦克风 | 不弹悬浮窗、不要求悬浮窗权限、不跳系统设置 |
-| I8 | 唤醒 → 浮层 → 上拖全屏 → 下拖回半屏 | 会话与语音状态全程不变，消息不重载 |
-| I9 | 播报设置为"从不播报"后语音对话 | 自动提交与续听仍成立，只是不出声，字幕正常 |
+| 锁屏唤起时浮层直接显示当前会话的全部历史；`showWhenLocked` 写死在清单里，结果浮层也会盖在锁屏上 | 去掉清单里的 `showWhenLocked`。助手入口打开或复用浮层时若处于锁屏，只在锁屏上方显示"解锁后继续"并请求解锁；解锁前不加载会话、不显示会话标题、不自动收音、不能跳转 App；取消解锁即关闭；解锁后撤掉 showWhenLocked，之后再锁屏浮层会退到锁屏后面 | `KeyguardContentGate.kt`、`AgentConversationSheetActivity.kt` |
+| 语音中途结束的原因看不到：状态条随语音关闭一起收起，通知也被撤掉 | 新增 `VoiceSessionUiState.notice`：非用户手动切回文字的结束（网络/鉴权失败、无声超时、切换或删除会话、提交被拒）以及开始失败，在输入框上方停留 8 秒，读屏主动播报；下一次开始语音时清除。关闭过程中控制器会连续发布几次，提示取最后一次的文案 | `VoiceSessionManager.kt`、`AgentVoiceStatusStrip.kt`、`AgentChatInputBar.kt` |
+| 浮层打开会话失败时无声关闭 | 失败原因用 Toast 显示后再关闭 | `AgentConversationSheetActivity.kt` |
+| 通知在每个识别中间结果都刷新一次，会被系统限流 | 只在状态文案变化时刷新 | `EtaAssistantVoiceService.kt` |
+| 缺麦克风权限或上一段语音还在关闭时，服务不转前台就被停掉（违反 `startForegroundService` 契约） | 入口先检查权限和占用，不满足就不拉起服务，并给出提示（上一段正在结束时不再无反应）；服务里剩下的竞态分支先短暂转前台再退出 | `VoiceEntry.kt`、`EtaAssistantVoiceService.kt` |
+| 死代码与过期注释 | 删除 `AgentAppState.attachScreenContext`、`AgentConversationSheetActivity.isAssistantVisible()`；更新 `EtaVoiceInteractionSession`、`VoiceSurfaceTracker`、`VoiceEntry` 中仍写着悬浮窗或"App 前台"的注释 | 同左 |
 
-现有已通过的连续对话用例（自动提交、补话合并、多轮、插话替换、口述结束、结束后不再提交、真实唤醒）必须全部回归，不得因本次重构回退。
-
-## 6. 未决问题
-
-1. ~~浮层用 Activity 还是 overlay~~ —— 已定：统一用 `AgentConversationSheetActivity`，已实现。遗留的是**锁屏与后台启动的真机行为**：`showWhenLocked` 与 `MODE_BACKGROUND_ACTIVITY_START_ALLOWED` 在各 ROM 上是否稳定，必须实测。
-2. **再切回语音的重连时延**。切回文字会关闭 Dialog 连接，来回切的代价是一次重连。实测时延后再决定是否值得做「静音保持」。
-3. **语音只跟随当前选中会话**。`AgentChatBottomBar` 直接观察进程级语音状态，没有按 `conversationId` 过滤。目前浮层和 App 页渲染的都是选中会话，所以成立；将来若出现并排两个会话，需要按 `VoiceSessionManager.ownsConversation(id)` 过滤。
-4. **语音听写模态是否保留**。当前产品链路只有"语音对话"一种：`EtaDictationController`（`asr/EtaAsrSessionFactory.kt:20`）仍在仓库里，但主代码已不再引用它，只剩单元测试在用。长按麦克风做听写需要把它重新接回或基于 Dialog 链路重做，可延后到阶段 C 之后。
+验证：`:app:compileDebugKotlin` 通过；相关 7 个测试类 67 项全部通过，其中新增 10 项（`KeyguardContentGateTest` 3 项：未锁屏直接显示、锁屏时先解锁且解锁后不再盖在锁屏上、取消解锁即关闭；`VoiceSessionLifecycleTest` 5 项：结束原因停留后过期、关闭过程取最终文案、手动切文字不提示、开始失败有提示、过期计时不会清掉下一条；`VoiceEntryRoutingTest` 2 项：缺权限不拉起服务、有权限正常启动）。全量单测 1154 项、12 项失败，失败集中在图片编解码 6、Binder 图片传输 2、工具需求 1、Breeno 内联图片 1、root shell 取消 1、工具目录 1，与 7.4 记录的本机环境性失败逐类同数。`:app:compileReleaseKotlin` 通过。日志在 `.docs/review-2026-09-23/`（本地，不入库）。**真机未验证**：I10、I11 以及通知刷新、前台服务分支都只有单测与代码依据。

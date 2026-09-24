@@ -52,7 +52,7 @@ internal data class VoiceWakeSettings(
     fun effectivePhrase(): String = WakePhraseRules.normalizeOrDefault(wakePhrase)
 
     companion object {
-        const val DEFAULT_WAKE_PHRASE = "小王同学"
+        const val DEFAULT_WAKE_PHRASE = "小O小O"
     }
 }
 
