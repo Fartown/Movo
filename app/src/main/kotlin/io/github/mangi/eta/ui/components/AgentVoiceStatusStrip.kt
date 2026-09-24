@@ -19,6 +19,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.agent.voice.session.VoiceChannel
@@ -97,6 +100,25 @@ internal fun AgentVoiceStatusStrip(
             modifier = Modifier.padding(top = 6.dp),
         )
     }
+}
+
+/** 语音结束或没能开始时的原因，停留几秒后自动消失；读屏会主动播报这一行。 */
+@Composable
+internal fun AgentVoiceNotice(text: String, modifier: Modifier = Modifier) {
+    val colors = MiuixTheme.colorScheme
+    Text(
+        text = text,
+        style = MiuixTheme.textStyles.body2,
+        color = colors.onSurfaceVariantSummary,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(colors.surfaceContainerHigh)
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .semantics { liveRegion = LiveRegionMode.Polite },
+    )
 }
 
 @Composable

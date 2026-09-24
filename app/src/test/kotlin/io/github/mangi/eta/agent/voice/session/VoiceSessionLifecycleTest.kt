@@ -40,6 +40,7 @@ class VoiceSessionLifecycleTest {
     private lateinit var scope: CoroutineScope
     private lateinit var owner: VoiceSessionOwner
     private lateinit var audio: FakeAudio
+    private val noticeExpiries = mutableListOf<() -> Unit>()
     private val service = object : VoiceSessionOwner.ServiceHost {
         override fun onVoiceState(state: VoiceSessionUiState) = Unit
         override fun onVoiceClosed() = Unit
@@ -51,7 +52,7 @@ class VoiceSessionLifecycleTest {
         context.deleteDatabase("eta.db")
         AgentConversationDraftStore.shared.clear()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-        owner = VoiceSessionOwner(scope) { _, host -> FakeAudio(host).also { audio = it } }
+        owner = VoiceSessionOwner(scope, expireNotice = { noticeExpiries += it }) { _, host -> FakeAudio(host).also { audio = it } }
     }
     @After fun cleanup() { scope.cancel(); AgentConversationDraftStore.shared.clear(); EtaDatabase.closeForTests() }
 
@@ -189,8 +190,7 @@ class VoiceSessionLifecycleTest {
     @Test fun appAdmissionRejectionDoesNotConsumePendingImage() {
         val state = app(); val id = state.voiceConversationId()
         state.sendCurrentMessage("第一条")
-        val image = io.github.mangi.eta.agent.model.AgentModelClient.ModelImage("content://image", "image/png", 1)
-        state.attachScreenContext(id, image, "data:image/png;base64,YQ==")
+        state.retainVoiceDraft(id, "草稿", listOf(PendingImageUi("image", "content://image", "data:image/png;base64,YQ==", "image/png")))
         val before = state.pendingVoiceImages(id)
         var result: AgentRuntimeWire.RunResult? = null
         state.sendVoiceMessage(id, "second", "第二条", before, "session", {}, { result = it })
@@ -201,7 +201,7 @@ class VoiceSessionLifecycleTest {
     @Test fun busyTextSubmissionIsQueuedAndEditRestoresDraftAndAttachments() {
         val state = app(); val id = state.voiceConversationId()
         state.sendCurrentMessage("正在执行")
-        state.attachScreenContext(id, io.github.mangi.eta.agent.model.AgentModelClient.ModelImage("content://image", "image/png", 1), "preview")
+        state.retainVoiceDraft(id, "临时", listOf(PendingImageUi("image", "content://image", "preview", "image/png")))
         val image = state.homeState.pendingImages.single()
         val draft = AgentConversationDraftStore.shared.get(id)
         draft.edit { replace(0, length, "下一条") }
@@ -264,6 +264,53 @@ class VoiceSessionLifecycleTest {
         observer.cancel()
     }
 
+    @Test fun endReasonOutlivesTheStatusStripThenExpires() {
+        val host = FakeConversations(); begin(host)
+        audio.end("暂时没有听到说话，语音已结束，可再次唤醒") // Controller-owned timeout, not a user action.
+        assertFalse(owner.state.value.active)
+        assertEquals("暂时没有听到说话，语音已结束，可再次唤醒", owner.state.value.notice)
+        noticeExpiries.last().invoke()
+        assertNull(owner.state.value.notice)
+    }
+
+    @Test fun closingPublishesKeepTheFinalReasonNotTheTransientStatus() {
+        val host = FakeConversations(); begin(host)
+        // A spoken "结束对话" publishes the stale endpoint status first, then the final one.
+        audio.active = false
+        audio.host.onState("ended", false, "听到了，可以继续补充…", "")
+        audio.host.onState("ended", false, "语音对话已结束", "")
+        assertEquals("语音对话已结束", owner.state.value.notice)
+        audio.host.onClosed()
+        audio.host.onState("result", false, "迟到状态", "")
+        assertEquals("语音对话已结束", owner.state.value.notice)
+    }
+
+    @Test fun switchingToTextByHandShowsNoEndNotice() {
+        val host = FakeConversations(); begin(host)
+        owner.switchToText()
+        assertFalse(owner.state.value.active)
+        assertNull(owner.state.value.notice)
+    }
+
+    @Test fun startFailureReasonIsVisible() {
+        val host = FakeConversations(); host.failure = "请等上下文整理和模型切换完成后再开始语音"
+        owner.attach(service, host)
+        assertFalse(owner.beginSession(context))
+        assertEquals("请等上下文整理和模型切换完成后再开始语音", owner.state.value.notice)
+    }
+
+    @Test fun newSessionClearsTheNoticeAndAStaleExpiryCannotClearTheNextOne() {
+        val host = FakeConversations(); begin(host)
+        audio.end("网络连接失败")
+        val firstExpiry = noticeExpiries.last()
+        audio.host.onClosed()
+        assertTrue(owner.beginSession(context))
+        assertNull(owner.state.value.notice)
+        audio.end("鉴权失败")
+        firstExpiry()
+        assertEquals("鉴权失败", owner.state.value.notice)
+    }
+
     private class FakeAudio(val host: VoiceConversationController.Host) : VoiceConversationSession {
         override var active = false
         override val busy get() = active
@@ -285,7 +332,8 @@ class VoiceSessionLifecycleTest {
         data class Request(val images: List<PendingImageUi>, val result: (AgentRuntimeWire.RunResult) -> Unit)
         val sent = mutableListOf<Request>()
         var stops = 0
-        override fun voiceConversationId() = voiceSelectedConversationId
+        var failure: String? = null
+        override fun voiceConversationId() = failure?.let { throw IllegalStateException(it) } ?: voiceSelectedConversationId
         override fun retainVoiceDraft(conversationId: String, text: String, images: List<PendingImageUi>) {
             retained += text
             this.images = (this.images + images).distinctBy { it.id }

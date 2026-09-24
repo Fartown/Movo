@@ -10,11 +10,11 @@ import org.junit.Test
 
 class WakePhraseAndCredentialRulesTest {
     @Test
-    fun defaultPhrase_isXiaoWangTongXue() {
-        assertEquals("小王同学", WakePhraseRules.DEFAULT)
-        assertEquals("小王同学", WakePhraseRules.normalizeOrDefault(""))
-        assertEquals("小王同学", WakePhraseRules.normalizeOrDefault("  "))
-        assertEquals("小王同学", WakePhraseRules.normalizeOrDefault("a"))
+    fun defaultPhrase_isXiaoOXiaoO() {
+        assertEquals("小O小O", WakePhraseRules.DEFAULT)
+        assertEquals("小O小O", WakePhraseRules.normalizeOrDefault(""))
+        assertEquals("小O小O", WakePhraseRules.normalizeOrDefault("  "))
+        assertEquals("小O小O", WakePhraseRules.normalizeOrDefault("a"))
     }
 
     @Test

@@ -22,6 +22,7 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.RecordVoiceOver
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
@@ -57,6 +58,7 @@ import io.github.mangi.eta.agent.voice.wake.WakeKeywordEncoder
 import io.github.mangi.eta.data.model.DoubaoCredentialRules
 import io.github.mangi.eta.data.model.DoubaoSpeechCredentials
 import io.github.mangi.eta.data.model.WakePhraseRules
+import io.github.mangi.eta.data.model.WakeListenScope
 import io.github.mangi.eta.data.model.WakeSensitivity
 import io.github.mangi.eta.data.repository.VoiceSettingsRepository
 import io.github.mangi.eta.ui.components.MiuixDialogActions
@@ -186,6 +188,8 @@ internal fun VoiceSettingsScreen(onBack: () -> Unit) {
                             WakeListeningState.Starting -> stringResource(R.string.voice_settings_state_starting)
                             WakeListeningState.Listening -> stringResource(R.string.voice_settings_state_listening)
                             WakeListeningState.Dictating -> stringResource(R.string.voice_settings_state_paused)
+                            WakeListeningState.ScreenOff -> stringResource(R.string.voice_settings_state_screen_off)
+                            WakeListeningState.AppHidden -> stringResource(R.string.voice_settings_state_app_hidden)
                             WakeListeningState.Stopped -> stringResource(R.string.voice_settings_state_stopped)
                             is WakeListeningState.Failed -> state.message
                         }
@@ -221,6 +225,24 @@ internal fun VoiceSettingsScreen(onBack: () -> Unit) {
                     enabled = settings != null && !wakeChanging,
                     startAction = { PreferenceIcon(Icons.Rounded.Edit) },
                     onClick = { editor = VoiceEditor.Phrase },
+                )
+                val scopes = listOf(WakeListenScope.AppOpen, WakeListenScope.ScreenOn)
+                WindowSpinnerPreference(
+                    title = stringResource(R.string.voice_settings_listen_scope),
+                    summary = stringResource(R.string.voice_settings_listen_scope_hint),
+                    items = listOf(R.string.voice_listen_scope_app_open, R.string.voice_listen_scope_screen_on)
+                        .map { DropdownItem(text = stringResource(it)) },
+                    selectedIndex = scopes.indexOf(settings?.listenScope ?: WakeListenScope.AppOpen),
+                    enabled = settings != null && !wakeChanging,
+                    startAction = { PreferenceIcon(Icons.Rounded.PhoneAndroid) },
+                    onSelectedIndexChange = { index ->
+                        scope.launch {
+                            try {
+                                VoiceSettingsRepository.setWakeListenScope(scopes[index])
+                            } catch (cancel: CancellationException) { throw cancel
+                            } catch (_: Exception) { toast(R.string.page_save_failed_40525a) }
+                        }
+                    },
                 )
                 val sensitivities = listOf(WakeSensitivity.Low, WakeSensitivity.Medium, WakeSensitivity.High)
                 WindowSpinnerPreference(

@@ -6,10 +6,10 @@ import android.os.Bundle
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Movo 自己的界面是不是正在前台。
+ * Movo 的聊天界面是不是正在屏幕上。
  *
- * 唤醒词命中时据此决定：已经在 Movo 里就地切语音模态，不再盖一层浮层；
- * 不在 Movo 里才打开浮层 Sheet。
+ * 系统入口据此决定：聊天页（App 首页会话或浮层 Sheet）可见就地切语音模态，不再盖一层浮层；
+ * 否则（包括 Movo 的设置等非聊天页面）打开浮层 Sheet。[appVisible] 只表示有 Activity 处于 resumed。
  */
 internal object VoiceSurfaceTracker : Application.ActivityLifecycleCallbacks {
     private val resumed = AtomicInteger(0)

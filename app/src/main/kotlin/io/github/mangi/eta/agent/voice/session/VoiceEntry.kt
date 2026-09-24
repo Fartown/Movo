@@ -2,19 +2,38 @@ package io.github.mangi.eta.agent.voice.session
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.widget.Toast
+import androidx.core.content.ContextCompat
 import io.github.mangi.eta.agent.voice.EtaAssistantVoiceService
 
 /**
  * 语音的所有入口都收敛在这里。
  *
- * 界面形态由"当前 Movo 是否在前台"决定，而不是由入口决定：
- * 已经在 Movo 里就就地进语音模态，不在就打开浮层 Sheet。两种情况用的是同一条会话。
+ * 界面形态由"聊天页是否正在屏幕上"决定，而不是由入口决定：
+ * 聊天页可见就地进语音模态，否则打开浮层 Sheet。两种情况用的是同一条会话。
  */
 internal object VoiceEntry {
-    /** App 页里点麦克风：就地开始语音，不开新窗口，也不需要悬浮窗权限。 */
+    /** 聊天页或浮层里开始语音：就地开始，不开新窗口，也不需要悬浮窗权限。 */
     fun startInPlace(context: Context) {
-        context.applicationContext.startForegroundService(
-            Intent(context.applicationContext, EtaAssistantVoiceService::class.java)
+        val app = context.applicationContext
+        // startForegroundService 之后服务必须转前台，否则系统按超时崩溃处理；
+        // 转前台又要求已有麦克风权限。所以不能开始的情况在这里挡掉，不把服务拉起来。
+        if (ContextCompat.checkSelfPermission(app, android.Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            Toast.makeText(app, "需要麦克风权限才能开始语音", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (VoiceSessionManager.busy) {
+            // 已经在语音里就什么都不做；上一段还在断开时明确告诉用户，而不是没反应。
+            if (!VoiceSessionManager.active) {
+                Toast.makeText(app, "上一段语音正在结束，请稍后再试", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+        app.startForegroundService(
+            Intent(app, EtaAssistantVoiceService::class.java)
                 .setAction(EtaAssistantVoiceService.ACTION_START_VOICE),
         )
     }

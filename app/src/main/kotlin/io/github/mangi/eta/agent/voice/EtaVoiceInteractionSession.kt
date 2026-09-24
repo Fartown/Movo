@@ -12,8 +12,9 @@ import io.github.mangi.eta.agent.voice.session.VoiceEntry
 /**
  * 系统数字助理的入口桥接。
  *
- * 系统会为本类创建 TYPE_VOICE_INTERACTION 窗口，但 Eta 的实际界面由自己的
- * TYPE_APPLICATION_OVERLAY 窗口承载，避免把厂商助手动画和输入层级绑定到系统会话窗口。
+ * 系统会为本类创建 TYPE_VOICE_INTERACTION 窗口，但它不显示任何内容（setUiEnabled(false)）。
+ * 本类运行在 :voice_session 进程，只把入口转交主进程：聊天页可见就地处理，
+ * 否则由 [io.github.mangi.eta.ui.AgentConversationSheetActivity] 承载界面。
  */
 internal class EtaVoiceInteractionSession(context: Context) : VoiceInteractionSession(context) {
     private val controlReceiver = object : BroadcastReceiver() {
@@ -52,7 +53,7 @@ internal class EtaVoiceInteractionSession(context: Context) : VoiceInteractionSe
     }
 
     override fun onDestroy() {
-        // 浮窗拥有独立生命周期；系统会话重建不代表用户关闭了助理。
+        // 助手界面在主进程，生命周期独立；系统会话重建不代表用户关闭了助理。
         context.unregisterReceiver(controlReceiver)
         super.onDestroy()
     }

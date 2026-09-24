@@ -65,12 +65,22 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
+            </intent-filter>
         </activity>
+
+        <activity
+            android:name=".agent.voice.WakeTileBridgeActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.EtaVoiceAssistBridge" />
 
         <activity
             android:name=".ui.AgentConversationSheetActivity"
             android:exported="false"
-            android:showWhenLocked="true"
             android:excludeFromRecents="true"
             android:launchMode="singleTask"
             android:taskAffinity="io.github.mangi.eta.conversation"
@@ -138,6 +148,20 @@
             android:name=".agent.voice.EtaWakeWordService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
+
+        <service
+            android:name=".agent.voice.EtaWakeTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_wake"
+            android:label="@string/wake_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
+        </service>
 
         <service
             android:name=".agent.runtime.AgentRuntimeService"

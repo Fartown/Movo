@@ -26,6 +26,7 @@ import io.github.mangi.eta.ui.AgentConversationSheetActivity
 /** Owns microphone FGS lifetime only. Opening/restoring a chat does not start this service. */
 internal class EtaAssistantVoiceService : Service(), VoiceSessionOwner.ServiceHost {
     private var foreground = false
+    private var notifiedText: String? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -46,21 +47,20 @@ internal class EtaAssistantVoiceService : Service(), VoiceSessionOwner.ServiceHo
     }
 
     private fun startVoice() {
+        // VoiceEntry 已经在调用 startForegroundService 之前挡掉这两种情况；这里只剩竞态。
+        // 系统规定 startForegroundService 之后必须 startForeground，不转前台就停服务同样按超时崩溃处理，
+        // 所以先短暂转前台满足契约再退出。缺麦克风权限时连转前台都会被拒，只能靠入口检查。
         if (VoiceSessionManager.busy) {
-            if (!foreground) stopSelf()
+            if (!foreground) leaveWithoutVoice()
             return
         }
         if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             Toast.makeText(this, "请在聊天页允许麦克风权限后开始语音", Toast.LENGTH_LONG).show()
-            stopSelf()
+            leaveWithoutVoice()
             return
         }
         val started = runCatching {
-            getSystemService(NotificationManager::class.java).createNotificationChannel(
-                NotificationChannel(VOICE_CHANNEL, "语音对话", NotificationManager.IMPORTANCE_LOW),
-            )
-            startForeground(VOICE_NOTIFICATION, notification("正在连接语音…"), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-            foreground = true
+            promote("正在连接语音…")
             EtaWakeWordService.pauseWake(this)
             VoiceSessionManager.beginSession(this)
         }.getOrElse {
@@ -77,10 +77,29 @@ internal class EtaAssistantVoiceService : Service(), VoiceSessionOwner.ServiceHo
     }
     override fun onVoiceState(state: VoiceSessionUiState) {
         if (!foreground || !state.active) return
-        runCatching { getSystemService(NotificationManager::class.java).notify(VOICE_NOTIFICATION,
-            notification(state.statusText.ifBlank { "语音对话进行中" })) }
+        // 识别中间结果每秒会发布多次，但通知只显示状态文案；文案不变就不刷新，避免被系统限流丢掉关键状态。
+        val text = state.statusText.ifBlank { "语音对话进行中" }
+        if (text == notifiedText) return
+        notifiedText = text
+        runCatching { getSystemService(NotificationManager::class.java).notify(VOICE_NOTIFICATION, notification(text)) }
+    }
+
+    private fun promote(text: String) {
+        getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel(VOICE_CHANNEL, "语音对话", NotificationManager.IMPORTANCE_LOW),
+        )
+        startForeground(VOICE_NOTIFICATION, notification(text), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+        notifiedText = text
+        foreground = true
+    }
+
+    private fun leaveWithoutVoice() {
+        runCatching { promote("语音对话已结束") }
+        if (foreground) { stopForeground(STOP_FOREGROUND_REMOVE); foreground = false }
+        stopIfIdle()
     }
     override fun onVoiceClosed() {
+        notifiedText = null
         if (foreground) { stopForeground(STOP_FOREGROUND_REMOVE); foreground = false }
         if (!DoubaoDialogEngine.hasOpenAudio()) EtaWakeWordService.resumeWake(this)
         stopIfIdle()
@@ -133,6 +152,7 @@ internal class EtaAssistantVoiceService : Service(), VoiceSessionOwner.ServiceHo
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE, options.toBundle())
         }
 
+        /** 旧的 eta_voice 来源任务在 GUI 操作前收起系统助理窗口；新任务的浮层由 Runtime 直接收起。 */
         fun dismissForForegroundOperation(context: Context): Boolean {
             EtaVoiceInteractionSession.requestHideForForegroundOperation(context)
             return true

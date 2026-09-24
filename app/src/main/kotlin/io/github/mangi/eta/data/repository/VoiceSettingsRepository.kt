@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import io.github.mangi.eta.data.model.DoubaoSpeechCredentials
 import io.github.mangi.eta.data.model.VoiceWakeSettings
+import io.github.mangi.eta.data.model.WakeListenScope
 import io.github.mangi.eta.data.model.WakePhraseRules
 import io.github.mangi.eta.data.model.WakeSensitivity
 import java.io.IOException
@@ -25,6 +26,7 @@ internal object VoiceSettingsRepository {
     private val WAKE_ENABLED = booleanPreferencesKey("wake_enabled")
     private val WAKE_PHRASE = stringPreferencesKey("wake_phrase")
     private val WAKE_SENSITIVITY = stringPreferencesKey("wake_sensitivity")
+    private val WAKE_LISTEN_SCOPE = stringPreferencesKey("wake_listen_scope")
 
     private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = STORE_NAME)
 
@@ -83,6 +85,11 @@ internal object VoiceSettingsRepository {
         dataStore.edit { it[WAKE_SENSITIVITY] = sensitivity.name }
     }
 
+    suspend fun setWakeListenScope(scope: WakeListenScope) {
+        ensureInitialized()
+        dataStore.edit { it[WAKE_LISTEN_SCOPE] = scope.name }
+    }
+
     fun loadDoubaoCredentials(): DoubaoSpeechCredentials =
         requireSecretStore().load()
 
@@ -102,6 +109,9 @@ internal object VoiceSettingsRepository {
             sensitivity = this[WAKE_SENSITIVITY]?.let { raw ->
                 runCatching { WakeSensitivity.valueOf(raw) }.getOrNull()
             } ?: WakeSensitivity.Medium,
+            listenScope = this[WAKE_LISTEN_SCOPE]?.let { raw ->
+                runCatching { WakeListenScope.valueOf(raw) }.getOrNull()
+            } ?: WakeListenScope.AppOpen,
         )
     }
 

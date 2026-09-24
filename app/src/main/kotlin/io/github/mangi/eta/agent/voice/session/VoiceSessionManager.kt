@@ -15,6 +15,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,12 +44,18 @@ internal object VoiceSessionManager : VoiceSessionOwner()
 
 internal open class VoiceSessionOwner(
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+    /** 结束提示的过期调度；测试替换它来控制时间。 */
+    private val expireNotice: (() -> Unit) -> Unit = { expire -> scope.launch { delay(NOTICE_MILLIS); expire() } },
     private val createController: (Context, VoiceConversationController.Host) -> VoiceConversationSession =
         { context, host -> VoiceConversationController(context, host) },
 ) {
     interface ServiceHost {
         fun onVoiceState(state: VoiceSessionUiState)
         fun onVoiceClosed()
+    }
+
+    private companion object {
+        const val NOTICE_MILLIS = 8_000L
     }
 
     private val mutableState = MutableStateFlow(VoiceSessionUiState())
@@ -63,7 +70,12 @@ internal open class VoiceSessionOwner(
     private var drainJob: Job? = null
     private var epoch = 0L
     private var accepting = false
-    private var retainedTranscript = false
+    /** 本次会话的关闭已经处理过（未发文字已退回草稿、是否提示已决定），迟到的 inactive 事件不再重复处理。 */
+    private var closeHandled = false
+    /** 用户自己切回文字（点键盘、点输入框、手动发送）时，界面已经给出结果，不再额外提示结束原因。 */
+    private var quietEnd = false
+    private var showCloseNotice = false
+    private var noticeToken = 0L
     val active: Boolean get() = state.value.active
     // Closing audio still owns the microphone, even after the visible mode has changed.
     val busy: Boolean get() = controller != null
@@ -89,12 +101,15 @@ internal open class VoiceSessionOwner(
         val conversations = app ?: return false
         if (busy) return active
         val id = runCatching { conversations.voiceConversationId() }.getOrElse {
-            publish("ended", false, it.message ?: "暂时无法开始语音", "")
+            val reason = it.message ?: "暂时无法开始语音"
+            publish("ended", false, reason, "", notice = reason)
             return false
         }
         conversationId = id
         accepting = true
-        retainedTranscript = false
+        closeHandled = false
+        quietEnd = false
+        showCloseNotice = false
         val generation = ++epoch
         controller = createController(context.applicationContext, controllerHost(generation))
         controller?.start()
@@ -123,7 +138,11 @@ internal open class VoiceSessionOwner(
         } else if (current.active) current.end(message)
     }
 
-    fun switchToText() { if (active) end("已切到文字输入") }
+    fun switchToText() {
+        if (!active) return
+        quietEnd = true
+        end("已切到文字输入")
+    }
     fun stopSpeaking() { if (active) controller?.stopSpeaking() }
     fun cancelTask() {
         val conversations = app ?: return
@@ -147,12 +166,28 @@ internal open class VoiceSessionOwner(
         if (queued != null) conversationId?.let { app?.retainVoiceDraft(it, queued.text) }
     }
 
-    private fun publish(event: String, active: Boolean, status: String, transcript: String) {
-        mutableState.value = state.value.copy(
-            channel = VoiceSessionUiState.channelFor(event, active, state.value.channel),
+    /** [notice] 非空表示这次发布要（重新）展示结束原因；为空时沿用当前提示，直到过期或下一次开始。 */
+    private fun publish(event: String, active: Boolean, status: String, transcript: String, notice: String? = null) {
+        val previous = state.value
+        mutableState.value = previous.copy(
+            channel = VoiceSessionUiState.channelFor(event, active, previous.channel),
             statusText = status, transcript = transcript,
             conversationId = if (active) conversationId else null,
+            notice = when {
+                active -> null
+                notice != null -> notice
+                else -> previous.notice
+            },
         )
+        if (active) noticeToken++
+        else if (notice != null) {
+            val token = ++noticeToken
+            expireNotice {
+                if (noticeToken == token && state.value.notice != null) {
+                    mutableState.value = state.value.copy(notice = null)
+                }
+            }
+        }
         host?.onVoiceState(state.value)
     }
 
@@ -213,18 +248,22 @@ internal open class VoiceSessionOwner(
             if (generation != epoch) return
             if (!active) {
                 freezeInput()
-                if (!retainedTranscript) {
-                    retainedTranscript = true
+                if (!closeHandled) {
+                    closeHandled = true
+                    showCloseNotice = !quietEnd
                     if (transcript.isNotBlank()) conversationId?.let { app?.retainVoiceDraft(it, transcript) }
                 }
             }
-            publish(event, active && accepting, status, transcript)
+            // 关闭过程中控制器可能连续发布几次，最终状态文案才是结束原因，所以每次都用最新文案。
+            val notice = if (!active && showCloseNotice) status.ifBlank { null } else null
+            publish(event, active && accepting, status, transcript, notice)
         }
         override fun submit(turn: VoiceTurnCoordinator.Turn, sessionId: String) = dispatch(turn, sessionId, generation)
         override fun cancelTask() { if (valid(generation)) this@VoiceSessionOwner.cancelTask() }
         override fun onClosed() {
             if (generation != epoch) return
             freezeInput()
+            showCloseNotice = false
             controller = null
             conversationId = null
             host?.onVoiceClosed()

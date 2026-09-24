@@ -1032,23 +1032,6 @@ internal class AgentAppState(
     override fun pendingVoiceImages(conversationId: String): List<PendingImageUi> =
         conversationsById[conversationId]?.pendingImages.orEmpty()
 
-    /** 助手入口抓到的屏幕截图作为普通附件挂到共享会话，用户可以在输入框上方直接移除。 */
-    fun attachScreenContext(
-        conversationId: String,
-        image: AgentModelClient.ModelImage,
-        previewDataUrl: String,
-    ) {
-        val state = conversationsById[conversationId] ?: return
-        if (state.pendingImages.any { it.uri == image.reference }) return
-        val pending = PendingImageUi(
-            id = "screen-${UUID.randomUUID()}",
-            uri = image.reference,
-            dataUrl = previewDataUrl,
-            mimeType = image.mimeType,
-        )
-        updateConversation(conversationId, state.copy(pendingImages = state.pendingImages + pending), updateTimestamp = false)
-    }
-
     override fun sendVoiceMessage(
         conversationId: String,
         runId: String,

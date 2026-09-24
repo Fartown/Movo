@@ -1,16 +1,22 @@
 package io.github.mangi.eta.agent.voice
 
+import android.app.Activity
+import android.app.Application
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Handler
 import android.os.IBinder
+import android.os.Bundle
 import android.os.Looper
+import android.os.PowerManager
 import io.github.mangi.eta.R
 import io.github.mangi.eta.agent.voice.session.VoiceEntry
 import io.github.mangi.eta.agent.voice.session.VoiceSurfaceTracker
@@ -18,6 +24,7 @@ import io.github.mangi.eta.agent.voice.wake.WakeEngineFactory
 import io.github.mangi.eta.agent.voice.wake.WakeWordEngine
 import io.github.mangi.eta.core.AndroidAgentLogger
 import io.github.mangi.eta.core.safeLogType
+import io.github.mangi.eta.data.model.WakeListenScope
 import io.github.mangi.eta.data.model.WakePhraseRules
 import io.github.mangi.eta.data.model.WakeSensitivity
 import io.github.mangi.eta.data.repository.VoiceSettingsRepository
@@ -34,6 +41,9 @@ import kotlinx.coroutines.launch
 /**
  * Foreground microphone service for local wake-word listening.
  * Does not stream ambient audio to Doubao; ASR starts only after wake / manual mic.
+ * Releases the microphone while the screen is off: an open recording keeps the device
+ * awake all night. Listening resumes when the screen turns on. With the default
+ * [WakeListenScope.AppOpen] it also releases the microphone while no Eta screen is visible.
  */
 internal class EtaWakeWordService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -44,6 +54,34 @@ internal class EtaWakeWordService : Service() {
     private var sensitivity: WakeSensitivity = WakeSensitivity.Medium
     private var foregroundActive = false
     private var wakeError: String? = null
+    private var screenReceiverRegistered = false
+    private var lifecycleRegistered = false
+    private val visibilityCheck = Runnable { onAppVisibilityChanged(VoiceSurfaceTracker.appVisible) }
+    // VoiceSurfaceTracker registers first, so its count is current when these run. Hiding is
+    // debounced so moving between two Eta screens does not reopen the microphone.
+    private val appLifecycle = object : Application.ActivityLifecycleCallbacks {
+        override fun onActivityResumed(activity: Activity) {
+            mainHandler.removeCallbacks(visibilityCheck)
+            onAppVisibilityChanged(true)
+        }
+        override fun onActivityPaused(activity: Activity) {
+            mainHandler.removeCallbacks(visibilityCheck)
+            mainHandler.postDelayed(visibilityCheck, HIDE_DEBOUNCE_MS)
+        }
+        override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+        override fun onActivityStarted(activity: Activity) = Unit
+        override fun onActivityStopped(activity: Activity) = Unit
+        override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+        override fun onActivityDestroyed(activity: Activity) = Unit
+    }
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                Intent.ACTION_SCREEN_OFF -> onScreenChanged(on = false)
+                Intent.ACTION_SCREEN_ON -> onScreenChanged(on = true)
+            }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -59,10 +97,24 @@ internal class EtaWakeWordService : Service() {
         // New app-initiated starts are gated in start(). A system sticky restart must
         // still be allowed to restore an already established foreground listener.
         if (!ensureForeground()) return
+        coordinator.onScreenChanged(getSystemService(PowerManager::class.java).isInteractive)
+        registerReceiver(
+            screenReceiver,
+            IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_SCREEN_ON)
+            },
+            RECEIVER_NOT_EXPORTED,
+        )
+        screenReceiverRegistered = true
+        coordinator.onAppVisibilityChanged(VoiceSurfaceTracker.appVisible)
+        application.registerActivityLifecycleCallbacks(appLifecycle)
+        lifecycleRegistered = true
         scope.launch {
             VoiceSettingsRepository.wakeSettingsFlow().collectLatest { settings ->
                 currentPhrase = settings.effectivePhrase()
                 sensitivity = settings.sensitivity
+                coordinator.setListenInBackground(settings.listenScope == WakeListenScope.ScreenOn)
                 coordinator.setPhrase(currentPhrase)
                 refreshNotification()
                 if (!settings.wakeEnabled) {
@@ -96,7 +148,7 @@ internal class EtaWakeWordService : Service() {
             }
             ACTION_RESUME_WAKE -> {
                 coordinator.onDictationFinished(resumeWake = true)
-                wakeEngine?.resume()
+                if (coordinator.mayCaptureWake()) wakeEngine?.resume()
                 refreshNotification()
             }
             else -> {
@@ -110,6 +162,14 @@ internal class EtaWakeWordService : Service() {
 
     override fun onDestroy() {
         if (instance === this) instance = null
+        if (screenReceiverRegistered) {
+            unregisterReceiver(screenReceiver)
+            screenReceiverRegistered = false
+        }
+        if (lifecycleRegistered) {
+            application.unregisterActivityLifecycleCallbacks(appLifecycle)
+            lifecycleRegistered = false
+        }
         clearForegroundNotification()
         stopWakeListening()
         mainHandler.removeCallbacksAndMessages(null)
@@ -166,10 +226,24 @@ internal class EtaWakeWordService : Service() {
                     }
                 },
             )
+            if (!coordinator.mayCaptureWake()) engine.pause()
         } else {
             wakeEngine?.updateKeywords(currentPhrase, sensitivity)
-            if (mayListen) wakeEngine?.resume()
+            if (mayListen && coordinator.mayCaptureWake()) wakeEngine?.resume() else wakeEngine?.pause()
         }
+        refreshNotification()
+    }
+
+    private fun onScreenChanged(on: Boolean) {
+        if (coordinator.onScreenChanged(on)) applyCapture()
+    }
+
+    private fun onAppVisibilityChanged(visible: Boolean) {
+        if (coordinator.onAppVisibilityChanged(visible)) applyCapture()
+    }
+
+    private fun applyCapture() {
+        if (coordinator.mayCaptureWake()) wakeEngine?.resume() else wakeEngine?.pause()
         refreshNotification()
     }
 
@@ -181,7 +255,7 @@ internal class EtaWakeWordService : Service() {
 
     private fun handleWakeDetected(phrase: String) {
         if (!coordinator.onWakeDetected()) {
-            wakeEngine?.resume()
+            if (coordinator.isScreenOn()) wakeEngine?.resume()
             return
         }
         wakeEngine?.pause()
@@ -206,6 +280,8 @@ internal class EtaWakeWordService : Service() {
         )
         val text = wakeError ?: when {
             coordinator.shouldPauseWakeForDictation() -> "语音输入中，唤醒监听已暂停"
+            !coordinator.isScreenOn() -> "息屏时暂停监听，亮屏后自动恢复"
+            coordinator.isWaitingForApp() -> getString(R.string.voice_settings_state_app_hidden)
             wakeEngine?.isRunning() == true -> getString(R.string.wake_notification_waiting, currentPhrase)
             else -> "正在启动本地唤醒"
         }
@@ -236,6 +312,8 @@ internal class EtaWakeWordService : Service() {
         mutableListeningState.value = when {
             wakeError != null -> WakeListeningState.Failed(wakeError!!)
             coordinator.shouldPauseWakeForDictation() -> WakeListeningState.Dictating
+            !coordinator.isScreenOn() -> WakeListeningState.ScreenOff
+            coordinator.isWaitingForApp() -> WakeListeningState.AppHidden
             wakeEngine?.isRunning() == true -> WakeListeningState.Listening
             else -> WakeListeningState.Starting
         }
@@ -262,6 +340,7 @@ internal class EtaWakeWordService : Service() {
         val listeningState = mutableListeningState.asStateFlow()
         private const val CHANNEL = "eta_wake_word"
         private const val NOTIFICATION_ID = 1108
+        private const val HIDE_DEBOUNCE_MS = 1_500L
         const val ACTION_STOP = "io.github.mangi.eta.action.STOP_WAKE_WORD"
         const val ACTION_PAUSE_WAKE = "io.github.mangi.eta.action.PAUSE_WAKE_WORD"
         const val ACTION_RESUME_WAKE = "io.github.mangi.eta.action.RESUME_WAKE_WORD"
@@ -331,5 +410,7 @@ internal sealed interface WakeListeningState {
     data object Starting : WakeListeningState
     data object Listening : WakeListeningState
     data object Dictating : WakeListeningState
+    data object ScreenOff : WakeListeningState
+    data object AppHidden : WakeListeningState
     data class Failed(val message: String) : WakeListeningState
 }
