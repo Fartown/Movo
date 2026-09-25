@@ -52,7 +52,9 @@ internal class ModelRequestTrace(
         record("attempt.started")
     }
 
-    fun snapshot(): Map<String, Any?> {
+    fun snapshot(): Map<String, Any?> = state() + MemoryDiagnostics.environmentSnapshot()
+
+    private fun state(): Map<String, Any?> {
         val now = MemoryDiagnostics.elapsedClock()
         return metadata + mapOf(
             "stage" to stage, "duration_ms" to now - started,
@@ -60,12 +62,14 @@ internal class ModelRequestTrace(
             "received_bytes" to received.get(), "last_byte_ago_ms" to lastByte?.let { now - it },
             "sse_events" to frames.get(), "last_sse_event" to lastEvent,
             "last_sse_ago_ms" to lastFrame?.let { now - it },
-        ) + MemoryDiagnostics.environmentSnapshot()
+        )
     }
 
     fun record(event: String, level: DiagnosticLevel = DiagnosticLevel.INFO, fields: Map<String, Any?> = emptyMap()) {
         // Keep event-specific diagnosis before the bounded field budget is consumed by environment metadata.
-        MemoryDiagnostics.record("model", event, level, context, fields + snapshot())
+        // 设备状态只在开始、结束和出错时附带；中间的网络阶段不重复记录，变化由系统事件单独体现。
+        val withEnvironment = event.startsWith("attempt.") || level != DiagnosticLevel.INFO
+        MemoryDiagnostics.record("model", event, level, context, fields + if (withEnvironment) snapshot() else state())
     }
 
     fun success() {
@@ -137,6 +141,7 @@ internal class ModelRequestTrace(
         if (count <= 0) return
         val first = received.getAndAdd(count) == 0L
         lastByte = MemoryDiagnostics.elapsedClock()
+        MemoryDiagnostics.markProgress(context.run)
         stage = "reading_body"
         if (first) record("http.first_byte")
     }

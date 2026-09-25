@@ -230,7 +230,7 @@ internal fun SettingsScreen(
                     )
                     ArrowPreference(
                         title = "运行日志",
-                        summary = "查看模型重试、网络与后台状态 · 仅保存在内存",
+                        summary = "排查任务失败、卡住和变慢 · 保存最近 20 个任务",
                         startAction = { PreferenceIcon(icon = Icons.Rounded.Description) },
                         onClick = { onNavigate(AppRoute.Diagnostics) },
                     )

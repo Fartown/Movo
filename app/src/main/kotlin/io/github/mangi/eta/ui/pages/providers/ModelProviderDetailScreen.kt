@@ -43,7 +43,9 @@ import io.github.mangi.eta.data.model.AnthropicProviderSetting
 import io.github.mangi.eta.data.model.CustomProviderSetting
 import io.github.mangi.eta.data.model.OpenAiEndpointMode
 import io.github.mangi.eta.data.model.ProviderSetting
+import io.github.mangi.eta.data.model.ProviderSourceTypes
 import io.github.mangi.eta.data.model.withId
+import io.github.mangi.eta.data.provider.ProviderSourceRegistry
 import io.github.mangi.eta.data.repository.ProviderRepository
 import io.github.mangi.eta.data.repository.RemoteModelFetcher
 import io.github.mangi.eta.data.repository.RuntimeConfigRepository
@@ -209,6 +211,7 @@ private fun ProviderConfigTab(
     var showResetDialog by remember { mutableStateOf(false) }
     var isWorking by remember { mutableStateOf(false) }
     var creationCommitted by remember { mutableStateOf(false) }
+    val isChatGpt = ProviderSourceRegistry.resolve(provider) == ProviderSourceTypes.CHATGPT
 
     LazyColumn(
         modifier = Modifier
@@ -242,23 +245,25 @@ private fun ProviderConfigTab(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    TextField(
-                        value = draft.apiKey,
-                        onValueChange = { onDraftChange(draft.copy(apiKey = it)) },
-                        label = "API Key",
-                        singleLine = true,
-                        visualTransformation = if (apiKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
-                                Icon(
-                                    imageVector = if (apiKeyVisible) Icons.Rounded.Visibility else Icons.Rounded.VisibilityOff,
-                                    contentDescription = if (apiKeyVisible) context.getString(R.string.page_hide_bb0e7e) else context.getString(R.string.page_show_71b677),
-                                )
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    if (!isChatGpt) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        TextField(
+                            value = draft.apiKey,
+                            onValueChange = { onDraftChange(draft.copy(apiKey = it)) },
+                            label = "API Key",
+                            singleLine = true,
+                            visualTransformation = if (apiKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            trailingIcon = {
+                                IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
+                                    Icon(
+                                        imageVector = if (apiKeyVisible) Icons.Rounded.Visibility else Icons.Rounded.VisibilityOff,
+                                        contentDescription = if (apiKeyVisible) context.getString(R.string.page_hide_bb0e7e) else context.getString(R.string.page_show_71b677),
+                                    )
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                     if (provider is AnthropicProviderSetting) {
                         Spacer(modifier = Modifier.height(12.dp))
                         TextField(
@@ -270,32 +275,38 @@ private fun ProviderConfigTab(
                         )
                     }
                 }
-                if (provider !is AnthropicProviderSetting) {
+                if (isChatGpt) {
                     HorizontalDivider()
-                    WindowSpinnerPreference(
-                        items = listOf(
-                            DropdownItem(text = "Chat Completions API"),
-                            DropdownItem(text = "Responses API"),
-                        ),
-                        selectedIndex = if (draft.endpointMode == OpenAiEndpointMode.RESPONSES) 1 else 0,
-                        title = stringResource(R.string.ui_endpoint_mode_3c8546),
-                        summary = if (draft.endpointMode == OpenAiEndpointMode.RESPONSES) {
-                            context.getString(R.string.page_using_typed_items_with_semantic_streaming_events_f9c906)
-                        } else {
-                            context.getString(R.string.page_use_standard_chat_completions_ee4b1a)
-                        },
-                        onSelectedIndexChange = { selectedIndex ->
-                            onDraftChange(
-                                draft.copy(
-                                    endpointMode = if (selectedIndex == 1) {
-                                        OpenAiEndpointMode.RESPONSES
-                                    } else {
-                                        OpenAiEndpointMode.CHAT_COMPLETIONS
-                                    },
-                                ),
-                            )
-                        },
-                    )
+                    ChatGptAccountSection(scope = scope, onStatus = { testStatus = it })
+                }
+                if (provider !is AnthropicProviderSetting) {
+                    if (!isChatGpt) {
+                        HorizontalDivider()
+                        WindowSpinnerPreference(
+                            items = listOf(
+                                DropdownItem(text = "Chat Completions API"),
+                                DropdownItem(text = "Responses API"),
+                            ),
+                            selectedIndex = if (draft.endpointMode == OpenAiEndpointMode.RESPONSES) 1 else 0,
+                            title = stringResource(R.string.ui_endpoint_mode_3c8546),
+                            summary = if (draft.endpointMode == OpenAiEndpointMode.RESPONSES) {
+                                context.getString(R.string.page_using_typed_items_with_semantic_streaming_events_f9c906)
+                            } else {
+                                context.getString(R.string.page_use_standard_chat_completions_ee4b1a)
+                            },
+                            onSelectedIndexChange = { selectedIndex ->
+                                onDraftChange(
+                                    draft.copy(
+                                        endpointMode = if (selectedIndex == 1) {
+                                            OpenAiEndpointMode.RESPONSES
+                                        } else {
+                                            OpenAiEndpointMode.CHAT_COMPLETIONS
+                                        },
+                                    ),
+                                )
+                            },
+                        )
+                    }
                     if (draft.endpointMode == OpenAiEndpointMode.RESPONSES) {
                         HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
                         SwitchPreference(

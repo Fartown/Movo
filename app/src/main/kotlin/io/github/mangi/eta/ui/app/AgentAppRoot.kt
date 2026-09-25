@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -58,6 +59,7 @@ import io.github.mangi.eta.ui.model.ConversationSummaryUi
 import io.github.mangi.eta.ui.model.PermissionHealthAction
 import io.github.mangi.eta.ui.navigation.AgentNavigator
 import io.github.mangi.eta.ui.navigation.AppRoute
+import io.github.mangi.eta.ui.screens.diagnostics.LocalRunLogOpener
 import io.github.mangi.eta.ui.pages.providers.ModelProviderDetailScreen
 import io.github.mangi.eta.ui.pages.providers.ModelProviderListScreen
 import io.github.mangi.eta.ui.screens.backup.DataBackupScreen
@@ -243,6 +245,10 @@ internal fun AgentAppRoot(
         conversationPaneOpen = false
     }
 
+    val openRunLog: (String?) -> Unit = { runId ->
+        pushRoute(runId?.let(AppRoute::DiagnosticsRun) ?: AppRoute.Diagnostics)
+    }
+
     @Composable
     fun RoutedShell(
         route: AppRoute,
@@ -308,7 +314,10 @@ internal fun AgentAppRoot(
                     .fillMaxSize()
                     .padding(padding)
             ) {
-                content()
+                // 对话里失败或卡住的任务可以直达运行日志。
+                CompositionLocalProvider(LocalRunLogOpener provides openRunLog) {
+                    content()
+                }
             }
         }
     }
@@ -570,7 +579,25 @@ internal fun AgentAppRoot(
                 AppearanceSettingsScreen(onBack = ::popRoute)
             }
             entry<AppRoute.Diagnostics>(swipeDismiss = swipeDismiss) {
-                io.github.mangi.eta.ui.screens.diagnostics.DiagnosticsScreen(onBack = ::popRoute)
+                io.github.mangi.eta.ui.screens.diagnostics.DiagnosticsScreen(
+                    onBack = ::popRoute,
+                    onOpenRun = { runId -> pushRoute(AppRoute.DiagnosticsRun(runId)) },
+                    onOpenSystem = { pushRoute(AppRoute.DiagnosticsSystem) },
+                )
+            }
+            entry<AppRoute.DiagnosticsRun>(swipeDismiss = swipeDismiss) { route ->
+                io.github.mangi.eta.ui.screens.diagnostics.DiagnosticsRunScreen(
+                    runId = route.runId,
+                    onBack = ::popRoute,
+                    onOpenModelSettings = { pushRoute(AppRoute.ModelProviders) },
+                    onOpenConversation = { conversationId ->
+                        selectConversation(conversationId)
+                        navigator.popToHome()
+                    },
+                )
+            }
+            entry<AppRoute.DiagnosticsSystem>(swipeDismiss = swipeDismiss) {
+                io.github.mangi.eta.ui.screens.diagnostics.DiagnosticsSystemScreen(onBack = ::popRoute)
             }
             entry<AppRoute.DataBackup>(swipeDismiss = swipeDismiss) {
                 DataBackupScreen(

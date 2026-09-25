@@ -9,6 +9,8 @@ import io.github.mangi.eta.data.model.ProviderSetting
 import io.github.mangi.eta.data.model.ProviderSourceTypes
 
 internal object OfficialModelCatalog {
+    private const val CHATGPT_CONTEXT_WINDOW = 272_000
+
     private val modelsByCatalogId: Map<String, List<Model>> = mapOf(
         ProviderSourceTypes.OPENAI to listOf(
             officialModel(
@@ -53,6 +55,49 @@ internal object OfficialModelCatalog {
                 toolCall = true,
                 reasoning = true,
             )
+        ),
+        // ChatGPT 订阅走 Codex 后端，窗口按 Codex 目录的 272K 计算（参考 pi openai-codex 模型表）。
+        ProviderSourceTypes.CHATGPT to listOf(
+            officialModel(
+                id = "builtin-chatgpt-gpt-5-6-sol",
+                modelId = "gpt-5.6-sol",
+                displayName = "GPT-5.6 Sol",
+                ownedBy = "openai",
+                inputModalities = listOf(Model.TEXT_MODALITY, Model.IMAGE_MODALITY),
+                toolCall = true,
+                reasoning = true,
+                contextWindow = CHATGPT_CONTEXT_WINDOW,
+            ),
+            officialModel(
+                id = "builtin-chatgpt-gpt-5-6-terra",
+                modelId = "gpt-5.6-terra",
+                displayName = "GPT-5.6 Terra",
+                ownedBy = "openai",
+                inputModalities = listOf(Model.TEXT_MODALITY, Model.IMAGE_MODALITY),
+                toolCall = true,
+                reasoning = true,
+                contextWindow = CHATGPT_CONTEXT_WINDOW,
+            ),
+            officialModel(
+                id = "builtin-chatgpt-gpt-5-6-luna",
+                modelId = "gpt-5.6-luna",
+                displayName = "GPT-5.6 Luna",
+                ownedBy = "openai",
+                inputModalities = listOf(Model.TEXT_MODALITY, Model.IMAGE_MODALITY),
+                toolCall = true,
+                reasoning = true,
+                contextWindow = CHATGPT_CONTEXT_WINDOW,
+            ),
+            officialModel(
+                id = "builtin-chatgpt-gpt-5-5",
+                modelId = "gpt-5.5",
+                displayName = "GPT-5.5",
+                ownedBy = "openai",
+                inputModalities = listOf(Model.TEXT_MODALITY, Model.IMAGE_MODALITY),
+                toolCall = true,
+                reasoning = true,
+                contextWindow = CHATGPT_CONTEXT_WINDOW,
+            ),
         ),
         ProviderSourceTypes.ANTHROPIC to listOf(
             officialModel(

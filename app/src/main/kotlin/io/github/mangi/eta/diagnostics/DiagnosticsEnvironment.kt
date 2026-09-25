@@ -14,7 +14,7 @@ import android.os.PowerManager
 import android.os.SystemClock
 import io.github.mangi.eta.BuildConfig
 
-/** Lightweight process-owned observers; no polling, persistent storage, or battery policy changes. */
+/** Lightweight process-owned observers and the local log store; no polling or battery policy changes. */
 internal object DiagnosticsEnvironment {
     @Volatile private var foreground = false
     @Volatile var executionService = false
@@ -24,6 +24,15 @@ internal object DiagnosticsEnvironment {
         if (initialized) return
         initialized = true
         MemoryDiagnostics.elapsedClock = SystemClock::elapsedRealtime
+        // 先恢复上次保存的记录并接上编号，再记录本次进程的第一条事件。
+        val store = DiagnosticStore(java.io.File(app.filesDir, "diagnostics/events.log"))
+        val saved = store.load(System.currentTimeMillis())
+        MemoryDiagnostics.buffer.restore(saved)
+        MemoryDiagnostics.continueNumbering(
+            DiagnosticRetention.lastNumber(saved, 'R') { it.context.run },
+            DiagnosticRetention.lastNumber(saved, 'Q') { it.context.request },
+        )
+        MemoryDiagnostics.sink = { entry -> store.append(entry) { MemoryDiagnostics.buffer.snapshot().entries } }
         val connectivity = app.getSystemService(ConnectivityManager::class.java)
         val power = app.getSystemService(PowerManager::class.java)
         MemoryDiagnostics.environment = {

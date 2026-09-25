@@ -182,6 +182,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.activity.compose)
+    implementation(libs.androidx.browser)
     implementation(libs.markdown.renderer)
     implementation(libs.markdown.renderer.m3)
     // markdown-renderer-m3 将 material3 作为 compileOnly，需显式引入以满足运行时依赖

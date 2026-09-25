@@ -64,9 +64,15 @@ class ProviderComponentsTest {
     @Test
     fun everyBuiltInProviderHasABrandLogo() {
         val logos = BuiltinProviders.PROVIDERS.map(::providerBrandLogoRes)
+        // ChatGPT 订阅与 OpenAI API 属于同一品牌，共用 OpenAI 标志；其余内置服务商各自独立。
+        val distinctBrands = BuiltinProviders.PROVIDERS.filterNot { it.id == BuiltinProviders.CHATGPT_ID }
 
         assertEquals(BuiltinProviders.PROVIDERS.size, logos.filterNotNull().size)
-        assertEquals(BuiltinProviders.PROVIDERS.size, logos.filterNotNull().toSet().size)
+        assertEquals(distinctBrands.size, logos.filterNotNull().toSet().size)
+        assertEquals(
+            providerBrandLogoRes(BuiltinProviders.providerById(BuiltinProviders.OPENAI_ID)!!),
+            providerBrandLogoRes(BuiltinProviders.providerById(BuiltinProviders.CHATGPT_ID)!!),
+        )
     }
 
     @Test

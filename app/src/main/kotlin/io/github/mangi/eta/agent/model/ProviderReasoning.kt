@@ -45,7 +45,7 @@ internal object ProviderReasoning {
     ) {
         if (config.reasoningCapabilities == null) return
         val effort = validatedEffort(config)
-        if (sourceType(config) == ProviderSourceTypes.OPENAI && effort == ReasoningEffort.MAX) {
+        if (sourceType(config) in setOf(ProviderSourceTypes.OPENAI, ProviderSourceTypes.CHATGPT) && effort == ReasoningEffort.MAX) {
             unsupportedEffort("OpenAI", effort)
         }
         request.put(
