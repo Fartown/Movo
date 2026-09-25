@@ -3,13 +3,17 @@ package io.github.mangi.eta.data.repository
 import io.github.mangi.eta.agent.model.AgentHttpClient
 import io.github.mangi.eta.agent.model.ProviderRequestHeaders
 import io.github.mangi.eta.agent.model.ProviderUrls
+import io.github.mangi.eta.data.auth.ChatGptAuth
+import io.github.mangi.eta.data.auth.ChatGptAuthException
 import io.github.mangi.eta.data.model.AnthropicProviderSetting
 import io.github.mangi.eta.data.model.Model
 import io.github.mangi.eta.data.model.ModelReasoningCapabilities
 import io.github.mangi.eta.data.model.ModelSource
 import io.github.mangi.eta.data.model.ProviderSetting
+import io.github.mangi.eta.data.model.ProviderSourceTypes
 import io.github.mangi.eta.data.model.ReasoningEffort
 import io.github.mangi.eta.data.provider.OfficialModelCatalog
+import io.github.mangi.eta.data.provider.ProviderSourceRegistry
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -32,8 +36,9 @@ internal object RemoteModelFetcher {
     suspend fun fetch(provider: ProviderSetting): Result<List<Model>> =
         withContext(Dispatchers.IO) {
             runCatching {
-                when (provider) {
-                    is AnthropicProviderSetting -> fetchAnthropic(provider)
+                when {
+                    provider is AnthropicProviderSetting -> fetchAnthropic(provider)
+                    ProviderSourceRegistry.resolve(provider) == ProviderSourceTypes.CHATGPT -> fetchChatGpt(provider)
                     else -> fetchOpenAiCompatible(provider)
                 }
             }
@@ -78,6 +83,18 @@ internal object RemoteModelFetcher {
             .get()
             .build()
         return OfficialModelCatalog.enrich(provider, executeJson(request, "拉取模型失败").let(::parseOpenAiModels))
+    }
+
+    /**
+     * ChatGPT 订阅没有公开的模型列表接口：先确认登录可用（必要时刷新令牌），再返回内置目录。
+     */
+    private fun fetchChatGpt(provider: ProviderSetting): List<Model> {
+        try {
+            ChatGptAuth.requireCredentials()
+        } catch (failure: ChatGptAuthException) {
+            error(failure.message.orEmpty())
+        }
+        return OfficialModelCatalog.modelsForProvider(provider)
     }
 
     private fun fetchAnthropic(provider: AnthropicProviderSetting): List<Model> {

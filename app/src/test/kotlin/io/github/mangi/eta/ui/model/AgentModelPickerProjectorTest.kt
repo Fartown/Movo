@@ -47,6 +47,24 @@ class AgentModelPickerProjectorTest {
     }
 
     @Test
+    fun project_showsKeylessChatGptProviderOnlyAfterLogin() {
+        val providers = listOf(
+            provider(
+                id = "chatgpt",
+                apiKey = "",
+                sourceType = ProviderSourceTypes.CHATGPT,
+                models = listOf(model(id = "gpt-5.5")),
+            ),
+        )
+
+        val loggedOut = AgentModelPickerProjector.project(providers, null, null, chatGptLoggedIn = false)
+        val loggedIn = AgentModelPickerProjector.project(providers, null, null, chatGptLoggedIn = true)
+
+        assertEquals(emptyList<String>(), loggedOut.providerGroups.map { it.providerId })
+        assertEquals(listOf("chatgpt"), loggedIn.providerGroups.map { it.providerId })
+    }
+
+    @Test
     fun project_hidesProvidersWithoutApiKeyButPreservesCurrentSelection() {
         val selected = model(id = "selected", displayName = "Selected")
         val result = AgentModelPickerProjector.project(

@@ -38,6 +38,7 @@ import io.github.mangi.eta.agent.roleplay.CharacterMacros
 import io.github.mangi.eta.agent.roleplay.CharacterCardCodec
 import io.github.mangi.eta.agent.roleplay.RoleplayMessageLink
 import io.github.mangi.eta.agent.roleplay.RoleplayMessageState
+import io.github.mangi.eta.data.auth.ChatGptAuth
 import io.github.mangi.eta.data.repository.CharacterRepository
 import io.github.mangi.eta.agent.runtime.AgentEvent
 import io.github.mangi.eta.agent.runtime.AgentConversationTarget
@@ -216,15 +217,17 @@ internal class AgentAppState(
                 RuntimeConfigRepository.selectedProviderIdFlow(),
                 RuntimeConfigRepository.selectedModelIdFlow(),
                 ProviderRepository.providersFlow(),
-            ) { providerId, modelId, providers ->
-                Triple(providerId, modelId, providers)
+                ChatGptAuth.accountState,
+            ) { providerId, modelId, providers, chatGpt ->
+                PickerInputs(providerId, modelId, providers, chatGpt.loggedIn)
             }
                 .distinctUntilChanged()
-                .collectLatest { (providerId, modelId, providers) ->
+                .collectLatest { (providerId, modelId, providers, chatGptLoggedIn) ->
                     val pickerState = AgentModelPickerProjector.project(
                         providers = providers,
                         selectedProviderId = providerId,
                         selectedModelId = modelId,
+                        chatGptLoggedIn = chatGptLoggedIn,
                     )
                     val capabilities = RuntimeConfigRepository.currentRuntimeConfig()
                         ?.reasoningCapabilities
@@ -2774,6 +2777,13 @@ internal class AgentAppState(
 
 internal data class MessageRevisionImpact(
     val laterTurnCount: Int,
+)
+
+private data class PickerInputs(
+    val providerId: String?,
+    val modelId: String?,
+    val providers: List<io.github.mangi.eta.data.model.ProviderSetting>,
+    val chatGptLoggedIn: Boolean,
 )
 
 private data class ContentMatchCacheEntry(

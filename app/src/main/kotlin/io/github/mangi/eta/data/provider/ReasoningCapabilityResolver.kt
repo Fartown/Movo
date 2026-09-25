@@ -45,7 +45,7 @@ internal object ReasoningCapabilityResolver {
     ): ModelReasoningCapabilities? {
         val model = modelId.trim().lowercase()
         return when (sourceType) {
-            ProviderSourceTypes.OPENAI -> when {
+            ProviderSourceTypes.OPENAI, ProviderSourceTypes.CHATGPT -> when {
                 model == "gpt-5.5" || model.startsWith("gpt-5.6-") ->
                     capabilities(
                         openAiEfforts,

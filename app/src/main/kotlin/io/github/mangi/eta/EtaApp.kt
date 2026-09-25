@@ -11,6 +11,8 @@ import io.github.mangi.eta.agent.voice.session.VoiceSurfaceTracker
 import io.github.mangi.eta.config.Prefs
 import io.github.mangi.eta.core.AndroidAgentLogger
 import io.github.mangi.eta.core.safeLogType
+import io.github.mangi.eta.data.auth.ChatGptAuth
+import io.github.mangi.eta.data.auth.ChatGptLoginManager
 import io.github.mangi.eta.data.datastore.SettingsDataStore
 import io.github.mangi.eta.data.repository.AgentMemoryRepository
 import io.github.mangi.eta.data.repository.AppearanceSettingsRepository
@@ -63,6 +65,8 @@ class EtaApp : Application(), XposedServiceHelper.OnServiceListener {
         PredictiveBackController.apply(applicationInfo, predictiveBackEnabled)
         AgentMemoryRepository.init(this)
         ProviderRepository.init(this)
+        ChatGptAuth.init(this)
+        ChatGptLoginManager.init(this)
         McpServerRepository.init(this)
         XposedServiceHelper.registerListener(this)
         applicationScope.launch {

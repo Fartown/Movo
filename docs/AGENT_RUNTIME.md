@@ -66,6 +66,16 @@ Runtime 独立于 Provider 自定义提示词注入 Eta 身份，以“当前配
 
 OpenAI-compatible Provider 可在配置页选择 `Chat Completions` 或 `Responses API`。新安装和重置后的内置 OpenAI 默认使用 Responses；数据库中已有 Provider 不会被默认值覆盖。自定义 Provider 和其他内置 Provider 默认仍使用 Chat Completions。
 
+内置 `ChatGPT` Provider 使用 ChatGPT Plus/Pro 订阅，不填 API Key。用户在 Provider 配置页登录 ChatGPT：Eta 采用 OAuth 授权码 + PKCE 流程，由本进程监听 `127.0.0.1:1455` 接收回跳；该端口不可用时，用户可以手动粘贴回跳地址。登录流程由进程级的 `ChatGptLoginManager` 持有，界面重组或离开页面都不会中断登录，最长等待 30 分钟。授权页通过 Custom Tabs 打开：优先使用默认浏览器，默认浏览器不支持 Custom Tabs 时改用 Chrome，两者都不可用时退回普通浏览器。不使用内嵌 WebView，因为 Google 登录会拒绝 WebView。浏览器在前台时，Eta 是后台缓存进程：Android 15 起会被断网（`blocked=APP_BACKGROUND`），HyperOS 等系统还会直接冻结进程。因此登录期间持有 `AgentExecutionService` 前台服务租约。租约不可用时，授权码先留在内存，等 Eta 回到前台再换取令牌。令牌经 Android Keystore 加密后单独保存（`ChatGptAuth`），不写入 Provider 配置、RemotePreferences 或跨进程请求。每次模型请求前，Runtime 从中读取令牌，距离过期不足 5 分钟时先刷新；收到 401 后会强制刷新并重发一次，仍失败则要求重新登录。
+
+请求走 Responses 协议，但有几处差异：
+- 端点为 `<baseUrl>/codex/responses`；
+- 需带 `chatgpt-account-id`、`originator`、`session-id` 请求头；
+- 请求体固定 `store:false`，并请求 `include: ["reasoning.encrypted_content"]`，保证工具回合之间回放的推理条目可用；
+- `prompt_cache_key` 取当前会话 ID。
+
+订阅用量耗尽时，返回不可重试的 `CHATGPT_USAGE_LIMIT` 错误。模型列表不走远端接口，而是先校验登录状态，再返回内置目录。协议细节移植自 pi（MIT，见[第三方声明](THIRD_PARTY_NOTICES.md)）。
+
 Chat Completions 在协议边界把当前上下文中的全部 `system` 内容按原顺序合并为首条唯一系统消息，兼容要求系统消息只能位于开头的模型 Chat Template。Responses 则把完整的 `system`/`developer` 上下文投影到 `instructions`，并将持久历史重建为带 `type: "message"` 的 input Items。
 
 Responses 请求固定使用 `stream:true`、`store:false`，不发送 `previous_response_id`。Runtime 在同一次 run 的工具回合之间精确回放 Provider 返回的完整 output Items；因此 encrypted reasoning、服务端工具状态等 opaque 数据只存在于内存，不进入 IPC transcript、Room、日志或运行归档。持久会话只保留规范化回答、可见推理内容和 Eta 工具记录，后续 run 由这些稳定数据重新构建上下文。
@@ -208,6 +218,8 @@ App 恢复时以 `checkpoint + outbox + active session` 统一对账，不再用
 - `AgentMemoryStoreTest`
 - `AgentMemoryContextBuilderTest`
 - `EtaDatabaseMigrationTest`
+- `ChatGptOAuthTest`
+- `ChatGptCodexRequestTest`
 
 最终验证仍运行项目统一命令：
 

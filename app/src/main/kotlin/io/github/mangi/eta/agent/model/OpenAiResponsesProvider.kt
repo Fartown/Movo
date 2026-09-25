@@ -2,6 +2,9 @@ package io.github.mangi.eta.agent.model
 
 import io.github.mangi.eta.agent.runtime.AgentRunController
 import io.github.mangi.eta.agent.runtime.AgentTokenUsage
+import io.github.mangi.eta.data.auth.ChatGptAuth
+import io.github.mangi.eta.data.auth.ChatGptAuthException
+import io.github.mangi.eta.data.auth.ChatGptCredentials
 import io.github.mangi.eta.data.model.OpenAiEndpointMode
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
@@ -34,21 +37,67 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
         require(config.openAiEndpointMode == OpenAiEndpointMode.RESPONSES) {
             "当前 Provider 未配置为 Responses API"
         }
-        val body = buildRequestJson(config, request.messages, request.effectiveTools)
+        if (!ChatGptCodexRequest.isChatGpt(config)) {
+            return completeOnce(request, runController, onEvent, credentials = null)
+        }
+        return try {
+            completeOnce(request, runController, onEvent, chatGptCredentials(forceRefresh = false))
+        } catch (_: ChatGptUnauthorized) {
+            // 访问令牌可能在服务端提前失效：强制刷新一次后重发；仍然 401 才要求重新登录。
+            try {
+                completeOnce(request, runController, onEvent, chatGptCredentials(forceRefresh = true))
+            } catch (_: ChatGptUnauthorized) {
+                throw AgentModelFailure(
+                    "CHATGPT_LOGIN_REQUIRED", false,
+                    "ChatGPT 登录已失效（HTTP 401），请在模型服务商“ChatGPT”中重新登录。",
+                )
+            }
+        }
+    }
+
+    /** 测试可替换；生产环境固定由 [ChatGptAuth] 提供并按需刷新。 */
+    internal var chatGptCredentialSource: (Boolean) -> ChatGptCredentials = ChatGptAuth::requireCredentials
+
+    private fun chatGptCredentials(forceRefresh: Boolean): ChatGptCredentials =
+        try {
+            chatGptCredentialSource(forceRefresh)
+        } catch (failure: ChatGptAuthException) {
+            throw AgentModelFailure("CHATGPT_LOGIN_REQUIRED", false, failure.message.orEmpty(), failure)
+        }
+
+    private class ChatGptUnauthorized : RuntimeException()
+
+    private fun completeOnce(
+        request: ProviderRequest,
+        runController: AgentRunController,
+        onEvent: (ProviderEvent) -> Unit,
+        credentials: ChatGptCredentials?,
+    ): ProviderResponse {
+        val config = request.effectiveConfig
+        val requestJson = buildRequestJson(config, request.messages, request.effectiveTools)
+        if (credentials != null) ChatGptCodexRequest.applyBody(requestJson, request.sessionId)
+        val body = requestJson
             .toString()
             .toRequestBody(JSON_MEDIA_TYPE)
         val headers = okhttp3.Headers.Builder()
             .add("Content-Type", "application/json; charset=utf-8")
             .add("Accept", "text/event-stream")
             .apply {
-                if (config.apiKey.isNotBlank()) add("Authorization", "Bearer ${config.apiKey}")
+                if (credentials == null && config.apiKey.isNotBlank()) add("Authorization", "Bearer ${config.apiKey}")
             }
             .also { ProviderRequestHeaders.mergeInto(it, config.baseUrl, config.customHeaders, request.sessionId) }
+            .also { builder ->
+                // 鉴权头最后写入，自定义请求头不能覆盖账号令牌。
+                credentials?.let { ChatGptCodexRequest.applyHeaders(builder, it, request.sessionId) }
+            }
             .build()
         val trace = ModelRequestTrace.forRequest(request, id)
         val httpRequest = Request.Builder()
             .tag(ModelRequestTrace::class.java, trace)
-            .url(ProviderUrls.openAiResponsesUrl(config.baseUrl))
+            .url(
+                if (credentials != null) ChatGptCodexRequest.responsesUrl(config.baseUrl)
+                else ProviderUrls.openAiResponsesUrl(config.baseUrl)
+            )
             .headers(headers)
             .post(body)
             .build()
@@ -62,7 +111,12 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
                 onEvent(ProviderEvent.ResponseHeaders(response.code))
                 runController.throwIfCancelled()
                 if (!response.isSuccessful) {
-                    throw AgentModelFailure.http(response.code, response.peekBody(16_384).string())
+                    val errorBody = response.peekBody(16_384).string()
+                    if (credentials != null) {
+                        if (response.code == 401) throw ChatGptUnauthorized()
+                        ChatGptCodexRequest.usageLimitFailure(response.code, errorBody)?.let { throw it }
+                    }
+                    throw AgentModelFailure.http(response.code, errorBody)
                 }
                 val assistant = readStreamingResponse(
                     stream = response.body.byteStream(),

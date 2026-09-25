@@ -21,6 +21,7 @@ internal object BuiltinProviders {
     const val STEPFUN_ID = "builtin-stepfun"
     const val SILICONFLOW_ID = "builtin-siliconflow"
     const val OPENROUTER_ID = "builtin-openrouter"
+    const val CHATGPT_ID = "builtin-chatgpt"
 
     val PROVIDERS: List<ProviderSetting> = listOf(
         OpenAiCompatibleProviderSetting(
@@ -113,7 +114,17 @@ internal object BuiltinProviders {
             isBuiltIn = true,
             sortOrder = 9,
             systemPrompt = DEFAULT_SYSTEM_PROMPT
-        )
+        ),
+        OpenAiCompatibleProviderSetting(
+            id = CHATGPT_ID,
+            name = "ChatGPT",
+            baseUrl = "https://chatgpt.com/backend-api",
+            sourceType = ProviderSourceTypes.CHATGPT,
+            isBuiltIn = true,
+            sortOrder = 10,
+            systemPrompt = DEFAULT_SYSTEM_PROMPT,
+            endpointMode = OpenAiEndpointMode.RESPONSES,
+        ),
     )
 
     fun providerById(id: String): ProviderSetting? =

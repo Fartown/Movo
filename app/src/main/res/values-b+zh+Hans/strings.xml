@@ -1266,4 +1266,18 @@
   <string name="voice_settings_overlay_hint">从桌面或其他应用唤醒后显示听写窗口</string>
   <string name="voice_settings_assistant_role">设为默认数字助理</string>
   <string name="voice_settings_assistant_hint">使用系统助理入口唤起 Eta</string>
+  <string name="chatgpt_account_title">ChatGPT 账号</string>
+  <string name="chatgpt_login">使用 ChatGPT 登录</string>
+  <string name="chatgpt_login_summary">使用 ChatGPT Plus 或 Pro 订阅，无需 API Key。</string>
+  <string name="chatgpt_logged_in_summary">已登录：%1$s</string>
+  <string name="chatgpt_logout">退出登录</string>
+  <string name="chatgpt_login_dialog_title">在浏览器中完成登录</string>
+  <string name="chatgpt_login_dialog_summary">登录完成后回到 Eta。如果浏览器无法打开最后的页面，请复制地址栏中的完整地址，粘贴到下方。</string>
+  <string name="chatgpt_login_port_busy">本地端口 1455 被占用，Eta 无法自动接收登录结果。登录后请复制地址栏中的完整地址，粘贴到下方。</string>
+  <string name="chatgpt_login_paste_hint">回跳地址或授权码</string>
+  <string name="chatgpt_login_submit">提交</string>
+  <string name="chatgpt_login_success">ChatGPT 登录成功</string>
+  <string name="chatgpt_logged_out">已退出 ChatGPT 登录</string>
+  <string name="chatgpt_open_browser_failed">无法打开浏览器</string>
+  <string name="chatgpt_login_exchanging">正在完成登录…</string>
 </resources>

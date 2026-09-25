@@ -40,6 +40,10 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <!-- ChatGPT 登录用 Custom Tabs 打开授权页，需要看到支持 Custom Tabs 的浏览器。 -->
+        <intent>
+            <action android:name="android.support.customtabs.action.CustomTabsService" />
+        </intent>
     </queries>
 
     <application

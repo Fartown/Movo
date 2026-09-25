@@ -1283,4 +1283,18 @@
   <string name="voice_settings_overlay_hint">Show dictation when waking from the home screen or other apps</string>
   <string name="voice_settings_assistant_role">Set as default digital assistant</string>
   <string name="voice_settings_assistant_hint">Open Eta from the system assistant entry</string>
+  <string name="chatgpt_account_title">ChatGPT account</string>
+  <string name="chatgpt_login">Sign in with ChatGPT</string>
+  <string name="chatgpt_login_summary">Use your ChatGPT Plus or Pro subscription instead of an API key.</string>
+  <string name="chatgpt_logged_in_summary">Signed in: %1$s</string>
+  <string name="chatgpt_logout">Sign out</string>
+  <string name="chatgpt_login_dialog_title">Continue in your browser to sign in</string>
+  <string name="chatgpt_login_dialog_summary">After signing in, return to Eta. If the browser cannot open the final page, copy the full address from the address bar and paste it below.</string>
+  <string name="chatgpt_login_port_busy">Local port 1455 is in use, so Eta cannot receive the sign-in result automatically. After signing in, copy the full address from the address bar and paste it below.</string>
+  <string name="chatgpt_login_paste_hint">Redirect URL or authorization code</string>
+  <string name="chatgpt_login_submit">Submit</string>
+  <string name="chatgpt_login_success">Signed in to ChatGPT</string>
+  <string name="chatgpt_logged_out">Signed out of ChatGPT</string>
+  <string name="chatgpt_open_browser_failed">Could not open a browser</string>
+  <string name="chatgpt_login_exchanging">Finishing sign-in…</string>
 </resources>

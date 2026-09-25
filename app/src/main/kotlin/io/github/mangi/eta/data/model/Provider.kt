@@ -17,6 +17,8 @@ internal object OpenAiEndpointMode {
 internal object ProviderSourceTypes {
     const val CUSTOM = "custom"
     const val OPENAI = "openai"
+    /** ChatGPT 订阅（Codex 后端），通过账号登录而不是 API Key 鉴权。 */
+    const val CHATGPT = "chatgpt"
     const val ANTHROPIC = "anthropic"
     const val BAILIAN = "bailian"
     const val DEEPSEEK = "deepseek"
