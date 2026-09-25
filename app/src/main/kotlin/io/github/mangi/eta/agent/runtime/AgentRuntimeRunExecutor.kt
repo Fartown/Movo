@@ -72,6 +72,14 @@ internal class AgentRuntimeRunExecutor(
         session: AgentRuntimeSession,
         request: AgentRuntimeWire.RunRequest,
     ): Outcome {
+        io.github.mangi.eta.diagnostics.MemoryDiagnostics.bindRun(
+            request.runId,
+            request.handoff
+                ?.takeIf { it.source == AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE }
+                ?.let { runCatching { AgentUiHandoffPayload.from(it.payload) }.getOrNull() }
+                ?.conversationId
+                ?.takeIf { it.isNotBlank() },
+        )
         val runController = session.controller
         val archivedEvents = mutableListOf<AgentEvent>()
         var entrySurfaceGuard: EntrySurfaceGuard? = null

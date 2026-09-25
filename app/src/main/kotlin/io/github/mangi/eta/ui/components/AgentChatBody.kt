@@ -680,6 +680,9 @@ internal fun AgentConversationMessages(
                     }
                 }
             }
+            if (isStreaming) {
+                item(key = "run-stall") { RunStallNotice(messageIds = visibleMessages.map { it.id }) }
+            }
             item(key = ChatBottomSentinelKey) {
                 Spacer(
                     modifier = Modifier

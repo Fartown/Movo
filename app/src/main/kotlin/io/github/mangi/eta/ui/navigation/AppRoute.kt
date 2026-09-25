@@ -53,6 +53,13 @@ sealed interface AppRoute : NavKey {
     @Serializable
     data object Diagnostics : AppRoute
 
+    /** 运行日志 · 任务详情；[runId] 是诊断任务号（R12）。 */
+    @Serializable
+    data class DiagnosticsRun(val runId: String) : AppRoute
+
+    @Serializable
+    data object DiagnosticsSystem : AppRoute
+
     @Serializable
     data object AppearanceSettings : AppRoute
 

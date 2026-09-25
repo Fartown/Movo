@@ -350,6 +350,8 @@ private fun titleForRoute(route: AppRoute?): String = when (route) {
     is AppRoute.Settings -> stringResource(R.string.route_settings)
     is AppRoute.VoiceSettings -> stringResource(R.string.voice_settings_title)
     is AppRoute.Diagnostics -> "运行日志"
+    is AppRoute.DiagnosticsRun -> "任务详情"
+    is AppRoute.DiagnosticsSystem -> "系统事件"
     is AppRoute.AppearanceSettings -> stringResource(R.string.appearance_title)
     is AppRoute.DataBackup -> stringResource(R.string.data_backup_title)
     is AppRoute.Memory -> stringResource(R.string.route_memory)

@@ -293,7 +293,7 @@ internal fun ChatMessageItem(
         )
         is SystemNoticeMessageUi -> if (message.code == SystemNoticeCode.ContextCompaction) {
             ContextCompactionMarker(message = message, modifier = modifier)
-        } else {
+        } else Column(modifier = modifier) {
             AgentMessageBlock(
                 message = AgentMessageUi(
                     id = message.id,
@@ -323,8 +323,10 @@ internal fun ChatMessageItem(
                 messageActionsEnabled = messageActionsEnabled,
                 onDelete = { onDeleteMessage(message.id) },
                 onRegenerate = { onRegenerateMessage(message.id) },
-                modifier = modifier,
             )
+            if (message.code == SystemNoticeCode.RuntimeFailed || message.code == SystemNoticeCode.Interrupted) {
+                RunLogLink(messageId = message.id)
+            }
         }
         is ThinkingMessageUi -> ThinkingRow(
             message = message,
@@ -2839,4 +2841,22 @@ private fun ToolActivityStatusUi.statusLabel(): String = when (this) {
     ToolActivityStatusUi.Success -> stringResource(R.string.tool_status_success)
     ToolActivityStatusUi.Failed -> stringResource(R.string.tool_status_failed)
     ToolActivityStatusUi.Unknown -> stringResource(R.string.tool_status_unknown)
+}
+
+/** 任务失败或中断时，直达这次任务的运行日志（运行日志功能定义 D3）；对话浮层里没有入口。 */
+@Composable
+private fun RunLogLink(messageId: String) {
+    val open = io.github.mangi.eta.ui.screens.diagnostics.LocalRunLogOpener.current ?: return
+    Box(
+        modifier = Modifier
+            .padding(start = 20.dp, top = 4.dp)
+            .height(32.dp)
+            .clip(RoundedCornerShape(percent = 50))
+            .background(MiuixTheme.colorScheme.surfaceContainer)
+            .clickable { open(io.github.mangi.eta.ui.screens.diagnostics.DiagnosticsLinks.runForMessage(messageId)) }
+            .padding(horizontal = 14.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text = "查看日志", style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurface)
+    }
 }

@@ -1,170 +1,330 @@
 package io.github.mangi.eta.ui.screens.diagnostics
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.widget.Toast
-import androidx.compose.foundation.clickable
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Description
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.unit.dp
-import io.github.mangi.eta.agent.model.ModelRequestTrace
-import io.github.mangi.eta.agent.runtime.modelFailureHint
-import io.github.mangi.eta.diagnostics.DiagnosticEntry
-import io.github.mangi.eta.diagnostics.DiagnosticLevel
-import io.github.mangi.eta.diagnostics.MemoryDiagnostics
-import io.github.mangi.eta.ui.components.MiuixScaffoldPage
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import kotlinx.coroutines.delay
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.theme.MiuixTheme
+import io.github.mangi.eta.diagnostics.DiagnosticStore
+import io.github.mangi.eta.diagnostics.RunTrace
+import io.github.mangi.eta.diagnostics.SystemEvent
+import io.github.mangi.eta.diagnostics.TimelineItem
+import io.github.mangi.eta.diagnostics.TraceStatus
+import io.github.mangi.eta.ui.theme.MovoColors
+import io.github.mangi.eta.ui.theme.MovoSize
+import io.github.mangi.eta.ui.theme.MovoSpacing
 
+/*
+ * 运行日志：先定义功能再做界面，见 docs/research/log-page/运行日志功能定义.md，
+ * 界面对应 Figma「Movo 首页」22–27。
+ */
+
+private enum class LogFilter { ALL, FAILED, RUNNING }
+
+private val RunTrace.isProblem: Boolean
+    get() = status == TraceStatus.FAILED || status == TraceStatus.INTERRUPTED
+
+/** 22 · 运行日志：以任务为单位，最新在前，按天分组。 */
 @Composable
-internal fun DiagnosticsScreen(onBack: () -> Unit) {
-    val context = LocalContext.current
-    var snapshot by remember { mutableStateOf(MemoryDiagnostics.buffer.snapshot()) }
-    var active by remember { mutableStateOf(ModelRequestTrace.activeSnapshots()) }
-    var paused by remember { mutableStateOf(false) }
-    var warningsOnly by remember { mutableStateOf(false) }
-    var query by remember { mutableStateOf("") }
-    var expanded by remember { mutableStateOf<Long?>(null) }
-    val formatter = remember { DateTimeFormatter.ofPattern("HH:mm:ss.SSS").withZone(ZoneId.systemDefault()) }
-    // Only the visible viewer polls. Producers never build a whole list for each token/read.
-    LaunchedEffect(paused) {
-        while (!paused) {
-            snapshot = MemoryDiagnostics.buffer.snapshot()
-            active = ModelRequestTrace.activeSnapshots()
-            delay(1_000)
-        }
+internal fun DiagnosticsScreen(
+    onBack: () -> Unit,
+    onOpenRun: (String) -> Unit,
+    onOpenSystem: () -> Unit,
+) {
+    val live = rememberDiagnosticsLive()
+    val titles = rememberConversationTitles()
+    val format = rememberDiagnosticsFormat()
+    var filter by rememberSaveable { mutableStateOf(LogFilter.ALL) }
+    val runs = live?.trace?.runs.orEmpty().take(DiagnosticStore.MAX_RUNS)
+    val failedCount = runs.count { it.isProblem }
+    val runningCount = runs.count { it.status == TraceStatus.RUNNING }
+    // 计数为 0 的芯片不显示；正在看的分类清空后回到全部。
+    val effective = when {
+        filter == LogFilter.FAILED && failedCount == 0 -> LogFilter.ALL
+        filter == LogFilter.RUNNING && runningCount == 0 -> LogFilter.ALL
+        else -> filter
     }
-    val visible = remember(snapshot, warningsOnly, query) {
-        snapshot.entries.asReversed().filter {
-            it.matches(query, warningsOnly)
+    val visible = runs.filter {
+        when (effective) {
+            LogFilter.ALL -> true
+            LogFilter.FAILED -> it.isProblem
+            LogFilter.RUNNING -> it.status == TraceStatus.RUNNING
         }
-    }
-    val copy: (String) -> Unit = { text ->
-        context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Movo 运行日志", text))
-        Toast.makeText(context, "日志已复制", Toast.LENGTH_SHORT).show()
     }
 
-    MiuixScaffoldPage(title = "运行日志", onBack = onBack) {
-        item(key = "info") {
-            Card(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("仅保存在内存 · 进程重启后清空", style = MiuixTheme.textStyles.body1)
-                    Text("${snapshot.entries.size} / ${MemoryDiagnostics.buffer.maxEntries} 条 · 日志文本 ${snapshot.bytes / 1024} KiB / 4 MiB · 已淘汰 ${snapshot.dropped} 条",
-                        style = MiuixTheme.textStyles.footnote1)
-                    Text("从错误记录的请求编号查看完整链路。包含网络、后台状态和模型阶段，不记录对话、工具内容或 API Key。",
-                        style = MiuixTheme.textStyles.footnote1)
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(text = if (paused) "继续刷新" else "暂停刷新", onClick = { paused = !paused }, modifier = Modifier.weight(1f))
-                        TextButton(text = "清空", onClick = {
-                            MemoryDiagnostics.buffer.clear()
-                            snapshot = MemoryDiagnostics.buffer.snapshot()
-                            expanded = null
-                        }, modifier = Modifier.weight(1f))
-                    }
-                    if (paused) Text("已暂停画面刷新，后台仍在记录。", style = MiuixTheme.textStyles.footnote1)
+    LogPage(
+        title = "运行日志",
+        onBack = onBack,
+        action = {
+            ExportAction(fileName = "movo-log-${System.currentTimeMillis() / 1000}.md") {
+                val current = live ?: return@ExportAction ""
+                format.exportMarkdown(
+                    header = exportHeader(),
+                    runs = runs,
+                    system = current.trace.system,
+                    raw = current.entries,
+                    generatedAt = System.currentTimeMillis(),
+                    scope = "全部（${runs.size} 个任务）",
+                )
+            }
+        },
+    ) {
+        item(key = "description") {
+            PageDescription("每次任务的模型请求、工具调用和当时的设备状态。保存最近 20 个任务，不含对话内容。")
+        }
+        if (live == null) return@LogPage
+        if (failedCount > 0 || runningCount > 0) {
+            item(key = "filters") {
+                Row(
+                    modifier = Modifier.padding(top = MovoSpacing.xxl),
+                    horizontalArrangement = Arrangement.spacedBy(MovoSpacing.sm),
+                ) {
+                    LogFilterChip("全部", effective == LogFilter.ALL) { filter = LogFilter.ALL }
+                    if (failedCount > 0) LogFilterChip("失败 $failedCount", effective == LogFilter.FAILED) { filter = LogFilter.FAILED }
+                    if (runningCount > 0) LogFilterChip("进行中 $runningCount", effective == LogFilter.RUNNING) { filter = LogFilter.RUNNING }
                 }
             }
         }
-        if (active.isNotEmpty()) item(key = "active") {
-            Card(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("进行中的模型请求", style = MiuixTheme.textStyles.body1)
-                    active.forEach { (ids, fields) ->
-                        Text("${ids.run} ${ids.request} · ${fields["purpose"]}\n${fields["stage"]} · 已用 ${((fields["duration_ms"] as? Long) ?: 0) / 1000}s · 距最后数据 ${fields["last_byte_ago_ms"] ?: "尚未收到"} ms",
-                            style = MiuixTheme.textStyles.footnote1,
-                            modifier = Modifier.clickable { query = ids.request; warningsOnly = false })
+        if (visible.isEmpty()) {
+            item(key = "empty") { EmptyHint("还没有任务记录。发送一条消息后，这里会记下它的请求和耗时。") }
+        }
+        visible.groupBy { format.day(it.startedAt) }.forEach { (day, dayRuns) ->
+            item(key = "day-$day") { SectionLabel(format.dayTitle(day)) }
+            item(key = "card-$day") {
+                LogCard {
+                    dayRuns.forEachIndexed { index, run ->
+                        LogRow(
+                            title = format.runTitle(run, titles.of(run)),
+                            subtitle = format.listSubtitle(run, live.nowElapsed),
+                            value = format.listValue(run, live.nowElapsed),
+                            showDivider = index < dayRuns.lastIndex,
+                            onClick = { onOpenRun(run.id) },
+                        ) { StatusIcon(run.status) }
                     }
                 }
             }
         }
-        item(key = "filter") {
-            Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextField(value = query, onValueChange = { query = it }, label = "搜索错误码、R1 / Q1 或阶段", singleLine = true, modifier = Modifier.fillMaxWidth())
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(text = if (warningsOnly) "显示全部" else "只看异常", onClick = { warningsOnly = !warningsOnly }, modifier = Modifier.weight(1f))
-                    TextButton(text = "复制最近 ${visible.size.coerceAtMost(80)} 条", enabled = visible.isNotEmpty(),
-                        onClick = { copy(visible.take(80).joinToString("\n\n") { it.text() }) }, modifier = Modifier.weight(1f))
-                }
-                Text("${visible.size} 条匹配 · 最新记录在前 · 点开查看详情", style = MiuixTheme.textStyles.footnote1)
-            }
-        }
-        if (visible.isEmpty()) item(key = "empty") {
-            Text(if (snapshot.entries.isEmpty()) "暂无日志。执行任务后，这里会显示请求和运行状态。" else "没有匹配的日志，请调整搜索或异常筛选。",
-                modifier = Modifier.padding(20.dp), style = MiuixTheme.textStyles.body2)
-        }
-        items(visible, key = { it.sequence }) { entry ->
-            Card(modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
-                Column(Modifier.fillMaxWidth().clickable { expanded = if (expanded == entry.sequence) null else entry.sequence }
-                    .padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("${formatter.format(Instant.ofEpochMilli(entry.timeMillis))} · ${entry.level} · ${entry.context.run} ${entry.context.request}",
-                        style = MiuixTheme.textStyles.footnote1,
-                        color = if (entry.level == DiagnosticLevel.ERROR) MiuixTheme.colorScheme.error else MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                    Text(entry.title(), style = MiuixTheme.textStyles.body1)
-                    val code = entry.field("code")
-                    if (code != null && code != "unknown") {
-                        val hint = if (code == "OK") "响应内容检查通过" else modelFailureHint(code)
-                        Text("$hint · $code", style = MiuixTheme.textStyles.body2)
-                    }
-                    Text(listOfNotNull(entry.field("stage"), entry.field("purpose"), entry.field("duration_ms")?.let { "${it}ms" }).joinToString(" · "),
-                        style = MiuixTheme.textStyles.footnote1)
-                    if (expanded == entry.sequence) {
-                        SelectionContainer {
-                            Text(entry.details, style = MiuixTheme.textStyles.footnote1.copy(fontFamily = FontFamily.Monospace))
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(text = "复制这条", onClick = { copy(entry.text()) }, modifier = Modifier.weight(1f))
-                            if (entry.context.request.isNotBlank()) TextButton(text = "查看该请求", onClick = {
-                                query = entry.context.request
-                                warningsOnly = false
-                            }, modifier = Modifier.weight(1f))
-                        }
-                    }
-                }
+        item(key = "system-label") { SectionLabel("任务之外") }
+        item(key = "system") {
+            LogCard {
+                LogRow(
+                    title = "系统事件",
+                    subtitle = "进程启动、网络变化、后台服务",
+                    value = "${live.trace.system.size} 条",
+                    showDivider = false,
+                    onClick = onOpenSystem,
+                ) { StepIcon(Icons.Rounded.Description, MovoColors.textSecondary) }
             }
         }
     }
 }
 
-private fun DiagnosticEntry.field(key: String): String? = details.lineSequence().firstOrNull { it.startsWith("$key=") }?.substringAfter('=')
+/** 23 / 24 · 任务详情：结论 → 原因与建议 → 耗时构成 → 时间线。 */
+@Composable
+internal fun DiagnosticsRunScreen(
+    runId: String,
+    onBack: () -> Unit,
+    onOpenModelSettings: () -> Unit,
+    onOpenConversation: (String) -> Unit,
+) {
+    val context = LocalContext.current
+    val live = rememberDiagnosticsLive()
+    val titles = rememberConversationTitles()
+    val format = rememberDiagnosticsFormat()
+    val run = live?.trace?.runs?.firstOrNull { it.id == runId }
+    // 默认展开最值得看的那次请求：失败任务的最后一次失败、进行中任务正在进行的请求；同时只展开一行。
+    var expanded by rememberSaveable(runId) { mutableStateOf<String?>(null) }
+    var expandedInitialized by rememberSaveable(runId) { mutableStateOf(false) }
+    LaunchedEffect(run != null) {
+        if (run == null || expandedInitialized) return@LaunchedEffect
+        expandedInitialized = true
+        expanded = when (run.status) {
+            TraceStatus.FAILED -> run.requests.lastOrNull { it.status == TraceStatus.FAILED }?.let { "request-${it.id}" }
+            TraceStatus.RUNNING -> run.requests.lastOrNull { it.status == TraceStatus.RUNNING }?.let { "request-${it.id}" }
+            else -> null
+        }
+    }
 
-private fun DiagnosticEntry.title(): String = when (event) {
-    "attempt.failed" -> "模型请求失败"
-    "retry.scheduled" -> "即将重试模型请求"
-    "attempt.started" -> "模型请求开始"
-    "attempt.completed" -> "模型请求完成"
-    "attempt.cancelled" -> "模型请求已取消"
-    "http.response_headers" -> "已收到 HTTP 响应头"
-    "http.first_byte" -> "已收到首批响应数据"
-    "sse.done_marker" -> "收到 [DONE] 标记"
-    "sse.terminal" -> "收到模型终态事件"
-    "response.output" -> "模型响应内容检查"
-    "run.started" -> "任务开始"
-    "run.completed" -> "任务完成"
-    "run.failed" -> "任务失败"
-    "run.cancelled" -> "任务已停止"
-    "app.background" -> "App 已进入后台"
-    "app.foreground" -> "App 已回到前台"
-    "network.lost" -> "网络连接已丢失"
-    else -> event
+    LogPage(
+        title = run?.let { format.runTitle(it, titles.of(it)) } ?: "任务详情",
+        onBack = onBack,
+        action = run?.let { current ->
+            {
+                ExportAction(fileName = "movo-log-${current.id}.md") {
+                    format.exportMarkdown(
+                        header = exportHeader(),
+                        runs = listOf(current),
+                        system = emptyList(),
+                        raw = current.entries,
+                        generatedAt = System.currentTimeMillis(),
+                        scope = "单个任务 ${current.id}",
+                    )
+                }
+            }
+        },
+    ) {
+        if (live == null) return@LogPage
+        if (run == null) {
+            item(key = "missing") { EmptyHint("这个任务的记录已经不在了。运行日志只保存最近 20 个任务。") }
+            return@LogPage
+        }
+        val now = live.nowElapsed
+        item(key = "summary") {
+            val running = run.status == TraceStatus.RUNNING
+            SummaryCard(
+                status = run.status,
+                statusText = format.statusLine(run),
+                timer = format.summaryTimer(run, now),
+                meta = format.summaryMeta(run),
+                footer = if (running) format.runningHint(run, now, live.silenceByRun[run.id]) else null,
+                footerAction = run.conversationId?.takeIf { running }?.let { id -> "回到对话" to { onOpenConversation(id) } },
+            )
+        }
+        format.explain(run)?.let { explanation ->
+            item(key = "reason-label") { SectionLabel("原因") }
+            item(key = "reason") {
+                ReasonCard(explanation) { action ->
+                    when (action) {
+                        FailureAction.MODEL_SETTINGS -> onOpenModelSettings()
+                        FailureAction.BACKGROUND_SETTINGS -> runCatching {
+                            context.startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        run.breakdown()?.let(format::breakdownParts)?.takeIf { it.isNotEmpty() }?.let { parts ->
+            item(key = "breakdown-label") { SectionLabel("耗时") }
+            item(key = "breakdown") { BreakdownCard(parts, format) }
+        }
+        item(key = "timeline-label") { SectionLabel("时间线") }
+        item(key = "timeline") {
+            LogCard {
+                if (run.timeline.isEmpty()) EmptyHint("还没有记录到请求")
+                run.timeline.forEachIndexed { index, item ->
+                    TimelineRow(
+                        item = item,
+                        run = run,
+                        nowElapsed = now,
+                        first = index == 0,
+                        last = index == run.timeline.lastIndex,
+                        expanded = expanded == item.key,
+                        onToggle = { expanded = if (expanded == item.key) null else item.key },
+                        format = format,
+                    )
+                }
+            }
+        }
+        item(key = "note") {
+            CardNote(
+                if (run.status == TraceStatus.RUNNING) "进行中的任务每秒刷新；结束后这里会写明结果和耗时构成。"
+                else "日志只记录请求阶段、工具名和设备状态，不含对话内容、工具结果和 API Key。",
+            )
+        }
+    }
+}
+
+@Composable
+private fun TimelineRow(
+    item: TimelineItem,
+    run: RunTrace,
+    nowElapsed: Long,
+    first: Boolean,
+    last: Boolean,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    format: DiagnosticsFormat,
+) {
+    when (item) {
+        is TimelineItem.Request -> {
+            val request = item.request
+            StepRow(
+                title = format.requestTitle(request),
+                subtitle = format.requestSubtitle(request, item.offsetMs),
+                duration = request.durationMs?.let(format::compact) ?: format.compact(nowElapsed - request.startElapsed),
+                first = first,
+                last = last,
+                detailLabel = "网络阶段",
+                detail = if (expanded) format.requestDetail(request) else null,
+                onClick = onToggle,
+            ) { StatusIcon(request.status, MovoSize.iconSmall) }
+        }
+        is TimelineItem.Tool -> {
+            val tool = item.tool
+            val status = when {
+                tool.durationMs == null && run.status == TraceStatus.RUNNING -> TraceStatus.RUNNING
+                tool.success == false -> TraceStatus.FAILED
+                else -> TraceStatus.SUCCEEDED
+            }
+            StepRow(
+                title = format.toolTitle(tool),
+                subtitle = format.toolSubtitle(tool, item.offsetMs),
+                duration = tool.durationMs?.let(format::compact) ?: format.compact(nowElapsed - tool.startElapsed),
+                first = first,
+                last = last,
+            ) { StatusIcon(status, MovoSize.iconSmall) }
+        }
+        is TimelineItem.Compaction -> StepRow(
+            title = "上下文压缩",
+            subtitle = format.compactionSubtitle(item),
+            duration = "",
+            first = first,
+            last = last,
+            muted = true,
+        ) { StepIcon(CompactionIcon, MovoColors.textTertiary) }
+        is TimelineItem.System -> StepRow(
+            title = item.event.title,
+            subtitle = format.systemSubtitle(item.event, item.offsetMs),
+            duration = "",
+            first = first,
+            last = last,
+            muted = true,
+        ) { StepIcon(item.event.icon(), item.event.tone.color()) }
+    }
+}
+
+/** 25 · 系统事件：任务之外的设备事件，最新在前，按天分组。 */
+@Composable
+internal fun DiagnosticsSystemScreen(onBack: () -> Unit) {
+    val live = rememberDiagnosticsLive()
+    val format = rememberDiagnosticsFormat()
+    LogPage(title = "系统事件", onBack = onBack) {
+        item(key = "description") {
+            PageDescription("设备和 App 状态的变化。任务进行中发生的，也会记在那个任务的时间线里。")
+        }
+        if (live == null) return@LogPage
+        val events: List<SystemEvent> = live.trace.system
+        if (events.isEmpty()) item(key = "empty") { EmptyHint("还没有系统事件") }
+        events.groupBy { format.day(it.timeMillis) }.forEach { (day, dayEvents) ->
+            item(key = "day-$day") { SectionLabel(format.dayTitle(day)) }
+            item(key = "card-$day") {
+                LogCard {
+                    dayEvents.forEach { event ->
+                        StepRow(
+                            title = event.title,
+                            subtitle = event.detail,
+                            duration = format.clock(event.timeMillis),
+                            first = true,
+                            last = true,
+                        ) { StepIcon(event.icon(), event.tone.color()) }
+                    }
+                }
+            }
+        }
+        item(key = "note") { CardNote("系统事件保留最近 7 天。") }
+    }
 }
