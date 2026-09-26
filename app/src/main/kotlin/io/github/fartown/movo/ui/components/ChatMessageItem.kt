@@ -419,7 +419,7 @@ internal fun AgentWorkProcess(
     var confirmEndTask by remember(id) { mutableStateOf(false) }
     val tools = messages.filterIsInstance<ToolActivityMessageUi>()
     val toolCount = tools.size
-    val failedIndex = tools.indexOfFirst { it.status == ToolActivityStatusUi.Failed }
+    val failedIndex = unrecoveredFailedStep(tools)
     var expanded by rememberSaveable(id) { mutableStateOf(running) }
     var manuallyExpanded by rememberSaveable(id) { mutableStateOf(false) }
 
@@ -3500,7 +3500,11 @@ private fun RunFailureCard(
         if (message.code == SystemNoticeCode.Interrupted) R.string.system_notice_interrupted else R.string.system_notice_runtime_failed,
     )
     val title = failure?.failure?.title ?: noticeText
-    val detail = failure?.failure?.message ?: message.detail?.takeIf(String::isNotBlank)
+    // 网络 / TLS 原始报错换成可操作的说明，原文留在运行日志。
+    val detail = io.github.fartown.movo.agent.model.UserFacingFailure.message(
+        failure?.failure?.message ?: message.detail?.takeIf(String::isNotBlank),
+        stringResource(R.string.movo_failure_network),
+    )
     val openRunLog = openLog?.let { open -> { open(failure?.runId ?: io.github.fartown.movo.ui.screens.diagnostics.DiagnosticsLinks.runForMessage(message.id)) } }
     @Suppress("DEPRECATION")
     val clipboardManager = LocalClipboardManager.current
@@ -3610,4 +3614,14 @@ private fun RunLogLink(messageId: String) {
     ) {
         Text(text = "查看日志", style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurface)
     }
+}
+
+/**
+ * 执行卡 / 执行详情的「第 N 步未完成」：只看**没有被补救**的失败——最后一个工具步骤失败才算。
+ * 中途某步失败、随后换了方式成功继续（真机：粘贴文本失败后改用替换文本完成），整张卡按完成显示；
+ * 失败的那一步在时间线里仍标 ✕。返回失败步的下标，没有则为 -1。
+ */
+internal fun unrecoveredFailedStep(tools: List<ToolActivityMessageUi>): Int {
+    val last = tools.lastIndex
+    return if (last >= 0 && tools[last].status == ToolActivityStatusUi.Failed) last else -1
 }

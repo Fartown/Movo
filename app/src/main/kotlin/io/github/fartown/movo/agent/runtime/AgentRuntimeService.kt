@@ -615,7 +615,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                             } else {
                                 AgentOverlayStatus.RunFailed
                             },
-                            detailText = result.error.orEmpty(),
+                            detailText = io.github.fartown.movo.agent.model.UserFacingFailure.message(
+                                result.error,
+                                getString(R.string.movo_failure_network),
+                            ).orEmpty(),
                         ),
                         keepVisible = entrySurfaceGuard?.wasTriggered == true,
                     )

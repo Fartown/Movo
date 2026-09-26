@@ -139,7 +139,7 @@ private fun RunSummaryCard(
     onSwitchToApp: ((String) -> Unit)?,
 ) {
     val tools = steps.filterIsInstance<ToolActivityMessageUi>()
-    val failedIndex = tools.indexOfFirst { it.status == ToolActivityStatusUi.Failed }
+    val failedIndex = io.github.fartown.movo.ui.components.unrecoveredFailedStep(tools)
     val firstStart = tools.mapNotNull { it.startedAtMillis }.minOrNull()
     val lastFinish = tools.mapNotNull { it.finishedAtMillis }.maxOrNull()
     val now by produceState(System.currentTimeMillis(), running) {

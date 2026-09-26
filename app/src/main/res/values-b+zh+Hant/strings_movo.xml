@@ -218,4 +218,5 @@
   <string name="movo_overlay_remove">移除</string>
   <string name="movo_overlay_mic_required">需要麥克風權限才能開始語音</string>
   <string name="movo_overlay_voice_failed">暫時無法開始語音，請回到 Movo 再試</string>
+  <string name="movo_failure_network">網路連線中斷，模型沒有回傳結果，請重試</string>
 </resources>

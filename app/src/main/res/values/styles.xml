@@ -17,6 +17,9 @@
 
     <style name="Theme.MovoConversationSheet" parent="@android:style/Theme.Material.Light.NoActionBar">
         <item name="android:windowNoTitle">true</item>
+        <!-- 进出场全部由浮层自己画（从底部上移 / 从悬浮球展开，规范 8.9、9.5）；
+             去掉系统窗口动画，否则 HyperOS 会先播自己的上滑，盖住「从悬浮球展开」。 -->
+        <item name="android:windowAnimationStyle">@null</item>
         <item name="android:forceDarkAllowed">false</item>
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
