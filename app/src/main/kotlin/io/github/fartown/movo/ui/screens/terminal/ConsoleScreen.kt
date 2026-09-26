@@ -24,8 +24,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -202,7 +200,7 @@ internal fun ConsoleScreen(
     }
 }
 
-/** 控制台状态栏：与块式终端同一套 Movo 外层组件（环境胶囊、44 图标按钮、「简洁模式」胶囊）。 */
+/** 控制台状态栏：与块式终端同一套 Movo 外层组件（环境分段、44 图标按钮、「简洁模式」胶囊）。 */
 @Composable
 private fun ConsoleStatusBar(
     environment: TerminalEnvironment,
@@ -218,15 +216,10 @@ private fun ConsoleStatusBar(
             .padding(start = MovoSpacing.md, end = MovoSpacing.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TerminalEnvironmentChip(
-            label = "Android",
-            selected = environment == TerminalEnvironment.ANDROID,
-            onClick = { onSwitchEnvironment(TerminalEnvironment.ANDROID) },
-        )
-        TerminalEnvironmentChip(
-            label = if (linuxEnvironment == TerminalEnvironment.ALPINE) "Alpine" else "Debian",
-            selected = environment == linuxEnvironment,
-            onClick = { onSwitchEnvironment(linuxEnvironment) },
+        TerminalEnvironmentTabs(
+            environment = environment,
+            linuxEnvironment = linuxEnvironment,
+            onSwitchEnvironment = onSwitchEnvironment,
         )
         Row(
             modifier = Modifier.weight(1f),
@@ -240,10 +233,12 @@ private fun ConsoleStatusBar(
                 iconSize = MovoSize.iconMedium,
                 tint = MovoColors.textSecondary,
             )
-            TerminalMaterialIconButton(
-                icon = Icons.Rounded.Insights,
+            MovoIconButton(
+                icon = MovoIcons.Activity,
                 contentDescription = stringResource(R.string.terminal_daemon_tasks),
                 onClick = onOpenTasks,
+                iconSize = MovoSize.iconMedium,
+                tint = MovoColors.textSecondary,
             )
             Spacer(Modifier.width(MovoSpacing.xs))
             MovoPillButton(
@@ -344,7 +339,8 @@ private fun ColumnScope.ConsoleGrid(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(MovoColors.bgCanvas.copy(alpha = 0.92f))
+                    // 会话结束遮罩不透明（D13）：92% 会透出下面的终端文字。
+                    .background(MovoColors.bgCanvas)
                     .padding(MovoSpacing.section),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,

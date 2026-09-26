@@ -1,8 +1,21 @@
 package io.github.fartown.movo.ui.screens.terminal
 
-import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.ui.unit.Dp
+import io.github.fartown.movo.ui.theme.MovoMotion
+import io.github.fartown.movo.ui.theme.MovoIcon
+import io.github.fartown.movo.ui.theme.LocalReducedMotion
+import io.github.fartown.movo.ui.pages.providers.MovoSegmentedTabs
+import io.github.fartown.movo.ui.components.movo.rememberDoneFlash
+import io.github.fartown.movo.ui.components.movo.MovoPopoverMenu
+import io.github.fartown.movo.ui.components.movo.MovoMenuItem
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,8 +36,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -76,15 +87,11 @@ import io.github.fartown.movo.ui.theme.MovoRadius
 import io.github.fartown.movo.ui.theme.MovoSize
 import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.theme.MovoTypography
-import top.yukonga.miuix.kmp.basic.DropdownImpl
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.InfiniteProgressIndicator
-import top.yukonga.miuix.kmp.basic.ListPopupColumn
-import top.yukonga.miuix.kmp.basic.PopupPositionProvider
 import top.yukonga.miuix.kmp.basic.Text
 import io.github.fartown.movo.ui.components.movo.TextField
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowListPopup
 
 /**
  * 用户手动终端：块式输出（命令、输出、退出码），给人用；与 AI 工具调用的任务模型分开。
@@ -140,13 +147,21 @@ internal fun UserTerminalScreen(
                 .weight(1f)
                 .fillMaxWidth(),
         ) {
-            when {
-                showLinuxGuide -> LinuxGuide(onOpenEnvironment = onOpenEnvironment)
-                state.blocks.isEmpty() -> EmptyHint(state.failMessage)
-                else -> BlockList(
-                    blocks = state.blocks,
-                    onReinput = { input = it },
-                )
+            // 引导 / 空 / 输出之间交叉淡化 `fast`（B9），不硬切。
+            val content = when {
+                showLinuxGuide -> TerminalContent.Guide
+                state.blocks.isEmpty() -> TerminalContent.Empty
+                else -> TerminalContent.Output
+            }
+            Crossfade(targetState = content, animationSpec = MovoMotion.fast(), label = "terminalContent") { shown ->
+                when (shown) {
+                    TerminalContent.Guide -> LinuxGuide(onOpenEnvironment = onOpenEnvironment)
+                    TerminalContent.Empty -> EmptyHint(state.failMessage)
+                    TerminalContent.Output -> BlockList(
+                        blocks = state.blocks,
+                        onReinput = { input = it },
+                    )
+                }
             }
         }
         StatusBar(
@@ -200,6 +215,8 @@ internal fun UserTerminalScreen(
     }
 }
 
+private enum class TerminalContent { Guide, Empty, Output }
+
 @Composable
 private fun BlockList(
     blocks: List<TerminalBlockUi>,
@@ -234,7 +251,6 @@ private fun BlockList(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CommandBlock(
     block: TerminalBlockUi,
@@ -242,6 +258,8 @@ private fun CommandBlock(
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
+    // 复制后在命令行右侧原地出现 ✓「已复制」，停留 1400ms（9.3「复制」，不另弹提示）。
+    val copied = rememberDoneFlash()
     val exitCode = block.exitCode
     val failed = exitCode != null && exitCode != 0
     Box {
@@ -249,7 +267,8 @@ private fun CommandBlock(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(IntrinsicSize.Min)
-                .combinedClickable(onClick = {}, onLongClick = { showMenu = true })
+                // 长按：行保持按压态、弹出 `Popover/Menu`（9.3.1「长按」）；不用 Material 水波纹。
+                .movoClickable(PressKind.Row, role = null, onLongClick = { showMenu = true }, onClick = {})
                 .padding(vertical = 6.dp),
         ) {
             if (failed) {
@@ -257,15 +276,32 @@ private fun CommandBlock(
                     modifier = Modifier
                         .width(3.dp)
                         .fillMaxHeight()
-                        .background(MiuixTheme.colorScheme.error),
+                        .background(MovoColors.roseFg),
                 )
                 Spacer(modifier = Modifier.width(8.dp))
             }
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = blockHeader(block),
-                    style = MiuixTheme.textStyles.body2.copy(fontFamily = FontFamily.Monospace),
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = blockHeader(block),
+                        style = MiuixTheme.textStyles.body2.copy(fontFamily = FontFamily.Monospace),
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    AnimatedVisibility(
+                        visible = copied.active,
+                        enter = fadeIn(MovoMotion.fast()) + scaleIn(MovoMotion.fast(), initialScale = 0.72f),
+                        exit = fadeOut(MovoMotion.fastExit()),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(start = MovoSpacing.sm),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            MovoIcon(MovoIcons.Check, contentDescription = null, size = MovoSize.iconLabel, tint = MovoColors.greenFg)
+                            Spacer(Modifier.width(MovoSpacing.xs))
+                            Text(stringResource(R.string.copy_copied), style = MovoTypography.labelRegular, color = MovoColors.textSecondary)
+                        }
+                    }
+                }
                 if (block.output.isNotEmpty()) {
                     // 原始输出含 ANSI 序列；整段重解析保证流式截断的序列在下一次到达后恢复。
                     val parsedOutput = remember(block.output) { ansiToAnnotatedString(block.output) }
@@ -291,12 +327,19 @@ private fun CommandBlock(
                     }
                 }
                 if (failed) {
-                    Text(
-                        text = stringResource(R.string.terminal_exit_code, exitCode),
-                        style = MiuixTheme.textStyles.footnote1,
-                        color = MiuixTheme.colorScheme.error,
+                    // 失败：Rose ✕ 图标 + 次要色文字（4.2 规则 2：Rose 不用于文字，颜色不是唯一信号）。
+                    Row(
                         modifier = Modifier.padding(top = 2.dp),
-                    )
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        MovoIcon(MovoIcons.CircleX, contentDescription = null, size = MovoSize.iconLabel, tint = MovoColors.roseFg)
+                        Spacer(Modifier.width(MovoSpacing.xs))
+                        Text(
+                            text = stringResource(R.string.terminal_exit_code, exitCode),
+                            style = MiuixTheme.textStyles.footnote1,
+                            color = MovoColors.textSecondary,
+                        )
+                    }
                 }
                 if (block.truncated) {
                     Text(
@@ -313,6 +356,7 @@ private fun CommandBlock(
             block = block,
             clipboard = clipboard,
             onDismiss = { showMenu = false },
+            onCopied = copied::trigger,
             onReinput = onReinput,
         )
     }
@@ -336,53 +380,37 @@ private fun blockHeader(block: TerminalBlockUi): AnnotatedString {
     }
 }
 
+/** 命令块长按菜单 `Popover/Menu`（规范 8「弹出菜单」）：复制命令、复制输出、重新输入。 */
 @Composable
 private fun BlockMenu(
     show: Boolean,
     block: TerminalBlockUi,
     clipboard: ClipboardManager,
     onDismiss: () -> Unit,
+    onCopied: () -> Unit,
     onReinput: (String) -> Unit,
 ) {
-    WindowListPopup(
+    MovoPopoverMenu(
         show = show,
-        alignment = PopupPositionProvider.Align.Start,
-        onDismissRequest = onDismiss,
-    ) {
-        ListPopupColumn {
-            DropdownImpl(
-                text = stringResource(R.string.terminal_copy_command),
-                optionSize = 3,
-                isSelected = false,
-                index = 0,
-                onSelectedIndexChange = {
-                    onDismiss()
-                    clipboard.setText(AnnotatedString(block.command))
-                },
-            )
-            DropdownImpl(
-                text = stringResource(R.string.terminal_copy_output),
-                optionSize = 3,
-                isSelected = false,
-                index = 1,
+        onDismiss = onDismiss,
+        items = listOf(
+            MovoMenuItem(icon = MovoIcons.Copy, label = stringResource(R.string.terminal_copy_command)) {
+                clipboard.setText(AnnotatedString(block.command))
+                onCopied()
+            },
+            MovoMenuItem(
+                icon = MovoIcons.FileText,
+                label = stringResource(R.string.terminal_copy_output),
                 enabled = block.output.isNotEmpty(),
-                onSelectedIndexChange = {
-                    onDismiss()
-                    clipboard.setText(AnnotatedString(ansiPlainText(block.output)))
-                },
-            )
-            DropdownImpl(
-                text = stringResource(R.string.terminal_reinput),
-                optionSize = 3,
-                isSelected = false,
-                index = 2,
-                onSelectedIndexChange = {
-                    onDismiss()
-                    onReinput(block.command)
-                },
-            )
-        }
-    }
+            ) {
+                clipboard.setText(AnnotatedString(ansiPlainText(block.output)))
+                onCopied()
+            },
+            MovoMenuItem(icon = MovoIcons.CornerDownRight, label = stringResource(R.string.terminal_reinput)) {
+                onReinput(block.command)
+            },
+        ),
+    )
 }
 
 @Composable
@@ -417,15 +445,10 @@ private fun StatusBar(
             .padding(start = MovoSpacing.md, end = MovoSpacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TerminalEnvironmentChip(
-            label = "Android",
-            selected = state.environment == TerminalEnvironment.ANDROID,
-            onClick = { onSwitchEnvironment(TerminalEnvironment.ANDROID) },
-        )
-        TerminalEnvironmentChip(
-            label = if (state.linuxEnvironment == TerminalEnvironment.ALPINE) "Alpine" else "Debian",
-            selected = state.environment == state.linuxEnvironment,
-            onClick = { onSwitchEnvironment(state.linuxEnvironment) },
+        TerminalEnvironmentTabs(
+            environment = state.environment,
+            linuxEnvironment = state.linuxEnvironment,
+            onSwitchEnvironment = onSwitchEnvironment,
         )
         Text(
             text = state.cwd,
@@ -445,10 +468,12 @@ private fun StatusBar(
             iconSize = MovoSize.iconMedium,
             tint = MovoColors.textSecondary,
         )
-        TerminalMaterialIconButton(
-            icon = Icons.Rounded.Insights,
+        MovoIconButton(
+            icon = MovoIcons.Activity,
             contentDescription = stringResource(R.string.terminal_daemon_tasks),
             onClick = onOpenTasks,
+            iconSize = MovoSize.iconMedium,
+            tint = MovoColors.textSecondary,
         )
         if (onOpenConsole != null) {
             MovoIconButton(
@@ -459,66 +484,46 @@ private fun StatusBar(
                 tint = MovoColors.textSecondary,
             )
         }
-        if (state.running) {
-            Spacer(Modifier.width(MovoSpacing.xs))
-            MovoPillButton(
-                label = stringResource(R.string.terminal_stop),
-                onClick = onStop,
-                primary = true,
-            )
+        // 运行中才出现「停止」：淡入 + 横向展开（B9），其余按钮平滑让位。
+        val reduced = LocalReducedMotion.current
+        AnimatedVisibility(
+            visible = state.running,
+            enter = if (reduced) fadeIn(MovoMotion.fast()) else fadeIn(MovoMotion.fast()) + expandHorizontally(MovoMotion.standard()),
+            exit = if (reduced) fadeOut(MovoMotion.fastExit()) else fadeOut(MovoMotion.fastExit()) + shrinkHorizontally(MovoMotion.standard()),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.width(MovoSpacing.xs))
+                MovoPillButton(
+                    label = stringResource(R.string.terminal_stop),
+                    onClick = onStop,
+                    primary = true,
+                )
+            }
         }
     }
 }
 
-/** 环境切换胶囊：高 32、圆角 16；选中 Indigo 浅底 + Indigo 文字（Medium），未选中透明底 + 次要色。 */
-@Composable
-internal fun TerminalEnvironmentChip(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    val shape = RoundedCornerShape(MovoRadius.md)
-    Box(
-        modifier = Modifier
-            .height(MovoSize.controlSmall)
-            .movoClickable(PressKind.Solid, shape = shape, role = Role.Tab, onClick = onClick)
-            .clip(shape)
-            .background(if (selected) MovoColors.indigoBg else Color.Transparent)
-            .padding(horizontal = MovoSpacing.md),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            style = if (selected) MovoTypography.labelMedium else MovoTypography.labelRegular,
-            color = if (selected) MovoColors.indigoFg else MovoColors.textSecondary,
-        )
-    }
-}
+/** 环境标签的宽度：两段各约 76，放得下「Android」「Debian」。 */
+private val EnvironmentTabsWidth: Dp = 160.dp
 
 /**
- * 暂无对应 Lucide 图标（需要 `activity`）时的过渡：Material 图标放进 Movo 图标按钮的热区与按压态，
- * 热区 44、图标 20、次要色。
+ * 环境切换（Android / Linux）：分段控件 `MovoSegmentedTabs`，选中底块滑到新位置 `standard`、文字颜色 `fast`
+ * （9.3.1「分段 / 标签」），与提供商详情页同一组件。
  */
 @Composable
-internal fun TerminalMaterialIconButton(
-    icon: ImageVector,
-    contentDescription: String,
-    onClick: () -> Unit,
+internal fun TerminalEnvironmentTabs(
+    environment: TerminalEnvironment,
+    linuxEnvironment: TerminalEnvironment,
+    onSwitchEnvironment: (TerminalEnvironment) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Box(
-        modifier = Modifier
-            .size(MovoSize.touchTarget)
-            .movoClickable(PressKind.Icon, onClick = onClick)
-            .semantics { this.contentDescription = contentDescription },
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(MovoSize.iconMedium),
-            tint = MovoColors.textSecondary,
-        )
-    }
+    val options = listOf(TerminalEnvironment.ANDROID, linuxEnvironment)
+    MovoSegmentedTabs(
+        tabs = listOf("Android", if (linuxEnvironment == TerminalEnvironment.ALPINE) "Alpine" else "Debian"),
+        selectedIndex = if (environment == linuxEnvironment) 1 else 0,
+        onSelect = { onSwitchEnvironment(options[it]) },
+        modifier = modifier.width(EnvironmentTabsWidth),
+    )
 }
 
 @Composable
