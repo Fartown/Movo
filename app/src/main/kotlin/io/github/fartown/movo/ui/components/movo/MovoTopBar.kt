@@ -118,9 +118,6 @@ internal fun MovoTopBar(
                     .align(Alignment.Center)
                     .padding(horizontal = 66.dp)
                     .widthIn(max = 280.dp)
-                    // Q4：从设置行进来时，标题由移动中的行标题接上，落地前自己先隐藏。
-                    .onGloballyPositioned { TitleMorph.reportTarget(title, it.boundsInWindow()) }
-                    .graphicsLayer { alpha = if (TitleMorph.hides(title)) 0f else 1f }
                     .semantics { heading() },
             )
             Row(

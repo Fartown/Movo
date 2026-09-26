@@ -1,5 +1,7 @@
 package io.github.fartown.movo.ui.components.movo
 
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.MutableTransitionState
@@ -95,11 +97,25 @@ internal fun MovoPopover(
     val reduced = LocalReducedMotion.current
     // 弹层窗口不可聚焦（保持键盘），返回键由所在窗口处理。
     androidx.activity.compose.BackHandler(enabled = show, onBack = onDismiss)
+    // 弹层窗口固定为「屏幕顶到输入框上方」这一整块，卡片贴底放在里面：分组展开 / 收起时只在窗口内重新排版，
+    // 窗口本身的大小和位置不变（原来窗口随内容逐帧变高，系统每帧重新摆放窗口，真机明显卡顿）。
+    // 这块区域里卡片以外的地方点一下即关闭，与点窗口外一致。没有 [aboveYPx] 时仍按内容大小摆放。
+    val regionHeight = if (aboveYPx > 0) with(density) { (aboveYPx - gapPx + shadowPadPx).coerceAtLeast(0).toDp() } else Dp.Unspecified
     Popup(
         popupPositionProvider = positionProvider,
         onDismissRequest = onDismiss,
         properties = PopupProperties(focusable = false, dismissOnClickOutside = true),
     ) {
+        Box(
+            modifier = if (regionHeight != Dp.Unspecified) {
+                Modifier
+                    .height(regionHeight)
+                    .pointerInput(onDismiss) { detectTapGestures { onDismiss() } }
+            } else {
+                Modifier
+            },
+            contentAlignment = if (alignEnd) Alignment.BottomEnd else Alignment.BottomStart,
+        ) {
         AnimatedVisibility(
             visibleState = visibleState,
             enter = if (reduced) {
@@ -126,11 +142,14 @@ internal fun MovoPopover(
                         },
                     )
                     .then(if (maxHeight != Dp.Unspecified) Modifier.heightIn(max = maxHeight) else Modifier)
+                    // 卡片自己吃掉点击，不落到外层「点空白关闭」。
+                    .pointerInput(Unit) { detectTapGestures { } }
                     .movoSurface(shape, MovoElevation.Overlay)
                     .verticalScroll(rememberScrollState())
                     .padding(MovoSpacing.sm),
                 content = content,
             )
+        }
         }
     }
 }

@@ -238,8 +238,6 @@ internal fun AgentAppRoot(
         conversationPaneOpen = restoreConversationPaneOnBack
         // 进入二级页时放下对话输入框的焦点，否则它在下层保持焦点，回到前台或切换语言后会在设置页弹出键盘。
         focusManager.clearFocus()
-        // Q4：刚从设置行起飞的标题认领这一页，返回时飞回原来那一行。
-        io.github.fartown.movo.ui.components.movo.TitleMorph.bindRoute(route)
         navigator.push(route)
     }
 
@@ -258,7 +256,6 @@ internal fun AgentAppRoot(
     }
 
     fun popRoute() {
-        backStack.lastOrNull()?.let(io.github.fartown.movo.ui.components.movo.TitleMorph::onPop)
         if (!navigator.pop()) {
             (context as? Activity)?.finish()
         }
@@ -734,8 +731,6 @@ internal fun AgentAppRoot(
                 )
             }
         }
-        // Q4 设置行 → 二级页：移动中的行标题画在导航容器之上。
-        io.github.fartown.movo.ui.components.movo.TitleMorphOverlay()
     }
     }
 

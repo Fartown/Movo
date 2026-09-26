@@ -84,17 +84,9 @@ internal fun SettingsRow(
     onClick: (() -> Unit)? = null,
 ) {
     val switch = trailing as? RowTrailing.Switch
-    // Q4：带「›」的行进入二级页时，行标题移动到二级页顶栏（落点由二级页顶栏认领）。
-    var titleRect by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
-    val reducedMotion = io.github.fartown.movo.ui.theme.LocalReducedMotion.current
+    // 进入二级页按默认页面切换；原来的「行标题飞到顶栏」（Q4）2026-09-27 去掉：观感不好。
     val clickAction: (() -> Unit)? = when {
         switch != null -> switch.onCheckedChange?.let { change -> { change(!switch.checked) } }
-        onClick != null && trailing is RowTrailing.Arrow && !reducedMotion -> {
-            {
-                titleRect?.let { TitleMorph.launch(title, it) }
-                onClick()
-            }
-        }
         else -> onClick
     }
     val textStart = if (leading != null) 48.dp else MovoSpacing.lg
@@ -158,9 +150,6 @@ internal fun SettingsRow(
                     // 译文较长（如「Thinking by default」）时折成两行，不截断。
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .onGloballyPositioned { titleRect = it.boundsInWindow() }
-                        .graphicsLayer { alpha = if (TitleMorph.hidesRow(title)) 0f else 1f },
                 )
                 if (subtitle != null) {
                     Text(subtitle, style = MovoTypography.labelRegular, color = MovoColors.textSecondary)
