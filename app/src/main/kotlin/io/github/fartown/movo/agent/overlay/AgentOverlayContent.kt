@@ -1,7 +1,9 @@
 package io.github.fartown.movo.agent.overlay
 
 import android.graphics.BlurMaskFilter
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.animateColorAsState
@@ -41,6 +43,9 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -52,6 +57,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.dropShadow
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.semantics.liveRegion
 import android.view.MotionEvent
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.semantics.onClick
@@ -94,6 +101,7 @@ import androidx.compose.ui.unit.dp
 import io.github.fartown.movo.R
 import io.github.fartown.movo.agent.voice.session.VoiceChannel
 import io.github.fartown.movo.agent.voice.session.VoiceSessionUiState
+import io.github.fartown.movo.ui.components.movo.MovoEntrance
 import io.github.fartown.movo.ui.components.movo.MovoOrb
 import io.github.fartown.movo.ui.components.movo.MovoSpinner
 import io.github.fartown.movo.ui.components.movo.PressKind
@@ -130,29 +138,30 @@ internal fun AgentOverlayGlow(state: AgentOverlayState) {
         AgentOverlayPhase.PAUSED -> 0.4f
         else -> 0f
     }
-    val alpha by animateFloatAsState(targetAlpha, MovoMotion.standard(), label = "glowAlpha")
-    if (alpha <= 0.001f) return
+    // 动画值都保存为 State，只在 graphicsLayer / Canvas 绘制 lambda 里读 `.value`：执行中光晕每帧只重画，不重组（审查 A6）。
+    val alpha = animateFloatAsState(targetAlpha, MovoMotion.standard(), label = "glowAlpha")
+    val shown by remember { derivedStateOf { alpha.value > 0.001f } }
+    if (!shown) return
     val flowing = phase == AgentOverlayPhase.RUNNING && !reduced
-    val rotation: Float
-    val breath: Float
+    val rotation: State<Float>?
+    val breath: State<Float>?
     if (flowing) {
         val transition = rememberInfiniteTransition(label = "glow")
-        val r by transition.animateFloat(
+        rotation = transition.animateFloat(
             0f, 360f,
             infiniteRepeatable(tween(MovoMotion.ORB_GRADIENT_PERIOD, easing = MovoMotion.EasingLinear)),
             label = "glowRotation",
         )
-        val b by transition.animateFloat(
+        breath = transition.animateFloat(
             0.7f, 1f,
             infiniteRepeatable(tween(MovoMotion.AMBIENT / 2, easing = MovoMotion.EasingStandard), RepeatMode.Reverse),
             label = "glowBreath",
         )
-        rotation = r
-        breath = b
     } else {
-        rotation = 0f
-        breath = if (reduced && phase == AgentOverlayPhase.RUNNING) 0.8f else 1f
+        rotation = null
+        breath = null
     }
+    val staticBreath = if (reduced && phase == AgentOverlayPhase.RUNNING) 0.8f else 1f
     val colors = remember { (MovoColors.brandGradient + MovoColors.brandGradient.first()).map { it.toArgb() }.toIntArray() }
     // 光晕画笔复用，不在每帧新建 Paint / Shader（盘点 B11）。
     val glowPaint = remember {
@@ -162,13 +171,13 @@ internal fun AgentOverlayGlow(state: AgentOverlayState) {
     }
     val shaderMatrix = remember { android.graphics.Matrix() }
     val cache = remember { GlowCache() }
-    Canvas(modifier = Modifier.fillMaxSize().graphicsLayer { this.alpha = alpha * breath }) {
+    Canvas(modifier = Modifier.fillMaxSize().graphicsLayer { this.alpha = alpha.value * (breath?.value ?: staticBreath) }) {
         val corner = 36.dp.toPx()
         val cx = size.width / 2f
         val cy = size.height / 2f
         drawIntoCanvas { canvas ->
             val shader = cache.shader(cx, cy, colors)
-            shaderMatrix.setRotate(rotation, cx, cy)
+            shaderMatrix.setRotate(rotation?.value ?: 0f, cx, cy)
             shader.setLocalMatrix(shaderMatrix)
             glowPaint.shader = shader
             // 柔光：10 宽、模糊 14，向内渐隐。
@@ -247,7 +256,7 @@ internal fun AgentOverlayOrb(
     LaunchedEffect(Unit) { entered = true }
     var dragging by remember { mutableStateOf(false) }
     var pressed by remember { mutableStateOf(false) }
-    val lift by animateFloatAsState(
+    val lift = animateFloatAsState(
         when {
             reduced -> 1f
             engaged -> 1.1f
@@ -336,7 +345,7 @@ internal fun AgentOverlayOrb(
             Box(
                 modifier = Modifier
                     .size(32.dp)
-                    .graphicsLayer { scaleX = lift; scaleY = lift }
+                    .graphicsLayer { scaleX = lift.value; scaleY = lift.value }
                     .dropShadow(CircleShape, Shadow(radius = 16.dp, offset = DpOffset(0.dp, 6.dp), color = MovoColors.shadow, alpha = shadowAlpha))
                     .clip(CircleShape)
                     .background(GlassSurface)
@@ -344,11 +353,12 @@ internal fun AgentOverlayOrb(
                 contentAlignment = Alignment.Center,
             ) {
                 val desaturate = mode == OrbMode.PAUSED
-                val saturation by animateFloatAsState(if (desaturate) 0f else 1f, MovoMotion.fast(), label = "orbSaturation")
+                val saturation = animateFloatAsState(if (desaturate) 0f else 1f, MovoMotion.fast(), label = "orbSaturation")
                 Box(
                     modifier = Modifier
                         .graphicsLayer {
-                            if (saturation < 1f) alpha = 0.7f + 0.3f * saturation
+                            val value = saturation.value
+                            alpha = if (value < 1f) 0.7f + 0.3f * value else 1f
                         }
                         .drawWithContent {
                             drawContent()
@@ -356,7 +366,8 @@ internal fun AgentOverlayOrb(
                             if (b > 0f) drawCircle(Color.White.copy(alpha = b), blendMode = androidx.compose.ui.graphics.BlendMode.Screen)
                         },
                 ) {
-                    MovoOrb(size = 22.dp, animated = mode == OrbMode.RUNNING || mode == OrbMode.LISTENING || mode == OrbMode.STANDBY)
+                    // 待命时光球为静态渐变、不再逐帧请求绘制（审查 A14）；只有执行中 / 聆听在转。
+                    MovoOrb(size = 22.dp, animated = mode == OrbMode.RUNNING || mode == OrbMode.LISTENING)
                 }
                 OrbStatusRing(mode)
             }
@@ -398,20 +409,21 @@ private class OrbGesture {
 private fun OrbRipple(hearing: Boolean) {
     val reduced = LocalReducedMotion.current
     val spreading = hearing && !reduced
-    val progress = if (spreading) {
+    // 进度只在 Canvas 绘制 lambda 里读（审查 A6）。
+    val progressState: State<Float>? = if (spreading) {
         val transition = rememberInfiniteTransition(label = "orbRipple")
-        val value by transition.animateFloat(
+        transition.animateFloat(
             0f, 1f,
             infiniteRepeatable(tween(MovoMotion.ORB_ARC_PERIOD, easing = MovoMotion.EasingStandard)),
             label = "orbRippleProgress",
         )
-        value
     } else {
-        -1f
+        null
     }
     Canvas(modifier = Modifier.size(44.dp)) {
         val stroke = 1.dp.toPx()
         drawCircle(MovoColors.indigoFg.copy(alpha = 0.22f), radius = size.minDimension / 2 - stroke / 2, style = Stroke(stroke))
+        val progress = progressState?.value ?: -1f
         if (progress >= 0f) {
             val from = 16.dp.toPx()
             val to = size.minDimension / 2 - stroke / 2
@@ -427,7 +439,7 @@ private fun OrbRipple(hearing: Boolean) {
 @Composable
 private fun OrbStatusRing(mode: OrbMode) {
     val reduced = LocalReducedMotion.current
-    val color by animateColorAsState(
+    val color = animateColorAsState(
         when (mode) {
             OrbMode.RUNNING, OrbMode.LISTENING -> MovoColors.indigoFg
             OrbMode.PAUSED -> MovoColors.textTertiary
@@ -439,24 +451,25 @@ private fun OrbStatusRing(mode: OrbMode) {
         label = "orbRing",
     )
     val spinning = mode == OrbMode.RUNNING && !reduced
-    val rotation = if (spinning) {
+    // 状态弧的角度与颜色只在 Canvas 绘制 lambda 里读（审查 A6）：执行中每帧只重画这一个 32 的环。
+    val rotation: State<Float>? = if (spinning) {
         val transition = rememberInfiniteTransition(label = "orbArc")
-        val value by transition.animateFloat(
+        transition.animateFloat(
             0f, 360f,
             infiniteRepeatable(tween(MovoMotion.ORB_ARC_PERIOD, easing = MovoMotion.EasingLinear)),
             label = "orbArcRotation",
         )
-        value
     } else {
-        0f
+        null
     }
     Canvas(modifier = Modifier.size(32.dp)) {
+        val color = color.value
         if (color.alpha <= 0.001f) return@Canvas
         val stroke = 1.5.dp.toPx()
         val inset = stroke / 2
         val arcSize = Size(size.width - stroke, size.height - stroke)
         if (spinning) {
-            rotate(rotation) {
+            rotate(rotation?.value ?: 0f) {
                 drawArc(color, -90f, 90f, false, Offset(inset, inset), arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
             }
         } else {
@@ -548,6 +561,8 @@ internal fun AgentOverlayBubble(
     onStartVoice: () -> Unit = {},
     onEndVoice: () -> Unit = {},
     onOpenResult: () -> Unit = {},
+    /** 展开卡状态说明（规范 8.1 / 8.11：悬浮窗的失败提示写进展开卡，不用 Toast），例如缺麦克风权限、打不开对话。 */
+    notice: String? = null,
 ) {
     val reduced = LocalReducedMotion.current
     var entered by remember { mutableStateOf(false) }
@@ -603,8 +618,15 @@ internal fun AgentOverlayBubble(
             modifier = Modifier
                 .padding(12.dp)
                 .width(224.dp)
-                .dropShadow(shape, Shadow(radius = 32.dp, spread = (-8).dp, offset = DpOffset(0.dp, 12.dp), color = MovoColors.shadow, alpha = 0.10f))
-                .dropShadow(shape, Shadow(radius = 3.dp, offset = DpOffset(0.dp, 1.dp), color = MovoColors.shadow, alpha = 0.05f))
+                // 卡片高度随内容动画变化：用硬件阴影（RenderNode 按轮廓实时算），不再每帧重画 32 模糊的位图阴影（审查 A10）。
+                // 色调取规范第 7 章暖灰阴影色；系统会再乘主题的 ambient / spot 透明度，spot 取一半使主阴影接近 `0 12 32 −8 / 10%`。
+                .shadow(
+                    elevation = 12.dp,
+                    shape = shape,
+                    clip = false,
+                    ambientColor = MovoColors.shadow,
+                    spotColor = MovoColors.shadow.copy(alpha = 0.5f),
+                )
                 .clip(shape)
                 .background(GlassSurface)
                 .border(0.5.dp, MovoColors.borderHairline, shape)
@@ -619,6 +641,7 @@ internal fun AgentOverlayBubble(
             ) { inVoice ->
                 if (inVoice) PanelVoiceBody(state, voice) else PanelHeader(state)
             }
+            PanelNotice(notice)
             AnimatedVisibility(
                 visible = supplementMode,
                 enter = fadeIn(MovoMotion.fast()) + expandVertically(MovoMotion.standard()),
@@ -643,7 +666,15 @@ internal fun AgentOverlayBubble(
                         enter = fadeIn(MovoMotion.standard()) + expandVertically(MovoMotion.standard()),
                         exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
                     ) {
-                        if (state.phase == AgentOverlayPhase.FAILED) PanelFailure(state, onOpenResult) else RecentSteps(state)
+                        // 失败与最近步骤之间交叉淡化，高度同步 `standard`（审查 B6）。
+                        Crossfade(
+                            targetState = state.phase == AgentOverlayPhase.FAILED,
+                            animationSpec = MovoMotion.fast(),
+                            modifier = Modifier.animateContentSize(MovoMotion.standard()),
+                            label = "panelFailure",
+                        ) { failed ->
+                            if (failed) PanelFailure(state, onOpenResult) else RecentSteps(state)
+                        }
                     }
                     PanelActions(
                         phase = state.phase,
@@ -677,19 +708,28 @@ private fun PanelHeader(state: AgentOverlayState) {
         modifier = Modifier.fillMaxWidth().height(32.dp).padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = when {
-                state.phase == AgentOverlayPhase.FAILED -> state.status.localizedText()
-                paused && stepCount > 0 -> stringResource(R.string.movo_overlay_paused_step, stepCount)
-                current != null -> stringResource(R.string.movo_overlay_step, stepCount, current.title)
-                else -> state.status.localizedText()
-            },
-            style = MovoTypography.labelMedium,
-            color = MovoColors.textPrimary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+        val title = when {
+            state.phase == AgentOverlayPhase.FAILED -> state.status.localizedText()
+            paused && stepCount > 0 -> stringResource(R.string.movo_overlay_paused_step, stepCount)
+            current != null -> stringResource(R.string.movo_overlay_step, stepCount, current.title)
+            else -> state.status.localizedText()
+        }
+        // 标题变化交叉淡化 `fast`（规范 9.3「值变化」，审查 B6）；计时直接换数字。
+        AnimatedContent(
+            targetState = title,
+            transitionSpec = { fadeIn(MovoMotion.fast()) togetherWith fadeOut(MovoMotion.fastExit()) },
+            contentAlignment = Alignment.CenterStart,
             modifier = Modifier.weight(1f),
-        )
+            label = "panelTitle",
+        ) { text ->
+            Text(
+                text = text,
+                style = MovoTypography.labelMedium,
+                color = MovoColors.textPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         // 继续后的第一帧 produceState 还没刷新，时钟仍是暂停那一刻，而暂停时长已扣掉，会闪一帧偏小的计时；
         // 执行中取当前时刻兜底。
         val clock = if (state.phase == AgentOverlayPhase.RUNNING) maxOf(now, System.currentTimeMillis()) else now
@@ -732,6 +772,8 @@ private fun PanelFailure(state: AgentOverlayState, onOpenResult: () -> Unit) {
 @Composable
 private fun RecentSteps(state: AgentOverlayState) {
     val recent = state.steps.takeLast(3)
+    // 展开卡出现时已有的步骤直接显示（整张卡在做进场），之后新出现的步骤才播淡入上移。
+    val seen = remember { state.steps.mapTo(mutableSetOf()) { it.id } }
     if (recent.isEmpty()) return
     val paused = state.phase == AgentOverlayPhase.PAUSED
     Column(
@@ -739,26 +781,65 @@ private fun RecentSteps(state: AgentOverlayState) {
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         recent.forEachIndexed { index, step ->
-            val isCurrent = index == recent.lastIndex
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.heightIn(min = 16.dp)) {
-                Box(Modifier.size(12.dp), contentAlignment = Alignment.Center) {
-                    when {
-                        isCurrent && paused -> MovoIcon(MovoIcons.Pause, null, size = 12.dp, tint = MovoColors.textSecondary)
-                        step.status == OverlayStepStatus.RUNNING -> MovoSpinner(size = 12.dp)
-                        step.status == OverlayStepStatus.DONE -> MovoIcon(MovoIcons.Check, null, size = 12.dp, tint = MovoColors.greenFg)
-                        else -> MovoIcon(MovoIcons.X, null, size = 12.dp, tint = MovoColors.roseFg)
+            // 按步骤 id 保持每一行的身份：新步骤淡入上移 6 `fast`（规范 9.4「执行卡 · 新步骤」，审查 B6）。
+            key(step.id) {
+                val isNew = remember { seen.add(step.id) }
+                val isCurrent = index == recent.lastIndex
+                MovoEntrance(play = isNew, shift = 6.dp, durationMillis = MovoMotion.FAST) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.heightIn(min = 16.dp)) {
+                        val icon = when {
+                            isCurrent && paused -> StepIcon.PAUSED
+                            step.status == OverlayStepStatus.RUNNING -> StepIcon.RUNNING
+                            step.status == OverlayStepStatus.DONE -> StepIcon.DONE
+                            else -> StepIcon.FAILED
+                        }
+                        // 状态图标交叉淡化 `fast`（加载圈 → ✓ / ✕ / ‖）。
+                        Crossfade(targetState = icon, animationSpec = MovoMotion.fast(), modifier = Modifier.size(12.dp), label = "panelStepIcon") { current ->
+                            Box(Modifier.size(12.dp), contentAlignment = Alignment.Center) {
+                                when (current) {
+                                    StepIcon.PAUSED -> MovoIcon(MovoIcons.Pause, null, size = 12.dp, tint = MovoColors.textSecondary)
+                                    StepIcon.RUNNING -> MovoSpinner(size = 12.dp)
+                                    StepIcon.DONE -> MovoIcon(MovoIcons.Check, null, size = 12.dp, tint = MovoColors.greenFg)
+                                    StepIcon.FAILED -> MovoIcon(MovoIcons.X, null, size = 12.dp, tint = MovoColors.roseFg)
+                                }
+                            }
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            step.title,
+                            style = MovoTypography.microMedium,
+                            color = if (isCurrent) MovoColors.textPrimary else MovoColors.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    step.title,
-                    style = MovoTypography.microMedium,
-                    color = if (isCurrent) MovoColors.textPrimary else MovoColors.textSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
             }
         }
+    }
+}
+
+private enum class StepIcon { PAUSED, RUNNING, DONE, FAILED }
+
+/** 展开卡状态说明：`Micro/Medium` 次要色、最多 2 行（与失败原因同一写法），出现 / 消失淡入淡出并收放高度。 */
+@Composable
+private fun PanelNotice(notice: String?) {
+    var last by remember { mutableStateOf("") }
+    if (notice != null) last = notice
+    AnimatedVisibility(
+        visible = notice != null,
+        enter = fadeIn(MovoMotion.fast()) + expandVertically(MovoMotion.standard()),
+        exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
+    ) {
+        Text(
+            last,
+            style = MovoTypography.microMedium,
+            color = MovoColors.textSecondary,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, bottom = 4.dp)
+                .semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite },
+        )
     }
 }
 
@@ -773,7 +854,12 @@ private fun PanelActions(
     onResume: () -> Unit,
     onStop: () -> Unit,
 ) {
-    if (phase == AgentOverlayPhase.FINISHED || phase == AgentOverlayPhase.FAILED) return
+    // 完成 / 失败时操作行淡出并收起，而不是直接消失（审查 B6）。
+    AnimatedVisibility(
+        visible = phase != AgentOverlayPhase.FINISHED && phase != AgentOverlayPhase.FAILED,
+        enter = fadeIn(MovoMotion.fast()) + expandVertically(MovoMotion.standard()),
+        exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
+    ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -796,6 +882,7 @@ private fun PanelActions(
                 }
             }
         }
+    }
     }
 }
 
@@ -852,7 +939,16 @@ private fun PanelVoiceBody(state: AgentOverlayState, voice: VoiceSessionUiState)
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             val transcript = voice.transcript.takeIf { it.isNotBlank() && channel != VoiceChannel.Speaking && !supplemented }
-            if (transcript != null) PanelTranscript(transcript)
+            // 字幕出现 / 消失淡入淡出并收放高度（审查 B6）；退出期间沿用最后一段字幕，不闪空白。
+            var lastTranscript by remember { mutableStateOf("") }
+            if (transcript != null) lastTranscript = transcript
+            AnimatedVisibility(
+                visible = transcript != null,
+                enter = fadeIn(MovoMotion.fast()) + expandVertically(MovoMotion.standard()),
+                exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
+            ) {
+                PanelTranscript(lastTranscript)
+            }
             val stepCount = state.steps.size
             Text(
                 text = if (stepCount > 0) {

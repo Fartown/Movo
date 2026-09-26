@@ -22,7 +22,6 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
-import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
@@ -151,6 +150,13 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private val orbShown = mutableStateOf(true)
     private val removeEngaged = mutableStateOf(false)
     private val removeZoneVisible = mutableStateOf(false)
+    /**
+     * 展开卡状态说明（规范 8.1 / 8.11：悬浮窗的失败提示写进展开卡，不用 Toast）：缺麦克风权限、语音没能开始、打不开结果对话。
+     * 展开卡收起时清掉。
+     */
+    private val panelNotice = mutableStateOf<String?>(null)
+    /** 最近一次从展开卡 / 长按悬浮球发起语音的时刻：之后几秒内语音服务报告的「没能开始」转述到展开卡。 */
+    private var panelVoiceRequestedAt = 0L
     private var removeZoneView: ComposeView? = null
     /** 拖动中手指对应的悬浮球窗口位置（吸附到移除区时窗口不跟手，松开吸附后回到这里）。 */
     private var fingerX = 0f
@@ -189,6 +195,14 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         // 语音对话与悬浮窗联动（规范 8.5）：执行中语音开始时展开卡以语音模式弹出；语音结束后展开卡恢复自动收起。
         lifecycleScope.launch {
             VoiceSessionManager.state.map { it.active }.distinctUntilChanged().collect(::onVoiceActiveChanged)
+        }
+        // 语音服务在后台没能转前台（例如系统不允许从后台启动麦克风）时只会写输入框上方的提示；
+        // 刚从展开卡发起的，把原因转述到展开卡（此时屏幕上没有 Movo 的输入框）。
+        lifecycleScope.launch {
+            VoiceSessionManager.state.map { it.notice }.distinctUntilChanged().collect { notice ->
+                val recent = android.os.SystemClock.uptimeMillis() - panelVoiceRequestedAt <= PANEL_VOICE_NOTICE_WINDOW_MS
+                if (notice != null && recent && !VoiceSessionManager.active) showPanelNotice(notice)
+            }
         }
     }
 
@@ -1141,14 +1155,24 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     /** 展开卡里的声波 / 长按悬浮球：开始语音对话；执行中说的话停顿后作为补充交给当前任务。 */
     private fun startPanelVoice() {
         if (VoiceSessionManager.active) return
-        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(this, R.string.movo_overlay_mic_required, Toast.LENGTH_LONG).show()
-            return
+        panelNotice.value = null
+        // 没能开始的原因写进展开卡（规范 8.1 / 8.11，不用 Toast）；展开卡此时已展开。
+        when (VoiceEntry.startInPlace(this, showNotice = false)) {
+            VoiceEntry.StartResult.STARTED -> panelVoiceRequestedAt = android.os.SystemClock.uptimeMillis()
+            VoiceEntry.StartResult.ALREADY_ACTIVE -> Unit
+            VoiceEntry.StartResult.MIC_PERMISSION_REQUIRED -> showPanelNotice(getString(R.string.movo_overlay_mic_required))
+            VoiceEntry.StartResult.CLOSING -> showPanelNotice(VoiceEntry.CLOSING_NOTICE)
+            VoiceEntry.StartResult.FAILED -> {
+                AndroidAgentLogger.warn("Overlay voice start failed")
+                showPanelNotice(getString(R.string.movo_overlay_voice_failed))
+            }
         }
-        runCatching { VoiceEntry.startInPlace(this) }.onFailure { throwable ->
-            AndroidAgentLogger.warn("Overlay voice start failed: type=${throwable.safeLogType()}")
-            Toast.makeText(this, R.string.movo_overlay_voice_failed, Toast.LENGTH_LONG).show()
-        }
+    }
+
+    /** 在展开卡里说明原因：没展开就展开（规范 8.1 展开卡状态行）。 */
+    private fun showPanelNotice(message: String) {
+        panelNotice.value = message
+        if (collapsed.value) expandBubble() else scheduleBubbleAutoCollapse()
     }
 
     private fun toggleCollapse() {
@@ -1168,7 +1192,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun collapseBubble() {
         collapsed.value = true
         mainHandler.removeCallbacksAndMessages(panelIdleToken)
-        val view = bubbleView ?: return
+        val view = bubbleView ?: run { panelNotice.value = null; return }
         bubbleVisible.value = false
         setBubbleInputMode(focusable = false)
         mainHandler.postDelayed({
@@ -1176,6 +1200,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 runCatching { windowManager?.removeView(view) }
                 bubbleView = null
                 bubbleParams = null
+                panelNotice.value = null
             }
         }, bubbleRemovalToken, BUBBLE_EXIT_MS)
     }
@@ -1211,6 +1236,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 onStartVoice = ::startPanelVoice,
                 onEndVoice = VoiceSessionManager::switchToText,
                 onOpenResult = ::onOrbTapped,
+                notice = panelNotice.value,
             )
         }
         val lp = bubbleLayoutParams()
@@ -1620,7 +1646,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 if (resultCode == AgentConversationHandoff.RESULT_READY) {
                     enterStandby()
                 } else {
-                    failResultHandoff(token)
+                    // 浮层已经打开并在内容区显示了原因与「重试」，这里不再另外提示。
+                    failResultHandoff(token, notify = false)
                 }
             }
         }
@@ -1652,11 +1679,15 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         mainHandler.postDelayed({ failResultHandoff(token) }, token, 10_000)
     }
 
-    private fun failResultHandoff(token: Any) {
+    /**
+     * 结果对话没能打开：悬浮球保留当前状态（点它可重试）；[notify] 时把原因写进展开卡并展开（规范 8.1 / 8.11，不用 Toast）。
+     * 浮层自己报告失败时它已在内容区说明，不重复提示。
+     */
+    private fun failResultHandoff(token: Any, notify: Boolean = true) {
         if (resultHandoffToken !== token) return
         clearResultHandoff()
         AndroidAgentLogger.warn("Agent conversation sheet not ready; runtime overlay retained")
-        Toast.makeText(this, R.string.overlay_result_open_failed, Toast.LENGTH_LONG).show()
+        if (notify && orbView != null) showPanelNotice(getString(R.string.overlay_result_open_failed))
     }
 
     private fun clearResultHandoff() {
@@ -1852,6 +1883,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         const val PANEL_SHADOW_DP = 12
         const val BUBBLE_EXIT_MS = 150L
         const val PANEL_AUTO_COLLAPSE_MS = 4_000L
+        /** 从展开卡发起语音后，语音服务报告「没能开始」时转述到展开卡的时间窗。 */
+        const val PANEL_VOICE_NOTICE_WINDOW_MS = 3_000L
         const val IME_TRACK_INTERVAL_MS = 60L
         private const val OVERLAY_PREFS = "agent_overlay"
         private const val PREF_IME_HEIGHT = "ime_height_px"

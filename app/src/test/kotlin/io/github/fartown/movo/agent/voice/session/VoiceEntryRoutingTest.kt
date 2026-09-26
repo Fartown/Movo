@@ -54,13 +54,22 @@ class VoiceEntryRoutingTest {
     }
     @Test fun startingWithoutMicrophonePermissionNeverStartsTheForegroundService() {
         shadowOf(context as Application).denyPermissions(android.Manifest.permission.RECORD_AUDIO)
-        VoiceEntry.startInPlace(context)
+        assertEquals(VoiceEntry.StartResult.MIC_PERMISSION_REQUIRED, VoiceEntry.startInPlace(context))
         assertNull(shadowOf(context as Application).nextStartedService)
-        assertEquals("需要麦克风权限才能开始语音", ShadowToast.getTextOfLatestToast())
+        // 规范 8.11 不用 Toast：原因写进输入框上方的语音提示。
+        assertNull(ShadowToast.getLatestToast())
+        assertEquals(VoiceEntry.MIC_REQUIRED_NOTICE, VoiceSessionManager.state.value.notice)
+    }
+    @Test fun callersWithoutAComposerGetTheReasonBackInsteadOfANotice() {
+        shadowOf(context as Application).denyPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val before = VoiceSessionManager.state.value.notice
+        assertEquals(VoiceEntry.StartResult.MIC_PERMISSION_REQUIRED, VoiceEntry.startInPlace(context, showNotice = false))
+        assertEquals(before, VoiceSessionManager.state.value.notice)
+        assertNull(ShadowToast.getLatestToast())
     }
     @Test fun startingWithPermissionStartsTheMicrophoneService() {
         shadowOf(context as Application).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
-        VoiceEntry.startInPlace(context)
+        assertEquals(VoiceEntry.StartResult.STARTED, VoiceEntry.startInPlace(context))
         assertEquals(io.github.fartown.movo.agent.voice.MovoAssistantVoiceService.ACTION_START_VOICE,
             shadowOf(context as Application).nextStartedService?.action)
     }

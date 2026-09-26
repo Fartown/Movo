@@ -11,7 +11,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Spacer
@@ -28,7 +29,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.offset
+import androidx.compose.animation.Crossfade
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.draw.clip
@@ -39,7 +43,6 @@ import androidx.compose.ui.unit.dp
 import io.github.fartown.movo.R
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -53,6 +56,10 @@ internal fun AgentConversationSheet(
     onOpenConversation: () -> Unit,
     onClose: () -> Unit,
     expandProgress: () -> Float = { 0f },
+    /** 标题位置暂时显示的是一条说明（例如「展开到 App」失败），用次要色。 */
+    titleIsNotice: Boolean = false,
+    /** 浮层顶边与状态栏重叠的高度（px，布局阶段读取）：推到屏幕顶时内容让出状态栏。 */
+    topInset: () -> Int = { 0 },
     content: @Composable () -> Unit,
 ) {
     val colors = MiuixTheme.colorScheme
@@ -65,14 +72,27 @@ internal fun AgentConversationSheet(
     val touchSlop = LocalViewConfiguration.current.touchSlop
     // `Overlay/Sheet`（规范 8.9）：bg/canvas，顶部圆角 28、底部 0；把手区 16（32 × 4）；头部 44，
     // 标题 Body/Strong 一行省略（最大宽 300），右侧「展开到 App」「关闭」图标 24、热区 44。
-    // Q4 浮层 → App：推满全屏时顶部圆角 28 → 0、把手淡出（规范 9.5）。
-    val topRadius = 28.dp * (1f - expandProgress().coerceIn(0f, 1f))
-    Scaffold(
-        modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(topStart = topRadius, topEnd = topRadius)),
-        containerColor = io.github.fartown.movo.ui.theme.MovoColors.bgCanvas,
-        contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
+    // Q4 浮层 → App：推满全屏时顶部圆角 28 → 0、把手淡出（规范 9.5）。进度只在绘制阶段读取（审查 A1）。
+    // Miuix 弹出菜单的 Scaffold 在浮层外的根上（铺满窗口），这里只是一块 bg/canvas 底。
+    Box(
+        modifier = Modifier.fillMaxSize()
+            .graphicsLayer {
+                val radius = 28.dp.toPx() * (1f - expandProgress().coerceIn(0f, 1f))
+                shape = RoundedCornerShape(topStart = radius, topEnd = radius)
+                clip = true
+            }
+            .background(io.github.fartown.movo.ui.theme.MovoColors.bgCanvas),
     ) {
-        Column(Modifier.fillMaxSize().statusBarsPadding()) {
+        Column(
+            Modifier.fillMaxSize()
+                // 窗口全屏后状态栏 insets 一直都在：只让出浮层顶边与状态栏重叠的部分（原来半屏窗口收不到 insets）。
+                .consumeWindowInsets(WindowInsets.statusBars)
+                .layout { measurable, constraints ->
+                    val top = topInset().coerceIn(0, constraints.maxHeight)
+                    val placeable = measurable.measure(constraints.offset(vertical = -top))
+                    layout(constraints.maxWidth, constraints.maxHeight) { placeable.place(0, top) }
+                },
+        ) {
             // The handle alone owns window dragging; the message list keeps its scrolling gestures.
             Column(
                 Modifier.fillMaxWidth().onSizeChanged { chromeWidth[0] = it.width }
@@ -124,14 +144,23 @@ internal fun AgentConversationSheet(
                     Modifier.fillMaxWidth().height(44.dp).padding(start = 20.dp, end = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        title,
-                        style = io.github.fartown.movo.ui.theme.MovoTypography.bodyStrong,
-                        color = io.github.fartown.movo.ui.theme.MovoColors.textPrimary,
+                    // 值变化：会话标题交叉淡化 `fast`（规范 9.3）。
+                    Crossfade(
+                        targetState = title to titleIsNotice,
+                        animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
                         modifier = Modifier.weight(1f).widthIn(max = 300.dp),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                        label = "sheetTitle",
+                    ) { (text, notice) ->
+                        Text(
+                            text,
+                            style = if (notice) io.github.fartown.movo.ui.theme.MovoTypography.labelRegular
+                                else io.github.fartown.movo.ui.theme.MovoTypography.bodyStrong,
+                            color = if (notice) io.github.fartown.movo.ui.theme.MovoColors.textSecondary
+                                else io.github.fartown.movo.ui.theme.MovoColors.textPrimary,
+                            maxLines = if (notice) 2 else 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                     io.github.fartown.movo.ui.components.movo.MovoIconButton(
                         icon = io.github.fartown.movo.ui.theme.MovoIcons.Maximize2,
                         contentDescription = stringResource(R.string.overlay_result_expand),
