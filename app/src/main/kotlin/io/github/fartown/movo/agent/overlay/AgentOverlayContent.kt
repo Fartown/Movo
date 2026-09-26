@@ -539,7 +539,9 @@ internal fun AgentOverlayRemoveZone(visible: Boolean) {
  * 悬浮球展开卡 `Overlay/Panel`：宽 224、内边距 4、圆角 16、玻璃材质。
  * 「第 N 步·动作」+ 计时 → 最近 3 步（12 图标 + Micro/Medium）→ 底部操作行（紧凑档 24，热区 32）：
  * 左 = 打字补充（键盘）、语音对话（声波）；右 = 运行中「‖ 暂停」，暂停后「结束任务」+「▶ 继续」。同一时刻只出现一种「停」。
- * 暂停态：标题「已暂停·第 N 步」、计时冻结改次要色、当前步图标换成 ‖。以靠球一侧的底角为锚点缩放 0.9 → 1 进场。
+ * 暂停态：标题「已暂停·第 N 步」、计时冻结改次要色、当前步图标换成 ‖。
+ * 进场从悬浮球里长出来（2026-09-27 定）：卡片先是与悬浮球重合的 32 圆，以球心为锚点放大成卡片，圆角由圆过渡到 16，
+ * 内容在 30%–100% 淡入（`standard` + `enter`）；收起反向缩回球里（140ms + `exit`）。减少动画时只淡入淡出。
  * 语音对话进行中（[voice] active）切到语音模式（Figma「展开卡（语音模式）」）：状态行 → 字幕（最多 3 行，顶部淡出）→
  * 上下文 → 操作行（左「切回文字」，右不变）；内容区交叉淡化、高度同步 `standard`，操作行原位不动。
  */
@@ -607,17 +609,28 @@ internal fun AgentOverlayBubble(
         }
     }
 
-    val origin = TransformOrigin(if (anchorEnd) 1f else 0f, 1f)
     AnimatedVisibility(
         visible = entered && visible,
-        enter = fadeIn(MovoMotion.fast()) + if (reduced) fadeIn(snap()) else scaleIn(MovoMotion.fast(), initialScale = 0.9f, transformOrigin = origin),
-        exit = fadeOut(MovoMotion.fastExit()) + if (reduced) fadeOut(snap()) else scaleOut(MovoMotion.fastExit(), targetScale = 0.9f, transformOrigin = origin),
+        enter = fadeIn(if (reduced) MovoMotion.fast() else tween(PANEL_MORPH_IN_MS / 3)),
+        exit = fadeOut(if (reduced) MovoMotion.fastExit() else tween(PANEL_MORPH_OUT_MS, easing = MovoMotion.EasingExit)),
     ) {
+        // 球 ↔ 卡片的形变进度：0 = 与悬浮球重合的 32 圆，1 = 卡片。
+        val morph by transition.animateFloat(
+            transitionSpec = {
+                if (targetState == androidx.compose.animation.EnterExitState.Visible) {
+                    tween(PANEL_MORPH_IN_MS, easing = MovoMotion.EasingEnter)
+                } else {
+                    tween(PANEL_MORPH_OUT_MS, easing = MovoMotion.EasingExit)
+                }
+            },
+            label = "panelMorph",
+        ) { if (it == androidx.compose.animation.EnterExitState.Visible || reduced) 1f else 0f }
         val shape = RoundedCornerShape(16.dp)
         Column(
             modifier = Modifier
                 .padding(12.dp)
                 .width(224.dp)
+                .orbMorph(progress = { morph }, anchorEnd = anchorEnd)
                 // 卡片高度随内容动画变化：用硬件阴影（RenderNode 按轮廓实时算），不再每帧重画 32 模糊的位图阴影（审查 A10）。
                 // 色调取规范第 7 章暖灰阴影色；系统会再乘主题的 ambient / spot 透明度，spot 取一半使主阴影接近 `0 12 32 −8 / 10%`。
                 .shadow(
@@ -630,7 +643,9 @@ internal fun AgentOverlayBubble(
                 .clip(shape)
                 .background(GlassSurface)
                 .border(0.5.dp, MovoColors.borderHairline, shape)
-                .padding(4.dp),
+                .padding(4.dp)
+                // 内容在形变 30%–100% 淡入：前段只有玻璃底色从球里长出来。
+                .graphicsLayer { alpha = ((morph - 0.3f) / 0.7f).coerceIn(0f, 1f) },
         ) {
             val voiceMode = voice.active && !supplementMode
             Crossfade(
@@ -1134,4 +1149,47 @@ private fun SupplementInput(
             CompactPill(MovoIcons.ArrowUp, stringResource(R.string.overlay_send), primary = value.isNotBlank(), onClick = onSend)
         }
     }
+}
+
+/** 展开卡从悬浮球长出 / 缩回的时长（规范 9.5「悬浮球 → 展开卡」）。收起须短于窗口移除的延迟（BUBBLE_EXIT_MS 150）。 */
+private const val PANEL_MORPH_IN_MS = MovoMotion.STANDARD
+private const val PANEL_MORPH_OUT_MS = 140
+
+/**
+ * 以悬浮球球心为锚点，把卡片从与球重合的 32 圆放大到自身大小。卡片与球的相对位置由窗口摆放决定
+ * （AgentRuntimeService.bubbleLayoutParams）：卡片在球朝屏幕中心的一侧、间距 8；卡片底边比球窗口底边高 6，
+ * 球窗口 44、球心在窗口中央。所以球心在卡片外侧 8 + 22、卡片底边上方 22 − 6。
+ * 形变只在绘制阶段读取进度；形变期间按椭圆 → 圆角 16 裁切（缩放后起点正好是正圆），结束后不裁切，保留卡片阴影。
+ */
+private fun Modifier.orbMorph(progress: () -> Float, anchorEnd: Boolean): Modifier = graphicsLayer {
+    val p = progress()
+    if (p >= 1f) return@graphicsLayer
+    val w = size.width
+    val h = size.height
+    if (w <= 0f || h <= 0f) return@graphicsLayer
+    val disc = 32.dp.toPx()
+    val sideGap = (8 + 22).dp.toPx()
+    val originX = if (anchorEnd) w + sideGap else -sideGap
+    val originY = h - (22 - 6).dp.toPx()
+    val sx = disc / w + (1f - disc / w) * p
+    val sy = disc / h + (1f - disc / h) * p
+    transformOrigin = TransformOrigin(originX / w, originY / h)
+    scaleX = sx
+    scaleY = sy
+    // 以球心为锚点缩放后，卡片中心离球心还差一段：起点平移到正好盖在球上，随进度归零。
+    translationX = -((w / 2f - originX) * (disc / w)) * (1f - p)
+    translationY = -((h / 2f - originY) * (disc / h)) * (1f - p)
+    val r = 16.dp.toPx()
+    val rx = w / 2f + (r - w / 2f) * p
+    val ry = h / 2f + (r - h / 2f) * p
+    shape = object : androidx.compose.ui.graphics.Shape {
+        override fun createOutline(
+            size: androidx.compose.ui.geometry.Size,
+            layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+            density: androidx.compose.ui.unit.Density,
+        ) = androidx.compose.ui.graphics.Outline.Rounded(
+            androidx.compose.ui.geometry.RoundRect(0f, 0f, size.width, size.height, androidx.compose.ui.geometry.CornerRadius(rx, ry)),
+        )
+    }
+    clip = true
 }
