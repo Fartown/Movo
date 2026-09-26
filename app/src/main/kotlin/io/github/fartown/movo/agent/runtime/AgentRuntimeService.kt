@@ -1272,10 +1272,14 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
      */
     private fun liftBubbleForTyping() {
         typingLift = 0
-        // 没有实测值时先按屏高 30% 上移：比常见键盘矮，之后读到实际位置只会再往上补一点，不会先高后掉。
-        val estimate = lastImeHeight.takeIf { it > 0 } ?: (screenRealHeight() * 0.3f).toInt()
+        sessionImeMax = 0
+        // 没有实测值时先按屏高 33% 上移：不高于常见键盘，之后读到实际位置只会再往上补一点，不会先高后掉。
+        val estimate = lastImeHeight.takeIf { it > 0 } ?: (screenRealHeight() * 0.33f).toInt()
         liftBubbleTo(bubbleYAbove(estimate))
     }
+
+    /** 本次补充输入里读到的最大键盘高度；0 = 键盘还没出现过（或已被收起）。 */
+    private var sessionImeMax = 0
 
     /** 本次补充输入里展开卡已经抬到的高度：输入期间只升不降（键盘升起过程中的读数会变小，跟着降就会上下晃）。 */
     private var typingLift = 0
@@ -1287,11 +1291,23 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     private fun placeBubbleAboveIme(imeTop: Int?) {
-        // 输入法窗口还没出现时保持当前位置，不退回原位。
-        imeTop ?: return
+        if (imeTop == null) {
+            // 键盘出现过又没了（用户按返回收起）：卡片回原位；再点输入框弹出键盘时重新上移。
+            // 键盘还没出现时（正在升起）保持当前位置。
+            if (sessionImeMax > 0) {
+                sessionImeMax = 0
+                typingLift = 0
+                moveBubbleTo(bubbleBaseY)
+            }
+            return
+        }
         val height = screenRealHeight() - imeTop
         if (height <= 0) return
-        lastImeHeight = height
+        // 只记本次输入里的最大高度：升起或收起过程中读到的中间值偏小，记下来会让下次上移不够。
+        if (height > sessionImeMax) {
+            sessionImeMax = height
+            lastImeHeight = height
+        }
         liftBubbleTo(bubbleYAbove(height))
     }
 
