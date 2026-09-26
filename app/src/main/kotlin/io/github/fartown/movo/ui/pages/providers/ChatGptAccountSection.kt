@@ -34,7 +34,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import top.yukonga.miuix.kmp.basic.TextField
+import io.github.fartown.movo.ui.components.movo.TextField
 
 /**
  * ChatGPT 订阅登录区：替代 API Key 输入框；放在「连接配置」卡片里，行样式同 `Settings/Row`（规范 8.7），

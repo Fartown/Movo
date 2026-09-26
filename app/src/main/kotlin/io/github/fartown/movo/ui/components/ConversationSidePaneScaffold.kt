@@ -124,7 +124,6 @@ import top.yukonga.miuix.kmp.blur.BlurColors
 import top.yukonga.miuix.kmp.blur.LayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
 import top.yukonga.miuix.kmp.nav.core.rememberNavSystemCornerRadius
-import top.yukonga.miuix.kmp.squircle.absoluteSquircleClip
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 
@@ -293,50 +292,66 @@ fun ConversationSidePaneScaffold(
             bottomRight = 0.dp,
             bottomLeft = foregroundCornerRadius,
         )
+        fun foregroundOffset(): Float = if (closeInstantly) {
+            0f
+        } else {
+            paneDragState.offset.takeUnless(Float::isNaN) ?: if (visible) paneWidthPx else 0f
+        }
+        // 只在「露出 / 收起」切换时重组；开合过程中的每一帧只在绘制阶段读进度，不重组、不重建修饰符。
+        val paneShowing by remember { derivedStateOf { openProgress > 0f } }
+        if (paneShowing) {
+            // 主页面左侧阴影（E3，暖灰）：形状与参数固定只画一次，随打开进度只改图层透明度，
+            // 不再逐帧重新光栅化 64 的模糊阴影。ModulateAlpha 不开离屏缓冲，阴影可画出边界。
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .offset { IntOffset(foregroundOffset().roundToInt(), 0) }
+                    .graphicsLayer {
+                        alpha = openProgress
+                        compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.ModulateAlpha
+                    }
+                    .dropShadow(
+                        shape = foregroundShape,
+                        shadow = Shadow(
+                            radius = 64.dp,
+                            spread = (-12).dp,
+                            offset = DpOffset(0.dp, 24.dp),
+                            color = MovoColors.shadow,
+                            alpha = 0.18f,
+                        ),
+                    )
+                    .dropShadow(
+                        shape = foregroundShape,
+                        shadow = Shadow(
+                            radius = 6.dp,
+                            offset = DpOffset(0.dp, 2.dp),
+                            color = MovoColors.shadow,
+                            alpha = 0.06f,
+                        ),
+                    )
+                    .zIndex(0.5f),
+            )
+        }
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .offset {
-                    val offset = if (closeInstantly) {
-                        0f
+                .offset { IntOffset(foregroundOffset().roundToInt(), 0) }
+                .graphicsLayer {
+                    // 左侧圆角随打开进度出现：硬件轮廓裁剪（圆角矩形），代价与普通图层相同。
+                    // 原来用着色器实现的连续曲率裁剪，每帧都要把整页离屏渲染再蒙版，开合会掉帧。
+                    val radius = foregroundCornerRadius.toPx() * openProgress
+                    if (radius > 0f) {
+                        shape = AbsoluteRoundedCornerShape(
+                            topLeft = radius.toDp(),
+                            topRight = 0.dp,
+                            bottomRight = 0.dp,
+                            bottomLeft = radius.toDp(),
+                        )
+                        clip = true
                     } else {
-                        paneDragState.offset.takeUnless(Float::isNaN) ?: if (visible) paneWidthPx else 0f
+                        clip = false
                     }
-                    IntOffset(offset.roundToInt(), 0)
                 }
-                .then(
-                    if (openProgress > 0f) {
-                        // 主页面左侧圆角与阴影随打开进度出现（E3，暖灰阴影）。
-                        Modifier
-                            .dropShadow(
-                                shape = foregroundShape,
-                                shadow = Shadow(
-                                    radius = 64.dp,
-                                    spread = (-12).dp,
-                                    offset = DpOffset(0.dp, 24.dp),
-                                    color = MovoColors.shadow,
-                                    alpha = 0.18f * openProgress,
-                                ),
-                            )
-                            .dropShadow(
-                                shape = foregroundShape,
-                                shadow = Shadow(
-                                    radius = 6.dp,
-                                    offset = DpOffset(0.dp, 2.dp),
-                                    color = MovoColors.shadow,
-                                    alpha = 0.06f * openProgress,
-                                ),
-                            )
-                            .absoluteSquircleClip(
-                                topLeft = foregroundCornerRadius * openProgress,
-                                topRight = 0.dp,
-                                bottomRight = 0.dp,
-                                bottomLeft = foregroundCornerRadius * openProgress,
-                            )
-                    } else {
-                        Modifier
-                    },
-                )
                 // 保持物理左右方向，不随 RTL 镜像：会话列表始终从屏幕左侧显露。
                 .anchoredDraggable(
                     state = paneDragState,

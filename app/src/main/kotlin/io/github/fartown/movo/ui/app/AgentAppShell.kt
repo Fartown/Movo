@@ -220,9 +220,9 @@ private fun HomeTopBar(
                         colors = BlurColors(blendColors = listOf(BlendColorEntry(MovoColors.bgCanvas.copy(alpha = 0.9f)))),
                     ),
                 )
-            } else {
-                Box(Modifier.matchParentSize().background(MovoColors.bgCanvas.copy(alpha = 0.9f)))
             }
+            // Q7 底色整条 90%（渐进模糊的混合色向下变淡，单靠它消息会和标题叠在一起）。
+            Box(Modifier.matchParentSize().background(MovoColors.bgCanvas.copy(alpha = 0.9f)))
         }
         Box(
             modifier = Modifier

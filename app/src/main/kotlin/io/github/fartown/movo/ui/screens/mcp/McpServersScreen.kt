@@ -72,7 +72,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextField
+import io.github.fartown.movo.ui.components.movo.TextField
 
 /**
  * MCP 服务器列表（规范 8.7 二级页）：顶栏「+」添加；一张「服务器 · N」卡片列出已配置服务器，点击进入详情。

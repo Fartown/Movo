@@ -33,6 +33,7 @@ import io.github.fartown.movo.ui.components.iconForTool
 import io.github.fartown.movo.ui.components.movo.BlockTone
 import io.github.fartown.movo.ui.components.movo.MovoBlockButton
 import io.github.fartown.movo.ui.components.movo.MovoDialogHost
+import io.github.fartown.movo.ui.components.movo.MovoButtonRow
 import io.github.fartown.movo.ui.components.movo.MovoIconButton
 import io.github.fartown.movo.ui.components.movo.PressKind
 import io.github.fartown.movo.ui.components.movo.movoClickable
@@ -181,22 +182,51 @@ internal fun ToolCard(
     }
     ToolDescriptionDialog(
         show = showDescription,
+        toolId = tool.id,
+        tone = tone,
         title = tool.title,
-        description = listOfNotNull(description, requirementText).joinToString("\n\n"),
+        description = description,
+        requirement = requirementText,
+        actionText = actionText.takeIf { action != null },
+        onAction = { showDescription = false; action?.let(onAction) },
         onDismiss = { showDescription = false },
     )
 }
 
-/** 工具说明（规范 8.11 对话框容器）：标题 Title/Section → 8 → 说明 Body/Regular 次要色（可滚动）→ 整行「关闭」。 */
+/**
+ * 工具说明 `Dialog/Info`（规范 8.11，Figma「09 · 工具说明弹窗」）：内容区 24：类别色图标块 40 → 16 → 标题 Title/Section
+ * → 8 → 说明 Body/Regular 次要色（可滚动）→ 16 → 条件提示块（shield-alert 16 + Label/Regular 次要色，
+ * `bg/surface-muted`、圆角 12、内边距 12 × 10）；按钮区同 `Dialog/Confirm`：有动作时「知道了」+ 主操作，否则只有「知道了」。
+ */
 @Composable
 private fun ToolDescriptionDialog(
     show: Boolean,
+    toolId: String,
+    tone: ToolCategoryTone,
     title: String,
     description: String,
+    requirement: String?,
+    actionText: String?,
+    onAction: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     MovoDialogHost(show = show, onDismissRequest = onDismiss) {
         Column(modifier = Modifier.padding(MovoSpacing.xxl)) {
+            Box(
+                modifier = Modifier
+                    .size(MovoSize.iconTile)
+                    .clip(RoundedCornerShape(MovoRadius.sm))
+                    .background(tone.background),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = iconForTool(toolId),
+                    contentDescription = null,
+                    modifier = Modifier.size(MovoSize.iconMedium),
+                    tint = tone.foreground,
+                )
+            }
+            Spacer(Modifier.height(MovoSpacing.lg))
             Text(title, style = MovoTypography.titleSection, color = MovoColors.textPrimary)
             Spacer(Modifier.height(MovoSpacing.sm))
             Text(
@@ -204,16 +234,41 @@ private fun ToolDescriptionDialog(
                 style = MovoTypography.bodyRegular,
                 color = MovoColors.textSecondary,
                 modifier = Modifier
-                    .heightIn(max = 360.dp)
+                    .heightIn(max = 320.dp)
                     .verticalScroll(rememberScrollState()),
             )
+            if (requirement != null) {
+                Spacer(Modifier.height(MovoSpacing.lg))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(MovoRadius.sm))
+                        .background(MovoColors.bgSurfaceMuted)
+                        .padding(horizontal = MovoSpacing.md, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    MovoIcon(MovoIcons.ShieldAlert, null, size = MovoSize.iconSmall, tint = MovoColors.textSecondary)
+                    Spacer(Modifier.width(MovoSpacing.sm))
+                    Text(requirement, style = MovoTypography.labelRegular, color = MovoColors.textSecondary)
+                }
+            }
         }
-        MovoBlockButton(
-            label = stringResource(R.string.action_close),
-            onClick = onDismiss,
-            tone = BlockTone.Secondary,
-            modifier = Modifier.fillMaxWidth().padding(MovoSpacing.xs),
-        )
+        MovoButtonRow(modifier = Modifier.padding(MovoSpacing.xs)) {
+            MovoBlockButton(
+                label = stringResource(R.string.ui_knew_cb63c6),
+                onClick = onDismiss,
+                tone = BlockTone.Secondary,
+                modifier = Modifier.weight(1f),
+            )
+            if (actionText != null) {
+                MovoBlockButton(
+                    label = actionText,
+                    onClick = onAction,
+                    tone = BlockTone.Primary,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
     }
 }
 

@@ -40,7 +40,7 @@ import io.github.fartown.movo.ui.theme.MovoSpacing
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.SliderDefaults
-import top.yukonga.miuix.kmp.basic.TextField
+import io.github.fartown.movo.ui.components.movo.TextField
 import top.yukonga.miuix.kmp.blur.isRuntimeShaderSupported
 import kotlin.math.roundToInt
 

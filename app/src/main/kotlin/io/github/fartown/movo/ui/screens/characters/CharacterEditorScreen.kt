@@ -27,7 +27,7 @@ import io.github.fartown.movo.ui.theme.MovoIcon
 import io.github.fartown.movo.ui.theme.MovoIcons
 import io.github.fartown.movo.ui.theme.MovoSize
 import io.github.fartown.movo.ui.theme.MovoSpacing
-import top.yukonga.miuix.kmp.basic.TextField
+import io.github.fartown.movo.ui.components.movo.TextField
 
 /**
  * 创建 / 编辑角色（规范 8.7 二级页）：顶栏 ✓ 保存；「角色设定」卡（名称、设定）；「开场白」卡（默认 + 备用，可移除、可添加）；
