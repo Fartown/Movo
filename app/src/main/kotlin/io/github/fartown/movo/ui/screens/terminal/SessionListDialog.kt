@@ -26,6 +26,7 @@ import io.github.fartown.movo.ui.app.displayName
 import io.github.fartown.movo.ui.components.movo.BlockTone
 import io.github.fartown.movo.ui.components.movo.MovoBlockButton
 import io.github.fartown.movo.ui.components.movo.MovoButtonRow
+import io.github.fartown.movo.ui.components.movo.MovoDialogButtonPadding
 import io.github.fartown.movo.ui.components.movo.MovoDialogHost
 import io.github.fartown.movo.ui.components.movo.MovoPillButton
 import io.github.fartown.movo.ui.components.movo.PressKind
@@ -81,18 +82,16 @@ internal fun SessionListDialog(
                 }
             }
         }
-        MovoButtonRow(modifier = Modifier.padding(MovoSpacing.xs)) {
+        MovoButtonRow(modifier = Modifier.padding(MovoDialogButtonPadding)) {
             MovoBlockButton(
                 label = stringResource(R.string.action_close),
                 onClick = onDismiss,
                 tone = BlockTone.Secondary,
-                modifier = Modifier.weight(1f),
             )
             MovoBlockButton(
                 label = stringResource(R.string.terminal_new_session),
                 onClick = { onNew(); onDismiss() },
                 tone = BlockTone.Primary,
-                modifier = Modifier.weight(1f),
             )
         }
     }

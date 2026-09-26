@@ -95,19 +95,17 @@ internal fun MovoInfoDialog(
                 }
             }
         }
-        MovoButtonRow(modifier = Modifier.padding(MovoSpacing.xs)) {
+        MovoButtonRow(modifier = Modifier.padding(MovoDialogButtonPadding)) {
             MovoBlockButton(
                 label = dismissText,
                 onClick = onDismiss,
                 tone = BlockTone.Secondary,
-                modifier = Modifier.weight(1f),
             )
             if (actionText != null) {
                 MovoBlockButton(
                     label = actionText,
                     onClick = onAction,
                     tone = BlockTone.Primary,
-                    modifier = Modifier.weight(1f),
                 )
             }
         }

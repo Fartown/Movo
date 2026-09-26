@@ -38,8 +38,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -295,18 +296,54 @@ internal fun MovoCircleButton(
     }
 }
 
-/** 占满一行的容器，给整行按钮并排使用。 */
+/**
+ * 对话框按钮区（规范 8.11）：放在对话框底部，外边距用 [MovoDialogButtonPadding]（左右、下各 24，不贴对话框边缘）。
+ * 按钮等宽并排、间距 12；任一按钮的文字在自己那一份宽度里放不下时改为上下排列、整行宽、间距 8，
+ * 主操作（最后一个）在最上面——文字不截断。只有一个按钮时占满整行。
+ */
 @Composable
 internal fun MovoButtonRow(
     modifier: Modifier = Modifier,
-    content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit,
+    content: @Composable () -> Unit,
 ) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(MovoSpacing.xs),
-        content = content,
-    )
+    Layout(content = content, modifier = modifier.fillMaxWidth()) { measurables, constraints ->
+        val width = constraints.maxWidth
+        if (measurables.isEmpty()) return@Layout layout(width, 0) {}
+        val gap = MovoSpacing.md.roundToPx()
+        val stackGap = MovoSpacing.sm.roundToPx()
+        val count = measurables.size
+        val slot = (width - gap * (count - 1)) / count
+        val fitsSideBySide = measurables.all { it.maxIntrinsicWidth(Constraints.Infinity) <= slot }
+        if (fitsSideBySide) {
+            val placeables = measurables.map { it.measure(Constraints.fixedWidth(slot)) }
+            val height = placeables.maxOf { it.height }
+            layout(width, height) {
+                var x = 0
+                placeables.forEach {
+                    it.placeRelative(x, (height - it.height) / 2)
+                    x += slot + gap
+                }
+            }
+        } else {
+            val placeables = measurables.asReversed().map { it.measure(Constraints.fixedWidth(width)) }
+            val height = placeables.sumOf { it.height } + stackGap * (count - 1)
+            layout(width, height) {
+                var y = 0
+                placeables.forEach {
+                    it.placeRelative(0, y)
+                    y += it.height + stackGap
+                }
+            }
+        }
+    }
 }
+
+/** 对话框按钮区的外边距：左右、下各 24，与内容区对齐（内容区下内边距 24 即两者间距）。 */
+internal val MovoDialogButtonPadding = androidx.compose.foundation.layout.PaddingValues(
+    start = MovoSpacing.xxl,
+    end = MovoSpacing.xxl,
+    bottom = MovoSpacing.xxl,
+)
 
 /**
  * 加载圈（规范 9.1：800ms 一圈，`linear`）：Lucide loader-circle 的 3/4 圆弧。

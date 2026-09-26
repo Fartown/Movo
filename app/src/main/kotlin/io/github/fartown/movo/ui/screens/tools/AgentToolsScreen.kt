@@ -1,6 +1,6 @@
 package io.github.fartown.movo.ui.screens.tools
 
-import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -24,6 +24,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import io.github.fartown.movo.R
 import io.github.fartown.movo.agent.tool.AgentToolCapabilities
 import io.github.fartown.movo.ui.app.rememberDeviceCapabilities
@@ -60,12 +62,38 @@ fun AgentToolsScreen(
 ) {
     val capabilities = rememberDeviceCapabilities()
     var showAll by rememberSaveable { mutableStateOf(false) }
+    // 分段切换（9.3.1「分段 / 标签」）：滑块立即滑到新位置；下方内容先淡出（`fast-exit`），换成新分段的内容后
+    // 淡入并上移 8 就位（`standard` + `enter`）。两个分段的分组卡 key 相同，只靠列表的增删动画时卡片不会离开，
+    // 卡内工具格会被直接换掉，所以由这里统一对整块内容做淡出 → 淡入。
+    var shownAll by rememberSaveable { mutableStateOf(showAll) }
+    val contentAlpha = remember { Animatable(1f) }
+    val contentRise = remember { Animatable(0f) }
+    val reduced = LocalReducedMotion.current
+    LaunchedEffect(showAll) {
+        if (shownAll != showAll) {
+            if (reduced) {
+                shownAll = showAll
+                contentAlpha.snapTo(1f)
+                contentRise.snapTo(0f)
+                return@LaunchedEffect
+            }
+            contentAlpha.animateTo(0f, MovoMotion.fastExit())
+            shownAll = showAll
+            contentRise.snapTo(1f)
+        }
+        coroutineScope {
+            launch { contentAlpha.animateTo(1f, MovoMotion.standard(MovoMotion.EasingEnter)) }
+            launch { contentRise.animateTo(0f, MovoMotion.standard(MovoMotion.EasingEnter)) }
+        }
+    }
     // 两个分段共用一个列表：切换时分段控件和页面不跳，下方内容原地变化。
     val listState = rememberLazyListState()
-    val groups = projectToolGroups(state.groups, showAll, capabilities.root.isGranted, capabilities.tools.colorOs)
-    // 分段切换（9.3.1「分段 / 标签」）：下方内容交叉淡化，不横向滑动——两边都有的分组卡平滑移位、高度平滑变化，
-    // 只在一边出现的淡入淡出。
-    val reduced = LocalReducedMotion.current
+    val groups = projectToolGroups(state.groups, shownAll, capabilities.root.isGranted, capabilities.tools.colorOs)
+    val riseDistance = MovoSpacing.sm
+    val contentModifier = Modifier.graphicsLayer {
+        alpha = contentAlpha.value
+        translationY = contentRise.value * riseDistance.toPx()
+    }
     MovoListPage(
         title = stringResource(R.string.ui_tool_ability_9f0f80),
         onBack = { onAction(AgentToolsAction.NavigateBack) },
@@ -96,17 +124,7 @@ fun AgentToolsScreen(
                     rootGranted = capabilities.root.isGranted,
                     capabilities = capabilities.tools,
                     onAction = onAction,
-                    modifier = if (reduced) {
-                        Modifier
-                    } else {
-                        Modifier
-                            .animateItem(
-                                fadeInSpec = MovoMotion.fast(),
-                                placementSpec = MovoMotion.standard(),
-                                fadeOutSpec = MovoMotion.fastExit(),
-                            )
-                            .animateContentSize(MovoMotion.standard<androidx.compose.ui.unit.IntSize>())
-                    },
+                    modifier = contentModifier,
                 )
             }
         }

@@ -162,20 +162,18 @@ internal fun MovoConfirmDialog(
             }
             extraContent?.invoke(this)
         }
-        MovoButtonRow(modifier = Modifier.padding(MovoSpacing.xs)) {
+        MovoButtonRow(modifier = Modifier.padding(MovoDialogButtonPadding)) {
             MovoBlockButton(
                 label = cancelText,
                 onClick = onDismissRequest,
                 tone = BlockTone.Secondary,
                 enabled = cancelEnabled,
-                modifier = Modifier.weight(1f),
             )
             MovoBlockButton(
                 label = confirmText,
                 onClick = onConfirm,
                 tone = if (destructive) BlockTone.Destructive else BlockTone.Primary,
                 enabled = confirmEnabled,
-                modifier = Modifier.weight(1f),
             )
         }
     }

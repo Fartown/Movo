@@ -59,6 +59,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -135,6 +136,9 @@ private object DrawerMetrics {
     /** 露出部分左侧圆角 = 屏幕圆角；取不到系统圆角时用稿中的 36。 */
     val ForegroundCornerRadiusFallback = 36.dp
     const val SettlePositionThresholdFraction = 0.5f
+
+    /** 首页稳定后多久预热侧边栏（见 [ConversationSidePaneScaffold] 的预热说明）。 */
+    const val WarmUpDelayMillis = 1000L
     val Edge = 20.dp
     val HeaderHeight = 56.dp
     val SearchHeight = 40.dp
@@ -275,6 +279,17 @@ fun ConversationSidePaneScaffold(
         // 侧边栏完全关闭时面板不参与绘制（A13）：面板一直保持组合，打开动画第一帧不用现组合；
         // 只在绘制阶段按「是否露出」切换图层透明度，零透明度的图层整层跳过，模糊浮层也不再每帧重算。
         val paneShowing by remember { derivedStateOf { openProgress > 0f } }
+        // 预热：面板关着时整层跳过绘制，第一次打开的那一帧要现录整个面板、首次编译磨砂模糊的着色器、首次生成 64 的大阴影，
+        // 真机上这一帧卡 57–84ms（之后再开就不卡）。首页稳定约 1 秒后把面板和阴影在主页面下面画两帧——
+        // 主页面不透明且铺满屏幕，用户看不到——让这些一次性开销提前在空闲时付掉。
+        var warmingUp by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) {
+            kotlinx.coroutines.delay(DrawerMetrics.WarmUpDelayMillis)
+            warmingUp = true
+            withFrameNanos { }
+            withFrameNanos { }
+            warmingUp = false
+        }
         ConversationPanePanel(
             state = state,
             width = paneWidth,
@@ -289,7 +304,7 @@ fun ConversationSidePaneScaffold(
             onOpenSettings = onOpenSettings,
             modifier = Modifier
                 .zIndex(0f)
-                .graphicsLayer { alpha = if (paneShowing) 1f else 0f },
+                .graphicsLayer { alpha = if (paneShowing || warmingUp) 1f else 0f },
         )
 
         val foregroundShape = AbsoluteRoundedCornerShape(
@@ -304,7 +319,8 @@ fun ConversationSidePaneScaffold(
             paneDragState.offset.takeUnless(Float::isNaN) ?: if (visible) paneWidthPx else 0f
         }
         // 只在「露出 / 收起」切换时重组；开合过程中的每一帧只在绘制阶段读进度，不重组、不重建修饰符。
-        if (paneShowing) {
+        run {
+            // 阴影层一直保持组合（关着时图层透明度为 0、整层跳过绘制）：第一次打开不用现组合、现生成阴影。
             // 主页面左侧阴影（E3，暖灰）：形状与参数固定只画一次，随打开进度只改图层透明度，
             // 不再逐帧重新光栅化 64 的模糊阴影。ModulateAlpha 不开离屏缓冲，阴影可画出边界。
             Box(
@@ -312,7 +328,7 @@ fun ConversationSidePaneScaffold(
                     .fillMaxSize()
                     .offset { IntOffset(foregroundOffset().roundToInt(), 0) }
                     .graphicsLayer {
-                        alpha = openProgress
+                        alpha = if (warmingUp && openProgress == 0f) 1f else openProgress
                         compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.ModulateAlpha
                     }
                     .dropShadow(

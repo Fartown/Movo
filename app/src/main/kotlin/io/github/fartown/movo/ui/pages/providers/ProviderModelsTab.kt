@@ -68,6 +68,7 @@ import io.github.fartown.movo.ui.components.movo.BlockTone
 import io.github.fartown.movo.ui.components.movo.CardTitle
 import io.github.fartown.movo.ui.components.movo.MovoBlockButton
 import io.github.fartown.movo.ui.components.movo.MovoButtonRow
+import io.github.fartown.movo.ui.components.movo.MovoDialogButtonPadding
 import io.github.fartown.movo.ui.components.movo.MovoConfirmDialog
 import io.github.fartown.movo.ui.components.movo.MovoDialogHost
 import io.github.fartown.movo.ui.components.movo.MovoDivider
@@ -969,13 +970,12 @@ private fun ModelEditDialog(
             }
             Spacer(Modifier.height(MovoSpacing.lg))
         }
-        MovoButtonRow(modifier = Modifier.padding(MovoSpacing.xs)) {
+        MovoButtonRow(modifier = Modifier.padding(MovoDialogButtonPadding)) {
             MovoBlockButton(
                 label = stringResource(R.string.action_cancel),
                 onClick = onDismiss,
                 tone = BlockTone.Secondary,
                 enabled = !isSaving,
-                modifier = Modifier.weight(1f),
             )
             MovoBlockButton(
                 label = if (isSaving) context.getString(R.string.page_saving_d70d42) else context.getString(R.string.page_save_fadf24),
@@ -984,7 +984,6 @@ private fun ModelEditDialog(
                     displayName.isNotBlank() &&
                     modelId.isNotBlank() &&
                     contextError == null,
-                modifier = Modifier.weight(1f),
             )
         }
     }

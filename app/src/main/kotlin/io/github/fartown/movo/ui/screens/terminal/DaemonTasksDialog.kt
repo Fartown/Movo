@@ -34,6 +34,7 @@ import io.github.fartown.movo.ui.app.DaemonTaskUi
 import io.github.fartown.movo.ui.components.movo.BlockTone
 import io.github.fartown.movo.ui.components.movo.MovoBlockButton
 import io.github.fartown.movo.ui.components.movo.MovoButtonRow
+import io.github.fartown.movo.ui.components.movo.MovoDialogButtonPadding
 import io.github.fartown.movo.ui.components.movo.MovoDialogHost
 import io.github.fartown.movo.ui.components.movo.MovoDivider
 import io.github.fartown.movo.ui.components.movo.MovoPillButton
@@ -71,12 +72,11 @@ internal fun DaemonTasksDialog(
                 }
             }
         }
-        MovoButtonRow(modifier = Modifier.padding(MovoSpacing.xs)) {
+        MovoButtonRow(modifier = Modifier.padding(MovoDialogButtonPadding)) {
             MovoBlockButton(
                 label = stringResource(R.string.action_close),
                 onClick = onDismiss,
                 tone = BlockTone.Secondary,
-                modifier = Modifier.weight(1f),
             )
         }
     }
