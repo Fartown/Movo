@@ -113,6 +113,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private var windowManager: WindowManager? = null
     /** [windowManager] 取自哪个 context（无障碍服务实例或本服务）；变了就要整体重建浮窗。 */
     private var overlayOwner: Context? = null
+    /** 下一次创建悬浮球时是否播进场；重建浮窗时为 false。 */
+    private var orbEntrance = true
+    /** 重建浮窗时沿用的悬浮球位置（用户可能拖过）。 */
+    private var restoreOrbPosition: WindowManager.LayoutParams? = null
     private val onAccessibilityInstanceChanged: () -> Unit = {
         mainHandler.post(::rebuildOverlayIfOwnerChanged)
     }
@@ -984,6 +988,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
         // ── 光球窗口：始终显示，右侧中下 ──────────────────────────────
         orbShown.value = true
+        val animateOrbEntrance = orbEntrance
+        orbEntrance = true
         val orb = createOverlayComposeView {
             val voice by VoiceSessionManager.state.collectAsState()
             AgentOverlayOrb(
@@ -1000,9 +1006,17 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 engaged = removeEngaged.value,
                 hearing = voice.channel == VoiceChannel.Hearing,
                 longRun = (state.value.elapsedMillis(System.currentTimeMillis()) ?: 0L) >= 10_000L,
+                animateEntrance = animateOrbEntrance,
             )
         }
-        val orbLp = orbLayoutParams()
+        val orbLp = orbLayoutParams().apply {
+            restoreOrbPosition?.let { previous ->
+                gravity = previous.gravity
+                x = previous.x
+                y = previous.y
+            }
+            restoreOrbPosition = null
+        }
         runCatching { wm.addView(orb, orbLp) }.onFailure { throwable ->
             AndroidAgentLogger.warnThrottled("runtime_orb_add_view_failed") {
                 "Agent runtime orb addView failed: type=${throwable.safeLogType()}"
@@ -1029,10 +1043,27 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         AndroidAgentLogger.debug { "Agent runtime overlay owner changed; rebuilding overlay windows" }
         val wasStandby = standby.value
         val hadGlow = glowView != null
-        removeAmbientWindows()
+        // 先用新的 context 加好新窗口，再撤旧窗口：旧窗口还在屏幕上时（例如从普通悬浮窗换回无障碍浮窗）不留空档；
+        // 新球沿用原位置、不播进场。
+        val oldManager = windowManager
+        val oldViews = listOfNotNull(orbView, bubbleView, glowView, removeZoneView)
+        restoreOrbPosition = orbParams
+        removeZoneView = null
+        orbView = null
+        bubbleView = null
+        glowView = null
+        orbParams = null
+        bubbleParams = null
+        glowParams = null
+        orbDiscRect = null
+        standby.value = false
         windowManager = null
         overlayOwner = null
+        orbEntrance = false
         showOverlay()
+        orbEntrance = true
+        restoreOrbPosition = null
+        oldViews.forEach { view -> runCatching { oldManager?.removeView(view) } }
         if (orbView == null) return
         if (!hadGlow) {
             glowView?.let { view -> runCatching { windowManager?.removeView(view) } }

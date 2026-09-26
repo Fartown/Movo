@@ -29,7 +29,7 @@ internal class StreamingGfmParserSession {
         acceptedSource = source
 
         val renderedSource = StreamingGfmProjection.project(
-            source = source,
+            source = CjkEmphasis.normalize(source),
             isComplete = isComplete,
         )
         // 终态直接交给静态视图，链接索引也必须随这次后台解析完成，不能在切换时重解析。

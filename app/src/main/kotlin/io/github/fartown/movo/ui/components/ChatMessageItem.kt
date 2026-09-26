@@ -499,49 +499,45 @@ internal fun AgentWorkProcess(
                 }
             }
             Spacer(modifier = Modifier.width(8.dp))
-            io.github.fartown.movo.ui.components.movo.MovoShimmerText(
-                text = when {
-                    paused && toolCount > 0 -> stringResource(R.string.movo_work_paused_step, toolCount)
-                    paused -> stringResource(R.string.movo_work_paused)
-                    running && toolCount > 0 -> stringResource(R.string.movo_work_running_step, toolCount)
-                    running -> stringResource(R.string.movo_work_analyzing)
-                    runStopped -> stringResource(R.string.movo_work_stopped_steps, toolCount)
-                    failedIndex >= 0 -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
-                    runUnfinished -> stringResource(R.string.movo_work_unfinished_steps, toolCount)
-                    toolCount > 0 -> stringResource(R.string.movo_work_done_steps, toolCount)
-                    else -> stringResource(R.string.movo_work_done)
-                },
-                style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
-                color = if (running || paused) io.github.fartown.movo.ui.theme.MovoColors.textPrimary else io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
-                active = running,
-                modifier = Modifier.weight(1f),
-            )
             // 计时：执行中「00:18」每秒直接换数字（9.0 规则 5，不滚动不闪）；结束后「用时 18 秒」。
             val firstStart = tools.mapNotNull { it.startedAtMillis }.minOrNull()
             val lastFinish = tools.mapNotNull { it.finishedAtMillis }.maxOrNull()
-            if (firstStart != null) {
-                val now by androidx.compose.runtime.produceState(System.currentTimeMillis(), running) {
-                    while (running) {
-                        value = System.currentTimeMillis()
-                        kotlinx.coroutines.delay(1_000)
-                    }
+            val now by androidx.compose.runtime.produceState(System.currentTimeMillis(), running, firstStart) {
+                while (running && firstStart != null) {
                     value = System.currentTimeMillis()
+                    kotlinx.coroutines.delay(1_000)
                 }
-                val timerText = if (running) {
-                    formatClock(now - firstStart)
-                } else {
-                    lastFinish?.let { formatElapsed(it - firstStart) }
-                }
-                if (timerText != null) {
-                    Text(
-                        text = timerText,
-                        style = io.github.fartown.movo.ui.theme.MovoTypography.numericLabel,
-                        color = if (running) io.github.fartown.movo.ui.theme.MovoColors.textSecondary else io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
-                        maxLines = 1,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                }
+                value = System.currentTimeMillis()
             }
+            val elapsed = firstStart?.let { start -> if (running) now - start else lastFinish?.let { it - start } }
+            val timerText = elapsed?.let { if (running) formatClock(it) else formatElapsed(it) }
+            // 放不下完整计时时退成「1:06」，状态文字不让位（规范：摘要条状态优先完整显示）。
+            val compactTimer = elapsed?.takeIf { !running }?.let(::formatClock)
+            StatusWithTimer(
+                status = {
+                    io.github.fartown.movo.ui.components.movo.MovoShimmerText(
+                        text = when {
+                            paused && toolCount > 0 -> stringResource(R.string.movo_work_paused_step, toolCount)
+                            paused -> stringResource(R.string.movo_work_paused)
+                            running && toolCount > 0 -> stringResource(R.string.movo_work_running_step, toolCount)
+                            running -> stringResource(R.string.movo_work_analyzing)
+                            runStopped -> stringResource(R.string.movo_work_stopped_steps, toolCount)
+                            failedIndex >= 0 -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
+                            runUnfinished -> stringResource(R.string.movo_work_unfinished_steps, toolCount)
+                            toolCount > 0 -> stringResource(R.string.movo_work_done_steps, toolCount)
+                            else -> stringResource(R.string.movo_work_done)
+                        },
+                        style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
+                        color = if (running || paused) io.github.fartown.movo.ui.theme.MovoColors.textPrimary else io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                        active = running,
+                    )
+                },
+                timer = timerText,
+                compactTimer = compactTimer,
+                timerColor = if (running) io.github.fartown.movo.ui.theme.MovoColors.textSecondary else io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
             val rotation by androidx.compose.animation.core.animateFloatAsState(
                 targetValue = if (expanded) 180f else 0f,
                 animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
@@ -734,6 +730,49 @@ internal fun WorkSteps(
 /** 整行可点的按压反馈（列表行：只叠加、不缩放，规范 9.3.1）。 */
 private fun Modifier.movoClickableRow(onClick: () -> Unit): Modifier =
     movoClickable(io.github.fartown.movo.ui.components.movo.PressKind.Row, onClick = onClick)
+
+/**
+ * 摘要条的状态 + 右侧计时：状态文字优先完整显示；剩余宽度放得下完整计时（「用时 1 分 6 秒」）就放，
+ * 放不下退成 [compactTimer]（「1:06」），再放不下就不显示计时。计时右对齐，与状态之间至少 8。
+ */
+@Composable
+private fun StatusWithTimer(
+    status: @Composable () -> Unit,
+    timer: String?,
+    compactTimer: String?,
+    timerColor: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier,
+) {
+    val timerStyle = io.github.fartown.movo.ui.theme.MovoTypography.numericLabel
+    androidx.compose.ui.layout.Layout(
+        contents = listOf(
+            status,
+            { if (timer != null) Text(timer, style = timerStyle, color = timerColor, maxLines = 1, softWrap = false) },
+            { if (compactTimer != null) Text(compactTimer, style = timerStyle, color = timerColor, maxLines = 1, softWrap = false) },
+        ),
+        modifier = modifier,
+    ) { (statusMeasurables, fullMeasurables, compactMeasurables), constraints ->
+        val gap = 8.dp.roundToPx()
+        val loose = constraints.copy(minWidth = 0)
+        val full = fullMeasurables.firstOrNull()?.measure(loose.copy(maxWidth = androidx.compose.ui.unit.Constraints.Infinity))
+        val compact = compactMeasurables.firstOrNull()?.measure(loose.copy(maxWidth = androidx.compose.ui.unit.Constraints.Infinity))
+        val statusMeasurable = statusMeasurables.first()
+        val statusWanted = statusMeasurable.maxIntrinsicWidth(constraints.maxHeight).coerceAtMost(constraints.maxWidth)
+        val room = constraints.maxWidth - statusWanted - gap
+        val chosen = when {
+            full != null && full.width <= room -> full
+            compact != null && compact.width <= room -> compact
+            else -> null
+        }
+        val statusMax = if (chosen != null) constraints.maxWidth - chosen.width - gap else constraints.maxWidth
+        val statusPlaceable = statusMeasurable.measure(loose.copy(maxWidth = statusMax.coerceAtLeast(0)))
+        val height = maxOf(statusPlaceable.height, chosen?.height ?: 0, constraints.minHeight)
+        layout(constraints.maxWidth, height) {
+            statusPlaceable.placeRelative(0, (height - statusPlaceable.height) / 2)
+            chosen?.placeRelative(constraints.maxWidth - chosen.width, (height - chosen.height) / 2)
+        }
+    }
+}
 
 /** 执行中计时：mm:ss（等宽数字）。 */
 private fun formatClock(elapsedMillis: Long): String {
@@ -1238,7 +1277,7 @@ private fun StableMarkdown(
 ) {
     // 流式终态已有完整 AST，直接复用，避免新解析器的 Loading 原文先撑高页面再缩回。
     val state = parsedState ?: (markdownState ?: rememberMarkdownState(
-        content = content,
+        content = io.github.fartown.movo.ui.markdown.CjkEmphasis.normalize(content),
         retainState = true,
     )).state.collectAsState().value
     val components = remember { chatMarkdownComponents() }
@@ -2462,7 +2501,7 @@ private fun ThinkingRow(
     // 避免每次展开都重新走一遍异步解析。
     val stableMarkdownState = if (streamingState == null && completedMarkdownState == null) {
         rememberMarkdownState(
-            content = message.content,
+            content = io.github.fartown.movo.ui.markdown.CjkEmphasis.normalize(message.content),
             retainState = true,
         )
     } else {

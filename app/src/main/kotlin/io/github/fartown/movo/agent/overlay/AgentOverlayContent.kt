@@ -221,6 +221,7 @@ internal fun AgentOverlayOrb(
     engaged: Boolean = false,
     hearing: Boolean = false,
     longRun: Boolean = false,
+    animateEntrance: Boolean = true,
 ) {
     val reduced = LocalReducedMotion.current
     // Q8：看着它从执行中变为完成、且任务用时 ≥ 10 秒时，光球亮度 1 → 1.3 → 1（600ms），只播一次。
@@ -234,7 +235,8 @@ internal fun AgentOverlayOrb(
             brighten.animateTo(0f, tween(300, easing = MovoMotion.EasingStandard))
         }
     }
-    var entered by remember { mutableStateOf(false) }
+    // 浮窗重建（无障碍服务重连）时球本来就在屏幕上，直接显示，不再从 0.5 放大进场。
+    var entered by remember { mutableStateOf(!animateEntrance) }
     LaunchedEffect(Unit) { entered = true }
     var dragging by remember { mutableStateOf(false) }
     var pressed by remember { mutableStateOf(false) }
