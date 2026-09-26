@@ -97,7 +97,9 @@ internal fun MovoListPage(
 
 /**
  * 自定义内容页骨架：调用方拿到顶部内边距（顶栏高度）自行排版；
- * 滚动态由挂在内容外层的 [ScrolledDetector] 判断。
+ * 滚动态由挂在内容外层的 [ScrolledDetector] 判断（只感知手指滚动）。
+ * [scrolled] 不为 null 时优先使用：内容会被代码滚动（如执行中自动跟随）时，由调用方按列表位置判断，
+ * 例如 `listState.rememberIsScrolled().value`。
  */
 @Composable
 internal fun MovoPage(
@@ -105,6 +107,7 @@ internal fun MovoPage(
     onBack: (() -> Unit)?,
     modifier: Modifier = Modifier,
     actions: @Composable RowScope.() -> Unit = {},
+    scrolled: Boolean? = null,
     content: @Composable (contentPadding: PaddingValues, sidePadding: Dp) -> Unit,
 ) {
     val backdrop = rememberMovoBackdrop()
@@ -121,7 +124,7 @@ internal fun MovoPage(
                 content(PaddingValues(top = barHeight), sidePadding)
             }
         }
-        MovoTopBar(title = title, onBack = onBack, scrolled = detector.scrolled, backdrop = backdrop, actions = actions)
+        MovoTopBar(title = title, onBack = onBack, scrolled = scrolled ?: detector.scrolled, backdrop = backdrop, actions = actions)
     }
 }
 

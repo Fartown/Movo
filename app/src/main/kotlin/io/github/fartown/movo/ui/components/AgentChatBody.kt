@@ -324,7 +324,25 @@ private fun AgentChatScaffold(
     modifier: Modifier = Modifier,
 ) {
     val surfaceColor = MiuixTheme.colorScheme.surface
-    val frostEnabled = hasMessages && LocalBlurEnabled.current && isRuntimeShaderSupported()
+    val frostSupported = hasMessages && LocalBlurEnabled.current && isRuntimeShaderSupported()
+    // 输入框上方 24 的磨砂条只在有内容滚到它下面时才需要真的采样消息列表（审查 A13）：
+    // 列表停在底部时最后一行离磨砂条还有 14，条里只有页面底色，磨砂与透明看起来一样，这时不给整条列表挂 backdrop。
+    // 有内容进入下方（可以继续向下滚）立即启用；回到底部后稍等再关，流式跟底时不来回切换。
+    val contentUnderComposer by remember(scrollState) { derivedStateOf { scrollState.canScrollForward } }
+    var frostActive by remember { mutableStateOf(false) }
+    LaunchedEffect(frostSupported, contentUnderComposer) {
+        when {
+            !frostSupported -> frostActive = false
+            contentUnderComposer -> frostActive = true
+            frostActive -> {
+                kotlinx.coroutines.delay(FROST_RELEASE_DELAY_MILLIS)
+                frostActive = false
+            }
+        }
+    }
+    val frostEnabled = frostSupported && frostActive
+    // 会话切换过渡（规范 9.3.1「视图切换」）：只有消息区（和首页内容）淡入淡出，输入栏不参与。
+    val switchFade = LocalConversationSwitchFade.current
     val messageBackdrop = rememberLayerBackdrop {
         // Backdrop 必须包含不透明底色，否则文字边缘模糊到透明区域时会出现黑边。
         drawRect(surfaceColor)
@@ -349,6 +367,8 @@ private fun AgentChatScaffold(
         bottomBar = {
             AgentChatBottomBar(
                 messageBackdrop = messageBackdrop.takeIf { frostEnabled },
+                reserveFrost = frostSupported,
+                hidden = switchFade?.outgoing == true,
                 input = input,
                 modelPickerState = modelPickerState,
                 isCompacting = isCompacting,
@@ -377,7 +397,16 @@ private fun AgentChatScaffold(
         },
     ) { innerPadding ->
         val bottomPadding = innerPadding.calculateBottomPadding()
-        Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    if (switchFade != null) {
+                        alpha = switchFade.contentAlpha()
+                        translationY = switchFade.contentShiftY()
+                    }
+                },
+        ) {
         if (hasMessages) {
             AgentConversationMessages(
                 visibleMessages = visibleMessages,
@@ -475,6 +504,28 @@ internal fun AgentConversationMessages(
     // 滑回时复用同一解析会话与打字机进度，避免整段内容重新解析并重放显现动画。
     val streamingMarkdownStates = remember { mutableStateMapOf<String, StreamingMarkdownState>() }
     val bottomItemIndex = timelineEntries.size
+    // 等待首个事件的小光球（Q6）挂在最后一条用户消息之后；首个事件到达（或本轮结束）时它自己淡出 120ms，
+    // 播完才从列表移除（审查 B14：不用列表的退场动画，被移除的退场项会残留在原位）。
+    val waitingAnchor = if (isStreaming) {
+        (timelineEntries.lastOrNull() as? AgentTimelineEntry.Message)?.takeIf { it.message is UserMessageUi }?.key
+    } else {
+        null
+    }
+    var lingeringOrbAnchor by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(waitingAnchor) {
+        if (waitingAnchor != null) {
+            lingeringOrbAnchor = waitingAnchor
+        } else if (lingeringOrbAnchor != null) {
+            kotlinx.coroutines.delay(io.github.fartown.movo.ui.theme.MovoMotion.FAST_EXIT.toLong())
+            lingeringOrbAnchor = null
+        }
+    }
+    val orbAfterIndex = (waitingAnchor ?: lingeringOrbAnchor)
+        ?.let { key -> timelineEntries.indexOfFirst { it.key == key } }
+        ?.takeIf { it >= 0 }
+    // 光球离场期间插在列表中间，它之后的条目在 LazyColumn 里的下标后移一位。
+    fun listIndexOf(entryIndex: Int): Int =
+        if (orbAfterIndex != null && entryIndex > orbAfterIndex) entryIndex + 1 else entryIndex
     val isUserDragging by scrollState.interactionSource.collectIsDraggedAsState()
     val isAtBottom by remember(scrollState) {
         derivedStateOf { !scrollState.canScrollForward }
@@ -668,10 +719,7 @@ internal fun AgentConversationMessages(
             ),
             overscrollEffect = null,
         ) {
-            items(
-                items = timelineEntries,
-                key = { it.key },
-            ) { entry ->
+            val entryItem: @Composable androidx.compose.foundation.lazy.LazyItemScope.(AgentTimelineEntry) -> Unit = { entry ->
                 val itemModifier = Modifier.animateItem(
                     fadeInSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
                     placementSpec = null,
@@ -739,23 +787,28 @@ internal fun AgentConversationMessages(
                     }
                 }
             }
-            if (isStreaming) {
-                // 等待首个事件（最后一条还是用户消息）：16 小光球作为「正在处理」指示（Q6）。
-                val lastEntry = timelineEntries.lastOrNull()
-                if (lastEntry is AgentTimelineEntry.Message && lastEntry.message is UserMessageUi) {
-                    item(key = "waiting-orb") {
-                        // 只淡入不做列表退场：被移除的退场项会残留在原位（真机验收发现叠在回答文字上）。
-                        Box(
-                            Modifier
-                                .animateItem(
-                                    fadeInSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
-                                    placementSpec = null,
-                                    fadeOutSpec = null,
-                                )
-                                .padding(horizontal = 20.dp),
-                        ) { WaitingOrb() }
-                    }
+            if (orbAfterIndex == null) {
+                items(items = timelineEntries, key = { it.key }) { entry -> entryItem(entry) }
+            } else {
+                items(items = timelineEntries.subList(0, orbAfterIndex + 1), key = { it.key }) { entry -> entryItem(entry) }
+                item(key = "waiting-orb") {
+                    // 只淡入，不用列表退场：离场由 WaitingOrb 自己淡出，播完再移除。
+                    Box(
+                        Modifier
+                            .animateItem(
+                                fadeInSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
+                                placementSpec = null,
+                                fadeOutSpec = null,
+                            )
+                            .padding(horizontal = 20.dp),
+                    ) { WaitingOrb(leaving = waitingAnchor == null) }
                 }
+                items(
+                    items = timelineEntries.subList(orbAfterIndex + 1, timelineEntries.size),
+                    key = { it.key },
+                ) { entry -> entryItem(entry) }
+            }
+            if (isStreaming) {
                 item(key = "run-stall") { RunStallNotice(messageIds = visibleMessages.map { it.id }) }
             }
             item(key = ChatBottomSentinelKey) {
@@ -794,7 +847,7 @@ internal fun AgentConversationMessages(
                     paused = runControls.isPaused,
                     onScrollToCard = {
                         val index = timelineEntries.indexOfFirst { it.key == entry.key }
-                        if (index >= 0) coroutineScope.launch { scrollState.animateScrollToItem(index) }
+                        if (index >= 0) coroutineScope.launch { scrollState.animateScrollToItem(listIndexOf(index)) }
                     },
                     onView = openRunDetail?.let { open -> { open(entry.key) } },
                 )
@@ -873,23 +926,24 @@ private fun TaskBar(
             .padding(start = 12.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (paused) {
-            io.github.fartown.movo.ui.theme.MovoIcon(io.github.fartown.movo.ui.theme.MovoIcons.Pause, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary)
-        } else {
-            io.github.fartown.movo.ui.components.movo.MovoOrb(size = 16.dp)
-        }
+        // 执行中 ↔ 已暂停：图标交叉淡化 + 缩放 0.72 ↔ 1、状态文字交叉淡化，`fast`（规范 9.3、9.4）；步数直接换。
+        WorkStatusIcon(if (paused) WorkStatusIconKind.Paused else WorkStatusIconKind.Running)
         Spacer(Modifier.width(8.dp))
-        io.github.fartown.movo.ui.components.movo.MovoShimmerText(
-            text = when {
-                paused -> stringResource(R.string.movo_work_paused_step, tools.size)
-                tools.isNotEmpty() -> stringResource(R.string.movo_work_running_step, tools.size)
-                else -> stringResource(R.string.movo_work_analyzing)
-            },
-            style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
-            color = io.github.fartown.movo.ui.theme.MovoColors.textPrimary,
-            active = !paused,
+        WorkPhaseCrossfade(
+            phase = if (paused) WorkPhase.Paused else WorkPhase.Running,
             modifier = Modifier.weight(1f),
-        )
+        ) { phase ->
+            io.github.fartown.movo.ui.components.movo.MovoShimmerText(
+                text = when {
+                    phase == WorkPhase.Paused -> stringResource(R.string.movo_work_paused_step, tools.size)
+                    tools.isNotEmpty() -> stringResource(R.string.movo_work_running_step, tools.size)
+                    else -> stringResource(R.string.movo_work_analyzing)
+                },
+                style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
+                color = io.github.fartown.movo.ui.theme.MovoColors.textPrimary,
+                active = phase == WorkPhase.Running,
+            )
+        }
         if (firstStart != null) {
             val seconds = ((now - firstStart) / 1000).coerceAtLeast(0)
             Text(
@@ -1133,6 +1187,10 @@ internal fun resolveFinalResultMessageIds(
 @Composable
 private fun AgentChatBottomBar(
     messageBackdrop: LayerBackdrop?,
+    /** 会话中且支持磨砂：磨砂条暂时不采样（列表停在底部）时也保留 24 的位置，布局不跳。 */
+    reserveFrost: Boolean,
+    /** 会话切换时离场的那一份输入栏：不显示（新会话的输入栏原地接上，不闪）。 */
+    hidden: Boolean,
     input: String,
     modelPickerState: AgentModelPickerUiState,
     isCompacting: Boolean,
@@ -1169,6 +1227,7 @@ private fun AgentChatBottomBar(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .graphicsLayer { alpha = if (hidden) 0f else 1f }
             .imePadding(),
     ) {
         if (messageBackdrop != null) {
@@ -1203,6 +1262,14 @@ private fun AgentChatBottomBar(
                         blurRadius = 20f,
                         colors = blurColors,
                     ),
+            )
+        } else if (reserveFrost) {
+            // 磨砂条下面只有页面底色时，磨砂的结果就是底色：留出同样的 24，不采样。
+            Spacer(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false)
+                    .height(ChatBottomFrostHeight),
             )
         } else {
             // 空白主页沿用原来的轻微渐隐，不改变主页视觉。
@@ -1284,6 +1351,9 @@ private fun AgentChatBottomBar(
 
 private val ChatBottomFrostHeight = 24.dp
 
+/** 列表回到底部后多久停用磨砂采样（流式跟底时「离开底部 / 回到底部」会连续交替，不跟着切）。 */
+private const val FROST_RELEASE_DELAY_MILLIS = 1_000L
+
 private const val ChatBottomSentinelKey = "agent-chat-bottom-sentinel"
 private const val BOTTOM_FOLLOW_RESPONSE_SECONDS = 0.085f
 private const val BOTTOM_FOLLOW_MAX_FRAME_SECONDS = 0.05f
@@ -1313,6 +1383,20 @@ internal fun shouldRequestInitialBottom(
     keepBottomAnchored: Boolean,
     isUserDragging: Boolean,
 ): Boolean = isStreaming && keepBottomAnchored && !isUserDragging
+
+/**
+ * 会话切换过渡（规范 9.3.1「视图切换」），由 [io.github.fartown.movo.ui.screens.chat.AgentChatScreen] 提供：
+ * [contentAlpha] / [contentShiftY]（px）只作用于消息区与首页内容；[outgoing] 为离场的那一份，它的输入栏直接隐藏。
+ * 两个值在绘制阶段读取。
+ */
+@androidx.compose.runtime.Stable
+internal class ConversationSwitchFade(
+    val outgoing: Boolean,
+    val contentAlpha: () -> Float,
+    val contentShiftY: () -> Float,
+)
+
+internal val LocalConversationSwitchFade = androidx.compose.runtime.staticCompositionLocalOf<ConversationSwitchFade?> { null }
 
 /** 正在离场的消息（删除、重新生成确认后），由对话容器提供。 */
 internal val LocalLeavingMessages = androidx.compose.runtime.compositionLocalOf<Collection<String>> { emptyList() }

@@ -1,5 +1,11 @@
 package io.github.fartown.movo.ui.screens.run
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,11 +34,15 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import io.github.fartown.movo.R
 import io.github.fartown.movo.ui.components.StreamingMarkdownState
+import io.github.fartown.movo.ui.components.WorkPhase
+import io.github.fartown.movo.ui.components.WorkPhaseCrossfade
+import io.github.fartown.movo.ui.components.WorkStatusIcon
+import io.github.fartown.movo.ui.components.WorkStatusIconKind
 import io.github.fartown.movo.ui.components.WorkSteps
+import io.github.fartown.movo.ui.components.movo.rememberIsScrolled
 import io.github.fartown.movo.ui.components.movo.CardFooter
 import io.github.fartown.movo.ui.components.movo.CardTitle
 import io.github.fartown.movo.ui.components.movo.MovoCard
-import io.github.fartown.movo.ui.components.movo.MovoOrb
 import io.github.fartown.movo.ui.components.movo.MovoPage
 import io.github.fartown.movo.ui.components.movo.MovoPillButton
 import io.github.fartown.movo.ui.components.movo.MovoShimmerText
@@ -43,9 +53,7 @@ import io.github.fartown.movo.ui.model.ThinkingMessageUi
 import io.github.fartown.movo.ui.model.ToolActivityMessageUi
 import io.github.fartown.movo.ui.model.ToolActivityStatusUi
 import io.github.fartown.movo.ui.theme.MovoColors
-import io.github.fartown.movo.ui.theme.MovoIcon
-import io.github.fartown.movo.ui.theme.MovoIcons
-import io.github.fartown.movo.ui.theme.MovoSize
+import io.github.fartown.movo.ui.theme.MovoMotion
 import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.theme.MovoTypography
 import java.text.SimpleDateFormat
@@ -72,9 +80,11 @@ internal fun RunDetailScreen(
         (message is ThinkingMessageUi && message.isStreaming) ||
             (message is ToolActivityMessageUi && message.status == ToolActivityStatusUi.Running)
     }
-    MovoPage(title = title, onBack = onBack) { contentPadding, sidePadding ->
+    val listState = rememberLazyListState()
+    // 顶栏 Q7 按列表位置判断：执行中自动跟随是代码滚动，手指滚动检测感知不到（审查 D1）。
+    val scrolled by listState.rememberIsScrolled()
+    MovoPage(title = title, onBack = onBack, scrolled = scrolled) { contentPadding, sidePadding ->
         Column(modifier = Modifier.fillMaxSize().imePadding()) {
-            val listState = rememberLazyListState()
             // 执行中自动跟随最新一步（新步骤出现时滚到底部）。
             LaunchedEffect(steps?.size, running) {
                 if (running && steps != null) listState.animateScrollToItem(1)
@@ -103,21 +113,29 @@ internal fun RunDetailScreen(
                     item(key = "summary") { RunSummaryCard(steps, running, onSwitchToApp, outcome) }
                     item(key = "steps") {
                         MovoCard(bottomPadding = 0.dp) {
-                            CardTitle(stringResource(R.string.movo_run_detail_steps))
-                            WorkSteps(
-                                messages = steps,
-                                running = running,
-                                onOpenBrowser = onOpenBrowser,
-                                currentBrowserMessageId = null,
-                                retainedStreamingStates = remember { emptyMap<String, StreamingMarkdownState>() },
-                                modifier = Modifier.padding(bottom = 6.dp),
-                            )
-                            CardFooter(listOf(stringResource(R.string.movo_run_detail_privacy)))
+                            // 新步骤出现时卡片高度过渡 `standard`（与执行卡一致，规范 9.4「执行卡 · 新步骤」）。
+                            Column(Modifier.animateContentSize(MovoMotion.standard())) {
+                                CardTitle(stringResource(R.string.movo_run_detail_steps))
+                                WorkSteps(
+                                    messages = steps,
+                                    running = running,
+                                    onOpenBrowser = onOpenBrowser,
+                                    currentBrowserMessageId = null,
+                                    retainedStreamingStates = remember { emptyMap<String, StreamingMarkdownState>() },
+                                    modifier = Modifier.padding(bottom = 6.dp),
+                                )
+                                CardFooter(listOf(stringResource(R.string.movo_run_detail_privacy)))
+                            }
                         }
                     }
                 }
             }
-            if (running) {
+            // 任务结束：输入框淡出 120ms、高度收起 `standard`，页面只读（规范 8.8「状态变化」）。
+            AnimatedVisibility(
+                visible = running,
+                enter = fadeIn(MovoMotion.fast()) + expandVertically(MovoMotion.standard()),
+                exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
+            ) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -157,30 +175,50 @@ private fun RunSummaryCard(
     MovoCard(bottomPadding = 0.dp) {
         Column(modifier = Modifier.padding(MovoSpacing.lg)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(MovoSize.iconSmall), contentAlignment = Alignment.Center) {
+                // 任务结束时概要卡状态交叉淡化（规范 8.8「状态变化」、9.4）：图标淡化 + 缩放 0.72 ↔ 1，文字淡入淡出，`fast`。
+                val stopped = outcome?.kind == io.github.fartown.movo.ui.components.WorkOutcome.Kind.Stopped
+                val unfinished = outcome?.kind == io.github.fartown.movo.ui.components.WorkOutcome.Kind.Unfinished
+                WorkStatusIcon(
                     when {
-                        running -> MovoOrb(size = MovoSize.iconSmall)
-                        outcome?.kind == io.github.fartown.movo.ui.components.WorkOutcome.Kind.Stopped -> MovoIcon(MovoIcons.Square, null, size = MovoSize.iconSmall, tint = MovoColors.textSecondary)
-                        failedIndex >= 0 || outcome?.kind == io.github.fartown.movo.ui.components.WorkOutcome.Kind.Unfinished -> MovoIcon(MovoIcons.X, null, size = MovoSize.iconSmall, tint = MovoColors.roseFg)
-                        else -> MovoIcon(MovoIcons.Check, null, size = MovoSize.iconSmall, tint = MovoColors.greenFg)
-                    }
-                }
-                Spacer(Modifier.width(MovoSpacing.md))
-                MovoShimmerText(
-                    text = when {
-                        running && tools.isNotEmpty() -> stringResource(R.string.movo_work_running_step, tools.size)
-                        running -> stringResource(R.string.movo_work_analyzing)
-                        outcome?.kind == io.github.fartown.movo.ui.components.WorkOutcome.Kind.Stopped -> stringResource(R.string.movo_work_stopped_steps, outcome.steps)
-                        failedIndex >= 0 -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
-                        outcome?.kind == io.github.fartown.movo.ui.components.WorkOutcome.Kind.Unfinished -> stringResource(R.string.movo_work_unfinished_steps, outcome.steps)
-                        tools.isNotEmpty() -> stringResource(R.string.movo_work_done_steps, tools.size)
-                        else -> stringResource(R.string.movo_work_done)
+                        running -> WorkStatusIconKind.Running
+                        stopped -> WorkStatusIconKind.Stopped
+                        failedIndex >= 0 || unfinished -> WorkStatusIconKind.Failed
+                        else -> WorkStatusIconKind.Done
                     },
-                    style = MovoTypography.bodyStrong,
-                    color = MovoColors.textPrimary,
-                    active = running,
-                    modifier = Modifier.weight(1f),
                 )
+                Spacer(Modifier.width(MovoSpacing.md))
+                val stepsInRun = outcome?.steps ?: 0
+                WorkPhaseCrossfade(
+                    phase = when {
+                        running -> WorkPhase.Running
+                        stopped -> WorkPhase.Stopped
+                        failedIndex >= 0 -> WorkPhase.Failed
+                        unfinished -> WorkPhase.Unfinished
+                        else -> WorkPhase.Done
+                    },
+                    modifier = Modifier.weight(1f),
+                ) { phase ->
+                    MovoShimmerText(
+                        text = when (phase) {
+                            WorkPhase.Running, WorkPhase.Paused -> if (tools.isNotEmpty()) {
+                                stringResource(R.string.movo_work_running_step, tools.size)
+                            } else {
+                                stringResource(R.string.movo_work_analyzing)
+                            }
+                            WorkPhase.Stopped -> stringResource(R.string.movo_work_stopped_steps, stepsInRun)
+                            WorkPhase.Failed -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
+                            WorkPhase.Unfinished -> stringResource(R.string.movo_work_unfinished_steps, stepsInRun)
+                            WorkPhase.Done -> if (tools.isNotEmpty()) {
+                                stringResource(R.string.movo_work_done_steps, tools.size)
+                            } else {
+                                stringResource(R.string.movo_work_done)
+                            }
+                        },
+                        style = MovoTypography.bodyStrong,
+                        color = MovoColors.textPrimary,
+                        active = phase == WorkPhase.Running,
+                    )
+                }
                 if (firstStart != null) {
                     val elapsed = (if (running) now else lastFinish ?: now) - firstStart
                     Text(
@@ -205,19 +243,29 @@ private fun RunSummaryCard(
             }
         }
         val app = steps.operatingAppName()
-        if (running && app != null && onSwitchToApp != null) {
-            MovoDivider(start = MovoSpacing.lg)
-            Row(
-                modifier = Modifier.fillMaxWidth().height(56.dp).padding(start = MovoSpacing.lg, end = MovoSpacing.md),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    stringResource(R.string.movo_work_operating_app, app),
-                    style = MovoTypography.labelRegular,
-                    color = MovoColors.textSecondary,
-                    modifier = Modifier.weight(1f),
-                )
-                MovoPillButton(label = stringResource(R.string.movo_run_switch_to_app), onClick = { onSwitchToApp(app) })
+        // 任务结束：底部栏淡出 120ms、高度收起 `standard`（规范 8.8「状态变化」）。离场期间沿用最后的 App 名。
+        val shownApp = remember { arrayOf<String?>(null) }
+        if (app != null) shownApp[0] = app
+        AnimatedVisibility(
+            visible = running && app != null && onSwitchToApp != null,
+            enter = fadeIn(MovoMotion.fast()) + expandVertically(MovoMotion.standard()),
+            exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
+        ) {
+            val label = shownApp[0].orEmpty()
+            Column {
+                MovoDivider(start = MovoSpacing.lg)
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(56.dp).padding(start = MovoSpacing.lg, end = MovoSpacing.md),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(R.string.movo_work_operating_app, label),
+                        style = MovoTypography.labelRegular,
+                        color = MovoColors.textSecondary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    MovoPillButton(label = stringResource(R.string.movo_run_switch_to_app), onClick = { onSwitchToApp?.invoke(label) })
+                }
             }
         }
     }

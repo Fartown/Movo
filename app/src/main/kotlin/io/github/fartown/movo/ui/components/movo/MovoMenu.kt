@@ -1,10 +1,13 @@
 package io.github.fartown.movo.ui.components.movo
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,7 +18,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,14 +46,20 @@ import io.github.fartown.movo.ui.theme.MovoRadius
 import io.github.fartown.movo.ui.theme.MovoSize
 import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.theme.MovoTypography
+import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Text
 
-/** 弹出菜单的一项；[destructive] 为 Rose（删除类）。 */
+/**
+ * 弹出菜单的一项；[destructive] 为 Rose（删除类）。
+ * [confirmIcon] 不为 null 时（如复制 → ✓，规范 9.3「复制」）：点击后菜单不立即关闭，图标原地交叉淡化为它（`fast`，
+ * 缩放 0.72 ↔ 1），停留 [MovoMotion.MENU_CLOSE_DELAY] 后再关闭（同 9.3.1 单选「新 ✓ 出现后停留再关闭」），不另弹提示。
+ */
 internal data class MovoMenuItem(
     val icon: MovoIconData,
     val label: String,
     val destructive: Boolean = false,
     val enabled: Boolean = true,
+    val confirmIcon: MovoIconData? = null,
     val onClick: () -> Unit,
 )
 
@@ -63,7 +77,19 @@ internal fun MovoPopoverMenu(
 ) {
     val visibleState = remember { MutableTransitionState(false) }
     visibleState.targetState = show
-    if (!visibleState.currentState && !visibleState.targetState) return
+    // 点了带确认图标的项（复制）：图标换成 ✓ 后停留再关闭。
+    var confirmedIndex by remember { mutableIntStateOf(-1) }
+    val currentOnDismiss by rememberUpdatedState(onDismiss)
+    val hidden = !visibleState.currentState && !visibleState.targetState
+    // 退场播完再复位，下次打开不会先闪一帧 ✓。
+    LaunchedEffect(hidden) { if (hidden) confirmedIndex = -1 }
+    LaunchedEffect(confirmedIndex) {
+        if (confirmedIndex >= 0) {
+            delay((MovoMotion.FAST + MovoMotion.MENU_CLOSE_DELAY).toLong())
+            currentOnDismiss()
+        }
+    }
+    if (hidden) return
     val density = LocalDensity.current
     val gapPx = with(density) { MovoSpacing.xs.roundToPx() }
     val shadowPadPx = with(density) { MovoSpacing.xxl.roundToPx() }
@@ -93,22 +119,44 @@ internal fun MovoPopoverMenu(
                     .background(MovoColors.bgSurface)
                     .padding(MovoSpacing.sm),
             ) {
-                items.forEach { item ->
+                items.forEachIndexed { index, item ->
                     val itemShape = RoundedCornerShape(MovoRadius.sm)
                     val tint = if (item.destructive) MovoColors.roseFg else MovoColors.textPrimary
+                    val confirmed = index == confirmedIndex && item.confirmIcon != null
                     Row(
                         modifier = Modifier
                             .widthIn(min = MenuMinWidth - MovoSpacing.lg)
                             .height(MovoSize.touchTarget)
                             .clip(itemShape)
                             .movoClickable(PressKind.Row, shape = itemShape, enabled = item.enabled) {
-                                onDismiss()
-                                item.onClick()
+                                if (confirmedIndex >= 0) return@movoClickable
+                                if (item.confirmIcon != null) {
+                                    item.onClick()
+                                    confirmedIndex = index
+                                } else {
+                                    onDismiss()
+                                    item.onClick()
+                                }
                             }
                             .padding(horizontal = MovoSpacing.md),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        MovoIcon(item.icon, null, size = MovoSize.iconMedium, tint = tint)
+                        // 图标状态切换：交叉淡化 + 缩放 0.72 ↔ 1，`fast`（规范 9.3.1）；✓ 用 Green（完成）。
+                        AnimatedContent(
+                            targetState = confirmed,
+                            transitionSpec = {
+                                (fadeIn(MovoMotion.fast()) + scaleIn(MovoMotion.fast(), initialScale = 0.72f))
+                                    .togetherWith(fadeOut(MovoMotion.fastExit()) + scaleOut(MovoMotion.fastExit(), targetScale = 0.72f))
+                            },
+                            label = "menuItemIcon",
+                        ) { showConfirm ->
+                            val confirmIcon = item.confirmIcon
+                            if (showConfirm && confirmIcon != null) {
+                                MovoIcon(confirmIcon, null, size = MovoSize.iconMedium, tint = MovoColors.greenFg)
+                            } else {
+                                MovoIcon(item.icon, null, size = MovoSize.iconMedium, tint = tint)
+                            }
+                        }
                         Spacer(Modifier.width(MovoSpacing.md))
                         Text(item.label, style = MovoTypography.bodyRegular, color = tint)
                     }

@@ -23,8 +23,9 @@ import io.github.fartown.movo.ui.theme.MovoMotion
 /**
  * Q8 完成的一道光（规范 9.3.2）：[trigger] 变为 true 时，卡片描边上一段品牌渐变光（长度 = 周长 25%，宽 1.5）
  * 从左上角沿边框走一圈（600ms `easing/standard`）后淡出。只播一次；减少动画时不播。
+ * [cornerRadius] 在绘制阶段读取：卡片圆角动画（28 → 24）期间不引起重组。
  */
-internal fun Modifier.completionGlint(trigger: Boolean, cornerRadius: Dp): Modifier = composed {
+internal fun Modifier.completionGlint(trigger: Boolean, cornerRadius: () -> Dp): Modifier = composed {
     val reduced = LocalReducedMotion.current
     val progress = remember { Animatable(-1f) }
     LaunchedEffect(trigger, reduced) {
@@ -40,7 +41,7 @@ internal fun Modifier.completionGlint(trigger: Boolean, cornerRadius: Dp): Modif
         drawContent()
         val p = progress.value
         if (p < 0f || p >= 2f) return@drawWithContent
-        val radius = cornerRadius.toPx()
+        val radius = cornerRadius().toPx()
         path.reset()
         path.addRoundRect(RoundRect(0f, 0f, size.width, size.height, radius, radius))
         val measure = PathMeasure().apply { setPath(path, true) }

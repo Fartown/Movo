@@ -6,14 +6,15 @@ import androidx.compose.ui.res.stringResource
 import io.github.fartown.movo.R
 import io.github.fartown.movo.ui.model.PermissionStatusUi
 import io.github.fartown.movo.ui.model.RunStatusUi
-import top.yukonga.miuix.kmp.theme.MiuixTheme
+import io.github.fartown.movo.ui.theme.MovoColors
 
-// 语义状态色
-val StatusSuccess = Color(0xFF00BD13)
-val StatusWarning = Color(0xFFFFB200)
-val StatusError: Color @Composable get() = MiuixTheme.colorScheme.error
-val StatusRunning: Color @Composable get() = MiuixTheme.colorScheme.primary
-val StatusIdle: Color @Composable get() = MiuixTheme.colorScheme.onSurfaceVariantSummary
+// 语义状态色：只取规范 4.2 的类别色 Token（完成 Green、系统 / 提醒 Amber、错误 Rose、进行中 Indigo），不裸写色值。
+// 状态色只用于图标与状态点；文字仍用主色 / 次要色（规范 4.2 规则 2）。
+val StatusSuccess: Color = MovoColors.greenFg
+val StatusWarning: Color = MovoColors.amberFg
+val StatusError: Color = MovoColors.roseFg
+val StatusRunning: Color = MovoColors.indigoFg
+val StatusIdle: Color = MovoColors.textSecondary
 
 // ── RunStatusUi 映射 ──────────────────────────────────────────────────
 
