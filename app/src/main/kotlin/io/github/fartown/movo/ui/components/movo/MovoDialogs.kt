@@ -38,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
@@ -181,7 +182,11 @@ internal fun MovoConfirmDialog(
 }
 
 /**
- * 单选对话框（规范 9.3.1「单选」）：行按压态；松手后旧 ✓ 淡出、新 ✓ 缩放淡入，停留 160ms 再关闭。
+ * 单选对话框 `Dialog/Choice`（Figma「10 · 单选对话框」）：内容区上 24：标题 Title/Section（左 24）→ 8 → 可选说明
+ * Body/Regular 次要色 → 16 → 选项条（左右 12、间距 8、下 12）：每条高 52、圆角 16（28 − 12 同心）、左右内边距 12，
+ * 文字 Body 左缘与标题对齐（24）；未选中 `bg/surface-muted` + 主色 Regular + 空心圈（1.5 `border/strong`），
+ * 选中 `accent/indigo-bg` + `accent/indigo-fg` Medium + 实心勾圈。切换按 9.3.1「单选」：底色与文字 `fast` 过渡，
+ * 新勾缩放 0.72 → 1 淡入；松手后停留 160ms 再关闭。
  */
 @Composable
 internal fun MovoChoiceDialog(
@@ -191,6 +196,7 @@ internal fun MovoChoiceDialog(
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
     onDismissRequest: () -> Unit,
+    description: String? = null,
 ) {
     var pending by remember(show) { mutableIntStateOf(-1) }
     LaunchedEffect(pending) {
@@ -201,44 +207,81 @@ internal fun MovoChoiceDialog(
         }
     }
     MovoDialogHost(show = show, onDismissRequest = onDismissRequest) {
-        Text(
-            title,
-            style = MovoTypography.titleSection,
-            color = MovoColors.textPrimary,
-            modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = MovoSpacing.sm),
-        )
+        Column(modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = MovoSpacing.lg)) {
+            Text(title, style = MovoTypography.titleSection, color = MovoColors.textPrimary)
+            if (description != null) {
+                Spacer(Modifier.size(MovoSpacing.sm))
+                Text(description, style = MovoTypography.bodyRegular, color = MovoColors.textSecondary)
+            }
+        }
         Column(
             modifier = Modifier
                 .heightIn(max = 420.dp)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = MovoSpacing.sm)
-                .padding(bottom = MovoSpacing.sm),
-            verticalArrangement = Arrangement.spacedBy(0.dp),
+                .padding(horizontal = MovoSpacing.md)
+                .padding(bottom = MovoSpacing.md),
+            verticalArrangement = Arrangement.spacedBy(MovoSpacing.sm),
         ) {
             options.forEachIndexed { index, option ->
                 val selected = if (pending >= 0) index == pending else index == selectedIndex
-                val shape = RoundedCornerShape(MovoRadius.sm)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 48.dp)
-                        .clip(shape)
-                        .movoClickable(PressKind.Row, shape = shape, role = Role.RadioButton) {
-                            if (pending < 0) pending = index
-                        }
-                        .padding(horizontal = MovoSpacing.lg),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        option,
-                        style = if (selected) MovoTypography.bodyStrong else MovoTypography.bodyRegular,
-                        color = MovoColors.textPrimary,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    CheckMark(visible = selected)
-                }
+                ChoiceOption(label = option, selected = selected) { if (pending < 0) pending = index }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChoiceOption(label: String, selected: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(16.dp)
+    val background by androidx.compose.animation.animateColorAsState(
+        if (selected) MovoColors.indigoBg else MovoColors.bgSurfaceMuted, MovoMotion.fast(), label = "choiceBg",
+    )
+    val textColor by androidx.compose.animation.animateColorAsState(
+        if (selected) MovoColors.indigoFg else MovoColors.textPrimary, MovoMotion.fast(), label = "choiceText",
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .clip(shape)
+            .drawBehind { drawRect(background) }
+            .movoClickable(PressKind.Row, shape = shape, role = Role.RadioButton, onClick = onClick)
+            .padding(horizontal = MovoSpacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = if (selected) MovoTypography.bodyStrong else MovoTypography.bodyRegular,
+            color = textColor,
+            modifier = Modifier.weight(1f),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.width(MovoSpacing.md))
+        RadioIndicator(selected)
+    }
+}
+
+/** 单选圈 20：未选中 1.5 `border/strong` 空心圈；选中 Indigo 实心圈 + 白勾（缩放 0.72 → 1 淡入）。 */
+@Composable
+private fun RadioIndicator(selected: Boolean) {
+    Box(modifier = Modifier.size(20.dp), contentAlignment = Alignment.Center) {
+        androidx.compose.foundation.Canvas(Modifier.matchParentSize()) {
+            if (!selected) {
+                val stroke = 1.5.dp.toPx()
+                drawCircle(MovoColors.borderStrong, radius = size.minDimension / 2 - stroke / 2, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+            }
+        }
+        AnimatedVisibility(
+            visible = selected,
+            enter = fadeIn(MovoMotion.fast()) + scaleIn(MovoMotion.fast(), initialScale = 0.72f),
+            exit = fadeOut(MovoMotion.fastExit()),
+        ) {
+            Box(
+                modifier = Modifier.size(20.dp).clip(androidx.compose.foundation.shape.CircleShape).background(MovoColors.indigoFg),
+                contentAlignment = Alignment.Center,
+            ) {
+                MovoIcon(MovoIcons.Check, null, size = 14.dp, tint = MovoColors.bgSurface)
             }
         }
     }

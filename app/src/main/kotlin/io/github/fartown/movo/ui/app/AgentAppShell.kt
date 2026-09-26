@@ -91,6 +91,8 @@ fun AgentAppShell(
     conversationPaneState: ConversationPaneUiState?,
     isConversationPaneOpen: Boolean,
     closeConversationPaneInstantly: Boolean = false,
+    /** 欢迎页（当前对话还没有消息）：只有这时显示背景光晕，发出第一句后随问候一起淡出。 */
+    showWelcomeAtmosphere: Boolean = true,
     onBack: () -> Unit,
     onOpenConversationPane: () -> Unit,
     onDismissConversationPane: () -> Unit,
@@ -133,8 +135,15 @@ fun AgentAppShell(
                     .captureMovoBackdrop(backdrop)
                     .nestedScroll(detector),
             ) {
-                // 首页与会话页的背景光晕（规范 9.4：首页 → 对话时保留不动）。
-                if (isHome) MovoAtmosphere()
+                // 背景光晕只属于欢迎页：发出第一句时随问候、能力卡一起淡出（120ms + exit），对话与滚动时不再有渐变；
+                // 回到新对话时淡入 `standard`。
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = isHome && showWelcomeAtmosphere,
+                    enter = androidx.compose.animation.fadeIn(io.github.fartown.movo.ui.theme.MovoMotion.standard()),
+                    exit = androidx.compose.animation.fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()),
+                ) {
+                    MovoAtmosphere()
+                }
                 content(PaddingValues(top = barHeight))
             }
             if (isHome) {

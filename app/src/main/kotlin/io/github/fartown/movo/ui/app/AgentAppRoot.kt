@@ -299,6 +299,7 @@ internal fun AgentAppRoot(
             // 浮层「展开到 App」交接期间：侧边栏在本帧就按关闭绘制（MainActivity 一回到前台就可见，不能等动画）。
             isConversationPaneOpen = conversationPaneOpen && resultConversationHandoff == null,
             closeConversationPaneInstantly = resultConversationHandoff != null,
+            showWelcomeAtmosphere = agentState.homeState.messages.isEmpty(),
             onBack = { popRoute() },
             onOpenConversationPane = { conversationPaneOpen = true },
             onDismissConversationPane = { conversationPaneOpen = false },
