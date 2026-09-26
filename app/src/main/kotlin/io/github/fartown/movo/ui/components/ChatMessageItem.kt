@@ -581,7 +581,7 @@ internal fun AgentWorkProcess(
         label = "workCorner",
     )
     // Q8：本次在屏幕上看着它从执行中变为完成，且任务用时 ≥ 10 秒时播一次。
-    var sawRunning by remember(id) { mutableStateOf(running) }
+    var sawRunning by rememberSaveable(id) { mutableStateOf(running) }
     if (running) sawRunning = true
     val finishedTools = messages.filterIsInstance<ToolActivityMessageUi>()
     val runMillis = finishedTools.mapNotNull { it.finishedAtMillis }.maxOrNull()?.let { end ->
@@ -634,16 +634,16 @@ internal fun AgentWorkProcess(
                 }
                 value = System.currentTimeMillis()
             }
-            // 看着它跑完的：结束后的用时不少于执行中最后显示的计时（最后一步之后模型还在想，按最后一步结束算会往回跳）。
-            val shownRunningElapsed = remember(id) { longArrayOf(0L) }
-            val elapsed = firstStart?.let { start ->
-                if (running) {
-                    now - start
-                } else {
-                    lastFinish?.let { maxOf(it - start, shownRunningElapsed[0]) }
-                }
+            // 看着它跑完的：记下它停止执行的时刻（回答开始或本轮结束），结束后的用时按这个算，与执行中的计时接得上
+            // （最后一步之后模型还在想，按最后一步结束算会往回跳）。按卡片 key 存，滚出屏幕再回来不丢；
+            // 重进会话后没有这个时刻，按最后一步结束算。
+            var endedAt by rememberSaveable(id) { androidx.compose.runtime.mutableLongStateOf(0L) }
+            if (sawRunning && !running && !paused && endedAt == 0L) {
+                SideEffect { if (endedAt == 0L) endedAt = System.currentTimeMillis() }
             }
-            if (running && elapsed != null) SideEffect { shownRunningElapsed[0] = elapsed }
+            val elapsed = firstStart?.let { start ->
+                if (running) now - start else (endedAt.takeIf { it > 0L } ?: lastFinish)?.let { it - start }
+            }
             val timerText = elapsed?.let { if (running) formatClock(it) else formatElapsed(it) }
             // 放不下完整计时时退成「1:06」，状态文字不让位（规范：摘要条状态优先完整显示）。
             val compactTimer = elapsed?.takeIf { !running }?.let(::formatCompactElapsed)
