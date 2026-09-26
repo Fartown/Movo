@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -521,6 +522,17 @@ internal fun AgentWorkProcess(
     stepOffset: Int = 0,
     outcome: WorkOutcome? = null,
 ) {
+    // 只有思考、没有执行步骤（纯问答）：不出执行卡，一行「✦ 已思考 N 秒 ⌄」（2026-09-27 定稿方案 2）。
+    // 之后出现工具步骤时换成执行卡，思考成为卡里第一步。
+    if (messages.isNotEmpty() && messages.all { it is ThinkingMessageUi }) {
+        ThinkingOnlyRow(
+            id = id,
+            messages = messages.filterIsInstance<ThinkingMessageUi>(),
+            retainedStreamingStates = retainedStreamingStates,
+            modifier = modifier,
+        )
+        return
+    }
     val runUnfinished = outcome?.kind == WorkOutcome.Kind.Unfinished
     val runStopped = outcome?.kind == WorkOutcome.Kind.Stopped
     val turnSteps = outcome?.steps ?: 0
@@ -767,6 +779,96 @@ private fun workTimeSpan(tools: List<ToolActivityMessageUi>, outcome: WorkOutcom
     val end = outcome?.finishedAt ?: tools.mapNotNull { it.finishedAtMillis }.maxOrNull() ?: return null
     val format = remember { java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()) }
     return stringResource(R.string.movo_run_detail_span, format.format(java.util.Date(start)), format.format(java.util.Date(end)))
+}
+
+/**
+ * 只有思考的一轮（规范 8.1「思考 · 行内」，Figma「14」）：没有卡片与描边，左对齐 20 的一行 sparkle 14 次要色 +
+ *「思考中」（Q3 光带）/「已思考 N 秒」`Label/Medium` 次要色 + ⌄，高 32；点开在下面展开思考内容：左侧 1 宽
+ * `border/strong` 竖线，文字三级色（思考正文字号）。默认收起。
+ */
+@Composable
+private fun ThinkingOnlyRow(
+    id: String,
+    messages: List<ThinkingMessageUi>,
+    retainedStreamingStates: Map<String, StreamingMarkdownState>,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by rememberSaveable(id) { mutableStateOf(false) }
+    val streaming = messages.any { it.isStreaming }
+    val seconds = messages.sumOf { it.elapsedSeconds ?: 0 }
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 4.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .height(32.dp)
+                .movoClickable(io.github.fartown.movo.ui.components.movo.PressKind.Link) { expanded = !expanded },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            io.github.fartown.movo.ui.theme.MovoIcon(
+                io.github.fartown.movo.ui.theme.MovoIcons.Sparkle, null, size = 14.dp,
+                tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+            )
+            Spacer(Modifier.width(6.dp))
+            io.github.fartown.movo.ui.components.movo.MovoShimmerText(
+                text = when {
+                    streaming -> stringResource(R.string.movo_thinking_in_progress)
+                    seconds > 0 -> stringResource(R.string.movo_thought_seconds, seconds)
+                    else -> stringResource(R.string.movo_thought)
+                },
+                style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
+                color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                active = streaming,
+            )
+            Spacer(Modifier.width(4.dp))
+            val rotation = androidx.compose.animation.core.animateFloatAsState(
+                targetValue = if (expanded) 180f else 0f,
+                animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
+                label = "thinkingOnlyChevron",
+            )
+            io.github.fartown.movo.ui.theme.MovoIcon(
+                io.github.fartown.movo.ui.theme.MovoIcons.ChevronDown,
+                contentDescription = stringResource(if (expanded) R.string.movo_collapse else R.string.movo_expand),
+                size = 14.dp,
+                tint = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
+                modifier = Modifier.graphicsLayer { rotationZ = rotation.value },
+            )
+        }
+        AnimatedVisibility(visible = expanded, enter = expandContentEnter(), exit = expandContentExit()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(androidx.compose.foundation.layout.IntrinsicSize.Min)
+                    .padding(start = 6.dp, top = 4.dp, bottom = 4.dp),
+            ) {
+                Box(
+                    Modifier
+                        .width(1.dp)
+                        .fillMaxHeight()
+                        .background(io.github.fartown.movo.ui.theme.MovoColors.borderStrong),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    messages.filter { it.content.isNotBlank() }.forEach { message ->
+                        val streamingState = retainedStreamingStates[message.id]
+                        if (message.isStreaming && streamingState != null) {
+                            StreamingMarkdown(
+                                state = streamingState,
+                                content = message.content,
+                                isStreaming = true,
+                                onRevealCompleteChange = {},
+                                tone = ChatMarkdownTone.Thinking,
+                            )
+                        } else {
+                            StableMarkdown(content = message.content, tone = ChatMarkdownTone.Thinking)
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /** 执行卡 / 执行条 / 执行详情概要卡的状态图标（规范 8.1、8.8）。 */

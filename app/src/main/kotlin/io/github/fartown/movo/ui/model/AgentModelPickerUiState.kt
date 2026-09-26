@@ -126,7 +126,9 @@ internal fun latestContextUsage(
 ): AgentContextUsageUi {
     val lastUsage = messages.asReversed().asSequence().mapNotNull { message ->
         when (message) {
-            is AgentMessageUi -> message.usage?.contextTokens?.let { it to false }
+            // 用量按最近一次请求的输入 token 计：这就是发给模型的上下文大小。total_tokens 还含输出（推理），
+            // 推理不会带进下一轮，按它算会在下一轮无故回落。没有输入数时退回 total。
+            is AgentMessageUi -> (message.usage?.inputTokens ?: message.usage?.contextTokens)?.let { it to false }
             is SystemNoticeMessageUi -> message.contextTokens?.let { it to true }
             else -> null
         }

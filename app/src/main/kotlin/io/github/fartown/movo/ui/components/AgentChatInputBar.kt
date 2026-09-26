@@ -320,11 +320,10 @@ internal fun AgentChatInputBar(
         val activeNotice = dictation.notice ?: appNotice
 
         // 任务已暂停（规范 8.1「工作过程 · 已暂停」，方案 B）：中性图标底 +「已完成 N 步，点 ▶ 继续」+「结束任务」
-        // （二次确认）；主按钮为 ▶。临时提示出现时让位，关掉后再回来。
+        // （直接结束，不再确认，2026-09-27 定）；主按钮为 ▶。临时提示出现时让位，关掉后再回来。
         val runControls = LocalRunControls.current
         var lastPausedSteps by remember { mutableStateOf(0) }
         if (runControls.isPaused) lastPausedSteps = runControls.completedSteps
-        var confirmEndTask by remember { mutableStateOf(false) }
         AnimatedVisibility(
             visible = runControls.isPaused && activeNotice == null,
             enter = aboveEnter,
@@ -345,23 +344,11 @@ internal fun AgentChatInputBar(
                 Spacer(Modifier.width(MovoSpacing.sm))
                 io.github.fartown.movo.ui.components.movo.MovoPillButton(
                     label = stringResource(R.string.movo_work_end_task),
-                    onClick = { confirmEndTask = true },
+                    onClick = runControls.onEndTask,
                     modifier = Modifier.padding(end = MovoSpacing.xs),
                 )
             }
         }
-        io.github.fartown.movo.ui.components.movo.MovoConfirmDialog(
-            show = confirmEndTask,
-            title = stringResource(R.string.movo_end_task_title),
-            message = stringResource(R.string.movo_end_task_message),
-            confirmText = stringResource(R.string.movo_work_end_task),
-            destructive = true,
-            onConfirm = {
-                confirmEndTask = false
-                runControls.onEndTask()
-            },
-            onDismissRequest = { confirmEndTask = false },
-        )
         var lastNotice by remember { mutableStateOf<ComposerNotice?>(null) }
         activeNotice?.let { if (it != lastNotice) lastNotice = it }
         AnimatedVisibility(
