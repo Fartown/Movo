@@ -27,11 +27,13 @@ import top.yukonga.miuix.kmp.basic.TextFieldDefaults
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * Movo 的输入框配色：空时的占位文字与浮起的标签用 `text/tertiary`（规范 §2「占位符」）。
- * Miuix 默认取 `onSecondaryContainer`，在 Movo 主题里是主文字色，占位看起来像已填的内容。
+ * Movo 的输入框配色。Miuix 只有一个 `labelColor`，同时管「空时的占位」和「有内容后浮起的字段名」：
+ * 空时是占位，用 `text/tertiary`（规范 §4.1「占位符」）；有内容后它是唯一的字段名，用 `text/secondary`
+ * （三级色只有 3.0:1，只能用于非关键信息）。Miuix 默认取 `onSecondaryContainer`，在 Movo 主题里是主文字色。
  */
 @Composable
-internal fun movoTextFieldColors(): TextFieldColors = TextFieldDefaults.textFieldColors(labelColor = MovoColors.textTertiary)
+internal fun movoTextFieldColors(hasContent: Boolean = false): TextFieldColors =
+    TextFieldDefaults.textFieldColors(labelColor = if (hasContent) MovoColors.textSecondary else MovoColors.textTertiary)
 
 // 与 Miuix `TextField` 同签名的三个重载，只换默认配色；页面代码 import 这里的 `TextField` 即可。
 
@@ -40,7 +42,7 @@ internal fun TextField(
     state: TextFieldState,
     modifier: Modifier = Modifier,
     insideMargin: DpSize = TextFieldDefaults.InsideMargin,
-    colors: TextFieldColors = movoTextFieldColors(),
+    colors: TextFieldColors = movoTextFieldColors(hasContent = state.text.isNotEmpty()),
     cornerRadius: Dp = TextFieldDefaults.CornerRadius,
     label: String = "",
     useLabelAsPlaceholder: Boolean = false,
@@ -73,7 +75,7 @@ internal fun TextField(
     onValueChange: (TextFieldValue) -> Unit,
     modifier: Modifier = Modifier,
     insideMargin: DpSize = TextFieldDefaults.InsideMargin,
-    colors: TextFieldColors = movoTextFieldColors(),
+    colors: TextFieldColors = movoTextFieldColors(hasContent = value.text.isNotEmpty()),
     cornerRadius: Dp = TextFieldDefaults.CornerRadius,
     label: String = "",
     useLabelAsPlaceholder: Boolean = false,
@@ -106,7 +108,7 @@ internal fun TextField(
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier,
     insideMargin: DpSize = TextFieldDefaults.InsideMargin,
-    colors: TextFieldColors = movoTextFieldColors(),
+    colors: TextFieldColors = movoTextFieldColors(hasContent = value.isNotEmpty()),
     cornerRadius: Dp = TextFieldDefaults.CornerRadius,
     label: String = "",
     useLabelAsPlaceholder: Boolean = false,
