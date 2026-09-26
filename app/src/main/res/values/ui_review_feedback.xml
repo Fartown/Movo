@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 就地反馈与失败说明（规范 8.11「不用 Toast」）。 -->
+<resources>
+  <string name="feedback_conversation_export_failed_title">Couldn\'t export the conversation</string>
+  <string name="feedback_write_file_failed">Couldn\'t write to the selected file. Try another location.</string>
+  <string name="feedback_try_again_later">Please try again later.</string>
+  <string name="feedback_saved">Saved</string>
+  <string name="feedback_memory_read_failed_title">Couldn\'t read memory</string>
+</resources>

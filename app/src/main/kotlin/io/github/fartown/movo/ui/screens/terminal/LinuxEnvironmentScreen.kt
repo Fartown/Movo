@@ -1,5 +1,7 @@
 package io.github.fartown.movo.ui.screens.terminal
 
+import io.github.fartown.movo.ui.components.movo.movoAnimateItem
+import io.github.fartown.movo.ui.components.movo.MovoExpandable
 import android.content.Context
 import android.text.format.Formatter
 import androidx.annotation.StringRes
@@ -302,6 +304,8 @@ internal fun LinuxEnvironmentScreen(
                 else -> profileProgressSummary
             }
             LinuxEnvironmentStatusCard(
+                // 状态切换（安装中 → 完成等）：卡片高度 `standard` 过渡、位置平滑移动（B10）。
+                modifier = movoAnimateItem(),
                 title = listOfNotNull(selectedDistribution.displayName(), version?.takeIf { it.isNotBlank() })
                     .joinToString(" "),
                 mode = backend.displayName(),
@@ -337,6 +341,7 @@ internal fun LinuxEnvironmentScreen(
         }
         item(key = "configuration-card") {
             LinuxEnvironmentConfiguration(
+                modifier = movoAnimateItem(),
                 distribution = selectedDistribution,
                 backend = backend,
                 rootGranted = capabilities.root.isGranted,
@@ -360,7 +365,7 @@ internal fun LinuxEnvironmentScreen(
             )
         }
         item(key = "files-card") {
-            MovoCard {
+            MovoCard(modifier = movoAnimateItem()) {
                 CardTitle(stringResource(R.string.linux_environment_files))
                 SettingsRow(
                     title = stringResource(R.string.capability_workspace),
@@ -368,7 +373,7 @@ internal fun LinuxEnvironmentScreen(
                     showDivider = selectedBaseReady,
                     onClick = { onNavigate(AppRoute.Workspace) },
                 )
-                if (selectedBaseReady) {
+                MovoExpandable(visible = selectedBaseReady) {
                     SettingsRow(
                         title = stringResource(R.string.shared_folders_entry_title),
                         subtitle = stringResource(R.string.linux_environment_shared_folders_summary),
@@ -386,7 +391,7 @@ internal fun LinuxEnvironmentScreen(
 
         if (selectedToolsReady) {
             item(key = "optional-tools-card") {
-                MovoCard {
+                MovoCard(modifier = movoAnimateItem()) {
                     CardTitle(stringResource(R.string.ui_optional_tools_3097d6))
                     packageProfileUis.forEach { profileUi ->
                         val ready = profileReady[profileUi.target] == true

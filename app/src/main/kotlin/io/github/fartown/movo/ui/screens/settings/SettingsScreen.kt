@@ -1,5 +1,6 @@
 package io.github.fartown.movo.ui.screens.settings
 
+import kotlinx.coroutines.flow.map
 import android.content.Intent
 import android.net.Uri
 import android.os.LocaleList
@@ -36,7 +37,6 @@ import io.github.fartown.movo.data.repository.McpServerRepository
 import io.github.fartown.movo.data.repository.ProviderRepository
 import io.github.fartown.movo.data.repository.RuntimeConfigRepository
 import io.github.fartown.movo.data.repository.VoiceSettingsRepository
-import io.github.fartown.movo.data.model.VoiceWakeSettings
 import io.github.fartown.movo.ui.components.modelOrProviderBrandLogoRes
 import io.github.fartown.movo.ui.components.movo.CardTitle
 import io.github.fartown.movo.ui.components.movo.MovoCard
@@ -85,14 +85,23 @@ internal fun SettingsScreen(
     val agentPrefs = remember { Prefs.localAgentPreferences() }
 
     // 右侧值：模型、唤醒词、记忆条数、Skills / MCP 数量、语言。回到前台时刷新。
-    val providers by ProviderRepository.providersFlow().collectAsState(initial = emptyList())
-    val selectedProviderId by RuntimeConfigRepository.selectedProviderIdFlow().collectAsState(initial = null)
-    val selectedModelId by RuntimeConfigRepository.selectedModelIdFlow().collectAsState(initial = null)
-    val selectedProvider = remember(providers, selectedProviderId) { providers.find { it.id == selectedProviderId } }
-    val selectedModel = remember(selectedProvider, selectedModelId) {
-        selectedProvider?.models?.find { it.id == selectedModelId }
+    // flow 只建一次（不在每次重组时新建）；初始值 null = 还在读取：读到之前右侧值留空，
+    // 读到后由设置行淡入，不先闪「未设置模型」或默认唤醒词再切成真实值（B8）。
+    val providers by remember { ProviderRepository.providersFlow() }.collectAsState(initial = null)
+    val selectedProviderId by remember {
+        RuntimeConfigRepository.selectedProviderIdFlow().map { Loaded(it) }
+    }.collectAsState(initial = null)
+    val selectedModelId by remember {
+        RuntimeConfigRepository.selectedModelIdFlow().map { Loaded(it) }
+    }.collectAsState(initial = null)
+    val modelLoaded = providers != null && selectedProviderId != null && selectedModelId != null
+    val selectedProvider = remember(providers, selectedProviderId) {
+        providers?.find { it.id == selectedProviderId?.value }
     }
-    val wake by remember { VoiceSettingsRepository.wakeSettingsFlow() }.collectAsState(initial = VoiceWakeSettings())
+    val selectedModel = remember(selectedProvider, selectedModelId) {
+        selectedProvider?.models?.find { it.id == selectedModelId?.value }
+    }
+    val wake by remember { VoiceSettingsRepository.wakeSettingsFlow() }.collectAsState(initial = null)
     val mcpServers by remember { McpServerRepository.serversFlow() }.collectAsState(initial = null)
     // 只存数值，文案在组合里按当前语言格式化：切换语言后不必等下次刷新。null = 未读到，-1 = 记忆已关闭。
     var memoryCount by remember { mutableStateOf<Int?>(null) }
@@ -147,16 +156,20 @@ internal fun SettingsScreen(
                         )
                     },
                     trailing = RowTrailing.Arrow(
-                        selectedModel?.displayName
-                            ?: selectedProvider?.let { stringResource(R.string.settings_model_not_selected) }
-                            ?: stringResource(R.string.movo_settings_model_none),
+                        if (!modelLoaded) {
+                            null
+                        } else {
+                            selectedModel?.displayName
+                                ?: selectedProvider?.let { stringResource(R.string.settings_model_not_selected) }
+                                ?: stringResource(R.string.movo_settings_model_none)
+                        },
                     ),
                     onClick = { onNavigate(AppRoute.ModelProviders) },
                 )
                 SettingsRow(
                     title = stringResource(R.string.voice_settings_title),
                     leading = RowLeading.Icon(MovoIcons.Mic),
-                    trailing = RowTrailing.Arrow(if (wake.wakeEnabled) wake.effectivePhrase() else null),
+                    trailing = RowTrailing.Arrow(wake?.takeIf { it.wakeEnabled }?.effectivePhrase()),
                     onClick = { onNavigate(AppRoute.VoiceSettings) },
                 )
                 PrefSwitchRow(
@@ -382,3 +395,6 @@ internal fun memoryEntryCount(content: String): Int {
 }
 
 private val BULLET = Regex("^([-*+]|\\d+[.)])\\s+")
+
+/** 区分「还没读到」（外层为 null）与「读到了、值为空」。 */
+private class Loaded<T>(val value: T)

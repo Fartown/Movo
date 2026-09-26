@@ -1,5 +1,7 @@
 package io.github.fartown.movo.ui.screens.diagnostics
 
+import io.github.fartown.movo.ui.components.movo.MovoExpandable
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -69,22 +71,41 @@ import top.yukonga.miuix.kmp.basic.Text
  * 页面骨架、卡片、卡内标题、页脚、设置行、行内按钮直接用 ui/components/movo 的公共组件。
  */
 
-/** Chip/Filter：高 40、圆角 20、左右 16；选中 = Indigo 浅底 + Indigo 字，未选中 = 1 宽 border/strong + 次要色字。 */
+/**
+ * Chip/Filter：高 40、圆角 20、左右 16；选中 = Indigo 浅底 + Indigo 字，未选中 = 1 宽 border/strong + 次要色字。
+ * 切换时底色、描边、文字颜色同时过渡 `fast`（9.3.1「芯片开关」）。
+ */
 @Composable
 internal fun LogFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
     val shape = RoundedCornerShape(MovoRadius.lg)
+    val background by animateColorAsState(
+        if (selected) MovoColors.indigoBg else MovoColors.indigoBg.copy(alpha = 0f),
+        MovoMotion.fast(),
+        label = "logChipBackground",
+    )
+    val border by animateColorAsState(
+        if (selected) MovoColors.borderStrong.copy(alpha = 0f) else MovoColors.borderStrong,
+        MovoMotion.fast(),
+        label = "logChipBorder",
+    )
+    val textColor by animateColorAsState(
+        if (selected) MovoColors.indigoFg else MovoColors.textSecondary,
+        MovoMotion.fast(),
+        label = "logChipText",
+    )
     Box(
         modifier = Modifier
             .height(MovoSize.controlMedium)
             .movoClickable(PressKind.Solid, shape = shape, role = Role.RadioButton, onClick = onClick)
             .semantics { this.selected = selected }
             .clip(shape)
+            .background(background)
             // 描边 1（Figma Chip/Filter），与发丝线 0.5 不同。
-            .then(if (selected) Modifier.background(MovoColors.indigoBg) else Modifier.border(1.dp, MovoColors.borderStrong, shape))
+            .border(1.dp, border, shape)
             .padding(horizontal = MovoSpacing.lg),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, style = MovoTypography.labelMedium, color = if (selected) MovoColors.indigoFg else MovoColors.textSecondary, maxLines = 1)
+        Text(label, style = MovoTypography.labelMedium, color = textColor, maxLines = 1)
     }
 }
 
@@ -180,8 +201,9 @@ internal fun SummaryCard(
     meta: String,
     footer: String? = null,
     footerAction: Pair<String, () -> Unit>? = null,
+    modifier: Modifier = Modifier,
 ) {
-    MovoCard(bottomPadding = 0.dp) {
+    MovoCard(modifier = modifier, bottomPadding = 0.dp) {
         Column(
             modifier = Modifier.padding(MovoSpacing.lg),
             verticalArrangement = Arrangement.spacedBy(MovoSpacing.xs),
@@ -227,8 +249,8 @@ internal fun SummaryCard(
 
 /** 「原因」卡：原因标题 Body/Strong + 说明 13 次要色 → 16 → 建议 Body/Regular + 行内按钮（如「去模型设置」）。 */
 @Composable
-internal fun ReasonCard(explanation: FailureExplanation, onAction: (FailureAction) -> Unit) {
-    MovoCard {
+internal fun ReasonCard(explanation: FailureExplanation, modifier: Modifier = Modifier, onAction: (FailureAction) -> Unit) {
+    MovoCard(modifier = modifier) {
         CardTitle("原因")
         Column(
             modifier = Modifier.padding(start = MovoSpacing.lg, end = MovoSpacing.lg, top = MovoSpacing.xs, bottom = MovoSpacing.md),
@@ -262,10 +284,10 @@ private fun BreakdownKind.color(): Color = when (this) {
 
 /** 「耗时」卡（Log/TimeBreakdown）：8 高分段条 + 每段一行（色点、名称、时长）；最久的一段 Medium 主色。 */
 @Composable
-internal fun BreakdownCard(parts: List<BreakdownPart>, format: DiagnosticsFormat) {
+internal fun BreakdownCard(parts: List<BreakdownPart>, format: DiagnosticsFormat, modifier: Modifier = Modifier) {
     val longest = parts.maxByOrNull { it.ms }
     val total = parts.sumOf { it.ms }.coerceAtLeast(1L)
-    MovoCard {
+    MovoCard(modifier = modifier) {
         CardTitle("耗时")
         Column(
             modifier = Modifier.padding(start = MovoSpacing.xl, end = MovoSpacing.xl, top = MovoSpacing.xs, bottom = MovoSpacing.md),
@@ -309,7 +331,8 @@ internal fun BreakdownCard(parts: List<BreakdownPart>, format: DiagnosticsFormat
 /**
  * Work/Step：时间线的一行。行内边距 16 / 10，状态图标 16 → 12 → 标题 13 Medium + 说明 13 次要色（间距 2），
  * 右侧时长 Numeric/Label 三级色；图标之间用 1 宽 border/strong 连接线串起来（x = 24，图标上下各留约 4）。
- * [detail] 不为空时在文字列（卡内 44）下方展开 Run/StepDetail。[muted] 用于设备事件：标题也用次要色。
+ * [expanded] 时在文字列（卡内 44）下方展开 Run/StepDetail（高度 `standard`、内容 40ms 后淡入，9.3「展开 / 收起」）。
+ * [muted] 用于设备事件：标题也用次要色。
  */
 @Composable
 internal fun StepRow(
@@ -321,6 +344,7 @@ internal fun StepRow(
     muted: Boolean = false,
     detailLabel: String? = null,
     detail: String? = null,
+    expanded: Boolean = detail != null,
     onClick: (() -> Unit)? = null,
     icon: @Composable () -> Unit,
 ) {
@@ -350,7 +374,7 @@ internal fun StepRow(
                 Text(duration, style = MovoTypography.numericLabel, color = MovoColors.textTertiary, maxLines = 1)
             }
         }
-        if (detail != null) {
+        MovoExpandable(visible = expanded && detail != null) {
             Column(
                 modifier = Modifier
                     .padding(start = MovoSize.iconSmall + MovoSpacing.md, top = MovoSpacing.sm + MovoSpacing.xxs)
@@ -362,7 +386,7 @@ internal fun StepRow(
             ) {
                 detailLabel?.let { Text(it, style = MovoTypography.labelMedium, color = MovoColors.textSecondary) }
                 SelectionContainer {
-                    Text(detail, style = MovoTypography.labelRegular, color = MovoColors.textPrimary)
+                    Text(detail.orEmpty(), style = MovoTypography.labelRegular, color = MovoColors.textPrimary)
                 }
             }
         }

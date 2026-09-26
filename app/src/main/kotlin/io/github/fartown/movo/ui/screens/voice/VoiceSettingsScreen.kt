@@ -1,5 +1,25 @@
 package io.github.fartown.movo.ui.screens.voice
 
+import io.github.fartown.movo.ui.components.movo.rememberLastNonNull
+import io.github.fartown.movo.ui.theme.MovoMotion
+import io.github.fartown.movo.ui.theme.LocalReducedMotion
+import io.github.fartown.movo.ui.components.movo.movoAnimateItem
+import io.github.fartown.movo.ui.components.movo.MovoInlineError
+import io.github.fartown.movo.ui.components.movo.MovoExpandable
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.AnimatedContent
 import android.Manifest
 import android.app.Activity
 import android.app.role.RoleManager
@@ -86,7 +106,7 @@ internal fun VoiceSettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
-    val settings by VoiceSettingsRepository.wakeSettingsFlow().collectAsState(initial = null)
+    val settings by remember { VoiceSettingsRepository.wakeSettingsFlow() }.collectAsState(initial = null)
     val listeningState by MovoWakeWordService.listeningState.collectAsState()
     val roleManager = remember { context.getSystemService(RoleManager::class.java) }
     var assistantRole by remember { mutableStateOf(roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)) }
@@ -164,21 +184,15 @@ internal fun VoiceSettingsScreen(onBack: () -> Unit) {
     }
     LaunchedEffect(Unit) { loadCredentials() }
 
-    if (editor == VoiceEditor.Phrase && settings != null) {
-        WakePhraseEditor(settings!!.effectivePhrase(), onBack = { editor = null }, onSaved = {
-            editor = null
-            phraseSaved = true
-        })
-        return
+    // 主页面的滚动位置放在外面：进入编辑页再返回时停在原处。
+    val mainListState = rememberLazyListState()
+    val activeEditor = when {
+        editor == VoiceEditor.Phrase && settings != null -> VoiceEditor.Phrase
+        editor == VoiceEditor.Credentials && credentials != null -> VoiceEditor.Credentials
+        else -> null
     }
-    if (editor == VoiceEditor.Credentials && credentials != null) {
-        VoiceCredentialsEditor(credentials!!, onBack = { editor = null }, onSaved = {
-            credentials = it
-            editor = null
-            testResult = null
-        })
-        return
-    }
+    val reduced = LocalReducedMotion.current
+    val pageShiftPx = with(LocalDensity.current) { PageShift.roundToPx() }
     val configured = credentials?.hasUsableAuth() == true
     val wakeEditable = settings != null && !wakeChanging
     val scopes = listOf(WakeListenScope.AppOpen, WakeListenScope.ScreenOn)
@@ -191,9 +205,34 @@ internal fun VoiceSettingsScreen(onBack: () -> Unit) {
     val showRoleRow = !assistantRole && roleManager.isRoleAvailable(RoleManager.ROLE_ASSISTANT)
     val showAccessCard = !notifications || !overlayAllowed || showRoleRow
 
-    MovoListPage(title = stringResource(R.string.voice_settings_title), onBack = onBack) {
+    // 编辑页（唤醒词、豆包凭据）按「页面切换」进出（9.3）：前进新页从右 24 移入并淡入 `slow` + `enter`，旧页不动；
+    // 返回当前页右移 24 淡出 250ms + `exit`。减少动画时纯淡入淡出 `fast`。
+    AnimatedContent(
+        targetState = activeEditor,
+        transitionSpec = { voicePageTransition(reduced, pageShiftPx) },
+        label = "voiceEditorPage",
+    ) { page ->
+        when (page) {
+            VoiceEditor.Phrase -> WakePhraseEditor(
+                savedPhrase = settings?.effectivePhrase() ?: WakePhraseRules.DEFAULT,
+                onBack = { editor = null },
+                onSaved = {
+                    editor = null
+                    phraseSaved = true
+                },
+            )
+            VoiceEditor.Credentials -> VoiceCredentialsEditor(
+                saved = credentials ?: DoubaoSpeechCredentials(),
+                onBack = { editor = null },
+                onSaved = {
+                    credentials = it
+                    editor = null
+                    testResult = null
+                },
+            )
+            null -> MovoListPage(title = stringResource(R.string.voice_settings_title), onBack = onBack, listState = mainListState) {
         item(key = "wake") {
-            MovoCard {
+            MovoCard(modifier = movoAnimateItem()) {
                 CardTitle(stringResource(R.string.voice_settings_wake_section))
                 SettingsRow(
                     title = stringResource(R.string.movo_voice_wake),
@@ -227,7 +266,7 @@ internal fun VoiceSettingsScreen(onBack: () -> Unit) {
                         } else setWake(enabled)
                     },
                 )
-                if (!micGranted) {
+                MovoExpandable(visible = !micGranted) {
                     SettingsRow(
                         title = stringResource(R.string.movo_voice_mic),
                         subtitle = stringResource(R.string.voice_settings_mic_permission_hint),
@@ -271,7 +310,7 @@ internal fun VoiceSettingsScreen(onBack: () -> Unit) {
         }
         if (showAccessCard) {
             item(key = "access") {
-                MovoCard {
+                MovoCard(modifier = movoAnimateItem()) {
                     CardTitle(stringResource(R.string.movo_voice_group_access))
                     if (!notifications) {
                         SettingsRow(
@@ -311,7 +350,7 @@ internal fun VoiceSettingsScreen(onBack: () -> Unit) {
             }
         }
         item(key = "doubao") {
-            MovoCard {
+            MovoCard(modifier = movoAnimateItem()) {
                 CardTitle(stringResource(R.string.voice_settings_doubao_section))
                 SettingsRow(
                     title = stringResource(R.string.voice_settings_configure),
@@ -357,7 +396,7 @@ internal fun VoiceSettingsScreen(onBack: () -> Unit) {
                         )
                     },
                 )
-                if (configured) {
+                MovoExpandable(visible = configured) {
                     SettingsRow(
                         title = stringResource(R.string.voice_settings_clear_credentials),
                         trailing = RowTrailing.None,
@@ -376,6 +415,8 @@ internal fun VoiceSettingsScreen(onBack: () -> Unit) {
                     ),
                 )
             }
+        }
+    }
         }
     }
 
@@ -436,7 +477,7 @@ internal fun VoiceSettingsScreen(onBack: () -> Unit) {
             }
         },
         extraContent = {
-            if (clearFailed) {
+            MovoExpandable(visible = clearFailed) {
                 ErrorText(stringResource(R.string.page_save_failed_40525a), Modifier.padding(top = MovoSpacing.sm))
             }
         },
@@ -496,10 +537,12 @@ private fun WakePhraseEditor(savedPhrase: String, onBack: () -> Unit, onSaved: (
                     TextField(value = draft, onValueChange = { draft = it; error = null },
                         label = stringResource(R.string.voice_settings_wake_phrase), singleLine = true,
                         enabled = !saving, modifier = Modifier.fillMaxWidth())
-                    if (WakePhraseRules.isShortPhraseWarning(draft)) {
+                    MovoExpandable(visible = WakePhraseRules.isShortPhraseWarning(draft)) {
                         ErrorText(stringResource(R.string.voice_settings_phrase_short_warn), warning = true)
                     }
-                    error?.let { ErrorText(it) }
+                    MovoExpandable(visible = error != null) {
+                        ErrorText(rememberLastNonNull(error).orEmpty())
+                    }
                 }
                 SettingsRow(
                     title = stringResource(R.string.voice_settings_restore_default_phrase),
@@ -596,13 +639,18 @@ private fun VoiceCredentialsEditor(saved: DoubaoSpeechCredentials, onBack: () ->
                     Modifier.padding(start = MovoSpacing.lg, end = MovoSpacing.lg, top = MovoSpacing.sm, bottom = MovoSpacing.md),
                     verticalArrangement = Arrangement.spacedBy(MovoSpacing.sm),
                 ) {
-                    if (useApiKey) {
+                    // 切换鉴权方式：字段展开 / 收起（9.3「展开 / 收起」），不硬增删。
+                    MovoExpandable(visible = useApiKey) {
                         VoiceSecretField("Api-Key", apiKey, !saving) { apiKey = it; error = null }
-                    } else {
+                    }
+                    MovoExpandable(visible = !useApiKey) {
                         VoiceSecretField("App-Key", appKey, !saving) { appKey = it; error = null }
+                        Spacer(Modifier.height(MovoSpacing.sm))
                         VoiceSecretField("Access-Key", accessKey, !saving) { accessKey = it; error = null }
                     }
-                    error?.let { ErrorText(it) }
+                    MovoExpandable(visible = error != null) {
+                        ErrorText(rememberLastNonNull(error).orEmpty())
+                    }
                 }
             }
         }
@@ -616,7 +664,7 @@ private fun VoiceCredentialsEditor(saved: DoubaoSpeechCredentials, onBack: () ->
                     enabled = !saving,
                     showDivider = false,
                 )
-                if (advanced) {
+                MovoExpandable(visible = advanced) {
                     TextField(value = resourceId, onValueChange = { resourceId = it; error = null }, label = "Resource-Id",
                         singleLine = true, enabled = !saving,
                         modifier = Modifier.fillMaxWidth().padding(start = MovoSpacing.lg, end = MovoSpacing.lg, bottom = MovoSpacing.md),
@@ -673,18 +721,53 @@ private fun DiscardVoiceEditsDialog(show: Boolean, onKeep: () -> Unit, onDiscard
         message = stringResource(R.string.voice_settings_discard_hint),
         confirmText = stringResource(R.string.voice_settings_discard),
         cancelText = stringResource(R.string.voice_settings_keep_editing),
+        // 放弃修改会丢掉已填写的内容，按危险确认处理（bg/inverse 白字 + Rose 警示图标）。
+        destructive = true,
         onConfirm = onDiscard,
         onDismissRequest = onKeep,
     )
 }
 
-/** 就地错误 / 警示：13 Regular，Rose 色（文字本身说明问题，颜色不是唯一信号）。 */
+/**
+ * 就地错误 / 警示：错误 = Rose 警示图标 + 主色文字（4.2 规则 2：Rose 不用于文字，颜色不是唯一信号）；
+ * 警示（唤醒词过短）= 13 Regular 次要色。
+ */
 @Composable
 private fun ErrorText(text: String, modifier: Modifier = Modifier, warning: Boolean = false) {
-    Text(
-        text,
-        modifier = modifier,
-        style = MovoTypography.labelRegular,
-        color = if (warning) MovoColors.textSecondary else MovoColors.roseFg,
-    )
+    if (warning) {
+        Text(text, modifier = modifier, style = MovoTypography.labelRegular, color = MovoColors.textSecondary)
+    } else {
+        MovoInlineError(text = text, modifier = modifier)
+    }
+}
+
+/** 页面切换位移（9.0 规则 4：屏内自动动画最大 24）。 */
+private val PageShift = 24.dp
+
+/**
+ * 9.3「页面切换」：前进（进入编辑页）新页从右 24 移入并淡入 `slow` + `enter`，旧页不动、被新页盖住；
+ * 返回当前页右移 24 淡出 250ms + `exit`，下面的页直接露出。减少动画时纯淡入淡出 `fast`。
+ */
+private fun AnimatedContentTransitionScope<VoiceEditor?>.voicePageTransition(reduced: Boolean, shiftPx: Int): ContentTransform {
+    if (reduced) {
+        return ContentTransform(fadeIn(MovoMotion.fast()), fadeOut(MovoMotion.fastExit()), sizeTransform = null)
+    }
+    val forward = targetState != null
+    return if (forward) {
+        ContentTransform(
+            targetContentEnter = slideInHorizontally(MovoMotion.slow(MovoMotion.EasingEnter)) { shiftPx } +
+                fadeIn(MovoMotion.slow(MovoMotion.EasingEnter)),
+            // 旧页保持不动，等新页盖住后再移除。
+            initialContentExit = fadeOut(tween(durationMillis = 0, delayMillis = MovoMotion.SLOW)),
+            targetContentZIndex = 1f,
+            sizeTransform = null,
+        )
+    } else {
+        ContentTransform(
+            targetContentEnter = EnterTransition.None,
+            initialContentExit = slideOutHorizontally(MovoMotion.slowExit()) { shiftPx } + fadeOut(MovoMotion.slowExit()),
+            targetContentZIndex = -1f,
+            sizeTransform = null,
+        )
+    }
 }

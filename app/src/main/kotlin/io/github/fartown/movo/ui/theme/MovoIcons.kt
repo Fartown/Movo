@@ -529,4 +529,197 @@ internal object MovoIcons {
         "M22 8.82a15 15 0 0 0-11.288-3.764",
         "m2 2 20 20",
     ))
+    /** lucide:scan-eye */
+    val ScanEye = MovoIconData("scan-eye", listOf(
+        "M3 7V5a2 2 0 0 1 2-2h2",
+        "M17 3h2a2 2 0 0 1 2 2v2",
+        "M21 17v2a2 2 0 0 1-2 2h-2",
+        "M7 21H5a2 2 0 0 1-2-2v-2",
+        "M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0",
+        "M18.944 12.33a1 1 0 0 0 0-.66 7.5 7.5 0 0 0-13.888 0 1 1 0 0 0 0 .66 7.5 7.5 0 0 0 13.888 0",
+    ))
+    /** lucide:crosshair */
+    val Crosshair = MovoIconData("crosshair", listOf(
+        "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0",
+        "M22 12L18 12",
+        "M6 12L2 12",
+        "M12 6L12 2",
+        "M12 22L12 18",
+    ))
+    /** lucide:pointer */
+    val Pointer = MovoIconData("pointer", listOf(
+        "M22 14a8 8 0 0 1-8 8",
+        "M18 11v-1a2 2 0 0 0-2-2a2 2 0 0 0-2 2",
+        "M14 10V9a2 2 0 0 0-2-2a2 2 0 0 0-2 2v1",
+        "M10 9.5V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v10",
+        "M18 11a2 2 0 1 1 4 0v3a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15",
+    ))
+    /** lucide:move */
+    val Move = MovoIconData("move", listOf(
+        "M12 2v20",
+        "m15 19-3 3-3-3",
+        "m19 9 3 3-3 3",
+        "M2 12h20",
+        "m5 9-3 3 3 3",
+        "m9 5 3-3 3 3",
+    ))
+    /** lucide:arrow-down-up */
+    val ArrowDownUp = MovoIconData("arrow-down-up", listOf(
+        "m3 16 4 4 4-4",
+        "M7 20V4",
+        "m21 8-4-4-4 4",
+        "M17 4v16",
+    ))
+    /** lucide:clipboard-paste */
+    val ClipboardPaste = MovoIconData("clipboard-paste", listOf(
+        "M11 14h10",
+        "M16 4h2a2 2 0 0 1 2 2v1.344",
+        "m17 18 4-4-4-4",
+        "M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 1.793-1.113",
+        "M9 2h6a1 1 0 0 1 1 1v2a1 1 0 0 1 -1 1h-6a1 1 0 0 1 -1 -1v-2a1 1 0 0 1 1 -1Z",
+    ))
+    /** lucide:clipboard */
+    val Clipboard = MovoIconData("clipboard", listOf(
+        "M9 2h6a1 1 0 0 1 1 1v2a1 1 0 0 1 -1 1h-6a1 1 0 0 1 -1 -1v-2a1 1 0 0 1 1 -1Z",
+        "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2",
+    ))
+    /** lucide:replace */
+    val Replace = MovoIconData("replace", listOf(
+        "M14 4a1 1 0 0 1 1-1",
+        "M15 10a1 1 0 0 1-1-1",
+        "M21 4a1 1 0 0 0-1-1",
+        "M21 9a1 1 0 0 1-1 1",
+        "m3 7 3 3 3-3",
+        "M6 10V5a2 2 0 0 1 2-2h2",
+        "M4 14h5a1 1 0 0 1 1 1v5a1 1 0 0 1 -1 1h-5a1 1 0 0 1 -1 -1v-5a1 1 0 0 1 1 -1Z",
+    ))
+    /** lucide:delete */
+    val Delete = MovoIconData("delete", listOf(
+        "M10 5a2 2 0 0 0-1.344.519l-6.328 5.74a1 1 0 0 0 0 1.481l6.328 5.741A2 2 0 0 0 10 19h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z",
+        "m12 9 6 6",
+        "m18 9-6 6",
+    ))
+    /** lucide:layout-grid */
+    val LayoutGrid = MovoIconData("layout-grid", listOf(
+        "M4 3h5a1 1 0 0 1 1 1v5a1 1 0 0 1 -1 1h-5a1 1 0 0 1 -1 -1v-5a1 1 0 0 1 1 -1Z",
+        "M15 3h5a1 1 0 0 1 1 1v5a1 1 0 0 1 -1 1h-5a1 1 0 0 1 -1 -1v-5a1 1 0 0 1 1 -1Z",
+        "M15 14h5a1 1 0 0 1 1 1v5a1 1 0 0 1 -1 1h-5a1 1 0 0 1 -1 -1v-5a1 1 0 0 1 1 -1Z",
+        "M4 14h5a1 1 0 0 1 1 1v5a1 1 0 0 1 -1 1h-5a1 1 0 0 1 -1 -1v-5a1 1 0 0 1 1 -1Z",
+    ))
+    /** lucide:telescope */
+    val Telescope = MovoIconData("telescope", listOf(
+        "m10.065 12.493-6.18 1.318a.934.934 0 0 1-1.108-.702l-.537-2.15a1.07 1.07 0 0 1 .691-1.265l13.504-4.44",
+        "m13.56 11.747 4.332-.924",
+        "m16 21-3.105-6.21",
+        "M16.485 5.94a2 2 0 0 1 1.455-2.425l1.09-.272a1 1 0 0 1 1.212.727l1.515 6.06a1 1 0 0 1-.727 1.213l-1.09.272a2 2 0 0 1-2.425-1.455z",
+        "m6.158 8.633 1.114 4.456",
+        "m8 21 3.105-6.21",
+        "M10 13a2 2 0 1 0 4 0a2 2 0 1 0 -4 0",
+    ))
+    /** lucide:monitor */
+    val Monitor = MovoIconData("monitor", listOf(
+        "M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-16a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2Z",
+        "M8 21L16 21",
+        "M12 17L12 21",
+    ))
+    /** lucide:camera */
+    val Camera = MovoIconData("camera", listOf(
+        "M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z",
+        "M9 13a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+    ))
+    /** lucide:file-search */
+    val FileSearch = MovoIconData("file-search", listOf(
+        "M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z",
+        "M14 2v5a1 1 0 0 0 1 1h5",
+        "M9 14.5a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0",
+        "M13.3 16.3 15 18",
+    ))
+    /** lucide:command */
+    val Command = MovoIconData("command", listOf(
+        "M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3",
+    ))
+    /** lucide:panel-top */
+    val PanelTop = MovoIconData("panel-top", listOf(
+        "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2Z",
+        "M3 9h18",
+    ))
+    /** lucide:map-pin */
+    val MapPin = MovoIconData("map-pin", listOf(
+        "M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0",
+        "M9 10a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+    ))
+    /** lucide:heart-pulse */
+    val HeartPulse = MovoIconData("heart-pulse", listOf(
+        "M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5",
+        "M3.22 13H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27",
+    ))
+    /** lucide:activity */
+    val Activity = MovoIconData("activity", listOf(
+        "M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2",
+    ))
+    /** lucide:contact */
+    val Contact = MovoIconData("contact", listOf(
+        "M16 2v2",
+        "M7 21v-2a2 2 0 012-2h6a2 2 0 012 2v2",
+        "M8 2v2",
+        "M9 10a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+        "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2Z",
+    ))
+    /** lucide:phone */
+    val Phone = MovoIconData("phone", listOf(
+        "M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384",
+    ))
+    /** lucide:music */
+    val Music = MovoIconData("music", listOf(
+        "M9 18V5l12-2v13",
+        "M3 18a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+        "M15 16a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+    ))
+    /** lucide:folder-open */
+    val FolderOpen = MovoIconData("folder-open", listOf(
+        "m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2",
+    ))
+    /** lucide:sticky-note */
+    val StickyNote = MovoIconData("sticky-note", listOf(
+        "M21 9a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 15 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2z",
+        "M15 3v5a1 1 0 0 0 1 1h5",
+    ))
+    /** lucide:shopping-bag */
+    val ShoppingBag = MovoIconData("shopping-bag", listOf(
+        "M16 10a4 4 0 0 1-8 0",
+        "M3.103 6.034h17.794",
+        "M3.4 5.467a2 2 0 0 0-.4 1.2V20a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6.667a2 2 0 0 0-.4-1.2l-2-2.667A2 2 0 0 0 17 2H7a2 2 0 0 0-1.6.8z",
+    ))
+    /** lucide:file-pen-line */
+    val FilePenLine = MovoIconData("file-pen-line", listOf(
+        "M14.364 13.634a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506l4.013-4.009a1 1 0 0 0-3.004-3.004z",
+        "M14.487 7.858A1 1 0 0 1 14 7V2",
+        "M20 19.645V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l2.516 2.516",
+        "M8 18h1",
+    ))
+    /** lucide:image-plus */
+    val ImagePlus = MovoIconData("image-plus", listOf(
+        "M16 5h6",
+        "M19 2v6",
+        "M21 11.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7.5",
+        "m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21",
+        "M7 9a2 2 0 1 0 4 0a2 2 0 1 0 -4 0",
+    ))
+    /** lucide:arrow-left */
+    val ArrowLeft = MovoIconData("arrow-left", listOf(
+        "m12 19-7-7 7-7",
+        "M19 12H5",
+    ))
+    /** lucide:lock */
+    val Lock = MovoIconData("lock", listOf(
+        "M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-7a2 2 0 0 1 2 -2Z",
+        "M7 11V7a5 5 0 0 1 10 0v4",
+    ))
+    /** lucide:app-window */
+    val AppWindow = MovoIconData("app-window", listOf(
+        "M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-16a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2Z",
+        "M10 4v4",
+        "M2 8h20",
+        "M6 4v4",
+    ))
 }

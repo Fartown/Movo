@@ -1,5 +1,9 @@
 package io.github.fartown.movo.ui.screens.characters
 
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
+import io.github.fartown.movo.ui.components.movo.rememberDoneFlash
+import io.github.fartown.movo.ui.components.movo.MovoDoneBlockButton
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -42,6 +46,12 @@ internal fun CharacterPersonaScreen(store: CharacterLibraryStore, onBack: () -> 
 /** 剧情记忆（规范 8.7 二级页）：输入卡（剧情与关系；页脚说明共享范围）→ 同一行「重新载入」「保存记忆」。 */
 @Composable
 internal fun CharacterMemoryScreen(id: String, store: CharacterLibraryStore, onBack: () -> Unit) {
+    // 保存成功：「保存记忆」原地交叉淡化为 ✓（8.11 结果就地反馈，不弹窗）。
+    val saved = rememberDoneFlash()
+    val initialSavedToken = remember { store.memorySavedToken }
+    LaunchedEffect(store.memorySavedToken) {
+        if (store.memorySavedToken != initialSavedToken) saved.trigger()
+    }
     MovoListPage(title = "剧情记忆", onBack = onBack, modifier = Modifier.imePadding()) {
         item(key = "memory") {
             CharacterFieldCard(
@@ -62,8 +72,10 @@ internal fun CharacterMemoryScreen(id: String, store: CharacterLibraryStore, onB
                     tone = BlockTone.Secondary,
                     modifier = Modifier.weight(1f),
                 )
-                MovoBlockButton(
+                MovoDoneBlockButton(
                     label = "保存记忆",
+                    doneLabel = "已保存",
+                    done = saved.active,
                     onClick = { store.saveMemory(id) },
                     enabled = !store.busy,
                     tone = BlockTone.Primary,

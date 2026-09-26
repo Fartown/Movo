@@ -1,5 +1,9 @@
 package io.github.fartown.movo.ui.screens.diagnostics
 
+import androidx.compose.ui.Modifier
+import io.github.fartown.movo.ui.components.movo.revealAlpha
+import io.github.fartown.movo.ui.components.movo.rememberContentReveal
+import io.github.fartown.movo.ui.components.movo.movoAnimateItem
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
@@ -59,6 +63,8 @@ internal fun DiagnosticsScreen(
         filter == LogFilter.RUNNING && runningCount == 0 -> LogFilter.ALL
         else -> filter
     }
+    // 进入时数据还没读到：先留空，数据到了整体淡入（从空白交叉淡化到内容，不闪）。
+    val reveal = rememberContentReveal(live != null)
     val visible = runs.filter {
         when (effective) {
             LogFilter.ALL -> true
@@ -88,7 +94,10 @@ internal fun DiagnosticsScreen(
         // 顶栏下 12 为筛选芯片（单选）；计数为 0 的芯片不显示，只剩「全部」时整行不显示。
         if (failedCount > 0 || runningCount > 0) {
             item(key = "filters") {
-                Row(horizontalArrangement = Arrangement.spacedBy(MovoSpacing.sm)) {
+                Row(
+                    modifier = movoAnimateItem(contentSize = false).revealAlpha(reveal),
+                    horizontalArrangement = Arrangement.spacedBy(MovoSpacing.sm),
+                ) {
                     LogFilterChip("全部", effective == LogFilter.ALL) { filter = LogFilter.ALL }
                     if (failedCount > 0) LogFilterChip("失败 $failedCount", effective == LogFilter.FAILED) { filter = LogFilter.FAILED }
                     if (runningCount > 0) LogFilterChip("进行中 $runningCount", effective == LogFilter.RUNNING) { filter = LogFilter.RUNNING }
@@ -97,15 +106,19 @@ internal fun DiagnosticsScreen(
         }
         if (visible.isEmpty()) {
             item(key = "empty") {
-                MovoCard { EmptyHint("还没有任务记录。", "发送一条消息后，这里会记下它的请求和耗时。") }
+                MovoCard(modifier = movoAnimateItem().revealAlpha(reveal)) {
+                    EmptyHint("还没有任务记录。", "发送一条消息后，这里会记下它的请求和耗时。")
+                }
             }
         }
-        // 按天一张卡片，卡内标题「今天」「昨天」或日期。
+        // 按天一张卡片，卡内标题「今天」「昨天」或日期。筛选切换与工具页同一写法（9.3.1「分段 / 标签」）：
+        // 两边都有的卡片平滑移位、高度平滑变化，只在一边出现的淡入淡出；卡内的行按任务 id 保持身份。
         visible.groupBy { format.day(it.startedAt) }.forEach { (day, dayRuns) ->
             item(key = "card-$day") {
-                MovoCard {
+                MovoCard(modifier = movoAnimateItem().revealAlpha(reveal)) {
                     CardTitle(format.dayTitle(day))
                     dayRuns.forEachIndexed { index, run ->
+                        androidx.compose.runtime.key(run.id) {
                         SettingsRow(
                             title = format.runTitle(run, titles.of(run)),
                             subtitle = format.listSubtitle(run, live.nowElapsed),
@@ -114,13 +127,14 @@ internal fun DiagnosticsScreen(
                             showDivider = index < dayRuns.lastIndex,
                             onClick = { onOpenRun(run.id) },
                         )
+                        }
                     }
                 }
             }
         }
         // 最后一张「任务之外」：系统事件入口 + 保存策略页脚。
         item(key = "system") {
-            MovoCard {
+            MovoCard(modifier = movoAnimateItem().revealAlpha(reveal)) {
                 CardTitle("任务之外")
                 SettingsRow(
                     title = "系统事件",
@@ -149,6 +163,7 @@ internal fun DiagnosticsRunScreen(
     val titles = rememberConversationTitles()
     val format = rememberDiagnosticsFormat()
     val run = live?.trace?.runs?.firstOrNull { it.id == runId }
+    val reveal = rememberContentReveal(live != null)
     // 默认展开最值得看的那次请求：失败任务的最后一次失败、进行中任务正在进行的请求；同时只展开一行。
     var expanded by rememberSaveable(runId) { mutableStateOf<String?>(null) }
     var expandedInitialized by rememberSaveable(runId) { mutableStateOf(false) }
@@ -183,7 +198,9 @@ internal fun DiagnosticsRunScreen(
         if (live == null) return@MovoListPage
         if (run == null) {
             item(key = "missing") {
-                MovoCard { EmptyHint("这个任务的记录已经不在了。", "运行日志只保存最近 20 个任务。") }
+                MovoCard(modifier = Modifier.revealAlpha(reveal)) {
+                    EmptyHint("这个任务的记录已经不在了。", "运行日志只保存最近 20 个任务。")
+                }
             }
             return@MovoListPage
         }
@@ -194,6 +211,7 @@ internal fun DiagnosticsRunScreen(
         item(key = "summary") {
             val stall = if (running) format.stallHint(silence) else null
             SummaryCard(
+                modifier = movoAnimateItem().revealAlpha(reveal),
                 status = run.status,
                 statusText = format.statusLine(run),
                 timer = format.summaryTimer(run, now),
@@ -204,7 +222,7 @@ internal fun DiagnosticsRunScreen(
         }
         format.explain(run)?.let { explanation ->
             item(key = "reason") {
-                ReasonCard(explanation) { action ->
+                ReasonCard(explanation, modifier = movoAnimateItem().revealAlpha(reveal)) { action ->
                     when (action) {
                         FailureAction.MODEL_SETTINGS -> onOpenModelSettings()
                         FailureAction.BACKGROUND_SETTINGS -> runCatching {
@@ -218,10 +236,10 @@ internal fun DiagnosticsRunScreen(
             }
         }
         run.breakdown()?.let(format::breakdownParts)?.takeIf { it.isNotEmpty() }?.let { parts ->
-            item(key = "breakdown") { BreakdownCard(parts, format) }
+            item(key = "breakdown") { BreakdownCard(parts, format, modifier = movoAnimateItem().revealAlpha(reveal)) }
         }
         item(key = "timeline") {
-            MovoCard {
+            MovoCard(modifier = movoAnimateItem().revealAlpha(reveal)) {
                 // 进行中且没卡住时，标题右侧写实时状态（多久前收到数据 / 正在执行的步骤与已等时长）。
                 CardTitle("时间线", trailing = if (running) format.liveNote(run, now, silence) else null)
                 if (run.timeline.isEmpty()) EmptyHint("还没有记录到请求")
@@ -270,7 +288,8 @@ private fun TimelineRow(
                 first = first,
                 last = last,
                 detailLabel = "网络阶段",
-                detail = if (expanded) format.requestDetail(request) else null,
+                detail = format.requestDetail(request),
+                expanded = expanded,
                 onClick = onToggle,
             ) { StatusIcon(request.status, MovoSize.iconSmall) }
         }
@@ -314,12 +333,13 @@ internal fun DiagnosticsSystemScreen(onBack: () -> Unit) {
     val live = rememberDiagnosticsLive()
     val format = rememberDiagnosticsFormat()
     val footer = listOf("任务中发生的事件，也记在该任务的时间线里。", "系统事件保留最近 7 天。")
+    val reveal = rememberContentReveal(live != null)
     MovoListPage(title = "系统事件", onBack = onBack) {
         if (live == null) return@MovoListPage
         val events: List<SystemEvent> = live.trace.system
         if (events.isEmpty()) {
             item(key = "empty") {
-                MovoCard {
+                MovoCard(modifier = movoAnimateItem().revealAlpha(reveal)) {
                     EmptyHint("还没有系统事件")
                     CardFooter(footer)
                 }
@@ -328,7 +348,7 @@ internal fun DiagnosticsSystemScreen(onBack: () -> Unit) {
         val days = events.groupBy { format.day(it.timeMillis) }.toList()
         days.forEachIndexed { dayIndex, (day, dayEvents) ->
             item(key = "card-$day") {
-                MovoCard {
+                MovoCard(modifier = movoAnimateItem().revealAlpha(reveal)) {
                     CardTitle(format.dayTitle(day))
                     dayEvents.forEach { event ->
                         StepRow(

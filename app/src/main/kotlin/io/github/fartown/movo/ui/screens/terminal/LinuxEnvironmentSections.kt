@@ -1,5 +1,16 @@
 package io.github.fartown.movo.ui.screens.terminal
 
+import io.github.fartown.movo.ui.components.movo.rememberLastNonNull
+import io.github.fartown.movo.ui.components.movo.MovoExpandable
+import io.github.fartown.movo.ui.components.movo.CheckMark
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -79,8 +90,9 @@ internal fun LinuxEnvironmentStatusCard(
     actionText: String?,
     actionEnabled: Boolean,
     onAction: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    MovoCard(bottomPadding = 0.dp) {
+    MovoCard(modifier = modifier, bottomPadding = 0.dp) {
         Column(
             modifier = Modifier.padding(MovoSpacing.lg),
             verticalArrangement = Arrangement.spacedBy(MovoSpacing.md),
@@ -102,24 +114,41 @@ internal fun LinuxEnvironmentStatusCard(
                 }
             }
             Row(verticalAlignment = Alignment.Top) {
-                if (busy) {
-                    Box(modifier = Modifier.height(22.dp), contentAlignment = Alignment.Center) {
-                        TerminalSpinner()
+                // 加载圈随「进行中」淡入淡出（9.3「加载圈」），说明文字交叉淡化 `fast`（B10）。
+                AnimatedVisibility(
+                    visible = busy,
+                    enter = fadeIn(MovoMotion.fast()) + expandHorizontally(MovoMotion.standard()),
+                    exit = fadeOut(MovoMotion.fastExit()) + shrinkHorizontally(MovoMotion.standard()),
+                ) {
+                    Row {
+                        Box(modifier = Modifier.height(22.dp), contentAlignment = Alignment.Center) {
+                            TerminalSpinner()
+                        }
+                        Spacer(Modifier.width(MovoSpacing.sm))
                     }
-                    Spacer(Modifier.width(MovoSpacing.sm))
                 }
-                Column(modifier = Modifier.weight(1f)) {
-                    summary.lines().forEach { line ->
-                        Text(text = line, style = MovoTypography.bodyRegular, color = MovoColors.textSecondary)
+                AnimatedContent(
+                    targetState = summary,
+                    modifier = Modifier.weight(1f),
+                    transitionSpec = {
+                        (fadeIn(MovoMotion.fast()) togetherWith fadeOut(MovoMotion.fastExit()))
+                            .using(SizeTransform(clip = false) { _, _ -> MovoMotion.standard() })
+                    },
+                    label = "linuxStatusSummary",
+                ) { text ->
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        text.lines().forEach { line ->
+                            Text(text = line, style = MovoTypography.bodyRegular, color = MovoColors.textSecondary)
+                        }
                     }
                 }
             }
-            message?.let {
-                Text(text = it, style = MovoTypography.labelRegular, color = MovoColors.textPrimary)
+            MovoExpandable(visible = message != null) {
+                Text(text = rememberLastNonNull(message).orEmpty(), style = MovoTypography.labelRegular, color = MovoColors.textPrimary)
             }
-            actionText?.let {
+            MovoExpandable(visible = actionText != null) {
                 MovoBlockButton(
-                    label = it,
+                    label = rememberLastNonNull(actionText).orEmpty(),
                     onClick = onAction,
                     tone = BlockTone.Primary,
                     enabled = actionEnabled,
@@ -142,6 +171,7 @@ internal fun LinuxEnvironmentConfiguration(
     enabled: Boolean,
     onDistributionSelected: (LinuxDistribution) -> Unit,
     onBackendSelected: (LinuxExecutionBackend) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val distributions = LinuxDistribution.entries
     val backends = listOf(LinuxExecutionBackend.PROOT, LinuxExecutionBackend.CHROOT)
@@ -149,7 +179,7 @@ internal fun LinuxEnvironmentConfiguration(
     var showBackendDialog by remember { mutableStateOf(false) }
     val backendSelectable = rootGranted || backend == LinuxExecutionBackend.CHROOT
 
-    MovoCard {
+    MovoCard(modifier = modifier) {
         CardTitle(stringResource(R.string.linux_environment_configuration))
         SettingsRow(
             title = stringResource(R.string.linux_distribution_title),
@@ -278,10 +308,9 @@ internal fun LinuxChoiceDialog(
                             Text(it, style = MovoTypography.labelRegular, color = MovoColors.textSecondary)
                         }
                     }
-                    if (selected) {
-                        Spacer(Modifier.width(MovoSpacing.sm))
-                        MovoIcon(MovoIcons.Check, null, size = MovoSize.iconMedium, tint = MovoColors.indigoFg)
-                    }
+                    // 单选 ✓（9.3.1）：与 `MovoChoiceDialog` 同一个 CheckMark，旧 ✓ 淡出、新 ✓ 缩放 0.72 → 1 淡入 `fast`。
+                    Spacer(Modifier.width(MovoSpacing.sm))
+                    CheckMark(visible = selected)
                 }
             }
         }

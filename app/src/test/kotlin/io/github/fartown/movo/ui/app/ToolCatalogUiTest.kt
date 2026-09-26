@@ -9,6 +9,8 @@ import io.github.fartown.movo.agent.model.AgentToolCatalog
 import io.github.fartown.movo.agent.tool.AgentToolCapabilities
 import io.github.fartown.movo.agent.tool.RootRequirement
 import io.github.fartown.movo.ui.components.iconForTool
+import io.github.fartown.movo.ui.components.toolIcon
+import io.github.fartown.movo.ui.theme.MovoIcons
 import io.github.fartown.movo.ui.model.projectToolGroups
 import io.github.fartown.movo.ui.model.toolCardRequirement
 import org.junit.Assert.assertEquals
@@ -42,7 +44,17 @@ class ToolCatalogUiTest {
             .flatMap { it.tools }.map { it.id }
         (runtimeNames + cardIds).distinct().forEach { name ->
             assertNotEquals(name, Icons.Rounded.Build, iconForTool(name))
+            assertNotEquals(name, MovoIcons.Wrench, toolIcon(name))
         }
+    }
+
+    @Test
+    fun lucideToolIconsKeepTheSameSemanticsAsTheLegacyIcons() {
+        assertEquals(MovoIcons.Telescope, toolIcon("网页搜索"))
+        assertEquals(toolIcon("网页搜索"), toolIcon("web_search"))
+        assertEquals(MovoIcons.Globe, toolIcon("browser_use"))
+        assertEquals(MovoIcons.Plug, toolIcon("mcp_server_search_012345"))
+        assertEquals(MovoIcons.Wrench, toolIcon("unknown_tool"))
     }
 
     @Test

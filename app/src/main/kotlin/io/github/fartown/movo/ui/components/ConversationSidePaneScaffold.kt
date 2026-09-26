@@ -272,9 +272,13 @@ fun ConversationSidePaneScaffold(
             onBackCompleted = onDismiss,
         )
 
+        // 侧边栏完全关闭时面板不参与绘制（A13）：面板一直保持组合，打开动画第一帧不用现组合；
+        // 只在绘制阶段按「是否露出」切换图层透明度，零透明度的图层整层跳过，模糊浮层也不再每帧重算。
+        val paneShowing by remember { derivedStateOf { openProgress > 0f } }
         ConversationPanePanel(
             state = state,
             width = paneWidth,
+            paneVisible = { paneShowing },
             settingsAttention = settingsAttention,
             onSearchChange = onSearchChange,
             onConversationSelected = onConversationSelected,
@@ -283,7 +287,9 @@ fun ConversationSidePaneScaffold(
             onConversationDelete = onConversationDelete,
             onNewConversation = onNewConversation,
             onOpenSettings = onOpenSettings,
-            modifier = Modifier.zIndex(0f),
+            modifier = Modifier
+                .zIndex(0f)
+                .graphicsLayer { alpha = if (paneShowing) 1f else 0f },
         )
 
         val foregroundShape = AbsoluteRoundedCornerShape(
@@ -298,7 +304,6 @@ fun ConversationSidePaneScaffold(
             paneDragState.offset.takeUnless(Float::isNaN) ?: if (visible) paneWidthPx else 0f
         }
         // 只在「露出 / 收起」切换时重组；开合过程中的每一帧只在绘制阶段读进度，不重组、不重建修饰符。
-        val paneShowing by remember { derivedStateOf { openProgress > 0f } }
         if (paneShowing) {
             // 主页面左侧阴影（E3，暖灰）：形状与参数固定只画一次，随打开进度只改图层透明度，
             // 不再逐帧重新光栅化 64 的模糊阴影。ModulateAlpha 不开离屏缓冲，阴影可画出边界。
@@ -383,6 +388,8 @@ fun ConversationSidePaneScaffold(
 private fun ConversationPanePanel(
     state: ConversationPaneUiState,
     width: Dp,
+    /** 面板是否露出（绘制期读取）；运行中会话行的加载圈只在露出时转（A14）。 */
+    paneVisible: () -> Boolean,
     settingsAttention: String?,
     onSearchChange: (String) -> Unit,
     onConversationSelected: (String) -> Unit,
@@ -433,13 +440,19 @@ private fun ConversationPanePanel(
             overscrollEffect = null,
         ) {
             when {
-                state.conversations.isEmpty() -> item { EmptyConversations(isSearching = searching) }
+                // 空状态与列表之间同样按列表增删过渡（B14），不硬切。
+                state.conversations.isEmpty() -> item(key = if (searching) "empty-search" else "empty") {
+                    Box(Modifier.animateItem(fadeInSpec = rowFadeIn, placementSpec = rowPlacement, fadeOutSpec = rowFadeOut)) {
+                        EmptyConversations(isSearching = searching)
+                    }
+                }
                 searching -> items(items = state.conversations, key = { it.id }) { conversation ->
                     Box(Modifier.animateItem(fadeInSpec = rowFadeIn, placementSpec = rowPlacement, fadeOutSpec = rowFadeOut)) {
                     ConversationRow(
                         conversation = conversation,
                         selected = conversation.id == state.selectedConversationId,
                         query = query,
+                        paneVisible = paneVisible,
                         onClick = { onConversationSelected(conversation.id) },
                         onRename = { onConversationRename(conversation) },
                         onExport = { onConversationExport(conversation) },
@@ -459,6 +472,7 @@ private fun ConversationPanePanel(
                             conversation = conversation,
                             selected = conversation.id == state.selectedConversationId,
                             query = null,
+                            paneVisible = paneVisible,
                             onClick = { onConversationSelected(conversation.id) },
                             onRename = { onConversationRename(conversation) },
                             onExport = { onConversationExport(conversation) },
@@ -600,14 +614,19 @@ private fun DrawerSearchField(
                     }
                     innerTextField()
                 }
-                if (query.isNotEmpty()) {
+                // ✕ 清空：出现 / 消失淡入淡出 + 缩放（9.3.1「图标状态切换」0.72 ↔ 1，`fast`）；
+                // 热区保持图标按钮的 44（D5），视觉用 16 图标控制，不再用外层 size 压小热区。
+                AnimatedVisibility(
+                    visible = query.isNotEmpty(),
+                    enter = fadeIn(MovoMotion.fast()) + scaleIn(MovoMotion.fast(), initialScale = 0.72f),
+                    exit = fadeOut(MovoMotion.fastExit()) + scaleOut(MovoMotion.fastExit(), targetScale = 0.72f),
+                ) {
                     MovoIconButton(
                         icon = MovoIcons.X,
                         contentDescription = stringResource(R.string.movo_drawer_clear_search),
                         onClick = { onQueryChange("") },
                         iconSize = MovoSize.iconSmall,
                         tint = MovoColors.textSecondary,
-                        modifier = Modifier.size(MovoSize.controlSmall),
                     )
                 }
             }
@@ -640,6 +659,7 @@ private fun ConversationRow(
     conversation: ConversationSummaryUi,
     selected: Boolean,
     query: String?,
+    paneVisible: () -> Boolean,
     onClick: () -> Unit,
     onRename: () -> Unit,
     onExport: () -> Unit,
@@ -708,7 +728,7 @@ private fun ConversationRow(
             }
             if (conversation.isActiveRun) {
                 Spacer(Modifier.width(MovoSpacing.sm))
-                MovoSpinner()
+                RunningRowSpinner(paneVisible)
             }
         }
         ConversationActionMenu(
@@ -719,6 +739,15 @@ private fun ConversationRow(
             onDelete = onDelete,
         )
     }
+}
+
+/**
+ * 运行中会话行的 16 Indigo 加载圈：侧边栏关着时不组合加载圈（占位保持宽度），不在看不见时每帧请求重组（A14）。
+ * 读取 [paneVisible] 放在这个独立作用域里，开合时只重组这一小块，不牵动整行。
+ */
+@Composable
+private fun RunningRowSpinner(paneVisible: () -> Boolean) {
+    if (paneVisible()) MovoSpinner() else Spacer(Modifier.size(MovoSize.iconSmall))
 }
 
 /** 命中词：text/primary Medium，其余沿用所在文字的颜色。 */

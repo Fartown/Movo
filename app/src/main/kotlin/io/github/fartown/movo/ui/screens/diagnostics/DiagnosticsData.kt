@@ -1,10 +1,12 @@
 package io.github.fartown.movo.ui.screens.diagnostics
 
+import io.github.fartown.movo.ui.components.movo.rememberDoneFlash
+import io.github.fartown.movo.ui.components.movo.MovoFailureDialog
+import io.github.fartown.movo.ui.components.movo.MovoDoneIconButton
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -57,7 +59,6 @@ import io.github.fartown.movo.diagnostics.MemoryDiagnostics
 import io.github.fartown.movo.diagnostics.RunTrace
 import io.github.fartown.movo.diagnostics.TraceStatus
 import io.github.fartown.movo.diagnostics.field
-import io.github.fartown.movo.ui.components.movo.MovoIconButton
 import io.github.fartown.movo.ui.components.movo.PressKind
 import io.github.fartown.movo.ui.components.movo.movoClickable
 import io.github.fartown.movo.ui.components.movo.movoSurface
@@ -196,6 +197,10 @@ internal fun ExportAction(fileName: String, buildText: () -> String) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val menu = remember { MutableTransitionState(false) }
+    // 结果就地反馈（8.11 不用 Toast）：导出 / 复制成功 = 顶栏导出图标原地换成 ✓ 停留 1400ms（9.3「复制」）；
+    // 导出失败 = `Dialog/Info` 写明原因。
+    val done = rememberDoneFlash()
+    var exportFailed by remember { mutableStateOf(false) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
@@ -204,11 +209,22 @@ internal fun ExportAction(fileName: String, buildText: () -> String) {
                     context.contentResolver.openOutputStream(uri)?.use { it.write(buildText().toByteArray(Charsets.UTF_8)) } != null
                 }.getOrDefault(false)
             }
-            Toast.makeText(context, if (ok) "已导出" else "导出失败", Toast.LENGTH_SHORT).show()
+            if (ok) done.trigger() else exportFailed = true
         }
     }
+    MovoFailureDialog(
+        show = exportFailed,
+        title = "运行日志导出失败",
+        message = "无法写入所选文件，请换个位置再试。",
+        onDismiss = { exportFailed = false },
+    )
     Box {
-        MovoIconButton(icon = MovoIcons.Download, contentDescription = "导出", onClick = { menu.targetState = true })
+        MovoDoneIconButton(
+            icon = MovoIcons.Download,
+            done = done.active,
+            contentDescription = if (done.active) "已完成" else "导出",
+            onClick = { menu.targetState = true },
+        )
         if (menu.currentState || menu.targetState) {
             ExportMenu(
                 state = menu,
@@ -220,6 +236,7 @@ internal fun ExportAction(fileName: String, buildText: () -> String) {
                 onCopy = {
                     menu.targetState = false
                     copyToClipboard(context, buildText())
+                    done.trigger()
                 },
             )
         }
@@ -326,5 +343,4 @@ private fun MenuItem(label: String, icon: MovoIconData, onClick: () -> Unit) {
 
 private fun copyToClipboard(context: Context, text: String) {
     context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Movo 运行日志", text))
-    Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
 }

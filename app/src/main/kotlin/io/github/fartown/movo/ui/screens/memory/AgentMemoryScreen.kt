@@ -1,8 +1,16 @@
 package io.github.fartown.movo.ui.screens.memory
 
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.LaunchedEffect
+import io.github.fartown.movo.ui.theme.MovoSize
+import io.github.fartown.movo.ui.theme.MovoIcons
+import io.github.fartown.movo.ui.theme.MovoIcon
+import io.github.fartown.movo.ui.components.movo.rememberLastNonNull
+import io.github.fartown.movo.ui.components.movo.rememberDoneFlash
+import io.github.fartown.movo.ui.components.movo.MovoFailureDialog
+import io.github.fartown.movo.ui.components.movo.MovoDoneBlockButton
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,7 +21,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -31,7 +38,6 @@ import io.github.fartown.movo.ui.components.movo.MovoBlockButton
 import io.github.fartown.movo.ui.components.movo.MovoButtonRow
 import io.github.fartown.movo.ui.components.movo.MovoCard
 import io.github.fartown.movo.ui.components.movo.MovoConfirmDialog
-import io.github.fartown.movo.ui.components.movo.MovoDialogHost
 import io.github.fartown.movo.ui.components.movo.MovoPage
 import io.github.fartown.movo.ui.components.movo.RowTrailing
 import io.github.fartown.movo.ui.components.movo.SettingsRow
@@ -43,7 +49,6 @@ import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.theme.MovoTypography
 import top.yukonga.miuix.kmp.basic.Text
 import io.github.fartown.movo.ui.components.movo.TextField
-import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 import java.text.NumberFormat
 
@@ -57,6 +62,25 @@ internal fun AgentMemoryScreen(
     onAction: (AgentMemoryAction) -> Unit,
 ) {
     var showClearDialog by remember { mutableStateOf(false) }
+    // 结果就地反馈（8.11，C5）：保存成功 =「保存」原地换成 ✓；清空成功 = 编辑框变空，本身就是结果；
+    // 只有失败才弹 `Dialog/Info`，标题按用户刚做的操作写具体（「记忆保存失败」而不是「记忆」）。
+    var lastAction by remember { mutableStateOf<MemoryUserAction?>(null) }
+    val saved = rememberDoneFlash()
+    val savedNotice = stringResource(R.string.state_ui_memory_saved_a2c61c)
+    val clearedNotice = stringResource(R.string.state_ui_memory_cleared_b415bb)
+    LaunchedEffect(state.notice) {
+        when (state.notice) {
+            savedNotice -> {
+                saved.trigger()
+                onAction(AgentMemoryAction.DismissNotice)
+            }
+            clearedNotice -> onAction(AgentMemoryAction.DismissNotice)
+        }
+    }
+    val act: (MemoryUserAction, AgentMemoryAction) -> Unit = { kind, action ->
+        lastAction = kind
+        onAction(action)
+    }
 
     MovoPage(
         title = stringResource(R.string.ui_memory_b55ff5),
@@ -82,7 +106,7 @@ internal fun AgentMemoryScreen(
                             title = stringResource(R.string.movo_memory_switch),
                             subtitle = stringResource(R.string.movo_memory_switch_desc),
                             enabled = !state.isLoading,
-                            trailing = RowTrailing.Switch(state.enabled) { onAction(AgentMemoryAction.ToggleEnabled(it)) },
+                            trailing = RowTrailing.Switch(state.enabled) { act(MemoryUserAction.Toggle, AgentMemoryAction.ToggleEnabled(it)) },
                         )
                         SettingsRow(
                             title = stringResource(R.string.ui_core_memory_injection_budget_48b5d5),
@@ -132,24 +156,28 @@ internal fun AgentMemoryScreen(
                         )
                         Spacer(modifier = Modifier.height(MovoSpacing.sm))
                         val overLimit = state.draftBytes > state.maxBytes
-                        val statusColor = if (overLimit) MovoColors.roseFg else MovoColors.textSecondary
+                        // 超限：Rose 警示图标 + 主色文字（4.2 规则 2：Rose 不用于文字，颜色不是唯一信号）。
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            if (overLimit) {
+                                MovoIcon(MovoIcons.CircleAlert, contentDescription = null, size = MovoSize.iconLabel, tint = MovoColors.roseFg)
+                                Spacer(Modifier.width(6.dp))
+                            }
                             Text(
                                 text = when {
                                     overLimit -> stringResource(R.string.memory_over_limit)
                                     state.hasUnsavedChanges -> stringResource(R.string.memory_unsaved_changes)
                                     else -> ""
                                 },
-                                color = statusColor,
+                                color = if (overLimit) MovoColors.textPrimary else MovoColors.textSecondary,
                                 style = MovoTypography.labelRegular,
+                                modifier = Modifier.weight(1f),
                             )
                             Text(
                                 text = "${formatBytes(state.draftBytes)} / 1 MiB",
-                                color = statusColor,
+                                color = MovoColors.textSecondary,
                                 style = MovoTypography.numericLabel,
                             )
                         }
@@ -162,10 +190,13 @@ internal fun AgentMemoryScreen(
                                 tone = BlockTone.Secondary,
                                 modifier = Modifier.weight(1f),
                             )
-                            MovoBlockButton(
+                            MovoDoneBlockButton(
                                 label = if (state.isSaving) stringResource(R.string.memory_saving) else stringResource(R.string.memory_save),
-                                enabled = state.canSave,
-                                onClick = { onAction(AgentMemoryAction.Save) },
+                                doneLabel = stringResource(R.string.feedback_saved),
+                                done = saved.active,
+                                // 显示 ✓ 期间保持可用外观（此时没有未保存的修改，点按不执行）。
+                                enabled = state.canSave || saved.active,
+                                onClick = { act(MemoryUserAction.Save, AgentMemoryAction.Save) },
                                 tone = BlockTone.Primary,
                                 modifier = Modifier.weight(1f),
                             )
@@ -186,41 +217,32 @@ internal fun AgentMemoryScreen(
         onDismissRequest = { showClearDialog = false },
         onConfirm = {
             showClearDialog = false
-            onAction(AgentMemoryAction.Clear)
+            act(MemoryUserAction.Clear, AgentMemoryAction.Clear)
         },
     )
 
-    MemoryNoticeDialog(
-        notice = state.notice,
+    val failure = state.notice?.takeIf { it != savedNotice && it != clearedNotice }
+    val shownFailure = rememberLastNonNull(failure)
+    val failureTitle = stringResource(
+        when (lastAction) {
+            MemoryUserAction.Save -> R.string.state_ui_memory_save_failed_1f501e
+            MemoryUserAction.Clear -> R.string.state_ui_memory_clearing_failed_7f0aba
+            MemoryUserAction.Toggle -> R.string.state_ui_memory_switch_failed_to_save_83b5d6
+            null -> R.string.feedback_memory_read_failed_title
+        },
+    )
+    val retry = stringResource(R.string.feedback_try_again_later)
+    MovoFailureDialog(
+        show = failure != null,
+        title = failureTitle,
+        // 失败文案与标题相同（只有「保存失败」一句）时，说明写下一步。
+        message = shownFailure?.takeIf { it != failureTitle } ?: retry,
         onDismiss = { onAction(AgentMemoryAction.DismissNotice) },
     )
 }
 
-/** 结果通知：单按钮「知道了」。退场动画期间保留上一条内容。 */
-@Composable
-private fun MemoryNoticeDialog(notice: String?, onDismiss: () -> Unit) {
-    var lastNotice by remember { mutableStateOf(notice.orEmpty()) }
-    if (notice != null) lastNotice = notice
-    MovoDialogHost(show = notice != null, onDismissRequest = onDismiss) {
-        Column(modifier = Modifier.padding(MovoSpacing.xxl)) {
-            Text(
-                stringResource(R.string.ui_memory_b55ff5),
-                style = MovoTypography.titleSection,
-                color = MovoColors.textPrimary,
-            )
-            Spacer(Modifier.height(MovoSpacing.sm))
-            Text(lastNotice, style = MovoTypography.bodyRegular, color = MovoColors.textSecondary)
-        }
-        MovoButtonRow(modifier = Modifier.padding(MovoSpacing.xs)) {
-            MovoBlockButton(
-                label = stringResource(R.string.ui_knew_cb63c6),
-                onClick = onDismiss,
-                tone = BlockTone.Secondary,
-                modifier = Modifier.weight(1f),
-            )
-        }
-    }
-}
+/** 用户最近一次触发的操作，失败说明据此写具体标题。 */
+private enum class MemoryUserAction { Save, Clear, Toggle }
 
 private fun formatBytes(bytes: Int): String = when {
     bytes < 1_024 -> "$bytes B"

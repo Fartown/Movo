@@ -288,7 +288,7 @@ private fun RadioIndicator(selected: Boolean) {
 }
 
 @Composable
-private fun CheckMark(visible: Boolean) {
+internal fun CheckMark(visible: Boolean) {
     AnimatedVisibility(
         visible = visible,
         enter = fadeIn(MovoMotion.fast()) + scaleIn(MovoMotion.fast(), initialScale = 0.72f),

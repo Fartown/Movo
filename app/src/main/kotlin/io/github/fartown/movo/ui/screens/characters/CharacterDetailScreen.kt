@@ -1,5 +1,14 @@
 package io.github.fartown.movo.ui.screens.characters
 
+import androidx.compose.runtime.LaunchedEffect
+import io.github.fartown.movo.ui.components.movo.movoAnimateItem
+import io.github.fartown.movo.ui.components.movo.rememberDoneFlash
+import io.github.fartown.movo.ui.components.movo.RowLeading
+import io.github.fartown.movo.ui.components.movo.MovoExpandable
+import io.github.fartown.movo.ui.components.movo.MovoExpandChevron
+import io.github.fartown.movo.ui.components.movo.CheckMark
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.Alignment
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
@@ -41,7 +50,6 @@ import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.theme.MovoTypography
 import top.yukonga.miuix.kmp.basic.Text
 
-private const val DescriptionPreviewChars = 220
 private const val GreetingPreviewChars = 240
 
 private data class CharacterTextPreview(val title: String, val text: String)
@@ -69,6 +77,15 @@ internal fun CharacterDetailScreen(
         if (it != null) store.export(id, CharacterCardFormat.JSON, it)
     }
     val profile = store.selected?.takeIf { it.id == id }
+    // 导出成功：对应的「导出」行右侧就地显示「已导出」，停留后换回（8.11 结果就地反馈，不弹窗）。
+    val exported = rememberDoneFlash()
+    val initialExportToken = remember { store.exportedToken }
+    LaunchedEffect(store.exportedToken) {
+        if (store.exportedToken != initialExportToken) exported.trigger()
+    }
+    val exportedValue = "已导出"
+    // 「阅读全文」只在设定真的被截断时出现（C10）：按实际排版是否溢出判断，不按字数。
+    var descriptionOverflow by remember(id) { mutableStateOf(false) }
     MovoListPage(title = profile?.card?.name ?: "角色详情", onBack = onBack) {
         if (profile == null) {
             item { CharacterPageMessage(if (store.busy) "正在读取角色…" else "无法读取角色，请返回后重试") }
@@ -95,8 +112,9 @@ internal fun CharacterDetailScreen(
                             color = MovoColors.textPrimary,
                             maxLines = 6,
                             overflow = TextOverflow.Ellipsis,
+                            onTextLayout = { descriptionOverflow = it.hasVisualOverflow },
                         )
-                        if (profile.card.description.length > DescriptionPreviewChars) {
+                        if (descriptionOverflow) {
                             Spacer(Modifier.height(MovoSpacing.sm))
                             CharacterReadMoreLink(onClick = {
                                 preview = CharacterTextPreview("角色设定", profile.card.description)
@@ -157,10 +175,9 @@ internal fun CharacterDetailScreen(
                             null
                         },
                     ) {
-                        if (selected) {
-                            MovoIcon(MovoIcons.Check, null, size = MovoSize.iconMedium, tint = MovoColors.indigoFg)
-                        } else {
-                            Spacer(Modifier.size(MovoSize.iconMedium))
+                        // 单选（9.3.1）：旧 ✓ 淡出 120ms，新 ✓ 缩放 0.72 → 1 淡入 `fast`；占位保持行宽不跳。
+                        Box(Modifier.size(MovoSize.iconMedium), contentAlignment = Alignment.Center) {
+                            CheckMark(visible = selected)
                         }
                     }
                 }
@@ -189,11 +206,17 @@ internal fun CharacterDetailScreen(
                 )
                 SettingsRow(
                     title = "导出 PNG",
+                    trailing = RowTrailing.Arrow(
+                        exportedValue.takeIf { exported.active && store.exportedFormat == CharacterCardFormat.PNG },
+                    ),
                     enabled = !store.busy,
                     onClick = { pngExporter.launch(characterExportName(profile.card.name, "png")) },
                 )
                 SettingsRow(
                     title = "导出 JSON",
+                    trailing = RowTrailing.Arrow(
+                        exportedValue.takeIf { exported.active && store.exportedFormat == CharacterCardFormat.JSON },
+                    ),
                     enabled = !store.busy,
                     showDivider = false,
                     onClick = { jsonExporter.launch(characterExportName(profile.card.name, "json")) },
@@ -202,10 +225,13 @@ internal fun CharacterDetailScreen(
         }
         item(key = "delete") {
             MovoCard {
-                CharacterRow(
+                // 危险操作：Rose 只用在垃圾桶图标上，标题主色（规范 4.2 规则 2、8.7）。
+                SettingsRow(
                     title = "删除角色",
-                    subtitle = null,
-                    titleColor = MovoColors.roseFg,
+                    leading = RowLeading.Custom {
+                        MovoIcon(MovoIcons.Trash2, contentDescription = null, size = MovoSize.iconMedium, tint = MovoColors.roseFg)
+                    },
+                    trailing = RowTrailing.None,
                     enabled = !store.busy,
                     showDivider = false,
                     onClick = { showDeleteConfirm = true },
@@ -214,21 +240,16 @@ internal fun CharacterDetailScreen(
         }
         if (store.compatibilityWarnings.isNotEmpty()) {
             item(key = "compatibility") {
-                MovoCard {
+                MovoCard(modifier = movoAnimateItem(contentSize = false)) {
                     CharacterRow(
                         title = "兼容说明",
                         subtitle = "${store.compatibilityWarnings.size} 项内容按兼容范围处理",
                         showDivider = showCompatibility,
                         onClick = { showCompatibility = !showCompatibility },
                     ) {
-                        MovoIcon(
-                            if (showCompatibility) MovoIcons.ChevronUp else MovoIcons.ChevronDown,
-                            null,
-                            size = MovoSize.iconSmall,
-                            tint = MovoColors.textTertiary,
-                        )
+                        MovoExpandChevron(expanded = showCompatibility)
                     }
-                    if (showCompatibility) {
+                    MovoExpandable(visible = showCompatibility) {
                         Column(modifier = Modifier.padding(horizontal = MovoSpacing.lg, vertical = MovoSpacing.md)) {
                             store.compatibilityWarnings.forEach { warning ->
                                 Text(

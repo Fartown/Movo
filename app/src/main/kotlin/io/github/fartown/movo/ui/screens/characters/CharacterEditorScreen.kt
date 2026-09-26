@@ -1,5 +1,11 @@
 package io.github.fartown.movo.ui.screens.characters
 
+import androidx.compose.foundation.layout.Box
+import io.github.fartown.movo.ui.components.movo.movoAnimateContentSize
+import io.github.fartown.movo.ui.components.movo.movoAnimateItem
+import io.github.fartown.movo.ui.components.movo.MovoInlineError
+import io.github.fartown.movo.ui.components.movo.MovoExpandable
+import io.github.fartown.movo.ui.components.movo.MovoExpandChevron
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -23,7 +29,6 @@ import io.github.fartown.movo.ui.components.movo.MovoIconButton
 import io.github.fartown.movo.ui.components.movo.MovoListPage
 import io.github.fartown.movo.ui.components.movo.MovoPillButton
 import io.github.fartown.movo.ui.theme.MovoColors
-import io.github.fartown.movo.ui.theme.MovoIcon
 import io.github.fartown.movo.ui.theme.MovoIcons
 import io.github.fartown.movo.ui.theme.MovoSize
 import io.github.fartown.movo.ui.theme.MovoSpacing
@@ -65,11 +70,19 @@ internal fun CharacterEditorScreen(
         item(key = "profile") {
             CharacterFieldCard(title = "角色设定") {
                 CharacterTextField("名称", store.draftName, store::updateName, !store.busy, singleLine = true)
+                // 校验错误写在名称输入框下方（规范 8.11），不弹窗。
+                MovoExpandable(visible = store.nameError != null) {
+                    MovoInlineError(
+                        text = store.nameError.orEmpty(),
+                        modifier = Modifier.padding(start = MovoSpacing.lg, end = MovoSpacing.lg, bottom = MovoSpacing.xs),
+                    )
+                }
                 CharacterTextField("外貌、性格与经历", card.description, { value -> store.updateDraft { it.withEdits(description = value) } }, !store.busy, minLines = 5)
             }
         }
         item(key = "greetings") {
-            MovoCard(bottomPadding = MovoSpacing.md) {
+            // 增删备用开场白：卡片高度 `standard` 过渡（9.3「列表增删」）。
+            MovoCard(modifier = Modifier.movoAnimateContentSize(), bottomPadding = MovoSpacing.md) {
                 CardTitle("开场白")
                 CharacterTextField("默认开场白", card.firstMessage, { value -> store.updateDraft { it.withEdits(firstMessage = value) } }, !store.busy)
                 card.alternateGreetings.forEachIndexed { index, value ->
@@ -117,14 +130,9 @@ internal fun CharacterEditorScreen(
                     showDivider = false,
                     onClick = { advanced = !advanced },
                 ) {
-                    MovoIcon(
-                        if (advanced) MovoIcons.ChevronUp else MovoIcons.ChevronDown,
-                        null,
-                        size = MovoSize.iconSmall,
-                        tint = MovoColors.textTertiary,
-                    )
+                    MovoExpandChevron(expanded = advanced)
                 }
-                if (advanced) {
+                MovoExpandable(visible = advanced) {
                     CardFooter(
                         listOf(
                             "角色卡中的第三方脚本与扩展界面不会执行。",
@@ -136,24 +144,30 @@ internal fun CharacterEditorScreen(
         }
         if (advanced) {
             item(key = "details") {
+                Box(movoAnimateItem(contentSize = false)) {
                 CharacterFieldCard(title = stringResource(R.string.movo_character_group_details)) {
                     CharacterTextField("性格与说话风格", card.personality, { value -> store.updateDraft { it.withEdits(personality = value) } }, !store.busy)
                     CharacterTextField("故事背景", card.scenario, { value -> store.updateDraft { it.withEdits(scenario = value) } }, !store.busy)
                     CharacterTextField("示例对话", card.exampleMessages, { value -> store.updateDraft { it.withEdits(exampleMessages = value) } }, !store.busy, minLines = 4)
                 }
+                }
             }
             item(key = "prompts") {
+                Box(movoAnimateItem(contentSize = false)) {
                 CharacterFieldCard(title = "提示词") {
                     CharacterTextField("系统提示词", card.systemPrompt, { value -> store.updateDraft { it.withEdits(systemPrompt = value) } }, !store.busy)
                     CharacterTextField("对话后置指令", card.postHistoryInstructions, { value -> store.updateDraft { it.withEdits(postHistoryInstructions = value) } }, !store.busy)
                 }
+                }
             }
             item(key = "credits") {
+                Box(movoAnimateItem(contentSize = false)) {
                 CharacterFieldCard(title = "作者信息") {
                     CharacterTextField("作者备注", card.creatorNotes, { value -> store.updateDraft { it.withEdits(creatorNotes = value) } }, !store.busy)
                     CharacterTextField("标签（每行一个）", card.tags.joinToString("\n"), { value -> store.updateDraft { it.withEdits(tags = value.lines()) } }, !store.busy)
                     CharacterTextField("作者", card.creator, { value -> store.updateDraft { it.withEdits(creator = value) } }, !store.busy, singleLine = true)
                     CharacterTextField("角色版本", card.version, { value -> store.updateDraft { it.withEdits(version = value) } }, !store.busy, singleLine = true)
+                }
                 }
             }
             characterWorldbookEditor(

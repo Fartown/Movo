@@ -11,9 +11,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,11 +27,8 @@ import androidx.compose.ui.unit.dp
 import io.github.fartown.movo.R
 import io.github.fartown.movo.agent.tool.AgentToolCapabilities
 import io.github.fartown.movo.agent.tool.RootRequirement
-import io.github.fartown.movo.ui.components.iconForTool
-import io.github.fartown.movo.ui.components.movo.BlockTone
-import io.github.fartown.movo.ui.components.movo.MovoBlockButton
-import io.github.fartown.movo.ui.components.movo.MovoDialogHost
-import io.github.fartown.movo.ui.components.movo.MovoButtonRow
+import io.github.fartown.movo.ui.components.toolIcon
+import io.github.fartown.movo.ui.components.movo.MovoInfoDialog
 import io.github.fartown.movo.ui.components.movo.MovoIconButton
 import io.github.fartown.movo.ui.components.movo.PressKind
 import io.github.fartown.movo.ui.components.movo.movoClickable
@@ -49,7 +44,6 @@ import io.github.fartown.movo.ui.theme.MovoRadius
 import io.github.fartown.movo.ui.theme.MovoSize
 import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.theme.MovoTypography
-import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Text
 
 /** 类别色（规范 4.2）：浅底 + 深色图标，成对使用。 */
@@ -119,13 +113,7 @@ internal fun ToolCard(
                     .background(tone.background),
                 contentAlignment = Alignment.Center,
             ) {
-                // 73 个工具还没有逐个对应的 Lucide 图标，暂用 iconForTool 的 Material 图标（见 restyle-C.md）。
-                Icon(
-                    imageVector = iconForTool(tool.id),
-                    contentDescription = null,
-                    modifier = Modifier.size(MovoSize.iconMedium),
-                    tint = tone.foreground,
-                )
+                MovoIcon(toolIcon(tool.id), contentDescription = null, size = MovoSize.iconMedium, tint = tone.foreground)
             }
             Spacer(modifier = Modifier.weight(1f))
             if (action != null) {
@@ -193,11 +181,7 @@ internal fun ToolCard(
     )
 }
 
-/**
- * 工具说明 `Dialog/Info`（规范 8.11，Figma「09 · 工具说明弹窗」）：内容区 24：类别色图标块 40 → 16 → 标题 Title/Section
- * → 8 → 说明 Body/Regular 次要色（可滚动）→ 16 → 条件提示块（shield-alert 16 + Label/Regular 次要色，
- * `bg/surface-muted`、圆角 12、内边距 12 × 10）；按钮区同 `Dialog/Confirm`：有动作时「知道了」+ 主操作，否则只有「知道了」。
- */
+/** 工具说明 `Dialog/Info`（规范 8.11，Figma「09 · 工具说明弹窗」）：类别色图标块 + 说明 + 条件提示块；有动作时「知道了」+ 主操作。 */
 @Composable
 private fun ToolDescriptionDialog(
     show: Boolean,
@@ -210,66 +194,18 @@ private fun ToolDescriptionDialog(
     onAction: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    MovoDialogHost(show = show, onDismissRequest = onDismiss) {
-        Column(modifier = Modifier.padding(MovoSpacing.xxl)) {
-            Box(
-                modifier = Modifier
-                    .size(MovoSize.iconTile)
-                    .clip(RoundedCornerShape(MovoRadius.sm))
-                    .background(tone.background),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = iconForTool(toolId),
-                    contentDescription = null,
-                    modifier = Modifier.size(MovoSize.iconMedium),
-                    tint = tone.foreground,
-                )
-            }
-            Spacer(Modifier.height(MovoSpacing.lg))
-            Text(title, style = MovoTypography.titleSection, color = MovoColors.textPrimary)
-            Spacer(Modifier.height(MovoSpacing.sm))
-            Text(
-                text = description,
-                style = MovoTypography.bodyRegular,
-                color = MovoColors.textSecondary,
-                modifier = Modifier
-                    .heightIn(max = 320.dp)
-                    .verticalScroll(rememberScrollState()),
-            )
-            if (requirement != null) {
-                Spacer(Modifier.height(MovoSpacing.lg))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(MovoRadius.sm))
-                        .background(MovoColors.bgSurfaceMuted)
-                        .padding(horizontal = MovoSpacing.md, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    MovoIcon(MovoIcons.ShieldAlert, null, size = MovoSize.iconSmall, tint = MovoColors.textSecondary)
-                    Spacer(Modifier.width(MovoSpacing.sm))
-                    Text(requirement, style = MovoTypography.labelRegular, color = MovoColors.textSecondary)
-                }
-            }
-        }
-        MovoButtonRow(modifier = Modifier.padding(MovoSpacing.xs)) {
-            MovoBlockButton(
-                label = stringResource(R.string.ui_knew_cb63c6),
-                onClick = onDismiss,
-                tone = BlockTone.Secondary,
-                modifier = Modifier.weight(1f),
-            )
-            if (actionText != null) {
-                MovoBlockButton(
-                    label = actionText,
-                    onClick = onAction,
-                    tone = BlockTone.Primary,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        }
-    }
+    MovoInfoDialog(
+        show = show,
+        icon = toolIcon(toolId),
+        iconBackground = tone.background,
+        iconTint = tone.foreground,
+        title = title,
+        message = description,
+        requirement = requirement,
+        actionText = actionText,
+        onAction = onAction,
+        onDismiss = onDismiss,
+    )
 }
 
 @Composable

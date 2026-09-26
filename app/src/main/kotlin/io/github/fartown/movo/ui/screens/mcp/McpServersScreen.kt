@@ -1,5 +1,12 @@
 package io.github.fartown.movo.ui.screens.mcp
 
+import androidx.compose.runtime.key
+import androidx.compose.animation.Crossfade
+import io.github.fartown.movo.ui.components.movo.MovoExpandable
+import io.github.fartown.movo.ui.components.movo.movoAnimateItem
+import io.github.fartown.movo.ui.components.movo.rememberLastNonNull
+import io.github.fartown.movo.ui.components.movo.RowLeading
+import io.github.fartown.movo.ui.components.movo.MovoInlineError
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -28,7 +35,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalResources
@@ -85,7 +91,8 @@ internal fun McpServersScreen(
 ) {
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
-    val servers by McpServerRepository.serversFlow().collectAsState(initial = emptyList())
+    // 初始值 null = 还在读取：不先闪「还没有服务器」再切成真实列表（B8）。
+    val loadedServers by remember { McpServerRepository.serversFlow() }.collectAsState(initial = null)
     var showAdd by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
@@ -105,37 +112,47 @@ internal fun McpServersScreen(
             )
         },
     ) {
+        val servers = loadedServers ?: return@MovoListPage
         item(key = "servers") {
-            MovoCard {
+            // 列表增删：卡片高度 `standard`，行按 id 保持身份；空状态 ↔ 列表交叉淡化（B7）。
+            MovoCard(modifier = movoAnimateItem()) {
                 CardTitle(stringResource(R.string.mcp_configured_servers, servers.size))
-                if (servers.isEmpty()) {
-                    McpEmptyBlock(
-                        title = stringResource(R.string.mcp_empty_title),
-                        summary = stringResource(R.string.mcp_empty_summary),
-                    ) {
-                        MovoPillButton(
-                            label = stringResource(R.string.mcp_add_server),
-                            onClick = { showAdd = true },
-                            icon = MovoIcons.Plus,
-                            primary = true,
-                        )
-                    }
-                } else {
-                    servers.forEachIndexed { index, server ->
-                        SettingsRow(
-                            title = server.name,
-                            subtitle = stringResource(
-                                R.string.mcp_server_row_summary,
-                                server.activeTools.size,
-                                server.tools.size,
-                            ),
-                            trailing = RowTrailing.Arrow(),
-                            showDivider = index != servers.lastIndex,
-                            onClick = { onNavigate(AppRoute.McpServerDetail(server.id)) },
-                        )
+                Crossfade(targetState = servers.isEmpty(), animationSpec = MovoMotion.fast(), label = "mcpServersEmpty") { empty ->
+                    if (empty) {
+                        McpEmptyBlock(
+                            title = stringResource(R.string.mcp_empty_title),
+                            summary = stringResource(R.string.mcp_empty_summary),
+                        ) {
+                            MovoPillButton(
+                                label = stringResource(R.string.mcp_add_server),
+                                onClick = { showAdd = true },
+                                icon = MovoIcons.Plus,
+                                primary = true,
+                            )
+                        }
+                    } else {
+                        Column {
+                            servers.forEachIndexed { index, server ->
+                                key(server.id) {
+                                    SettingsRow(
+                                        title = server.name,
+                                        subtitle = stringResource(
+                                            R.string.mcp_server_row_summary,
+                                            server.activeTools.size,
+                                            server.tools.size,
+                                        ),
+                                        trailing = RowTrailing.Arrow(),
+                                        showDivider = index != servers.lastIndex,
+                                        onClick = { onNavigate(AppRoute.McpServerDetail(server.id)) },
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
-                addedMessage?.let { CardFooter(listOf(it)) }
+                MovoExpandable(visible = addedMessage != null) {
+                    CardFooter(listOf(addedMessage.orEmpty()))
+                }
             }
         }
     }
@@ -229,8 +246,9 @@ internal fun McpServersScreen(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                error?.let {
-                    Text(text = it, style = MovoTypography.labelRegular, color = MovoColors.roseFg)
+                // 错误：Rose 警示图标 + 主色文字（4.2 规则 2：Rose 不用于文字）。
+                MovoExpandable(visible = error != null) {
+                    MovoInlineError(text = rememberLastNonNull(error).orEmpty())
                 }
             }
         },
@@ -248,8 +266,9 @@ internal fun McpServerDetailScreen(
 ) {
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
-    val servers by McpServerRepository.serversFlow().collectAsState(initial = emptyList())
-    val server = servers.firstOrNull { it.id == serverId }
+    // 初始值 null = 还在读取：读到之前不显示「服务器不存在」（B8）。
+    val servers by remember { McpServerRepository.serversFlow() }.collectAsState(initial = null)
+    val server = servers?.firstOrNull { it.id == serverId }
     var working by remember { mutableStateOf(false) }
     var pendingRiskyTool by remember { mutableStateOf<McpToolDefinition?>(null) }
     var showDelete by remember { mutableStateOf(false) }
@@ -287,9 +306,10 @@ internal fun McpServerDetailScreen(
             }
         },
     ) {
+        if (servers == null) return@MovoListPage
         if (server == null) {
             item(key = "missing") {
-                MovoCard {
+                MovoCard(modifier = movoAnimateItem()) {
                     SettingsRow(
                         title = stringResource(R.string.mcp_server_missing),
                         trailing = RowTrailing.None,
@@ -300,7 +320,7 @@ internal fun McpServerDetailScreen(
             return@MovoListPage
         }
         item(key = "server") {
-            MovoCard {
+            MovoCard(modifier = movoAnimateItem()) {
                 CardTitle(stringResource(R.string.mcp_server_settings))
                 McpRow(
                     title = stringResource(R.string.mcp_enable_server),
@@ -331,7 +351,8 @@ internal fun McpServerDetailScreen(
             }
         }
         item(key = "tools") {
-            MovoCard {
+            // 刷新后工具增删：卡片高度 `standard`，行按工具名保持身份；页脚结果展开出现。
+            MovoCard(modifier = movoAnimateItem()) {
                 CardTitle(stringResource(R.string.mcp_tools_count, server.tools.size))
                 if (server.tools.isEmpty()) {
                     McpEmptyBlock(
@@ -340,6 +361,7 @@ internal fun McpServerDetailScreen(
                     )
                 } else {
                     server.tools.forEachIndexed { index, tool ->
+                        key(tool.name) {
                         val checked = tool.name in server.enabledToolNames
                         McpRow(
                             title = tool.title.ifBlank { tool.name },
@@ -359,17 +381,24 @@ internal fun McpServerDetailScreen(
                         ) {
                             MovoSwitch(checked = checked, onCheckedChange = null)
                         }
+                        }
                     }
                 }
-                refreshMessage?.let { CardFooter(listOf(it)) }
+                MovoExpandable(visible = refreshMessage != null) {
+                    CardFooter(listOf(rememberLastNonNull(refreshMessage).orEmpty()))
+                }
             }
         }
         item(key = "delete") {
-            MovoCard {
-                McpRow(
+            MovoCard(modifier = movoAnimateItem()) {
+                // 危险操作：Rose 只用在垃圾桶图标上，标题主色（规范 4.2 规则 2、8.7）。
+                SettingsRow(
                     title = stringResource(R.string.mcp_delete_server),
                     subtitle = stringResource(R.string.mcp_delete_server_summary),
-                    titleColor = MovoColors.roseFg,
+                    leading = RowLeading.Custom {
+                        MovoIcon(MovoIcons.Trash2, contentDescription = null, size = MovoSize.iconMedium, tint = MovoColors.roseFg)
+                    },
+                    trailing = RowTrailing.None,
                     showDivider = false,
                     onClick = { showDelete = true },
                 )
@@ -457,7 +486,7 @@ private fun toolSummary(tool: McpToolDefinition): String = when {
 
 /**
  * 二级页行（icon=false，规范 8.7）：与公共 `SettingsRow` 同样式，另支持说明最多两行（工具描述可能很长）
- * 与标题颜色（删除行用 Rose）。开关行整行点击切换。
+ * 开关行整行点击切换。
  */
 @Composable
 private fun McpRow(
@@ -466,7 +495,6 @@ private fun McpRow(
     onClick: () -> Unit,
     role: Role = Role.Button,
     showDivider: Boolean = true,
-    titleColor: Color = MovoColors.textPrimary,
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
     Box(
@@ -482,7 +510,7 @@ private fun McpRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(title, style = MovoTypography.bodyStrong, color = titleColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(title, style = MovoTypography.bodyStrong, color = MovoColors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (subtitle != null) {
                     Text(
                         subtitle,
@@ -540,16 +568,4 @@ private fun McpSpinner() {
         tint = MovoColors.indigoFg,
         modifier = Modifier.graphicsLayer { rotationZ = angle },
     )
-}
-
-private class LastValue<T : Any> {
-    var value: T? = null
-}
-
-/** 返回 [value]；为 null 时返回上一次的非空值（给对话框退场动画用）。 */
-@Composable
-private fun <T : Any> rememberLastNonNull(value: T?): T? {
-    val holder = remember { LastValue<T>() }
-    if (value != null) holder.value = value
-    return value ?: holder.value
 }

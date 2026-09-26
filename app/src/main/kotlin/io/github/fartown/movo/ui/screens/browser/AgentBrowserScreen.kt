@@ -3,7 +3,6 @@ package io.github.fartown.movo.ui.screens.browser
 import android.content.Intent
 import android.view.ViewGroup
 import android.widget.FrameLayout
-import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.expandVertically
@@ -16,7 +15,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,17 +28,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.ArrowForward
-import androidx.compose.material.icons.automirrored.rounded.OpenInNew
-import androidx.compose.material.icons.rounded.AdsClick
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.GppMaybe
-import androidx.compose.material.icons.rounded.Language
-import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -52,55 +39,57 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.disabled
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.net.toUri
 import io.github.fartown.movo.R
 import io.github.fartown.movo.agent.browser.AgentBrowserSession
 import io.github.fartown.movo.agent.browser.BrowserSessionSnapshot
-import io.github.fartown.movo.ui.components.MiuixDialogActions
-import io.github.fartown.movo.ui.components.StatusError
+import io.github.fartown.movo.ui.components.movo.MovoConfirmDialog
+import io.github.fartown.movo.ui.components.movo.MovoDivider
+import io.github.fartown.movo.ui.components.movo.MovoIconButton
+import io.github.fartown.movo.ui.components.movo.MovoPillButton
+import io.github.fartown.movo.ui.components.movo.MovoSpinner
+import io.github.fartown.movo.ui.components.movo.TextField
+import io.github.fartown.movo.ui.components.movo.movoSurface
+import io.github.fartown.movo.ui.components.movo.rememberLastNonNull
+import io.github.fartown.movo.ui.theme.MovoColors
+import io.github.fartown.movo.ui.theme.MovoIcon
+import io.github.fartown.movo.ui.theme.MovoIconData
+import io.github.fartown.movo.ui.theme.MovoIcons
+import io.github.fartown.movo.ui.theme.MovoMotion
+import io.github.fartown.movo.ui.theme.MovoRadius
+import io.github.fartown.movo.ui.theme.MovoSize
+import io.github.fartown.movo.ui.theme.MovoSpacing
+import io.github.fartown.movo.ui.theme.MovoTypography
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.CardDefaults
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.InfiniteProgressIndicator
 import top.yukonga.miuix.kmp.basic.LinearProgressIndicator
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
-import io.github.fartown.movo.ui.components.movo.TextField
-import top.yukonga.miuix.kmp.squircle.squircleSurface
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
 
 /**
  * Agent 与用户共享的浏览器会话。
  *
  * 浏览器通常在后台由模型驱动；进入本页后挂载的是同一个 WebView，用户可以直接接管，
  * 不会新建一份与 Agent 状态脱节的预览。
+ *
+ * 界面按规范（D10）：左右边距线 20；地址栏 → 12 → 状态条（有提示时）→ 浏览器窗口卡片（`movoSurface`：圆角 28 + 发丝描边）；
+ * 工具栏为 44 热区的 Lucide 图标按钮，禁用态整体 40%；结果与失败都写在顶部状态条里，不用 Toast（8.11）。
  */
 @Composable
 internal fun AgentBrowserScreen(
@@ -118,6 +107,8 @@ internal fun AgentBrowserScreen(
     var addressFocused by remember { mutableStateOf(false) }
     var actionPending by remember { mutableStateOf(false) }
     var showResetDialog by remember { mutableStateOf(false) }
+    // 就地失败提示（如没有外部应用能打开网页）：写在顶部状态条，下一次操作时清除。
+    var notice by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(context.applicationContext) {
         AgentBrowserSession.initialize(context.applicationContext)
@@ -130,6 +121,7 @@ internal fun AgentBrowserScreen(
 
     fun launchBrowserAction(action: () -> Unit) {
         if (actionPending) return
+        notice = null
         actionPending = true
         scope.launch {
             try {
@@ -158,12 +150,13 @@ internal fun AgentBrowserScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(MiuixTheme.colorScheme.surface)
-            .padding(horizontal = 12.dp)
-            .padding(bottom = 12.dp)
+            .background(MovoColors.bgCanvas)
+            .padding(horizontal = MovoSpacing.pageEdge)
+            .padding(bottom = MovoSpacing.md)
             .imePadding()
             .navigationBarsPadding(),
     ) {
+        val canGo = address.isNotBlank() && !actionPending
         TextField(
             value = address,
             onValueChange = {
@@ -181,37 +174,28 @@ internal fun AgentBrowserScreen(
             ),
             keyboardActions = KeyboardActions(onGo = { navigate() }),
             leadingIcon = {
-                Icon(
-                    imageVector = if (snapshot.url.startsWith("https://")) {
-                        Icons.Rounded.Lock
-                    } else {
-                        Icons.Rounded.Language
-                    },
+                MovoIcon(
+                    if (snapshot.url.startsWith("https://")) MovoIcons.Lock else MovoIcons.Globe,
                     contentDescription = null,
-                    modifier = Modifier.padding(start = 12.dp).size(18.dp),
-                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    size = MovoSize.iconSmall,
+                    tint = MovoColors.textSecondary,
+                    modifier = Modifier.padding(start = MovoSpacing.md),
                 )
             },
             trailingIcon = {
-                IconButton(
+                MovoIconButton(
+                    icon = MovoIcons.ArrowRight,
+                    contentDescription = stringResource(R.string.ui_access_7f5641),
                     onClick = ::navigate,
-                    enabled = address.isNotBlank() && !actionPending,
-                    modifier = Modifier
-                        .padding(end = 6.dp)
-                        .alpha(if (address.isNotBlank() && !actionPending) 1f else 0.34f),
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
-                        contentDescription = stringResource(R.string.ui_access_7f5641),
-                        modifier = Modifier.size(19.dp),
-                        tint = MiuixTheme.colorScheme.onSurface,
-                    )
-                }
+                    enabled = canGo,
+                    iconSize = MovoSize.iconMedium,
+                    modifier = Modifier.padding(end = MovoSpacing.xs),
+                )
             },
         )
 
-        Spacer(modifier = Modifier.height(10.dp))
-        BrowserStatusBanner(snapshot)
+        Spacer(modifier = Modifier.height(MovoSpacing.md))
+        BrowserStatusBanner(snapshot, notice)
 
         BrowserWindow(
             snapshot = snapshot,
@@ -221,6 +205,7 @@ internal fun AgentBrowserScreen(
             onBack = { launchBrowserAction { AgentBrowserSession.goBackFromUser() } },
             onForward = { launchBrowserAction { AgentBrowserSession.goForwardFromUser() } },
             onRefresh = {
+                notice = null
                 if (snapshot.isLoading) {
                     scope.launch(Dispatchers.IO) {
                         AgentBrowserSession.stopFromUser()
@@ -234,10 +219,11 @@ internal fun AgentBrowserScreen(
             onOpenExternal = {
                 val currentUrl = snapshot.url.takeIf { it.startsWith("http://") || it.startsWith("https://") }
                 if (currentUrl != null) {
+                    notice = null
                     runCatching {
                         context.startActivity(Intent(Intent.ACTION_VIEW, currentUrl.toUri()))
                     }.onFailure {
-                        Toast.makeText(context, noExternalAppMessage, Toast.LENGTH_SHORT).show()
+                        notice = noExternalAppMessage
                     }
                 }
             },
@@ -248,30 +234,27 @@ internal fun AgentBrowserScreen(
         )
     }
 
-    if (showResetDialog) {
-        WindowDialog(
-            show = true,
-            title = stringResource(R.string.ui_reset_browser_session_791b36),
-            summary = stringResource(R.string.ui_this_will_close_the_current_page_and_clear_movo_brows_1cd331),
-            onDismissRequest = { showResetDialog = false },
-        ) {
-            MiuixDialogActions(
-                confirmText = stringResource(R.string.browser_reset),
-                confirmEnabled = !actionPending,
-                onCancel = { showResetDialog = false },
-                onConfirm = {
-                    showResetDialog = false
-                    address = ""
-                    launchBrowserAction { AgentBrowserSession.resetFromUser() }
-                },
-            )
-        }
-    }
+    // 重置会话会清除 Cookie 与站点数据（C7）：危险确认（标题前 Rose 警示图标 + bg/inverse 白字确认）。
+    MovoConfirmDialog(
+        show = showResetDialog,
+        title = stringResource(R.string.ui_reset_browser_session_791b36),
+        message = stringResource(R.string.ui_this_will_close_the_current_page_and_clear_movo_brows_1cd331),
+        confirmText = stringResource(R.string.browser_reset),
+        destructive = true,
+        confirmEnabled = !actionPending,
+        onDismissRequest = { showResetDialog = false },
+        onConfirm = {
+            showResetDialog = false
+            address = ""
+            launchBrowserAction { AgentBrowserSession.resetFromUser() }
+        },
+    )
 }
 
 /**
- * 统一的浏览器窗口：工具栏、进度条与网页内容收进同一张卡片，
- * 进度条悬浮在内容顶部，加载时不再挤压布局。
+ * 统一的浏览器窗口：工具栏、进度条与网页内容收进同一张卡片（圆角 28 + 发丝描边，E0），
+ * 进度条悬浮在内容顶部，加载时不再挤压布局。卡片用普通圆角裁剪（硬件轮廓裁剪，对 WebView 安全；
+ * 不能用着色器裁剪，会强制离屏合成导致 WebView 闪烁）。
  */
 @Composable
 private fun BrowserWindow(
@@ -286,14 +269,7 @@ private fun BrowserWindow(
     onReset: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Card(
-        modifier = modifier,
-        insideMargin = PaddingValues(0.dp),
-        colors = CardDefaults.defaultColors(
-            color = MiuixTheme.colorScheme.surfaceContainer,
-            contentColor = MiuixTheme.colorScheme.onSurface,
-        ),
-    ) {
+    Column(modifier = modifier.movoSurface()) {
         BrowserToolbar(
             snapshot = snapshot,
             actionPending = actionPending,
@@ -303,24 +279,11 @@ private fun BrowserWindow(
             onOpenExternal = onOpenExternal,
             onReset = onReset,
         )
+        MovoDivider(end = 0.dp)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(0.5.dp)
-                .background(MiuixTheme.colorScheme.outline.copy(alpha = 0.45f)),
-        )
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                // 不能用 squircleClip：shader 遮罩会强制离屏合成，WebView 每帧重绘导致闪烁。
-                // 普通 clip 走 clipToOutline，硬件裁剪对 WebView 安全。
-                .clip(
-                    RoundedCornerShape(
-                        bottomStart = CardDefaults.CornerRadius,
-                        bottomEnd = CardDefaults.CornerRadius,
-                    )
-                ),
+                .weight(1f),
         ) {
             BrowserWebViewHost(
                 modifier = Modifier.fillMaxSize(),
@@ -338,6 +301,7 @@ private fun BrowserWindow(
     }
 }
 
+/** 工具栏：44 热区图标按钮（图标 20），首个图标字形对齐卡内 16（左内边距 4 = 16 − 12）。 */
 @Composable
 private fun BrowserToolbar(
     snapshot: BrowserSessionSnapshot,
@@ -351,27 +315,23 @@ private fun BrowserToolbar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 6.dp, vertical = 4.dp),
+            .padding(horizontal = MovoSpacing.xs, vertical = MovoSpacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         BrowserControlButton(
-            icon = Icons.AutoMirrored.Rounded.ArrowBack,
+            icon = MovoIcons.ArrowLeft,
             description = stringResource(R.string.browser_back),
             enabled = snapshot.canGoBack && !actionPending,
             onClick = onBack,
         )
         BrowserControlButton(
-            icon = Icons.AutoMirrored.Rounded.ArrowForward,
+            icon = MovoIcons.ArrowRight,
             description = stringResource(R.string.browser_forward),
             enabled = snapshot.canGoForward && !actionPending,
             onClick = onForward,
         )
         BrowserControlButton(
-            icon = if (snapshot.isLoading) {
-                Icons.Rounded.Close
-            } else {
-                Icons.Rounded.Refresh
-            },
+            icon = if (snapshot.isLoading) MovoIcons.X else MovoIcons.RotateCw,
             description = if (snapshot.isLoading) stringResource(R.string.browser_stop_loading) else stringResource(R.string.browser_refresh),
             enabled = snapshot.available && (snapshot.isLoading || !actionPending),
             onClick = onRefresh,
@@ -380,33 +340,34 @@ private fun BrowserToolbar(
         Column(
             modifier = Modifier
                 .weight(1f)
-                .padding(horizontal = 8.dp),
+                .padding(horizontal = MovoSpacing.sm),
         ) {
             Text(
                 text = snapshot.title.ifBlank { stringResource(R.string.browser_title) },
-                style = MiuixTheme.textStyles.body2,
-                fontWeight = FontWeight.Medium,
-                color = MiuixTheme.colorScheme.onSurface,
+                style = MovoTypography.bodyStrong,
+                color = MovoColors.textPrimary,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             if (snapshot.host.isNotBlank()) {
                 Text(
                     text = snapshot.host,
-                    style = MiuixTheme.textStyles.footnote2,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    style = MovoTypography.labelRegular,
+                    color = MovoColors.textSecondary,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
 
         BrowserControlButton(
-            icon = Icons.AutoMirrored.Rounded.OpenInNew,
+            icon = MovoIcons.ExternalLink,
             description = stringResource(R.string.browser_open_external),
             enabled = snapshot.available,
             onClick = onOpenExternal,
         )
         BrowserControlButton(
-            icon = Icons.Rounded.Delete,
+            icon = MovoIcons.Trash2,
             description = stringResource(R.string.browser_reset_session),
             enabled = snapshot.available && !actionPending,
             onClick = onReset,
@@ -414,30 +375,21 @@ private fun BrowserToolbar(
     }
 }
 
+/** 无底色图标按钮（规范 8「图标按钮」）：热区 44、图标 20、按压 40 圆形叠加层；禁用整体 40%、不响应。 */
 @Composable
 private fun BrowserControlButton(
-    icon: ImageVector,
+    icon: MovoIconData,
     description: String,
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
-    IconButton(
+    MovoIconButton(
+        icon = icon,
+        contentDescription = description,
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier
-            .alpha(if (enabled) 1f else 0.34f)
-            .semantics(mergeDescendants = true) {
-                contentDescription = description
-                if (!enabled) disabled()
-            },
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp),
-            tint = MiuixTheme.colorScheme.onSurface,
-        )
-    }
+        iconSize = MovoSize.iconMedium,
+    )
 }
 
 private enum class BrowserOverlay {
@@ -456,8 +408,8 @@ private fun BoxScope.BrowserLoadingProgress(snapshot: BrowserSessionSnapshot) {
     AnimatedVisibility(
         visible = snapshot.isLoading && snapshot.available,
         modifier = Modifier.align(Alignment.TopCenter),
-        enter = fadeIn(),
-        exit = fadeOut(),
+        enter = fadeIn(MovoMotion.fast()),
+        exit = fadeOut(MovoMotion.fastExit()),
     ) {
         LinearProgressIndicator(
             progress = snapshot.progress
@@ -486,6 +438,7 @@ private fun BoxScope.BrowserStateOverlay(
     }
     Crossfade(
         targetState = overlay,
+        animationSpec = MovoMotion.fast(),
         label = "browser_overlay",
         modifier = Modifier.fillMaxSize(),
     ) { state ->
@@ -505,79 +458,69 @@ private fun BoxScope.BrowserStateOverlay(
     }
 }
 
+/**
+ * 顶部状态条：网页错误 / 就地失败提示 = Rose 警示图标 + 主色文字；用户接管 = Indigo 点击图标（Agent 状态）+ 主色文字。
+ * 容器同卡片（圆角 28 + 发丝描边），内边距 16 / 12；出现与消失高度展开 `standard` + 淡入淡出。
+ */
 @Composable
-private fun ColumnScope.BrowserStatusBanner(snapshot: BrowserSessionSnapshot) {
+private fun ColumnScope.BrowserStatusBanner(snapshot: BrowserSessionSnapshot, notice: String?) {
+    val error = snapshot.error ?: notice
     val message = when {
-        snapshot.error != null -> snapshot.error
+        error != null -> error
         snapshot.isUserControlling && snapshot.available ->
             stringResource(R.string.browser_user_controlling)
         else -> null
     }
-    val color = when {
-        snapshot.error != null -> StatusError
-        else -> MiuixTheme.colorScheme.primary
-    }
-    val icon = if (snapshot.error != null) {
-        Icons.Rounded.GppMaybe
-    } else {
-        Icons.Rounded.AdsClick
-    }
-
+    val shown = rememberLastNonNull(message)
+    val isError = error != null
     AnimatedVisibility(
         visible = message != null,
-        enter = fadeIn() + expandVertically(),
-        exit = fadeOut() + shrinkVertically(),
+        enter = fadeIn(MovoMotion.fast()) + expandVertically(MovoMotion.standard()),
+        exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
     ) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 10.dp),
-            insideMargin = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-            colors = CardDefaults.defaultColors(
-                color = color.copy(alpha = 0.10f),
-                contentColor = MiuixTheme.colorScheme.onSurface,
-            ),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = icon,
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .movoSurface()
+                    .padding(horizontal = MovoSpacing.lg, vertical = MovoSpacing.md),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                MovoIcon(
+                    if (isError) MovoIcons.CircleAlert else MovoIcons.MousePointerClick,
                     contentDescription = null,
-                    modifier = Modifier.size(17.dp),
-                    tint = color,
+                    size = MovoSize.iconSmall,
+                    tint = if (isError) MovoColors.roseFg else MovoColors.indigoFg,
                 )
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(MovoSpacing.sm))
                 Text(
-                    text = message.orEmpty(),
+                    text = shown.orEmpty(),
                     modifier = Modifier.weight(1f),
-                    style = MiuixTheme.textStyles.footnote1,
-                    color = MiuixTheme.colorScheme.onSurface,
+                    style = MovoTypography.labelRegular,
+                    color = MovoColors.textPrimary,
                 )
             }
+            Spacer(modifier = Modifier.height(MovoSpacing.md))
         }
     }
 }
 
+/** 占位状态的图标块：40、圆角 12、类别色浅底 + 深色图标 20（规范 2.3、4.2）。 */
 @Composable
 private fun BrowserOverlayIcon(
-    icon: ImageVector,
+    icon: MovoIconData,
+    background: Color,
     tint: Color,
     modifier: Modifier = Modifier,
 ) {
     Box(
         modifier = modifier
-            .size(64.dp)
-            .squircleSurface(
-                color = tint.copy(alpha = 0.10f),
-                cornerRadius = 20.dp,
-            ),
+            .size(MovoSize.iconTile)
+            .clip(RoundedCornerShape(MovoRadius.sm))
+            .background(background),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(28.dp),
-            tint = tint,
-        )
+        MovoIcon(icon, contentDescription = null, size = MovoSize.iconMedium, tint = tint)
     }
 }
 
@@ -599,27 +542,24 @@ private fun BrowserEmptyState(modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .consumeTouches()
-            .background(MiuixTheme.colorScheme.surfaceContainer)
-            .padding(28.dp),
+            .background(MovoColors.bgSurface)
+            .padding(MovoSpacing.section),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        BrowserOverlayIcon(
-            icon = Icons.Rounded.Language,
-            tint = MiuixTheme.colorScheme.primary,
-        )
-        Spacer(modifier = Modifier.height(16.dp))
+        // 浏览器 = Blue（4.2「信息与网络」）。
+        BrowserOverlayIcon(icon = MovoIcons.Globe, background = MovoColors.blueBg, tint = MovoColors.blueFg)
+        Spacer(modifier = Modifier.height(MovoSpacing.lg))
         Text(
             text = stringResource(R.string.ui_the_browser_has_not_opened_the_web_page_yet_31e095),
-            style = MiuixTheme.textStyles.body1,
-            fontWeight = FontWeight.Medium,
-            color = MiuixTheme.colorScheme.onSurface,
+            style = MovoTypography.bodyStrong,
+            color = MovoColors.textPrimary,
+            textAlign = TextAlign.Center,
         )
-        Spacer(modifier = Modifier.height(6.dp))
         Text(
             text = stringResource(R.string.ui_enter_the_url_in_the_address_bar_or_let_the_agent_br_e2ae90),
-            style = MiuixTheme.textStyles.body2,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            style = MovoTypography.labelRegular,
+            color = MovoColors.textSecondary,
             textAlign = TextAlign.Center,
         )
     }
@@ -633,21 +573,19 @@ private fun BrowserLoadingState(
     Column(
         modifier = modifier
             .consumeTouches()
-            .background(MiuixTheme.colorScheme.surfaceContainer)
-            .padding(28.dp),
+            .background(MovoColors.bgSurface)
+            .padding(MovoSpacing.section),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        InfiniteProgressIndicator(
-            color = MiuixTheme.colorScheme.primary,
-            size = 34.dp,
-        )
-        Spacer(modifier = Modifier.height(16.dp))
+        MovoSpinner(size = MovoSize.iconLarge)
+        Spacer(modifier = Modifier.height(MovoSpacing.lg))
         Text(
             text = if (host.isBlank()) stringResource(R.string.browser_opening) else stringResource(R.string.browser_opening_host, host),
-            style = MiuixTheme.textStyles.body2,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            style = MovoTypography.labelRegular,
+            color = MovoColors.textSecondary,
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -661,36 +599,33 @@ private fun BrowserFailedState(
     Column(
         modifier = modifier
             .consumeTouches()
-            .background(MiuixTheme.colorScheme.surfaceContainer)
-            .padding(28.dp),
+            .background(MovoColors.bgSurface)
+            .padding(MovoSpacing.section),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        BrowserOverlayIcon(
-            icon = Icons.Rounded.GppMaybe,
-            tint = StatusError,
-        )
-        Spacer(modifier = Modifier.height(16.dp))
+        BrowserOverlayIcon(icon = MovoIcons.CircleAlert, background = MovoColors.roseBg, tint = MovoColors.roseFg)
+        Spacer(modifier = Modifier.height(MovoSpacing.lg))
         Text(
             text = stringResource(R.string.ui_the_webpage_cannot_be_opened_3db06d),
-            style = MiuixTheme.textStyles.body1,
-            fontWeight = FontWeight.Medium,
-            color = MiuixTheme.colorScheme.onSurface,
+            style = MovoTypography.bodyStrong,
+            color = MovoColors.textPrimary,
+            textAlign = TextAlign.Center,
         )
         if (!error.isNullOrBlank()) {
-            Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = error,
-                style = MiuixTheme.textStyles.body2,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                style = MovoTypography.labelRegular,
+                color = MovoColors.textSecondary,
                 textAlign = TextAlign.Center,
             )
         }
-        Spacer(modifier = Modifier.height(14.dp))
-        TextButton(
-            text = stringResource(R.string.ui_reload_5982c4),
+        Spacer(modifier = Modifier.height(MovoSpacing.lg))
+        // 主操作：浅 Indigo 底 + 深 Indigo 字（D6，不用饱和主色实底）。
+        MovoPillButton(
+            label = stringResource(R.string.ui_reload_5982c4),
             onClick = onRetry,
-            colors = ButtonDefaults.textButtonColorsPrimary(),
+            primary = true,
         )
     }
 }
@@ -703,7 +638,7 @@ private fun BrowserWebViewHost(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val backgroundColor = MiuixTheme.colorScheme.surfaceContainer.toArgb()
+    val backgroundColor = MovoColors.bgSurface.toArgb()
     val container = remember(context) {
         FrameLayout(context).apply {
             layoutParams = ViewGroup.LayoutParams(

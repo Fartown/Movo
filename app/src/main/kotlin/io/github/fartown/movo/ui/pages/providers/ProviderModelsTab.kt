@@ -2,6 +2,8 @@
 
 package io.github.fartown.movo.ui.pages.providers
 
+import io.github.fartown.movo.ui.components.movo.movoAnimateItem
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -179,12 +181,13 @@ private fun String.containsCharactersInOrder(query: String): Boolean {
  */
 @Composable
 internal fun ProviderModelsTab(
+    listState: LazyListState,
     provider: ProviderSetting,
     scope: CoroutineScope,
     contentSidePadding: Dp,
 ) {
     val context = LocalContext.current
-    val selectedModelId by RuntimeConfigRepository.selectedModelIdFlow().collectAsState(initial = null)
+    val selectedModelId by remember { RuntimeConfigRepository.selectedModelIdFlow() }.collectAsState(initial = null)
     var isFetching by remember { mutableStateOf(false) }
     var isMutatingModel by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -218,6 +221,7 @@ internal fun ProviderModelsTab(
 
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .scrollEndHaptic()
@@ -232,7 +236,7 @@ internal fun ProviderModelsTab(
             overscrollEffect = null,
         ) {
             item(key = "actions", contentType = "section") {
-                ProviderSection(title = stringResource(R.string.ui_model_management_183414)) {
+                ProviderSection(title = stringResource(R.string.ui_model_management_183414), modifier = movoAnimateItem()) {
                     SettingsRow(
                         title = if (isFetching) context.getString(R.string.page_retrieving_a880c9) else context.getString(R.string.page_automatically_pull_from_remote_f883d0),
                         subtitle = stringResource(R.string.provider_models_endpoint_summary, provider.baseUrl),
@@ -336,7 +340,7 @@ internal fun ProviderModelsTab(
                 item(key = "models_empty", contentType = "empty") {
                     ProviderSection(
                         title = modelListTitle,
-                        modifier = Modifier.padding(top = MovoSpacing.lg),
+                        modifier = movoAnimateItem().padding(top = MovoSpacing.lg),
                     ) {
                         Text(
                             text = if (provider.models.isEmpty()) {
@@ -354,7 +358,7 @@ internal fun ProviderModelsTab(
                 item(key = "models_title", contentType = "section_title") {
                     CardTitle(
                         text = modelListTitle,
-                        modifier = Modifier
+                        modifier = movoAnimateItem(contentSize = false)
                             .padding(top = MovoSpacing.lg)
                             .movoCardSegment(CardSegment.Top),
                     )
@@ -394,7 +398,8 @@ internal fun ProviderModelsTab(
                                 RuntimeConfigRepository.syncToRemotePreferences(MovoApp.serviceInstance)
                             }
                         },
-                        modifier = Modifier
+                        // 列表增删（B7）：新增淡入、删除淡出，其余行移位 `standard`。
+                        modifier = movoAnimateItem(contentSize = false)
                             .movoCardSegment(if (isLast) CardSegment.Bottom else CardSegment.Middle)
                             .padding(bottom = if (isLast) MovoSpacing.xs else 0.dp),
                     )
