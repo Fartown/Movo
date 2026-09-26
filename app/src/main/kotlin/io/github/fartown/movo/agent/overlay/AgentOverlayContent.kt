@@ -114,6 +114,7 @@ import io.github.fartown.movo.ui.theme.MovoIcons
 import io.github.fartown.movo.ui.theme.MovoMotion
 import io.github.fartown.movo.ui.theme.MovoTypography
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Text
 
@@ -609,6 +610,7 @@ internal fun AgentOverlayBubble(
         }
     }
 
+    StickyWindowHeight(maxHeight = PANEL_WINDOW_MAX_HEIGHT) {
     AnimatedVisibility(
         visible = entered && visible,
         enter = fadeIn(if (reduced) MovoMotion.fast() else tween(PANEL_MORPH_IN_MS / 3)),
@@ -704,6 +706,7 @@ internal fun AgentOverlayBubble(
                 }
             }
         }
+    }
     }
 }
 
@@ -1193,3 +1196,41 @@ private fun Modifier.orbMorph(progress: () -> Float, anchorEnd: Boolean): Modifi
     }
     clip = true
 }
+
+/** 展开卡窗口在高度动画期间临时撑到的高度（卡片最高的语音模式 + 补充输入 + 阴影余量）。 */
+private val PANEL_WINDOW_MAX_HEIGHT = 380.dp
+
+/**
+ * 悬浮窗的窗口大小跟内容走（WRAP_CONTENT）：卡片高度逐帧过渡时，系统每帧都要重新摆放窗口，真机明显卡顿。
+ * 内容高度一开始变化，就把上报给窗口的高度一次撑到 [maxHeight]，卡片贴底在里面做动画；高度连续约 4 帧不再变化后
+ * 再按实际高度上报一次。一次动画窗口只变两三次。撑开期间卡片上方的透明区域会短暂接住触摸（不到半秒）。
+ * 窗口底边对齐悬浮球（Gravity.BOTTOM），所以贴底放置时卡片位置不变。
+ */
+@Composable
+private fun StickyWindowHeight(maxHeight: androidx.compose.ui.unit.Dp, content: @Composable () -> Unit) {
+    var holding by remember { mutableStateOf(false) }
+    val lastHeight = remember { intArrayOf(-1) }
+    val changes = remember { kotlinx.coroutines.flow.MutableSharedFlow<Int>(extraBufferCapacity = 64) }
+    LaunchedEffect(Unit) {
+        changes.collectLatest {
+            delay(STICKY_SETTLE_MS)
+            holding = false
+        }
+    }
+    androidx.compose.ui.layout.Layout(content) { measurables, constraints ->
+        val placeables = measurables.map { it.measure(constraints.copy(minHeight = 0)) }
+        val width = placeables.maxOfOrNull { it.width } ?: 0
+        val height = placeables.maxOfOrNull { it.height } ?: 0
+        if (lastHeight[0] >= 0 && height != lastHeight[0]) {
+            holding = true
+            changes.tryEmit(height)
+        }
+        lastHeight[0] = height
+        val reported = if (holding) maxOf(height, maxHeight.roundToPx()) else height
+        layout(width, reported) {
+            placeables.forEach { it.place(0, reported - it.height) }
+        }
+    }
+}
+
+private const val STICKY_SETTLE_MS = 70L

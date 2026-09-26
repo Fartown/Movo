@@ -1,5 +1,6 @@
 package io.github.fartown.movo.ui.components.movo
 
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.animation.AnimatedVisibility
@@ -144,7 +145,15 @@ internal fun MovoPopover(
                     .then(if (maxHeight != Dp.Unspecified) Modifier.heightIn(max = maxHeight) else Modifier)
                     // 卡片自己吃掉点击，不落到外层「点空白关闭」。
                     .pointerInput(Unit) { detectTapGestures { } }
-                    .movoSurface(shape, MovoElevation.Overlay)
+                    // 硬件阴影（RenderNode 按轮廓实时算）：分组展开时卡片逐帧变高，位图模糊阴影（E3 的 64 模糊）每帧都要重画。
+                    .shadow(
+                        elevation = 16.dp,
+                        shape = shape,
+                        clip = false,
+                        ambientColor = io.github.fartown.movo.ui.theme.MovoColors.shadow,
+                        spotColor = io.github.fartown.movo.ui.theme.MovoColors.shadow.copy(alpha = 0.5f),
+                    )
+                    .movoSurface(shape)
                     .verticalScroll(rememberScrollState())
                     .padding(MovoSpacing.sm),
                 content = content,

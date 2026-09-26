@@ -546,7 +546,8 @@ internal fun AgentWorkProcess(
     }
     // 执行中 = 有步骤在进行，或本轮仍在进行且未暂停（两步之间模型在思考）；回答开始后这张卡的步骤已经结束。
     val running = !paused && (stepRunning || (runActive && !answerStarted))
-    val tools = messages.filterIsInstance<ToolActivityMessageUi>()
+    // 计时每秒重组一次卡片：步骤列表只在消息变化时重算。
+    val tools = remember(messages) { messages.filterIsInstance<ToolActivityMessageUi>() }
     val toolCount = tools.size
     // 后面接着给出了回答、也没有失败 / 停止卡：中途失败的步骤已被绕过，整张卡按完成显示（该步自己仍是 ✕）。
     val failedIndex = if (answerStarted && outcome == null) -1 else unrecoveredFailedStep(tools)
@@ -583,10 +584,11 @@ internal fun AgentWorkProcess(
     // Q8：本次在屏幕上看着它从执行中变为完成，且任务用时 ≥ 10 秒时播一次。
     var sawRunning by rememberSaveable(id) { mutableStateOf(running) }
     if (running) sawRunning = true
-    val finishedTools = messages.filterIsInstance<ToolActivityMessageUi>()
-    val runMillis = finishedTools.mapNotNull { it.finishedAtMillis }.maxOrNull()?.let { end ->
-        finishedTools.mapNotNull { it.startedAtMillis }.minOrNull()?.let { end - it }
-    } ?: 0L
+    val runMillis = remember(tools) {
+        tools.mapNotNull { it.finishedAtMillis }.maxOrNull()?.let { end ->
+            tools.mapNotNull { it.startedAtMillis }.minOrNull()?.let { end - it }
+        } ?: 0L
+    }
     val glint = sawRunning && !running && !paused && failedIndex < 0 && outcome == null && runMillis >= 10_000L
     Column(
         modifier = modifier
@@ -946,20 +948,23 @@ private fun ThinkingOnlyRow(
             ThinkingTicker(latest.orEmpty(), modifier = Modifier.fillMaxWidth().padding(start = 20.dp, bottom = 4.dp))
         }
         AnimatedVisibility(visible = expanded, enter = expandContentEnter(), exit = expandContentExit()) {
-            Row(
+            // 左侧竖线画在绘制阶段：不用固有高度测量（展开动画与流式思考时每帧都要对 Markdown 做一次固有测量）。
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(androidx.compose.foundation.layout.IntrinsicSize.Min)
-                    .padding(start = 6.dp, top = 4.dp, bottom = 4.dp),
+                    .padding(start = 6.dp, top = 4.dp, bottom = 4.dp)
+                    .drawBehind {
+                        drawLine(
+                            color = io.github.fartown.movo.ui.theme.MovoColors.borderStrong,
+                            start = Offset(0.5.dp.toPx(), 0f),
+                            end = Offset(0.5.dp.toPx(), size.height),
+                            strokeWidth = 1.dp.toPx(),
+                        )
+                    }
+                    .padding(start = 13.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Box(
-                    Modifier
-                        .width(1.dp)
-                        .fillMaxHeight()
-                        .background(io.github.fartown.movo.ui.theme.MovoColors.borderStrong),
-                )
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                run {
                     messages.filter { it.content.isNotBlank() }.forEach { message ->
                         val streamingState = retainedStreamingStates[message.id]
                         if (message.isStreaming && streamingState != null) {
@@ -3474,7 +3479,7 @@ private fun WorkThinkingStep(
                 } else if (!showFull) {
                     Text(
                         // 思考完：整段开头两行，末尾省略。
-                        text = message.content.plainPreview(),
+                        text = remember(message.content) { message.content.plainPreview() },
                         style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular,
                         color = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
                         maxLines = 2,
@@ -3520,7 +3525,10 @@ private fun expandContentExit(): androidx.compose.animation.ExitTransition =
 
 /** 思考摘要：去掉常见 Markdown 标记后折叠空白。 */
 private fun String.plainPreview(): String =
-    replace(Regex("[*_`#>]+"), "").replace(Regex("\\s+"), " ").trim()
+    replace(MARKDOWN_MARKS, "").replace(WHITESPACE_RUNS, " ").trim()
+
+private val MARKDOWN_MARKS = Regex("[*_`#>]+")
+private val WHITESPACE_RUNS = Regex("\\s+")
 
 /**
  * `Work/Step` 工具行：状态图标 16（完成 Green ✓ / 进行中 Indigo 加载圈 / 失败 Rose ✕ / 中断 次要色 !）

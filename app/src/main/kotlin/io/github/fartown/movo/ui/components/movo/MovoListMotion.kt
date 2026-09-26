@@ -39,7 +39,7 @@ import io.github.fartown.movo.ui.theme.MovoSize
  * 减少动画时只淡入淡出，位置与高度直接到位。
  */
 @Composable
-internal fun LazyItemScope.movoAnimateItem(contentSize: Boolean = true): Modifier {
+internal fun LazyItemScope.movoAnimateItem(contentSize: Boolean = false): Modifier {
     val reduced = LocalReducedMotion.current
     return if (reduced) {
         Modifier.animateItem(fadeInSpec = MovoMotion.fast(), placementSpec = null, fadeOutSpec = MovoMotion.fastExit())

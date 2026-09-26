@@ -193,7 +193,9 @@ internal fun AgentChatBody(
     // Initial result presentation starts at the latest turn. Window resizing and onResume do
     // not restart this effect, so a reader's position remains untouched afterwards.
     // 新建的主界面接过浮层的会话时，这里第一次组合时消息可能还没读出来（真机：停在会话开头）：等到有消息再滚到最新。
-    val latestEntryCount by rememberUpdatedState(visibleMessages.toTimelineEntries().size)
+    // 只在消息变化时重建时间线（流式中每次重组都重建会拖慢每一帧）。
+    val entryCount = remember(visibleMessages) { visibleMessages.toTimelineEntries().size }
+    val latestEntryCount by rememberUpdatedState(entryCount)
     LaunchedEffect(Unit) {
         if (initiallyShowLatestMessage) {
             val count = kotlinx.coroutines.withTimeoutOrNull(INITIAL_LATEST_WAIT_MS) {
@@ -237,7 +239,7 @@ internal fun AgentChatBody(
         seenTailSuggestionId = tailSuggestionId
         if (arrived && keepBottomAnchored && !scrollState.isScrollInProgress) {
             withFrameNanos { }
-            scrollState.animateScrollToItem(visibleMessages.toTimelineEntries().size)
+            scrollState.animateScrollToItem(entryCount)
             withFrameNanos { }
             if (scrollState.canScrollForward) scrollState.scroll { scrollBy(Float.MAX_VALUE / 4) }
         }

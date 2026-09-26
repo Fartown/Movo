@@ -51,6 +51,8 @@ internal fun movoNavTransition(reducedMotion: Boolean): NavTransition {
         }
         translationX = shift * (1f - visible) * if (scope.layoutDirection == androidx.compose.ui.unit.LayoutDirection.Rtl) -1f else 1f
         alpha = visible
+        // 整页淡入淡出不走离屏合成（整页含磨砂顶栏与背景采样，离屏一帧就是整屏一次额外绘制）：透明度直接乘到每个绘制操作上。
+        compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.ModulateAlpha
     }
 }
 
