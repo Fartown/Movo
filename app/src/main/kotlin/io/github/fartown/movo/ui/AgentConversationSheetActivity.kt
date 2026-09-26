@@ -69,6 +69,11 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
     private var autoListen by mutableStateOf(false)
     /** 系统分享进来的内容（规范 8.9.1）：打开时新建会话并预填进输入框，用完置空。 */
     private var sharedContent by mutableStateOf<io.github.fartown.movo.ui.share.SharedContent?>(null)
+    /**
+     * 这个浮层是为分享打开的：内容已预填进新会话后，不能再走助手入口的 `voiceConversationId()`，
+     * 否则会给这条新会话分配 id，分享提示（只属于未发消息的新会话）随之消失。
+     */
+    private var shareSession by mutableStateOf(false)
     private var mainHandoffToken: Any? = null
     private var resizeAnimator: ValueAnimator? = null
     /** 进场、下拉回弹与退场共用：整块浮层的位移与后方遮罩（规范 8.9 / 9.5）。 */
@@ -106,7 +111,10 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         assistantMode = intent.action == ACTION_ASSISTANT
         autoListen = intent.getBooleanExtra(io.github.fartown.movo.agent.voice.MovoAssistantVoiceService.EXTRA_AUTO_LISTEN, false)
         request = AgentConversationHandoff.from(intent)
-        if (intent.action == ACTION_SHARE) sharedContent = io.github.fartown.movo.ui.share.SharedContent.fromExtras(intent)
+        if (intent.action == ACTION_SHARE) {
+            sharedContent = io.github.fartown.movo.ui.share.SharedContent.fromExtras(intent)
+            shareSession = true
+        }
         if (request == null && !assistantMode && sharedContent == null) { finish(); return }
         current = WeakReference(this)
         if (assistantMode) keyguardGate.check()
@@ -139,13 +147,18 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                         LaunchedEffect(imeBottom, navigationBottom) {
                             avoidKeyboard(imeBottom, navigationBottom)
                         }
-                        LaunchedEffect(request, assistantMode, sharedContent, keyguardGate.locked) {
+                        LaunchedEffect(request, assistantMode, sharedContent, shareSession, keyguardGate.locked) {
                             // 锁屏时不加载会话，解锁成功后本 effect 会重新执行。
                             if (keyguardGate.locked) return@LaunchedEffect
                             sharedContent?.let { shared ->
                                 // 分享进来：新会话，内容预填进输入框，自动获焦等用户补一句指令（不自动发送）。
                                 sharedContent = null
                                 agentState.openSharedContent(shared)
+                                ready = true
+                                return@LaunchedEffect
+                            }
+                            // 分享打开的浮层：清空 sharedContent 会让本 effect 重跑，这时会话已就绪，什么都不做。
+                            if (shareSession && request == null) {
                                 ready = true
                                 return@LaunchedEffect
                             }
@@ -220,9 +233,11 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
             autoListen = false
             request = null
             sharedContent = io.github.fartown.movo.ui.share.SharedContent.fromExtras(intent)
+            shareSession = true
             return
         }
         if (intent.action == ACTION_ASSISTANT) {
+            shareSession = false
             assistantMode = true
             autoListen = intent.getBooleanExtra(io.github.fartown.movo.agent.voice.MovoAssistantVoiceService.EXTRA_AUTO_LISTEN, false)
             request = null
@@ -230,6 +245,7 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
             return
         }
         val next = AgentConversationHandoff.from(intent) ?: return
+        shareSession = false
         // 长按完成态的悬浮球：打开结果的同时直接进入语音模式（规范 8.1）。
         if (intent.getBooleanExtra(io.github.fartown.movo.agent.voice.MovoAssistantVoiceService.EXTRA_AUTO_LISTEN, false)) autoListen = true
         // Keep the existing body mounted when the same conversation completes another turn.
