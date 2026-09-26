@@ -535,11 +535,13 @@ internal fun AgentChatInputBar(
 
                 if (!voice.active) Spacer(modifier = Modifier.weight(1f))
 
-                if (showContextUsage && !isStreaming && !voice.active) {
+                // 手动压缩也是一轮执行：压缩中留着用量环，浮层里显示「正在压缩…」。
+                if (showContextUsage && (!isStreaming || isCompacting) && !voice.active) {
                     AgentContextUsageButton(
                         usage = contextUsage,
                         onCompact = onCompactContext,
                         canCompact = canCompactContext,
+                        isCompacting = isCompacting,
                         popupAnchorTopPx = inputContainerTopPx,
                     )
                 }

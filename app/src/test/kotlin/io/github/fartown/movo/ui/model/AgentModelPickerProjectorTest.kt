@@ -148,6 +148,30 @@ class AgentModelPickerProjectorTest {
     }
 
     @Test
+    fun contextPopoverNumbers_roundAboveTenThousandAndKeepTwoDigitsForMillions() {
+        assertEquals("19K", formatContextTokenCount(19_000))
+        assertEquals("19K", formatContextTokenCount(19_400))
+        assertEquals("865K", formatContextTokenCount(865_000))
+        assertEquals("1.05M", formatContextTokenCount(1_050_000))
+        assertEquals("1M", formatContextTokenCount(999_700))
+        assertEquals("8.5K", formatContextTokenCount(8_530))
+        assertEquals("950", formatContextTokenCount(950))
+        assertEquals(
+            "1.8%",
+            formatContextUsagePercent(AgentContextUsageUi(contextTokens = 19_000, contextWindow = 1_050_000)),
+        )
+        assertEquals(
+            "82,4%",
+            formatContextUsagePercent(
+                AgentContextUsageUi(contextTokens = 865_000, contextWindow = 1_050_000),
+                java.util.Locale.GERMANY,
+            ),
+        )
+        assertNull(formatContextUsagePercent(AgentContextUsageUi(contextTokens = null, contextWindow = 100_000)))
+        assertNull(formatContextUsagePercent(AgentContextUsageUi(contextTokens = 12_000, contextWindow = null)))
+    }
+
+    @Test
     fun contextUsageFormattingUsesTheRequestedLocale() {
         assertEquals(
             "82K / 100K tokens · 82,0%",

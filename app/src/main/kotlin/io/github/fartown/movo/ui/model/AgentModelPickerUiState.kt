@@ -170,3 +170,34 @@ internal fun formatCompactTokenCount(value: Int, locale: Locale = Locale.getDefa
     }.format(value / divisor)
     return "$formatted$suffix"
 }
+
+/**
+ * 上下文用量浮层里的 token 数（规范 `Popover/ContextUsage`）：1 万以上取整（19K、865K），百万保留最多两位（1.05M），
+ * 1 千到 1 万保留一位（8.5K），不写 tokens。取整后到 1000K 的直接进位成 M。
+ */
+internal fun formatContextTokenCount(value: Int, locale: Locale = Locale.getDefault()): String {
+    val absolute = kotlin.math.abs(value.toLong())
+    val (divisor, suffix, fractionDigits) = when {
+        absolute >= 999_500 -> Triple(1_000_000.0, "M", 2)
+        absolute >= 10_000 -> Triple(1_000.0, "K", 0)
+        absolute >= 1_000 -> Triple(1_000.0, "K", 1)
+        else -> return NumberFormat.getIntegerInstance(locale).format(value)
+    }
+    val formatted = NumberFormat.getNumberInstance(locale).apply {
+        minimumFractionDigits = 0
+        maximumFractionDigits = fractionDigits
+        isGroupingUsed = false
+    }.format(value / divisor)
+    return "$formatted$suffix"
+}
+
+/** 上下文占用百分比，一位小数（1.8%）；超出窗口时如实显示。没有用量或模型没给上限时为 null。 */
+internal fun formatContextUsagePercent(usage: AgentContextUsageUi, locale: Locale = Locale.getDefault()): String? {
+    val tokens = usage.contextTokens ?: return null
+    val window = usage.contextWindow?.takeIf { it > 0 } ?: return null
+    val percentFormat = NumberFormat.getNumberInstance(locale).apply {
+        minimumFractionDigits = 1
+        maximumFractionDigits = 1
+    }
+    return "${percentFormat.format(tokens.toDouble() / window.toDouble() * 100.0)}%"
+}
