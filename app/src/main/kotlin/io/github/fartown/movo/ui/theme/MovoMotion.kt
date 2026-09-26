@@ -85,7 +85,8 @@ internal val LocalReducedMotion = staticCompositionLocalOf { false }
 
 @Composable
 internal fun ProvideReducedMotion(content: @Composable () -> Unit) {
-    val context = LocalContext.current
+    // 注册在应用级 context 上：浮窗的 context 是无障碍服务，服务被系统停掉时组合未必来得及释放，会泄漏接收器。
+    val context = LocalContext.current.applicationContext
     var reduced by remember { mutableStateOf(isReducedMotion(context)) }
     DisposableEffect(context) {
         val refresh = { reduced = isReducedMotion(context) }

@@ -116,6 +116,9 @@ internal fun SettingsRow(
                 },
             ),
     ) {
+        // 右侧值最多占行宽 40%（且不超过 160），标题优先完整显示：长的是值（模型名等），不能把标题挤成「Mo…」。
+        androidx.compose.foundation.layout.BoxWithConstraints {
+        val valueMaxWidth = (maxWidth * 0.4f).coerceAtMost(160.dp)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -141,7 +144,8 @@ internal fun SettingsRow(
                     title,
                     style = MovoTypography.bodyStrong,
                     color = MovoColors.textPrimary,
-                    maxLines = 1,
+                    // 译文较长（如「Thinking by default」）时折成两行，不截断。
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
                         .onGloballyPositioned { titleRect = it.boundsInWindow() }
@@ -151,7 +155,8 @@ internal fun SettingsRow(
                     Text(subtitle, style = MovoTypography.labelRegular, color = MovoColors.textSecondary)
                 }
             }
-            RowTrailingContent(trailing, attention, enabled, rowInteraction)
+            RowTrailingContent(trailing, attention, enabled, rowInteraction, valueMaxWidth)
+        }
         }
         if (showDivider) {
             MovoDivider(modifier = Modifier.align(Alignment.BottomStart), start = textStart)
@@ -165,19 +170,20 @@ private fun RowTrailingContent(
     attention: Boolean,
     enabled: Boolean,
     interaction: androidx.compose.foundation.interaction.MutableInteractionSource? = null,
+    valueMaxWidth: androidx.compose.ui.unit.Dp = 160.dp,
 ) {
     when (trailing) {
         is RowTrailing.Arrow -> {
-            RowValue(trailing.value, attention)
+            RowValue(trailing.value, attention, maxWidth = valueMaxWidth)
             MovoIcon(MovoIcons.ChevronRight, null, size = MovoSize.iconSmall, tint = MovoColors.textTertiary)
         }
         is RowTrailing.External -> {
-            RowValue(trailing.value, attention)
+            RowValue(trailing.value, attention, maxWidth = valueMaxWidth)
             MovoIcon(MovoIcons.ExternalLink, null, size = MovoSize.iconSmall, tint = MovoColors.textTertiary)
         }
         is RowTrailing.Value -> {
             Spacer(Modifier.width(MovoSpacing.sm))
-            RowValue(trailing.value, attention, gap = false)
+            RowValue(trailing.value, attention, gap = false, maxWidth = valueMaxWidth)
         }
         is RowTrailing.Switch -> {
             Spacer(Modifier.width(MovoSpacing.md))
@@ -193,7 +199,12 @@ private fun RowTrailingContent(
 }
 
 @Composable
-private fun RowValue(value: String?, attention: Boolean, gap: Boolean = true) {
+private fun RowValue(
+    value: String?,
+    attention: Boolean,
+    gap: Boolean = true,
+    maxWidth: androidx.compose.ui.unit.Dp = 160.dp,
+) {
     if (value == null) return
     Spacer(Modifier.width(MovoSpacing.sm))
     if (attention) {
@@ -215,7 +226,7 @@ private fun RowValue(value: String?, attention: Boolean, gap: Boolean = true) {
             color = MovoColors.textSecondary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.widthIn(max = 160.dp),
+            modifier = Modifier.widthIn(max = maxWidth),
         )
     }
     if (gap) Spacer(Modifier.width(MovoSpacing.xs))

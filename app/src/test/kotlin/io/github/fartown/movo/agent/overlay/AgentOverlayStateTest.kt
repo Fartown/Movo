@@ -33,6 +33,7 @@ class AgentOverlayStateTest {
         // 规范 8.1：完成 / 失败待查看优先；语音对话中为聆听；待命只有玻璃圆 + 光球。
         assertEquals(OrbMode.FINISHED, orbMode(AgentOverlayPhase.FINISHED, standby = false, listening = true))
         assertEquals(OrbMode.FAILED, orbMode(AgentOverlayPhase.FAILED, standby = false, listening = false))
+        assertEquals(OrbMode.STANDBY, orbMode(AgentOverlayPhase.FAILED, standby = false, listening = false, stopped = true))
         assertEquals(OrbMode.LISTENING, orbMode(AgentOverlayPhase.PAUSED, standby = false, listening = true))
         assertEquals(OrbMode.PAUSED, orbMode(AgentOverlayPhase.PAUSED, standby = false, listening = false))
         assertEquals(OrbMode.RUNNING, orbMode(AgentOverlayPhase.RUNNING, standby = false, listening = false))

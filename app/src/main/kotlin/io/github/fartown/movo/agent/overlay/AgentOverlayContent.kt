@@ -988,7 +988,9 @@ private fun SupplementInput(
                 onValueChange = onValueChange,
                 modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
                 textStyle = MovoTypography.labelRegular.copy(color = MovoColors.textPrimary),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
+                // 键盘的回车键直接发送（展开卡里的发送键可能被键盘挡住）。
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSend = { if (value.isNotBlank()) onSend() }),
                 cursorBrush = SolidColor(MovoColors.indigoFg),
                 maxLines = 4,
             )

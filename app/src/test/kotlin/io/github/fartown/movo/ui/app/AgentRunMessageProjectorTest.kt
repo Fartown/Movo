@@ -264,6 +264,11 @@ class AgentRunMessageProjectorTest {
         assertEquals(ToolActivityStatusUi.Running, secondTool.status)
         assertEquals("执行命令 · Android · root", secondTool.argumentsSummary)
         assertEquals("pm list packages | head", secondTool.command)
+
+        // 整次运行在很久之后才收尾：已结束的思考块保留自己的时长，不被算成到任务结束为止。
+        now = 190_000L
+        val finalized = projector.finalizeRun(runId, messages)
+        assertEquals(3, (finalized[1] as ThinkingMessageUi).elapsedSeconds)
     }
 
     @Test

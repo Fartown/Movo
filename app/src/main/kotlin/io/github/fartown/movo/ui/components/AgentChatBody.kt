@@ -94,6 +94,8 @@ import io.github.fartown.movo.ui.model.PendingImageUi
 import io.github.fartown.movo.ui.model.ThinkingMessageUi
 import io.github.fartown.movo.ui.model.ToolActivityMessageUi
 import io.github.fartown.movo.ui.model.ToolSummaryMessageUi
+import io.github.fartown.movo.ui.model.SystemNoticeCode
+import io.github.fartown.movo.ui.model.SystemNoticeMessageUi
 import io.github.fartown.movo.ui.model.UserMessageUi
 import io.github.fartown.movo.ui.model.latestContextUsage
 import kotlin.math.exp
@@ -442,6 +444,7 @@ internal fun AgentConversationMessages(
 ) {
     val timelineEntries = remember(visibleMessages) { visibleMessages.toTimelineEntries() }
     val lastWorkKey = timelineEntries.lastOrNull { it is AgentTimelineEntry.WorkProcess }?.key
+    val unfinishedWorkKeys = remember(timelineEntries) { unfinishedWorkKeys(timelineEntries) }
     // 复制按钮只出现在每轮对话的最终结果上，中间步骤的过渡文本不提供复制入口。
     // 流式进行中当前这一轮尚未收尾，此时的“最后一条正文”只是中间步骤，不标记。
     val finalResultMessageIds = remember(visibleMessages, isStreaming) {
@@ -703,6 +706,7 @@ internal fun AgentConversationMessages(
                             messages = entry.messages,
                             // 本轮仍在进行：模型在两步之间思考时步骤都已完成，但执行卡不能当作完成收起。
                             runActive = isStreaming && entry.key == lastWorkKey,
+                            runUnfinished = entry.key in unfinishedWorkKeys,
                             onOpenBrowser = onOpenBrowser,
                             currentBrowserMessageId = currentBrowserMessageId,
                             retainedStreamingStates = streamingMarkdownStates,
@@ -923,6 +927,31 @@ internal fun smoothBottomFollowStep(
     val easedStep = distancePx * (1f - exp(-frameSeconds / BOTTOM_FOLLOW_RESPONSE_SECONDS))
     val speedLimitedStep = BOTTOM_FOLLOW_MAX_SPEED_DP_PER_SECOND * density * frameSeconds
     return min(distancePx, min(easedStep.coerceAtLeast(BOTTOM_FOLLOW_MIN_STEP_PX), speedLimitedStep))
+}
+
+/**
+ * 这一轮以失败 / 中断告终的执行卡：执行卡之后、下一条用户消息之前出现了失败卡。
+ * 这类执行卡即使每一步都成功，摘要条也不能显示「✓ 已完成」。
+ */
+internal fun unfinishedWorkKeys(entries: List<AgentTimelineEntry>): Set<String> {
+    val keys = mutableSetOf<String>()
+    var pending: String? = null
+    for (entry in entries) {
+        when (entry) {
+            is AgentTimelineEntry.WorkProcess -> pending = entry.key
+            is AgentTimelineEntry.Message -> when (val message = entry.message) {
+                is UserMessageUi -> pending = null
+                is SystemNoticeMessageUi -> if (
+                    message.code == SystemNoticeCode.RuntimeFailed || message.code == SystemNoticeCode.Interrupted
+                ) {
+                    pending?.let(keys::add)
+                    pending = null
+                }
+                else -> Unit
+            }
+        }
+    }
+    return keys
 }
 
 internal sealed interface AgentTimelineEntry {

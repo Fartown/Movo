@@ -111,12 +111,19 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     )
 
     private var windowManager: WindowManager? = null
+    /** [windowManager] 取自哪个 context（无障碍服务实例或本服务）；变了就要整体重建浮窗。 */
+    private var overlayOwner: Context? = null
+    private val onAccessibilityInstanceChanged: () -> Unit = {
+        mainHandler.post(::rebuildOverlayIfOwnerChanged)
+    }
     private var glowView: ComposeView? = null
     private var orbView: ComposeView? = null
     private var bubbleView: ComposeView? = null
     private var glowParams: WindowManager.LayoutParams? = null
     private var orbParams: WindowManager.LayoutParams? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
+    /** 展开卡的原始位置（距屏幕底部）；键盘补充时抬到键盘上方，键盘收起后回到这里。 */
+    private var bubbleBaseY = 0
     private val resultConversationOpening = mutableStateOf(false)
     private var resultConversationTarget: AgentConversationTarget? = null
     private var resultConversationRunId: String? = null
@@ -172,6 +179,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
         application.registerActivityLifecycleCallbacks(appActivityCallbacks)
+        AgentAccessibilityService.addInstanceListener(onAccessibilityInstanceChanged)
         // 语音对话与悬浮窗联动（规范 8.5）：执行中语音开始时展开卡以语音模式弹出；语音结束后展开卡恢复自动收起。
         lifecycleScope.launch {
             VoiceSessionManager.state.map { it.active }.distinctUntilChanged().collect(::onVoiceActiveChanged)
@@ -203,6 +211,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     override fun onDestroy() {
         application.unregisterActivityLifecycleCallbacks(appActivityCallbacks)
+        AgentAccessibilityService.removeInstanceListener(onAccessibilityInstanceChanged)
         clearResultHandoff()
         io.github.fartown.movo.diagnostics.MemoryDiagnostics.record("lifecycle", "runtime.destroyed",
             fields = mapOf("run_active" to (activeSession?.isTerminal == false)))
@@ -237,6 +246,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         orbParams = null
         glowParams = null
         windowManager = null
+        overlayOwner = null
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         super.onDestroy()
     }
@@ -957,6 +967,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     private fun showOverlay() {
+        if (orbView != null && overlayOwner !== overlayContext()) rebuildOverlayIfOwnerChanged()
         if (orbView != null) {
             // 悬浮球已常驻：只补上边缘光晕。
             if (glowView == null) windowManager?.let(::showGlow)
@@ -964,8 +975,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
         // TYPE_ACCESSIBILITY_OVERLAY 免 SYSTEM_ALERT_WINDOW 权限；仅回退态（无障碍未启用）才需检查
         if (AgentAccessibilityService.current() == null && !Settings.canDrawOverlays(this)) return
-        val wm = overlayContext().getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
+        val owner = overlayContext()
+        val wm = owner.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
         windowManager = wm
+        overlayOwner = owner
 
         showGlow(wm)
 
@@ -974,7 +987,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         val orb = createOverlayComposeView {
             val voice by VoiceSessionManager.state.collectAsState()
             AgentOverlayOrb(
-                mode = orbMode(state.value.phase, standby.value, voice.active),
+                mode = orbMode(
+                    state.value.phase, standby.value, voice.active,
+                    stopped = state.value.status == AgentOverlayStatus.Stopped,
+                ),
                 onTap = ::onOrbTapped,
                 onLongPress = ::onOrbLongPressed,
                 onDragStart = ::onOrbDragStart,
@@ -1001,6 +1017,31 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         // ── 小气泡窗口：展开态显示，跟随光球，窗口外触摸穿透 ─────────
         if (!collapsed.value) {
             showBubble(wm)
+        }
+    }
+
+    /**
+     * 无障碍服务重连（或断开、恢复）后，旧实例名下的浮窗已被系统移除，旧 WindowManager 再加窗口会
+     * BadTokenException（光晕、展开卡加不上，悬浮球消失）。用当前可用的 context 按原状态重建。
+     */
+    private fun rebuildOverlayIfOwnerChanged() {
+        if (orbView == null || overlayOwner === overlayContext()) return
+        AndroidAgentLogger.debug { "Agent runtime overlay owner changed; rebuilding overlay windows" }
+        val wasStandby = standby.value
+        val hadGlow = glowView != null
+        removeAmbientWindows()
+        windowManager = null
+        overlayOwner = null
+        showOverlay()
+        if (orbView == null) return
+        if (!hadGlow) {
+            glowView?.let { view -> runCatching { windowManager?.removeView(view) } }
+            glowView = null
+            glowParams = null
+        }
+        if (wasStandby) {
+            standby.value = true
+            updateStandbyOrbVisibility()
         }
     }
 
@@ -1147,6 +1188,30 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
         bubbleView = bubble
         bubbleParams = lp
+        bubbleBaseY = lp.y
+        bubble.setOnApplyWindowInsetsListener { view, insets ->
+            liftBubbleAboveIme(insets)
+            view.onApplyWindowInsets(insets)
+        }
+    }
+
+    /**
+     * 键盘补充：浮窗不会被系统随键盘挪动，键盘盖住展开卡的输入框和发送键时把窗口抬到键盘上方；
+     * 键盘收起后回到原位。insets 是相对本窗口的遮挡量，抬起后变为 0，所以只在有遮挡时累加。
+     */
+    private fun liftBubbleAboveIme(insets: android.view.WindowInsets) {
+        val wm = windowManager ?: return
+        val bubble = bubbleView ?: return
+        val lp = bubbleParams ?: return
+        val ime = android.view.WindowInsets.Type.ime()
+        val target = when {
+            !insets.isVisible(ime) -> bubbleBaseY
+            insets.getInsets(ime).bottom > 0 -> lp.y + insets.getInsets(ime).bottom + dpToPx(8)
+            else -> return
+        }
+        if (lp.y == target) return
+        lp.y = target
+        runCatching { wm.updateViewLayout(bubble, lp) }
     }
 
     private fun createOverlayComposeView(content: @Composable () -> Unit): ComposeView =
@@ -1545,6 +1610,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         clearResultHandoff()
         removeAmbientWindows()
         windowManager = null
+        overlayOwner = null
         stopSelf()
     }
 

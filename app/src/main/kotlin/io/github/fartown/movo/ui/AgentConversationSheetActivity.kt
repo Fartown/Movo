@@ -74,6 +74,8 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
     /** 在半屏高度继续往下拖时，浮层整体下移的距离（不压缩内容）。 */
     private var dismissOffset = 0f
     private var closing = false
+    /** 这次是从悬浮球点开的：关闭时反向收回球。 */
+    private var openedFromOrb = false
     /** Q4 浮层 → App：推满全屏的进度（驱动顶部圆角与把手）。 */
     private var expandProgress by mutableStateOf(0f)
     private var windowHeight = 0
@@ -319,6 +321,7 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         val decor = window.decorView
         val orb = consumeOrbOrigin()
         if (orb != null && !isReducedMotion(this)) {
+            openedFromOrb = true
             setScrim(0f)
             decor.alpha = 0f
             decor.post { if (!closing) morphWithOrb(orb, expand = true) {} }
@@ -339,7 +342,10 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         }
     }
 
-    /** 关闭浮层（✕、返回、点遮罩、下拉）：先向下退场 `slow-exit`，再结束 Activity；只关浮层，不停止任务。 */
+    /**
+     * 关闭浮层（✕、返回、点遮罩、下拉）：先向下退场 `slow-exit`，再结束 Activity；只关浮层，不停止任务。
+     * 从悬浮球点开的浮层（没被拖动过）按 Q4 反向收回悬浮球（规范 9.3.2「返回反向」、8.9「浮层收进悬浮球」）。
+     */
     private fun dismissAnimated() {
         if (closing) return
         closing = true
@@ -349,6 +355,13 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
             window.decorView.animate().alpha(0f).setDuration(MovoMotion.FAST_EXIT.toLong())
                 .withEndAction { finish() }.start()
             return
+        }
+        if (openedFromOrb && dismissOffset == 0f) {
+            val orb = io.github.fartown.movo.agent.runtime.AgentRuntimeService.orbDiscRect
+            if (orb != null) {
+                morphWithOrb(orb, expand = false) { finish() }
+                return
+            }
         }
         val from = window.decorView.translationY
         animateSheetOffset(from, windowHeight.toFloat().coerceAtLeast(from + 1f), MovoMotion.SLOW_EXIT.toLong(), EASE_EXIT) {

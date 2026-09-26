@@ -94,7 +94,8 @@ internal fun SettingsScreen(
     }
     val wake by remember { VoiceSettingsRepository.wakeSettingsFlow() }.collectAsState(initial = VoiceWakeSettings())
     val mcpServers by remember { McpServerRepository.serversFlow() }.collectAsState(initial = null)
-    var memoryValue by remember { mutableStateOf<String?>(null) }
+    // 只存数值，文案在组合里按当前语言格式化：切换语言后不必等下次刷新。null = 未读到，-1 = 记忆已关闭。
+    var memoryCount by remember { mutableStateOf<Int?>(null) }
     var skillsCount by remember { mutableStateOf<Int?>(null) }
     var resumeTick by remember { mutableIntStateOf(0) }
     OnResumeEffect {
@@ -102,15 +103,10 @@ internal fun SettingsScreen(
         onRefreshPermissions()
         kimiWeb.onRefresh()
     }
-    val memoryOff = stringResource(R.string.movo_settings_memory_off)
     LaunchedEffect(resumeTick) {
-        memoryValue = withContext(Dispatchers.IO) {
+        memoryCount = withContext(Dispatchers.IO) {
             runCatching {
-                if (!AgentMemoryRepository.isEnabled()) {
-                    memoryOff
-                } else {
-                    context.getString(R.string.movo_settings_memory_count, memoryEntryCount(AgentMemoryRepository.snapshot().content))
-                }
+                if (!AgentMemoryRepository.isEnabled()) -1 else memoryEntryCount(AgentMemoryRepository.snapshot().content)
             }.getOrNull()
         }
         skillsCount = withContext(Dispatchers.IO) {
@@ -172,7 +168,13 @@ internal fun SettingsScreen(
                 SettingsRow(
                     title = stringResource(R.string.ui_memory_b55ff5),
                     leading = RowLeading.Icon(MovoIcons.BookOpen),
-                    trailing = RowTrailing.Arrow(memoryValue),
+                    trailing = RowTrailing.Arrow(
+                        when (val count = memoryCount) {
+                            null -> null
+                            -1 -> stringResource(R.string.movo_settings_memory_off)
+                            else -> stringResource(R.string.movo_settings_memory_count, count)
+                        },
+                    ),
                     showDivider = false,
                     onClick = { onNavigate(AppRoute.Memory) },
                 )

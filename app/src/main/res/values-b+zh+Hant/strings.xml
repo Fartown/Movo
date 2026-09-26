@@ -243,6 +243,7 @@
   <string name="system_notice_stopped">已停止</string>
   <string name="system_notice_empty_result">執行已完成，但沒有文字回覆。</string>
   <string name="system_notice_runtime_failed">Runtime 執行失敗</string>
+  <string name="system_notice_model_retry">模型請求重試</string>
   <string name="conversation_persistence_failed">無法儲存對話，請重試</string>
   <string name="system_notice_interrupted">任務已中斷。已保留部分輸出，未自動重試尚未完成的操作。</string>
   <string name="tool_status_unknown">結果未知</string>

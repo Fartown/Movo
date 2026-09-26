@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="execution_channel">任務執行</string>
+    <string name="execution_title">Movo 正在執行</string>
+    <string name="execution_summary">%1$d 項任務正在執行，可返回 Movo 檢視進度</string>
+    <string name="execution_stop">停止執行任務</string>
+</resources>

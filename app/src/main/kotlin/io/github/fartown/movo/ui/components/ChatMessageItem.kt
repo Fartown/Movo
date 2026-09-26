@@ -407,6 +407,7 @@ internal fun AgentWorkProcess(
     onEditMessage: (String) -> Unit = {},
     onDeleteMessage: (String) -> Unit = {},
     runActive: Boolean = false,
+    runUnfinished: Boolean = false,
 ) {
     val runControls = LocalRunControls.current
     val paused = runActive && runControls.isPaused
@@ -448,7 +449,7 @@ internal fun AgentWorkProcess(
     val runMillis = finishedTools.mapNotNull { it.finishedAtMillis }.maxOrNull()?.let { end ->
         finishedTools.mapNotNull { it.startedAtMillis }.minOrNull()?.let { end - it }
     } ?: 0L
-    val glint = sawRunning && !running && !paused && failedIndex < 0 && runMillis >= 10_000L
+    val glint = sawRunning && !running && !paused && failedIndex < 0 && !runUnfinished && runMillis >= 10_000L
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -483,7 +484,7 @@ internal fun AgentWorkProcess(
                         io.github.fartown.movo.ui.theme.MovoIcons.Pause, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
                     )
                     running -> io.github.fartown.movo.ui.components.movo.MovoOrb(size = 16.dp)
-                    failedIndex >= 0 -> io.github.fartown.movo.ui.theme.MovoIcon(
+                    failedIndex >= 0 || runUnfinished -> io.github.fartown.movo.ui.theme.MovoIcon(
                         io.github.fartown.movo.ui.theme.MovoIcons.X, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.roseFg,
                     )
                     else -> io.github.fartown.movo.ui.theme.MovoIcon(
@@ -499,6 +500,7 @@ internal fun AgentWorkProcess(
                     running && toolCount > 0 -> stringResource(R.string.movo_work_running_step, toolCount)
                     running -> stringResource(R.string.movo_work_analyzing)
                     failedIndex >= 0 -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
+                    runUnfinished -> stringResource(R.string.movo_work_unfinished_steps, toolCount)
                     toolCount > 0 -> stringResource(R.string.movo_work_done_steps, toolCount)
                     else -> stringResource(R.string.movo_work_done)
                 },
