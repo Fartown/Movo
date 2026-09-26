@@ -1248,8 +1248,13 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     /** 上次读到的键盘高度（距屏幕底）；下次打开补充输入时先按它上移，不等输入法窗口出现。 */
     private var lastImeHeight: Int
-        get() = imeHeightCache
-        set(value) { imeHeightCache = value }
+        get() = imeHeightCache.takeIf { it > 0 }
+            ?: getSharedPreferences(OVERLAY_PREFS, Context.MODE_PRIVATE).getInt(PREF_IME_HEIGHT, 0).also { imeHeightCache = it }
+        set(value) {
+            if (value == imeHeightCache) return
+            imeHeightCache = value
+            getSharedPreferences(OVERLAY_PREFS, Context.MODE_PRIVATE).edit().putInt(PREF_IME_HEIGHT, value).apply()
+        }
     private var bubbleYAnimator: android.animation.ValueAnimator? = null
     private var bubbleTargetY = 0
 
@@ -1267,7 +1272,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
      */
     private fun liftBubbleForTyping() {
         typingLift = 0
-        if (lastImeHeight > 0) liftBubbleTo(bubbleYAbove(lastImeHeight))
+        // 没有实测值时先按屏高 30% 上移：比常见键盘矮，之后读到实际位置只会再往上补一点，不会先高后掉。
+        val estimate = lastImeHeight.takeIf { it > 0 } ?: (screenRealHeight() * 0.3f).toInt()
+        liftBubbleTo(bubbleYAbove(estimate))
     }
 
     /** 本次补充输入里展开卡已经抬到的高度：输入期间只升不降（键盘升起过程中的读数会变小，跟着降就会上下晃）。 */
@@ -1822,6 +1829,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         const val BUBBLE_EXIT_MS = 150L
         const val PANEL_AUTO_COLLAPSE_MS = 4_000L
         const val IME_TRACK_INTERVAL_MS = 60L
+        private const val OVERLAY_PREFS = "agent_overlay"
+        private const val PREF_IME_HEIGHT = "ime_height_px"
         const val GLOW_FADE_MS = 300L
         const val ORB_EXIT_MS = 200L
         const val REMOVE_ZONE_DP = 48

@@ -539,7 +539,6 @@ internal fun AgentWorkProcess(
                 timerColor = if (running) io.github.fartown.movo.ui.theme.MovoColors.textSecondary else io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
                 modifier = Modifier.weight(1f),
             )
-            Spacer(Modifier.width(8.dp))
             val rotation by androidx.compose.animation.core.animateFloatAsState(
                 targetValue = if (expanded) 180f else 0f,
                 animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
@@ -734,8 +733,8 @@ private fun Modifier.movoClickableRow(onClick: () -> Unit): Modifier =
     movoClickable(io.github.fartown.movo.ui.components.movo.PressKind.Row, onClick = onClick)
 
 /**
- * 摘要条的状态 + 右侧计时：状态文字优先完整显示；剩余宽度放得下完整计时（「用时 1 分 6 秒」）就放，
- * 放不下退成 [compactTimer]（「1:06」），再放不下就不显示计时。计时右对齐，与状态之间至少 8。
+ * 摘要条的状态 + 右侧计时（含到箭头的间距）：状态文字优先完整显示；剩余宽度放得下完整计时（「用时 1 分 6 秒」）
+ * 就放，放不下退成 [compactTimer]（「1:06」，两侧间距缩到 4，大字号窄屏也放得下），再放不下就不显示计时。
  */
 @Composable
 internal fun StatusWithTimer(
@@ -755,23 +754,25 @@ internal fun StatusWithTimer(
         modifier = modifier,
     ) { (statusMeasurables, fullMeasurables, compactMeasurables), constraints ->
         val gap = 8.dp.roundToPx()
+        val tightGap = 4.dp.roundToPx()
         val loose = constraints.copy(minWidth = 0)
         val full = fullMeasurables.firstOrNull()?.measure(loose.copy(maxWidth = androidx.compose.ui.unit.Constraints.Infinity))
         val compact = compactMeasurables.firstOrNull()?.measure(loose.copy(maxWidth = androidx.compose.ui.unit.Constraints.Infinity))
         val statusMeasurable = statusMeasurables.first()
         val statusWanted = statusMeasurable.maxIntrinsicWidth(constraints.maxHeight).coerceAtMost(constraints.maxWidth)
-        val room = constraints.maxWidth - statusWanted - gap
-        val chosen = when {
-            full != null && full.width <= room -> full
-            compact != null && compact.width <= room -> compact
-            else -> null
+        val room = constraints.maxWidth - statusWanted
+        // 选中的计时与它两侧的间距（状态 → 计时、计时 → 箭头）。
+        val (chosen, sideGap) = when {
+            full != null && full.width + gap * 2 <= room -> full to gap
+            compact != null && compact.width + tightGap * 2 <= room -> compact to tightGap
+            else -> null to gap
         }
-        val statusMax = if (chosen != null) constraints.maxWidth - chosen.width - gap else constraints.maxWidth
-        val statusPlaceable = statusMeasurable.measure(loose.copy(maxWidth = statusMax.coerceAtLeast(0)))
+        val trailing = if (chosen != null) chosen.width + sideGap * 2 else gap
+        val statusPlaceable = statusMeasurable.measure(loose.copy(maxWidth = (constraints.maxWidth - trailing).coerceAtLeast(0)))
         val height = maxOf(statusPlaceable.height, chosen?.height ?: 0, constraints.minHeight)
         layout(constraints.maxWidth, height) {
             statusPlaceable.placeRelative(0, (height - statusPlaceable.height) / 2)
-            chosen?.placeRelative(constraints.maxWidth - chosen.width, (height - chosen.height) / 2)
+            chosen?.placeRelative(constraints.maxWidth - sideGap - chosen.width, (height - chosen.height) / 2)
         }
     }
 }

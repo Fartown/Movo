@@ -55,4 +55,13 @@ class StatusWithTimerTest {
         compose.onNodeWithText("已完成 8 个步骤").assertIsDisplayed()
         compose.onNodeWithText("1:13").assertIsDisplayed()
     }
+
+    /** 真机：600dpi 物理屏被改成 1080 宽（288dp），1.4 倍字号时状态约 130dp、紧凑计时约 37dp，区域约 176dp。 */
+    @Test
+    @Config(qualifiers = "zh-rCN-w288dp-h640dp-xxxhdpi", fontScale = 1.4f)
+    fun narrowScreenLargeFontShowsCompactTimer() {
+        show(176)
+        compose.onNodeWithText("已完成 8 个步骤").assertIsDisplayed()
+        compose.onNodeWithText("1:13").assertIsDisplayed()
+    }
 }
