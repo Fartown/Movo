@@ -2,26 +2,32 @@ package io.github.fartown.movo.ui.components
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.lerp
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -134,16 +140,21 @@ internal fun LayoutCoordinates.windowRect(): Rect = boundsInWindow()
 /** 在对话页最上层绘制飞行中的气泡与光球。放在对话页根 Box 里，铺满。 */
 @Composable
 internal fun ChatFlightOverlay(controller: ChatFlightController, modifier: Modifier = Modifier) {
-    var origin by androidx.compose.runtime.remember { mutableStateOf(Offset.Zero) }
-    Box(modifier = modifier.fillMaxSize().onGloballyPositioned { origin = it.windowRect().topLeft }) {
-        controller.bubble?.let { BubbleFlightLayer(controller, it, origin) }
-        controller.orb?.let { OrbFlightLayer(controller, it, origin) }
+    // 窗口坐标原点：只在放置 / 图层阶段读取。
+    val origin = remember { mutableStateOf(Offset.Zero) }
+    Box(modifier = modifier.fillMaxSize().onGloballyPositioned { origin.value = it.windowRect().topLeft }) {
+        controller.bubble?.let { BubbleFlightLayer(controller, it) { origin.value } }
+        controller.orb?.let { OrbFlightLayer(controller, it) { origin.value } }
     }
 }
 
+/**
+ * Q1 飞行中的气泡。进度与实时落点逐帧变化，只在放置（位置）、测量（外框尺寸）与绘制（底色、描边、圆角、文字透明度）阶段读取；
+ * 组合期只关心「有没有落点」，飞行中不重组。文字按落点（气泡最终尺寸）排版，最终尺寸不变时不重新排版。
+ */
 @Composable
-private fun BubbleFlightLayer(controller: ChatFlightController, flight: BubbleFlight, origin: Offset) {
-    val target = flight.target
+private fun BubbleFlightLayer(controller: ChatFlightController, flight: BubbleFlight, origin: () -> Offset) {
+    val hasTarget by remember(flight) { derivedStateOf { flight.target != null } }
     LaunchedEffect(flight) {
         // 发送被拒绝等情况下没有新气泡出现：1s 后放弃，不留残影；最多存在 2 秒。
         delay(1_000)
@@ -151,42 +162,67 @@ private fun BubbleFlightLayer(controller: ChatFlightController, flight: BubbleFl
         delay(1_000)
         controller.finishBubble(flight)
     }
-    LaunchedEffect(flight, target != null) {
-        if (target == null) return@LaunchedEffect
+    LaunchedEffect(flight, hasTarget) {
+        if (!hasTarget) return@LaunchedEffect
         flight.progress.animateTo(1f, tween(MovoMotion.SLOW, easing = MovoMotion.EasingStandard))
         controller.finishBubble(flight)
     }
-    val end = target ?: return
-    val t = flight.progress.value
+    if (!hasTarget) return
     val density = LocalDensity.current
     val padX = with(density) { 16.dp.toPx() }
     val padY = with(density) { 11.dp.toPx() }
-    // 输入框起点：文字第一行与输入框文字重合，所以起点框 = 文字位置向外扩出气泡内边距，尺寸取气泡最终尺寸（最终排版）。
-    val startBox = if (flight.startFilled) {
-        flight.start
-    } else {
-        Rect(Offset(flight.start.left - padX, flight.start.top - padY), end.size)
+    val hairline = with(density) { MovoSize.hairline.toPx() }
+    val startRadius = with(density) { if (flight.startFilled) 28.dp.toPx() else 20.dp.toPx() }
+    val endRadius = with(density) { 20.dp.toPx() }
+    val endTail = with(density) { 8.dp.toPx() }
+    // 当前外框（窗口坐标）。输入框起点：文字第一行与输入框文字重合，所以起点框 = 文字位置向外扩出气泡内边距，
+    // 尺寸取气泡最终尺寸（最终排版）。
+    fun currentBox(end: Rect): Rect {
+        val startBox = if (flight.startFilled) {
+            flight.start
+        } else {
+            Rect(Offset(flight.start.left - padX, flight.start.top - padY), end.size)
+        }
+        return lerp(startBox, end, flight.progress.value)
     }
-    val box = lerp(startBox, end, t)
-    // 底色与描边在前 50% 淡入（能力卡起点本来就有底色）。
-    val fill = if (flight.startFilled) 1f else (t / 0.5f).coerceIn(0f, 1f)
-    // 能力卡起点：文字在 30%–100% 淡入（卡片文字随首页淡出）。
-    val textAlpha = if (flight.startFilled) ((t - 0.3f) / 0.7f).coerceIn(0f, 1f) else 1f
-    val radius = with(density) { lerp(if (flight.startFilled) 28.dp.toPx() else 20.dp.toPx(), 20.dp.toPx(), t) }
-    val tail = with(density) { lerp(if (flight.startFilled) 28.dp.toPx() else 20.dp.toPx(), 8.dp.toPx(), t) }
-    val shape = RoundedCornerShape(
-        topStart = with(density) { radius.toDp() },
-        topEnd = with(density) { radius.toDp() },
-        bottomEnd = with(density) { tail.toDp() },
-        bottomStart = with(density) { radius.toDp() },
-    )
+    val fillPath = remember { Path() }
+    val strokePath = remember { Path() }
     Box(
         modifier = Modifier
-            .offset { IntOffset((box.left - origin.x).roundToInt(), (box.top - origin.y).roundToInt()) }
-            .size(with(density) { box.width.toDp() }, with(density) { box.height.toDp() })
-            .graphicsLayer { clip = false }
-            .background(MovoColors.bgSurface.copy(alpha = fill), shape)
-            .border(MovoSize.hairline, MovoColors.borderHairline.copy(alpha = MovoColors.borderHairline.alpha * fill), shape),
+            .offset {
+                val end = flight.target ?: return@offset IntOffset.Zero
+                val box = currentBox(end)
+                val o = origin()
+                IntOffset((box.left - o.x).roundToInt(), (box.top - o.y).roundToInt())
+            }
+            .drawBehind {
+                val t = flight.progress.value
+                // 底色与描边在前 50% 淡入（能力卡起点本来就有底色）。
+                val fill = if (flight.startFilled) 1f else (t / 0.5f).coerceIn(0f, 1f)
+                if (fill <= 0f) return@drawBehind
+                val radius = lerp(startRadius, endRadius, t)
+                val tail = lerp(startRadius, endTail, t)
+                fillPath.reset()
+                fillPath.addRoundRect(bubbleRoundRect(0f, 0f, size.width, size.height, radius, tail))
+                drawPath(fillPath, MovoColors.bgSurface, alpha = fill)
+                // 描边与 Modifier.border 一样画在框内。
+                val inset = hairline / 2
+                strokePath.reset()
+                strokePath.addRoundRect(
+                    bubbleRoundRect(inset, inset, size.width - inset, size.height - inset, radius - inset, tail - inset),
+                )
+                drawPath(strokePath, MovoColors.borderHairline, alpha = fill, style = Stroke(hairline))
+            }
+            .layout { measurable, _ ->
+                val end = flight.target ?: Rect.Zero
+                val box = currentBox(end)
+                val placeable = measurable.measure(
+                    Constraints.fixed(end.width.roundToInt().coerceAtLeast(0), end.height.roundToInt().coerceAtLeast(0)),
+                )
+                layout(box.width.roundToInt().coerceAtLeast(0), box.height.roundToInt().coerceAtLeast(0)) {
+                    placeable.place(0, 0)
+                }
+            },
     ) {
         Text(
             text = flight.text,
@@ -194,15 +230,36 @@ private fun BubbleFlightLayer(controller: ChatFlightController, flight: BubbleFl
             color = MovoColors.textPrimary,
             modifier = Modifier
                 .padding(horizontal = 16.dp, vertical = 11.dp)
-                .size(with(density) { (end.width - 2 * padX).coerceAtLeast(0f).toDp() }, with(density) { (end.height - 2 * padY).coerceAtLeast(0f).toDp() })
-                .graphicsLayer { alpha = textAlpha },
+                .fillMaxSize()
+                .graphicsLayer {
+                    // 能力卡起点：文字在 30%–100% 淡入（卡片文字随首页淡出）。
+                    alpha = if (flight.startFilled) ((flight.progress.value - 0.3f) / 0.7f).coerceIn(0f, 1f) else 1f
+                },
         )
     }
 }
 
+private fun bubbleRoundRect(left: Float, top: Float, right: Float, bottom: Float, radius: Float, tail: Float): RoundRect {
+    val r = CornerRadius(radius.coerceAtLeast(0f))
+    return RoundRect(
+        left = left,
+        top = top,
+        right = right,
+        bottom = bottom,
+        topLeftCornerRadius = r,
+        topRightCornerRadius = r,
+        bottomRightCornerRadius = CornerRadius(tail.coerceAtLeast(0f)),
+        bottomLeftCornerRadius = r,
+    )
+}
+
+/**
+ * Q6 飞行中的光球。光球按起点尺寸（首页 52）固定排版，飞行只改图层的缩放、位移与透明度：
+ * 不逐帧重组、不逐帧重新布局，[MovoOrb] 的模糊半径也不逐帧重建（缩放后的模糊与小光球同比例）。
+ */
 @Composable
-private fun OrbFlightLayer(controller: ChatFlightController, flight: OrbFlight, origin: Offset) {
-    val target = flight.target
+private fun OrbFlightLayer(controller: ChatFlightController, flight: OrbFlight, origin: () -> Offset) {
+    val hasTarget by remember(flight) { derivedStateOf { flight.target != null } }
     LaunchedEffect(flight) {
         delay(1_500)
         if (flight.target == null) controller.finishOrb(flight)
@@ -210,8 +267,8 @@ private fun OrbFlightLayer(controller: ChatFlightController, flight: OrbFlight, 
         delay(500)
         controller.finishOrb(flight)
     }
-    LaunchedEffect(flight, target != null) {
-        if (target == null) return@LaunchedEffect
+    LaunchedEffect(flight, hasTarget) {
+        if (!hasTarget) return@LaunchedEffect
         flight.progress.animateTo(1f, tween(MovoMotion.SLOW, easing = MovoMotion.EasingStandard))
         controller.finishOrb(flight)
     }
@@ -221,18 +278,31 @@ private fun OrbFlightLayer(controller: ChatFlightController, flight: OrbFlight, 
         flight.fade.animateTo(0f, tween(MovoMotion.FAST_EXIT, easing = MovoMotion.EasingExit))
         controller.finishOrb(flight)
     }
-    val end = target ?: flight.start
-    val t = flight.progress.value
     val density = LocalDensity.current
-    val box = lerp(flight.start, end, t)
-    // 轻微弧线：横向外凸最多 24。
-    val arc = with(density) { 24.dp.toPx() } * sin(PI * t).toFloat()
-    val size = box.width
+    val arcPx = with(density) { 24.dp.toPx() }
+    // MovoOrb 小于 24 时是小光球（不画外圈光）：缩放到这个尺寸以下时同样去掉外圈光。
+    val miniPx = with(density) { 24.dp.toPx() }
+    val startSize = flight.start.width
+    fun currentBox(): Rect = lerp(flight.start, flight.target ?: flight.start, flight.progress.value)
     Box(
-        modifier = Modifier
-            .offset { IntOffset((box.left + arc - origin.x).roundToInt(), (box.top - origin.y).roundToInt()) }
-            .graphicsLayer { alpha = flight.fade.value },
+        modifier = Modifier.graphicsLayer {
+            val t = flight.progress.value
+            val box = currentBox()
+            // 轻微弧线：横向外凸最多 24。
+            val arc = arcPx * sin(PI * t).toFloat()
+            val o = origin()
+            val scale = if (startSize > 0f) box.width / startSize else 1f
+            transformOrigin = TransformOrigin(0f, 0f)
+            scaleX = scale
+            scaleY = scale
+            translationX = box.left + arc - o.x
+            translationY = box.top - o.y
+            alpha = flight.fade.value
+        },
     ) {
-        MovoOrb(size = with(density) { size.toDp() })
+        MovoOrb(
+            size = with(density) { startSize.toDp() },
+            glowAlpha = { if (currentBox().width < miniPx) 0f else 1f },
+        )
     }
 }

@@ -10,11 +10,14 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -26,6 +29,9 @@ import top.yukonga.miuix.kmp.basic.Text
 /**
  * Q3 进行中光带（规范 9.3.2）：文字原色，一道宽 = 文字宽 40% 的高光带从左扫到右，中心为原色 35% 不透明度；
  * 扫过 1200ms `easing/standard` + 停 400ms 循环；[active] 为 false 或减少动画时是静态文字。
+ *
+ * 文字始终用同一个 style 排版，扫光进度只在绘制阶段读取：离屏图层里先画文字，再用 `DstIn` 按光带渐变
+ * 调低带内文字的不透明度（带外保持 100%），扫光期间不重组、不新建 TextStyle、不重新排版。
  */
 @Composable
 internal fun MovoShimmerText(
@@ -41,9 +47,10 @@ internal fun MovoShimmerText(
         Text(text, style = style, color = color, maxLines = maxLines, overflow = TextOverflow.Ellipsis, modifier = modifier)
         return
     }
-    var width by remember { mutableFloatStateOf(0f) }
+    // 光带宽度按文字排版宽度算（与节点宽度无关）；只在绘制阶段读。
+    val textWidth = remember { mutableFloatStateOf(0f) }
     val transition = rememberInfiniteTransition(label = "shimmer")
-    val progress by transition.animateFloat(
+    val progress = transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -55,22 +62,35 @@ internal fun MovoShimmerText(
         ),
         label = "shimmerProgress",
     )
-    val band = width * 0.4f
-    val center = -band / 2 + (width + band) * progress
-    val brush = Brush.linearGradient(
-        colors = listOf(color, color.copy(alpha = 0.35f), color),
-        start = Offset(center - band / 2, 0f),
-        end = Offset(center + band / 2, 0f),
-    )
-    androidx.compose.foundation.text.BasicText(
+    Text(
         text,
-        style = style.copy(brush = brush),
+        style = style,
+        color = color,
         maxLines = maxLines,
         overflow = TextOverflow.Ellipsis,
-        modifier = modifier,
-        onTextLayout = { width = it.size.width.toFloat() },
+        onTextLayout = { textWidth.floatValue = it.size.width.toFloat() },
+        modifier = modifier
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                val width = textWidth.floatValue
+                if (width <= 0f) return@drawWithContent
+                val band = width * 0.4f
+                val center = -band / 2 + (width + band) * progress.value
+                drawRect(
+                    brush = Brush.horizontalGradient(
+                        colors = ShimmerMask,
+                        startX = center - band / 2,
+                        endX = center + band / 2,
+                    ),
+                    blendMode = BlendMode.DstIn,
+                )
+            },
     )
 }
+
+/** 光带遮罩：带外 100%，带中心 35%（DstIn 只取不透明度）。 */
+private val ShimmerMask = listOf(Color.Black, Color.Black.copy(alpha = 0.35f), Color.Black)
 
 /**
  * 逐词切分（规范 9.3.2 Q2「首页问候逐词显现」）：中文按系统分词 `BreakIterator.getWordInstance`，英文按空格；

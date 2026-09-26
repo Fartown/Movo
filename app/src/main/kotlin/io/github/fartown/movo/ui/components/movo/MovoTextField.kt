@@ -22,9 +22,9 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import io.github.fartown.movo.ui.theme.MovoColors
+import io.github.fartown.movo.ui.theme.MovoTypography
 import top.yukonga.miuix.kmp.basic.TextFieldColors
 import top.yukonga.miuix.kmp.basic.TextFieldDefaults
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
  * Movo 的输入框配色。Miuix 只有一个 `labelColor`，同时管「空时的占位」和「有内容后浮起的字段名」：
@@ -35,7 +35,10 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 internal fun movoTextFieldColors(hasContent: Boolean = false): TextFieldColors =
     TextFieldDefaults.textFieldColors(labelColor = if (hasContent) MovoColors.textSecondary else MovoColors.textTertiary)
 
-// 与 Miuix `TextField` 同签名的三个重载，只换默认配色；页面代码 import 这里的 `TextField` 即可。
+/** 输入框文字：规范字体表 `Input/Placeholder` 16/24 Regular，主文字色（Miuix 默认 `main` 是 17，不在字体表里）。 */
+internal fun movoTextFieldStyle(): TextStyle = MovoTypography.inputPlaceholder.copy(color = MovoColors.textPrimary)
+
+// 与 Miuix `TextField` 同签名的三个重载，只换默认配色与字号；页面代码 import 这里的 `TextField` 即可。
 
 @Composable
 internal fun TextField(
@@ -49,7 +52,7 @@ internal fun TextField(
     enabled: Boolean = true,
     readOnly: Boolean = false,
     inputTransformation: InputTransformation? = null,
-    textStyle: TextStyle = MiuixTheme.textStyles.main,
+    textStyle: TextStyle = movoTextFieldStyle(),
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     onKeyboardAction: KeyboardActionHandler? = null,
     lineLimits: TextFieldLineLimits = TextFieldLineLimits.Default,
@@ -81,7 +84,7 @@ internal fun TextField(
     useLabelAsPlaceholder: Boolean = false,
     enabled: Boolean = true,
     readOnly: Boolean = false,
-    textStyle: TextStyle = MiuixTheme.textStyles.main,
+    textStyle: TextStyle = movoTextFieldStyle(),
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
     leadingIcon: @Composable (() -> Unit)? = null,
@@ -114,7 +117,7 @@ internal fun TextField(
     useLabelAsPlaceholder: Boolean = false,
     enabled: Boolean = true,
     readOnly: Boolean = false,
-    textStyle: TextStyle = MiuixTheme.textStyles.main,
+    textStyle: TextStyle = movoTextFieldStyle(),
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
     leadingIcon: @Composable (() -> Unit)? = null,

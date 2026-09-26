@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -91,33 +92,39 @@ internal class TitleFlight(val title: String, val start: Rect, val returning: Bo
     val progress = Animatable(0f)
 }
 
-/** 放在导航容器之上、铺满窗口。 */
+/**
+ * 放在导航容器之上、铺满窗口。飞行进度与落点（页面切换时顶栏每帧都在移动）只在放置阶段读取，
+ * 组合期只关心「有没有落点」，标题飞行中不重组。
+ */
 @Composable
 internal fun TitleMorphOverlay() {
     val flight = TitleMorph.flight ?: return
     val reduced = io.github.fartown.movo.ui.theme.LocalReducedMotion.current
-    var origin by remember { mutableStateOf(Offset.Zero) }
-    val target = flight.target
+    val origin = remember { mutableStateOf(Offset.Zero) }
+    val hasTarget by remember(flight) { derivedStateOf { flight.target != null } }
     LaunchedEffect(flight) {
         delay(MovoMotion.SLOW.toLong())
         if (flight.target == null) TitleMorph.finish(flight)
     }
-    LaunchedEffect(flight, target != null) {
-        if (target == null) return@LaunchedEffect
+    LaunchedEffect(flight, hasTarget) {
+        if (!hasTarget) return@LaunchedEffect
         if (!reduced) flight.progress.animateTo(1f, tween(MovoMotion.SLOW, easing = MovoMotion.EasingStandard))
         TitleMorph.finish(flight)
     }
-    Box(Modifier.fillMaxSize().onGloballyPositioned { origin = it.boundsInWindow().topLeft }) {
-        val end = target ?: return@Box
-        if (reduced) return@Box
-        val position = lerp(flight.start, end, flight.progress.value).topLeft
+    Box(Modifier.fillMaxSize().onGloballyPositioned { origin.value = it.boundsInWindow().topLeft }) {
+        if (!hasTarget || reduced) return@Box
         Text(
             text = flight.title,
             style = MovoTypography.bodyStrong,
             color = MovoColors.textPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.offset { IntOffset((position.x - origin.x).roundToInt(), (position.y - origin.y).roundToInt()) },
+            modifier = Modifier.offset {
+                val end = flight.target ?: flight.start
+                val position = lerp(flight.start, end, flight.progress.value).topLeft
+                val o = origin.value
+                IntOffset((position.x - o.x).roundToInt(), (position.y - o.y).roundToInt())
+            },
         )
     }
 }

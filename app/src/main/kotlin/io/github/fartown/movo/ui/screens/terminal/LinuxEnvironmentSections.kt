@@ -313,24 +313,24 @@ internal fun TerminalSpinner(
     tint: Color = MovoColors.indigoFg,
 ) {
     val reduced = LocalReducedMotion.current
-    val rotation = if (reduced) {
-        0f
+    // 旋转角只保存 State，在 graphicsLayer 里读：转动时不重组。
+    val rotation: androidx.compose.runtime.State<Float>? = if (reduced) {
+        null
     } else {
         val transition = rememberInfiniteTransition(label = "terminalSpinner")
-        val value by transition.animateFloat(
+        transition.animateFloat(
             initialValue = 0f,
             targetValue = 360f,
             animationSpec = infiniteRepeatable(tween(MovoMotion.SPINNER_PERIOD, easing = LinearEasing)),
             label = "terminalSpinnerRotation",
         )
-        value
     }
     MovoIcon(
         MovoIcons.LoaderCircle,
         contentDescription = null,
         size = size,
         tint = tint,
-        modifier = Modifier.graphicsLayer { rotationZ = rotation },
+        modifier = Modifier.graphicsLayer { rotationZ = rotation?.value ?: 0f },
     )
 }
 

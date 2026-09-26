@@ -54,6 +54,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import io.github.fartown.movo.R
 import io.github.fartown.movo.ui.components.movo.MovoIconButton
@@ -95,14 +96,15 @@ internal fun MovoSegmentedTabs(
             .padding(MovoSpacing.xs),
     ) {
         val segmentWidth = maxWidth / tabs.size.coerceAtLeast(1)
-        val indicatorOffset by animateDpAsState(
+        // 底块位移只在放置阶段读取：滑动期间整组分段不重组。
+        val indicatorOffset = animateDpAsState(
             targetValue = segmentWidth * selectedIndex,
             animationSpec = if (reduced) snap() else MovoMotion.standard(),
             label = "segmentIndicator",
         )
         Box(
             modifier = Modifier
-                .offset(x = indicatorOffset)
+                .offset { IntOffset(indicatorOffset.value.roundToPx(), 0) }
                 .width(segmentWidth)
                 .fillMaxHeight()
                 .clip(CircleShape)
@@ -204,11 +206,21 @@ internal enum class CardSegment { Top, Middle, Bottom, Single }
 
 /**
  * 把一张列表卡片拆到多个 Lazy 条目：白底 + 0.5 发丝描边 + 28 圆角只画在卡片的上下两端，中间条目只画左右描边；
- * 行按压叠加层同样被卡片圆角裁切。
+ * 行按压叠加层同样被卡片圆角裁切。中间条目没有圆角，用矩形底色与矩形裁剪，不做逐行路径裁剪。
  */
 internal fun Modifier.movoCardSegment(segment: CardSegment): Modifier = drawWithCache {
-    val radius = MovoRadius.xl.toPx()
     val stroke = MovoSize.hairline.toPx()
+    if (segment == CardSegment.Middle) {
+        return@drawWithCache onDrawWithContent {
+            clipRect {
+                drawRect(MovoColors.bgSurface)
+                this@onDrawWithContent.drawContent()
+                drawRect(MovoColors.borderHairline, size = Size(stroke, size.height))
+                drawRect(MovoColors.borderHairline, topLeft = Offset(size.width - stroke, 0f), size = Size(stroke, size.height))
+            }
+        }
+    }
+    val radius = MovoRadius.xl.toPx()
     val extendTop = segment == CardSegment.Middle || segment == CardSegment.Bottom
     val extendBottom = segment == CardSegment.Top || segment == CardSegment.Middle
     val top = if (extendTop) -radius * 2 else 0f
@@ -296,19 +308,44 @@ internal fun MovoCheckbox(
     }
 }
 
-/** 单选的未选中态：20 线条圆（与 Lucide circle 同几何），选中态用 [MovoIcons.CircleCheck]。 */
+/**
+ * 单选标记：未选中是 20 线条圆（与 Lucide circle 同几何），选中是 [MovoIcons.CircleCheck]。
+ * 过渡按规范 9.3.1「单选」：旧 ✓ 淡出 120ms（`exit`）；新 ✓ 缩放 0.72 → 1 并淡入 `fast`，线条圆同时交叉淡化；
+ * 减少动画时只淡入淡出（9.8）。进度只在图层 / 绘制阶段读取。
+ */
 @Composable
 internal fun MovoRadioMark(selected: Boolean, modifier: Modifier = Modifier) {
-    if (selected) {
-        MovoIcon(MovoIcons.CircleCheck, contentDescription = null, size = MovoSize.iconMedium, tint = MovoColors.indigoFg, modifier = modifier)
-    } else {
-        Canvas(modifier = modifier.size(MovoSize.iconMedium)) {
+    val reduced = LocalReducedMotion.current
+    val shown = animateFloatAsState(
+        targetValue = if (selected) 1f else 0f,
+        animationSpec = if (selected) MovoMotion.fast() else MovoMotion.fastExit(),
+        label = "radioMark",
+    )
+    Box(modifier = modifier.size(MovoSize.iconMedium), contentAlignment = Alignment.Center) {
+        Canvas(modifier = Modifier.matchParentSize()) {
+            val ring = 1f - shown.value
+            if (ring <= 0f) return@Canvas
             val strokeWidth = MovoIconData.strokeFor(MovoSize.iconMedium).dp.toPx()
             drawCircle(
                 color = MovoColors.textTertiary,
                 radius = size.minDimension * 10f / 24f,
                 style = Stroke(strokeWidth),
+                alpha = ring,
             )
         }
+        MovoIcon(
+            MovoIcons.CircleCheck,
+            contentDescription = null,
+            size = MovoSize.iconMedium,
+            tint = MovoColors.indigoFg,
+            modifier = Modifier.graphicsLayer {
+                val value = shown.value
+                alpha = value
+                // 只有选中（新 ✓ 出现）时缩放；取消选中只淡出。
+                val scale = if (selected && !reduced) 0.72f + 0.28f * value else 1f
+                scaleX = scale
+                scaleY = scale
+            },
+        )
     }
 }
