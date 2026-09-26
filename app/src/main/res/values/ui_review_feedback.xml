@@ -6,4 +6,7 @@
   <string name="feedback_try_again_later">Please try again later.</string>
   <string name="feedback_saved">Saved</string>
   <string name="feedback_memory_read_failed_title">Couldn\'t read memory</string>
+    <string name="settings_orb_group">Floating orb</string>
+    <string name="settings_keep_orb">Keep floating orb</string>
+    <string name="settings_keep_orb_summary">Stays after you leave the app; tap to chat</string>
 </resources>

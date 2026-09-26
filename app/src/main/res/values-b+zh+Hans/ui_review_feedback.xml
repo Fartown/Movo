@@ -6,4 +6,7 @@
   <string name="feedback_try_again_later">请稍后重试。</string>
   <string name="feedback_saved">已保存</string>
   <string name="feedback_memory_read_failed_title">没能读取记忆</string>
+    <string name="settings_orb_group">悬浮球</string>
+    <string name="settings_keep_orb">常驻悬浮球</string>
+    <string name="settings_keep_orb_summary">离开 App 后也显示，点它打开对话</string>
 </resources>

@@ -59,6 +59,13 @@ internal fun MovoOrb(
     speechKey: Int = 0,
     /** 外圈柔光的不透明度，在绘制阶段读取；飞行层（Q6）按固定尺寸缩放光球时用它模拟小光球「无外圈光」。 */
     glowAlpha: () -> Float = { 1f },
+    /**
+     * 按 App 图标（规范 6.1 B7）画：光球上叠同色浅调 M，不画外圈柔光，改为下方 Indigo 柔和投影（首页、悬浮球用；
+     * Figma「11 · Logo 光球」）。
+     */
+    logo: Boolean = false,
+    /** logo 光球上 M 的不透明度（绘制阶段读取）；飞行层缩小成执行卡里的小光球时淡出 M。 */
+    markAlpha: () -> Float = { 1f },
 ) {
     val reduced = LocalReducedMotion.current
     val mini = size < 24.dp
@@ -120,10 +127,26 @@ internal fun MovoOrb(
             .graphicsLayer { translationX = shake.value * this.density },
         contentAlignment = Alignment.Center,
     ) {
-        if (!mini) {
-            // 外圈柔光：丁香 34% → 蜜桃 12% → 透明，直径约 2.2 倍。
-            Canvas(modifier = Modifier.requiredSize(size * 2.2f).graphicsLayer { alpha = glowAlpha() }) {
+        if (logo && !mini) {
+            // 图标同款投影：Indigo 18%，下移 5%、模糊约 16%（不用外发光，小尺寸发虚）。
+            Canvas(modifier = Modifier.requiredSize(size * 1.4f)) {
+                val d = this.size.minDimension / 1.4f
                 drawCircle(
+                    brush = Brush.radialGradient(
+                        0.55f to Color(0x2E5B4BFF),
+                        1f to Color(0x005B4BFF),
+                        center = Offset(center.x, center.y + d * 0.05f),
+                        radius = d * 0.66f,
+                    ),
+                    radius = d * 0.66f,
+                    center = Offset(center.x, center.y + d * 0.05f),
+                )
+            }
+        }
+        if (!mini) {
+            // 外圈柔光：丁香 34% → 蜜桃 12% → 透明，直径约 2.2 倍；logo 光球不画柔光，只保留聆听波纹。
+            Canvas(modifier = Modifier.requiredSize(size * 2.2f).graphicsLayer { alpha = glowAlpha() }) {
+                if (!logo) drawCircle(
                     brush = Brush.radialGradient(
                         0f to Color(0x57A68CFF),
                         0.5f to Color(0x1FFF9E80),
@@ -187,8 +210,51 @@ internal fun MovoOrb(
                     center = center,
                 )
             }
+            if (logo) {
+                Canvas(modifier = Modifier.size(size).graphicsLayer { alpha = markAlpha() }) {
+                    drawLogoMark()
+                }
+            }
         }
     }
+}
+
+/**
+ * App 图标上的 M（规范 6.1）：两段弧、笔画 = 直径 × 6.5 / 62、圆头；描边为光球同色系浅调渐变
+ * （左 → 右 `#FFE6DA` → `#EFE8FF` → `#DDEFFF`），90% 不透明度。中心线取自 `ic_launcher_monochrome.xml`
+ * 的 M 轮廓（108 画布，光球直径 62、左上角在 23），这里换算成光球直径的比例。
+ */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLogoMark() {
+    val d = size.minDimension
+    fun x(v: Float) = (v - 23f) / 62f * d
+    fun y(v: Float) = (v - 23f) / 62f * d
+    val path = androidx.compose.ui.graphics.Path().apply {
+        moveTo(x(39.5f), y(65f))
+        cubicTo(x(39.5f), y(60.5f), x(39.9f), y(57.4f), x(40.85f), y(54.96f))
+        cubicTo(x(41.9f), y(52.3f), x(43.1f), y(50.8f), x(44.3f), y(50.3f))
+        cubicTo(x(46f), y(49.6f), x(47.6f), y(49.9f), x(49f), y(51f))
+        cubicTo(x(50.8f), y(52.3f), x(52.4f), y(53.9f), x(54f), y(55.75f))
+        cubicTo(x(55.6f), y(53.9f), x(57.2f), y(52.3f), x(59f), y(51f))
+        cubicTo(x(60.4f), y(49.9f), x(62f), y(49.6f), x(63.7f), y(50.3f))
+        cubicTo(x(64.9f), y(50.8f), x(66.1f), y(52.3f), x(67.15f), y(54.96f))
+        cubicTo(x(68.1f), y(57.4f), x(68.5f), y(60.5f), x(68.5f), y(65f))
+    }
+    drawPath(
+        path = path,
+        brush = Brush.horizontalGradient(
+            0f to Color(0xFFFFE6DA),
+            0.5f to Color(0xFFEFE8FF),
+            1f to Color(0xFFDDEFFF),
+            startX = x(36.25f),
+            endX = x(71.75f),
+        ),
+        alpha = 0.9f,
+        style = androidx.compose.ui.graphics.drawscope.Stroke(
+            width = d * 6.5f / 62f,
+            cap = androidx.compose.ui.graphics.StrokeCap.Round,
+            join = androidx.compose.ui.graphics.StrokeJoin.Round,
+        ),
+    )
 }
 
 private val OrbBase = Color(0xFFEDE6FF)

@@ -146,6 +146,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
      * 待命时 Movo 自己的界面在前台就先藏起来，回到其他 App 再出现。
      */
     private val standby = mutableStateOf(false)
+    /** 任务结束后 ✓ / ! 保留到这个时刻（uptime），之后没有执行中任务就淡出悬浮球。 */
+    private var resultOrbVisibleUntil = 0L
+    private val orbFadeToken = Any()
+    private val orbPrefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == io.github.fartown.movo.agent.overlay.OrbPrefs.KEY_KEEP_ORB) mainHandler.post { updateStandbyOrbVisibility() }
+    }
     /** 悬浮球退场（移除）时置 false，播完退场再移除窗口。 */
     private val orbShown = mutableStateOf(true)
     private val removeEngaged = mutableStateOf(false)
@@ -191,6 +197,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
         application.registerActivityLifecycleCallbacks(appActivityCallbacks)
+        io.github.fartown.movo.agent.overlay.OrbPrefs.prefs(this).registerOnSharedPreferenceChangeListener(orbPrefsListener)
         AgentAccessibilityService.addInstanceListener(onAccessibilityInstanceChanged)
         // 语音对话与悬浮窗联动（规范 8.5）：执行中语音开始时展开卡以语音模式弹出；语音结束后展开卡恢复自动收起。
         lifecycleScope.launch {
@@ -231,6 +238,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     override fun onDestroy() {
         application.unregisterActivityLifecycleCallbacks(appActivityCallbacks)
+        io.github.fartown.movo.agent.overlay.OrbPrefs.prefs(this).unregisterOnSharedPreferenceChangeListener(orbPrefsListener)
         AgentAccessibilityService.removeInstanceListener(onAccessibilityInstanceChanged)
         clearResultHandoff()
         io.github.fartown.movo.diagnostics.MemoryDiagnostics.record("lifecycle", "runtime.destroyed",
@@ -1190,8 +1198,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     /** 收起：先让展开卡播退场（120ms），再移除窗口。 */
     private fun collapseBubble() {
+        val wasOpen = !collapsed.value
         collapsed.value = true
         mainHandler.removeCallbacksAndMessages(panelIdleToken)
+        if (wasOpen) mainHandler.post { updateStandbyOrbVisibility() }
         val view = bubbleView ?: run { panelNotice.value = null; return }
         bubbleVisible.value = false
         setBubbleInputMode(focusable = false)
@@ -1710,6 +1720,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             collapseBubble()
             if (!AgentConversationSheetActivity.isConversationVisible(resultConversationTarget)) {
                 ensureOverlayVisible()
+                scheduleResultOrbHide()
                 updateStandbyOrbVisibility()
                 // 失败：展开卡自动弹出显示原因，保持失败态直到用户点开（规范 9.5）。
                 // Movo 自己在前台时原因已在 App 里显示，球也藏着，不单独弹展开卡。
@@ -1760,16 +1771,48 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     /**
-     * Movo 自己的界面在前台时藏起悬浮球：待命时如此，任务结束（✓ / !）后也是——结果已经在 App 里，
-     * 球留着只会盖住键盘和输入框；回到其他 App 时再出现，✓ / ! 仍保留到点开。执行中始终显示。
+     * 悬浮球显隐。「常驻悬浮球」开（默认）时退出 App 后一直在；关时只在有执行中（含暂停）的任务时显示
+     * （设置 → 系统助手，[io.github.fartown.movo.agent.overlay.OrbPrefs]）。以下是关闭常驻时的规则：
+     * 任务在其他 App 里结束时，✓ / ! 保留 [RESULT_ORB_HOLD_MS] 让用户看到结果（这段时间点它仍打开结果），随后淡出；
+     * 展开卡开着（例如失败原因）时等它收起再淡出。Movo 自己在前台时结果已在 App 里，直接藏起。
      */
     private fun updateStandbyOrbVisibility() {
         val view = orbView ?: return
-        val idle = standby.value || activeSession == null
-        val hide = idle && VoiceSurfaceTracker.appVisible
-        view.visibility = if (hide) View.GONE else View.VISIBLE
+        val running = !standby.value && activeSession != null
+        val show = if (io.github.fartown.movo.agent.overlay.OrbPrefs.keepOrbAfterExit(this)) {
+            // 常驻（默认）：Movo 自己在前台且没有执行中任务时藏起，其余时候都在（待命、✓ / ! 保留到点开）。
+            running || !VoiceSurfaceTracker.appVisible
+        } else {
+            val holdingResult = !running && !standby.value &&
+                android.os.SystemClock.uptimeMillis() < resultOrbVisibleUntil && !VoiceSurfaceTracker.appVisible
+            running || holdingResult || (!running && !standby.value && !collapsed.value && !VoiceSurfaceTracker.appVisible)
+        }
+        mainHandler.removeCallbacksAndMessages(orbFadeToken)
+        if (show) {
+            view.animate().cancel()
+            view.alpha = 1f
+            view.visibility = View.VISIBLE
+            return
+        }
         // 失败时自动弹出的展开卡也一起收起：否则切回 Movo 后它留在键盘上，透明的阴影区还会吃掉点击。
-        if (hide && !collapsed.value) collapseBubble()
+        if (!collapsed.value) collapseBubble()
+        if (view.visibility != View.VISIBLE) return
+        if (VoiceSurfaceTracker.appVisible || io.github.fartown.movo.ui.theme.isReducedMotion(this)) {
+            view.visibility = View.GONE
+            return
+        }
+        // 淡出 `standard-exit`，播完再藏起窗口内容。
+        view.animate().alpha(0f).setDuration(MovoMotion.STANDARD_EXIT.toLong()).withEndAction {
+            if (orbView === view) view.visibility = View.GONE
+            view.alpha = 1f
+        }.start()
+    }
+
+    /** 任务结束后在 [RESULT_ORB_HOLD_MS] 到期时重新判断悬浮球显隐（展开卡开着时，收起后再判断）。 */
+    private fun scheduleResultOrbHide() {
+        resultOrbVisibleUntil = android.os.SystemClock.uptimeMillis() + RESULT_ORB_HOLD_MS
+        mainHandler.removeCallbacksAndMessages(orbFadeToken)
+        mainHandler.postAtTime({ updateStandbyOrbVisibility() }, orbFadeToken, resultOrbVisibleUntil + 1)
     }
 
     private fun onVoiceActiveChanged(active: Boolean) {
@@ -1882,6 +1925,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         const val ORB_EDGE_DP = 8
         const val PANEL_SHADOW_DP = 12
         const val BUBBLE_EXIT_MS = 150L
+
+        /** 任务在其他 App 里结束后，悬浮球保留 ✓ / ! 的时长。 */
+        const val RESULT_ORB_HOLD_MS = 3_000L
         const val PANEL_AUTO_COLLAPSE_MS = 4_000L
         /** 从展开卡发起语音后，语音服务报告「没能开始」时转述到展开卡的时间窗。 */
         const val PANEL_VOICE_NOTICE_WINDOW_MS = 3_000L

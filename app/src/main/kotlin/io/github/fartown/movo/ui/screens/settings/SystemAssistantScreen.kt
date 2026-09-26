@@ -68,6 +68,8 @@ internal fun SystemAssistantScreen(
     val powerTargets = PowerAssistantTarget.entries
     val showGemini = framework.showFrameworkRows || capabilities.root.isGranted || framework.hasUsedSystemizer
 
+    var keepOrb by remember { mutableStateOf(io.github.fartown.movo.agent.overlay.OrbPrefs.keepOrbAfterExit(context)) }
+
     MovoListPage(title = stringResource(R.string.movo_settings_system_assistant), onBack = onBack) {
         item(key = "default_assistant") {
             MovoCard {
@@ -103,6 +105,21 @@ internal fun SystemAssistantScreen(
                 } else {
                     CardFooter(listOf(stringResource(R.string.movo_assistant_footer_framework)))
                 }
+            }
+        }
+        // 悬浮球：退出 App 后是否保留（默认保留）。关掉后只在有执行中任务时出现。
+        item(key = "floating_orb") {
+            MovoCard {
+                CardTitle(stringResource(R.string.settings_orb_group))
+                SettingsRow(
+                    title = stringResource(R.string.settings_keep_orb),
+                    subtitle = stringResource(R.string.settings_keep_orb_summary),
+                    trailing = RowTrailing.Switch(keepOrb) { checked ->
+                        keepOrb = checked
+                        io.github.fartown.movo.agent.overlay.OrbPrefs.setKeepOrbAfterExit(context, checked)
+                    },
+                    showDivider = false,
+                )
             }
         }
         if (framework.showFrameworkRows) {

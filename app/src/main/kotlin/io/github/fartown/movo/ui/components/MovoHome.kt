@@ -119,6 +119,7 @@ internal fun MovoHomeContent(
             }
             MovoOrb(
                 size = 52.dp,
+                logo = true,
                 state = when (voice.channel) {
                     io.github.fartown.movo.agent.voice.session.VoiceChannel.Listening,
                     io.github.fartown.movo.agent.voice.session.VoiceChannel.Hearing,

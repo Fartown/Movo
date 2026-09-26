@@ -303,6 +303,12 @@ private fun OrbFlightLayer(controller: ChatFlightController, flight: OrbFlight, 
         MovoOrb(
             size = with(density) { startSize.toDp() },
             glowAlpha = { if (currentBox().width < miniPx) 0f else 1f },
+            // 起飞时与首页 logo 光球一致；缩到一半尺寸前 M 淡出，落地成执行卡里的小光球。
+            logo = true,
+            markAlpha = {
+                val w = currentBox().width
+                if (startSize <= 0f) 1f else ((w / startSize - 0.5f) / 0.5f).coerceIn(0f, 1f)
+            },
         )
     }
 }

@@ -367,7 +367,7 @@ internal fun AgentOverlayOrb(
                         },
                 ) {
                     // 待命时光球为静态渐变、不再逐帧请求绘制（审查 A14）；只有执行中 / 聆听在转。
-                    MovoOrb(size = 22.dp, animated = mode == OrbMode.RUNNING || mode == OrbMode.LISTENING)
+                    MovoOrb(size = 22.dp, animated = mode == OrbMode.RUNNING || mode == OrbMode.LISTENING, logo = true)
                 }
                 OrbStatusRing(mode)
             }
