@@ -189,9 +189,20 @@ internal fun AgentChatBody(
     }
     // Initial result presentation starts at the latest turn. Window resizing and onResume do
     // not restart this effect, so a reader's position remains untouched afterwards.
+    // 新建的主界面接过浮层的会话时，这里第一次组合时消息可能还没读出来（真机：停在会话开头）：等到有消息再滚到最新。
+    val latestEntryCount by rememberUpdatedState(visibleMessages.toTimelineEntries().size)
     LaunchedEffect(Unit) {
         if (initiallyShowLatestMessage) {
-            scrollState.requestScrollToItem(visibleMessages.toTimelineEntries().size)
+            val count = kotlinx.coroutines.withTimeoutOrNull(INITIAL_LATEST_WAIT_MS) {
+                snapshotFlow { latestEntryCount }.first { it > 0 }
+            } ?: latestEntryCount
+            scrollState.requestScrollToItem(count)
+            // 首次跳转时末尾几项（操作行、推荐追问）还没测量，停下的位置会离底部差一截（真机 66–181px）：
+            // 等排版稳定后把剩下的距离一次滚完。
+            repeat(3) {
+                withFrameNanos { }
+                if (scrollState.canScrollForward) scrollState.scroll { scrollBy(Float.MAX_VALUE / 4) }
+            }
         }
     }
     val currentBrowserMessageId = remember(
@@ -1424,3 +1435,6 @@ private fun LeavingItem(
         content()
     }
 }
+
+/** 「一打开就停在最新消息」最多等消息读出来的时长。 */
+private const val INITIAL_LATEST_WAIT_MS = 1_500L

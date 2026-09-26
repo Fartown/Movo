@@ -74,11 +74,12 @@ class MainActivity : ComponentActivity() {
                         AgentAppRoot(
                             resultConversationHandoff = resultConversationHandoff,
                             onResultConversationOpened = { request, opened ->
-                                request.acknowledge(opened)
                                 if (resultConversationHandoff === request) {
                                     resultConversationHandoff = null
                                     AgentConversationHandoff.consume(intent)
                                 }
+                                // 先放开首帧、等这一帧真正上屏，再通知浮层关闭：否则浮层先消失、主界面还没画出来，中间会露出底下的 App。
+                                releaseHandoffDrawHold { request.acknowledge(opened) }
                             },
                             browserUrl = browserUrl,
                             onBrowserOpened = {
@@ -93,6 +94,37 @@ class MainActivity : ComponentActivity() {
             }
             contentReady = true
         }
+    }
+
+    private var handoffDrawHold: android.view.ViewTreeObserver.OnPreDrawListener? = null
+
+    /**
+     * 对话浮层「展开到 App」：浮层已推满全屏盖在上面，主界面在会话准备好（切到目标会话、停在最新消息）之前不画，
+     * 窗口也就不会盖上来；浮层一直可见，看不出切换（真机原来会先露出空白或会话开头再跳）。最多等 [HANDOFF_DRAW_HOLD_MS]。
+     */
+    private fun holdDrawingForHandoff() {
+        if (handoffDrawHold != null) return
+        val view = window.decorView
+        val listener = android.view.ViewTreeObserver.OnPreDrawListener { false }
+        view.viewTreeObserver.addOnPreDrawListener(listener)
+        handoffDrawHold = listener
+        view.postDelayed({ releaseHandoffDrawHold() }, HANDOFF_DRAW_HOLD_MS)
+    }
+
+    /** 放开首帧；[afterFrame] 在放开后的第一帧提交到屏幕后执行（没有在等时立即执行）。 */
+    private fun releaseHandoffDrawHold(afterFrame: (() -> Unit)? = null) {
+        val view = window.decorView
+        val listener = handoffDrawHold
+        if (listener == null) {
+            afterFrame?.invoke()
+            return
+        }
+        handoffDrawHold = null
+        view.viewTreeObserver.removeOnPreDrawListener(listener)
+        if (afterFrame != null) {
+            view.viewTreeObserver.registerFrameCommitCallback { view.post(afterFrame) }
+        }
+        view.invalidate()
     }
 
     override fun onResume() {
@@ -111,6 +143,7 @@ class MainActivity : ComponentActivity() {
         if (intent?.action == AgentConversationHandoff.ACTION_OPEN) {
             browserUrl = null
             resultConversationHandoff = AgentConversationHandoff.from(intent)
+            if (resultConversationHandoff != null) holdDrawingForHandoff()
             return
         }
         if (intent?.action == InAppBrowserUriHandler.ACTION_OPEN_BROWSER) {
@@ -187,6 +220,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
+        const val HANDOFF_DRAW_HOLD_MS = 1_500L
+
         /** 进程内上一次看到的 Activity 配置（Activity 重建时仍在）。 */
         var lastConfiguration: android.content.res.Configuration? = null
 

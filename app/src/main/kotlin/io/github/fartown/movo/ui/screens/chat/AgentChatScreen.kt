@@ -67,7 +67,7 @@ internal fun AgentChatScreen(
         modelPickerState = modelPickerState,
         conversationKey = conversationKey,
         isDrawerOpen = isDrawerOpen,
-        initiallyShowLatestMessage = initiallyShowLatestMessage,
+        initiallyShowLatestMessage = initiallyShowLatestMessage || ConversationSwitchMotion.instant,
         // 分享提示只属于分享新开、还没发出消息的那条会话（规范 8.9.1）；App 与对话浮层都走这里。
         shareIntro = io.github.fartown.movo.ui.share.ShareIntake.intro
             ?.takeIf { conversationKey == null && state.messages.isEmpty() },
@@ -90,6 +90,7 @@ internal fun AgentChatScreen(
         val progress = transition.animateFloat(
             transitionSpec = {
                 when {
+                    ConversationSwitchMotion.instant -> snap()
                     targetState == EnterExitState.PostExit -> tween(MovoMotion.FAST_EXIT, easing = MovoMotion.EasingExit)
                     // 新建对话：首页有自己的进场（逐项淡入上移），消息区不再叠一层淡入。
                     frame.conversationKey == null -> snap()
@@ -108,6 +109,21 @@ internal fun AgentChatScreen(
         }
         ChatBody(frame = frame, switchFade = switchFade, onAction = onAction)
     }
+}
+
+/**
+ * 对话浮层「展开到 App」接过来的会话（规范 9.5 Q4）：浮层已推满全屏、盖着 App，切过来时不能再播会话切换的淡入，
+ * 也要和浮层一样停在最新消息处，否则切换那一刻内容会从会话开头淡入（真机：整体下移约 590px）。
+ * [skipNext] 之后 1.5 秒内的会话切换直接到位。
+ */
+internal object ConversationSwitchMotion {
+    private val instantUntil = androidx.compose.runtime.mutableLongStateOf(0L)
+
+    fun skipNext() {
+        instantUntil.longValue = android.os.SystemClock.uptimeMillis() + 1_500L
+    }
+
+    val instant: Boolean get() = android.os.SystemClock.uptimeMillis() < instantUntil.longValue
 }
 
 /** 一份会话组合要显示的内容（见 [AgentChatScreen]）。 */

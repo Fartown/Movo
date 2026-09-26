@@ -149,6 +149,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     /** 任务结束后 ✓ / ! 保留到这个时刻（uptime），之后没有执行中任务就淡出悬浮球。 */
     private var resultOrbVisibleUntil = 0L
     private val orbFadeToken = Any()
+    private val appLeaveToken = Any()
     private val orbPrefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == io.github.fartown.movo.agent.overlay.OrbPrefs.KEY_KEEP_ORB) mainHandler.post { updateStandbyOrbVisibility() }
     }
@@ -170,10 +171,14 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     /** App 自己的页面进出前台时刷新待命悬浮球的显隐（前台判断用 [VoiceSurfaceTracker]，它从进程启动起就在计数）。 */
     private val appActivityCallbacks = object : android.app.Application.ActivityLifecycleCallbacks {
         override fun onActivityResumed(activity: android.app.Activity) {
+            mainHandler.removeCallbacksAndMessages(appLeaveToken)
             mainHandler.post(::updateStandbyOrbVisibility)
         }
         override fun onActivityPaused(activity: android.app.Activity) {
-            mainHandler.post(::updateStandbyOrbVisibility)
+            // 离开 Movo 的页面稍等再判断：Movo 页面之间切换（例如对话浮层「展开到 App」）时，旧页暂停到新页恢复之间有一段空档，
+            // 立即判断会让悬浮球在全屏浮层上闪一下（真机约 10ms）。
+            mainHandler.removeCallbacksAndMessages(appLeaveToken)
+            mainHandler.postDelayed(::updateStandbyOrbVisibility, appLeaveToken, APP_LEAVE_SETTLE_MS)
         }
         override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: Bundle?) = Unit
         override fun onActivityStarted(activity: android.app.Activity) = Unit
@@ -586,7 +591,16 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             }
             if (session.isTerminal) return@post
             runCatching {
+                val phaseBefore = state.value.phase
                 state.value = state.value.applyEvent(event)
+                // ✓ / ! 可能先由事件流（RunFinished / RunFailed）点亮，早于终态交付：从这一刻起算 3 秒保留（常驻关闭时）。
+                val phaseAfter = state.value.phase
+                if (phaseAfter != phaseBefore &&
+                    (phaseAfter == AgentOverlayPhase.FINISHED || phaseAfter == AgentOverlayPhase.FAILED)
+                ) {
+                    scheduleResultOrbHide()
+                    updateStandbyOrbVisibility()
+                }
                 if (revealsForegroundOperation && entrySurfaceReady) {
                     if (orbView == null) {
                         AgentHapticFeedback.perform(
@@ -1778,7 +1792,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
      */
     private fun updateStandbyOrbVisibility() {
         val view = orbView ?: return
-        val running = !standby.value && activeSession != null
+        // 结束后会话引用要等结果被查看才清掉，是否「执行中」按阶段判断（真机：只看 activeSession 时 ✓ 一直不淡出）。
+        val phase = state.value.phase
+        val running = !standby.value && activeSession != null &&
+            (phase == AgentOverlayPhase.RUNNING || phase == AgentOverlayPhase.PAUSED)
         val show = if (io.github.fartown.movo.agent.overlay.OrbPrefs.keepOrbAfterExit(this)) {
             // 常驻（默认）：Movo 自己在前台且没有执行中任务时藏起，其余时候都在（待命、✓ / ! 保留到点开）。
             running || !VoiceSurfaceTracker.appVisible
@@ -1787,7 +1804,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 android.os.SystemClock.uptimeMillis() < resultOrbVisibleUntil && !VoiceSurfaceTracker.appVisible
             running || holdingResult || (!running && !standby.value && !collapsed.value && !VoiceSurfaceTracker.appVisible)
         }
-        mainHandler.removeCallbacksAndMessages(orbFadeToken)
+        // 注意：这里不能取消 [orbFadeToken] 上的回调——那是 3 秒后的这次复查本身（原来在这里取消，✓ 永远不淡出）。
+        AndroidAgentLogger.info(
+            "Agent orb visibility: show=$show running=$running phase=$phase standby=${standby.value} " +
+                "appVisible=${VoiceSurfaceTracker.appVisible} collapsed=${collapsed.value}",
+        )
         if (show) {
             view.animate().cancel()
             view.alpha = 1f
@@ -1928,6 +1949,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
         /** 任务在其他 App 里结束后，悬浮球保留 ✓ / ! 的时长。 */
         const val RESULT_ORB_HOLD_MS = 3_000L
+
+        /** Movo 页面暂停后多久再判断悬浮球显隐（跳过页面之间切换的空档）。 */
+        const val APP_LEAVE_SETTLE_MS = 300L
         const val PANEL_AUTO_COLLAPSE_MS = 4_000L
         /** 从展开卡发起语音后，语音服务报告「没能开始」时转述到展开卡的时间窗。 */
         const val PANEL_VOICE_NOTICE_WINDOW_MS = 3_000L

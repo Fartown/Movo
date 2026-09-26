@@ -11,6 +11,9 @@
         <item name="android:forceDarkAllowed">false</item>
         <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
         <item name="android:windowSplashScreenBehavior">icon_preferred</item>
+        <!-- App 内自己拉起主界面（对话浮层「展开到 App」）时不要启动窗：系统会插一个整屏启动窗 75–91ms（真机深色模式下还是深灰），
+             盖在已推满全屏的浮层上就是一闪。从桌面启动（系统入口）仍按上面的启动页显示。 -->
+        <item name="android:windowDisablePreview">true</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowLightNavigationBar">true</item>
     </style>

@@ -31,6 +31,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
+import kotlinx.coroutines.flow.first
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -197,6 +199,8 @@ internal fun AgentAppRoot(
 
     LaunchedEffect(resultConversationHandoff) {
         val request = resultConversationHandoff ?: return@LaunchedEffect
+        // 浮层盖着时切会话：不播切换淡入、停在最新消息处，与浮层全屏时一致。
+        io.github.fartown.movo.ui.screens.chat.ConversationSwitchMotion.skipNext()
         // 浮层「展开到 App」（Q4）：一开始就收起侧边栏，并在浮层仍盖着时播完，切过来时看到的就是会话页。
         val paneWasOpen = conversationPaneOpen
         conversationPaneOpen = false
@@ -211,7 +215,13 @@ internal fun AgentAppRoot(
             focusManager.clearFocus()
             conversationPaneOpen = false
             navigator.popToHome()
-            // Let the original chat compose before removing the covering result window.
+            // Let the original chat load its messages, compose and apply its scroll-to-latest before removing the
+            // covering result window (a freshly created activity otherwise shows the conversation's first turn).
+            withTimeoutOrNull(1_000) {
+                snapshotFlow { agentState.homeState.messages.isNotEmpty() }.first { it }
+            }
+            withFrameNanos { }
+            withFrameNanos { }
             withFrameNanos { }
             if (paneWasOpen) kotlinx.coroutines.delay(io.github.fartown.movo.ui.theme.MovoMotion.SLOW_EXIT.toLong())
         }
@@ -378,6 +388,8 @@ internal fun AgentAppRoot(
                         agentState = agentState,
                         onOpenBrowser = { pushRoute(AppRoute.Browser) },
                         isDrawerOpen = conversationPaneOpen,
+                        // 规范 9.3.1「切换会话」：打开会话（冷启动、侧边栏切换、浮层展开到 App）停在最新消息处。
+                        initiallyShowLatestMessage = true,
                     )
                 }
             }

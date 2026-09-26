@@ -278,7 +278,9 @@ fun ConversationSidePaneScaffold(
 
         // 侧边栏完全关闭时面板不参与绘制（A13）：面板一直保持组合，打开动画第一帧不用现组合；
         // 只在绘制阶段按「是否露出」切换图层透明度，零透明度的图层整层跳过，模糊浮层也不再每帧重算。
-        val paneShowing by remember { derivedStateOf { openProgress > 0f } }
+        // 与 openProgress 同样的 key：否则这里一直读第一次组合时的那份进度（例如从浮层接过来时 closeInstantly 为真、进度恒为 0），
+        // 面板永远透明（真机：从悬浮球进来的主界面侧边栏空白）。
+        val paneShowing by remember(paneDragState, paneWidthPx, closeInstantly) { derivedStateOf { openProgress > 0f } }
         // 预热：面板关着时整层跳过绘制，第一次打开的那一帧要现录整个面板、首次编译磨砂模糊的着色器、首次生成 64 的大阴影，
         // 真机上这一帧卡 57–84ms（之后再开就不卡）。首页稳定约 1 秒后把面板和阴影在主页面下面画两帧——
         // 主页面不透明且铺满屏幕，用户看不到——让这些一次性开销提前在空闲时付掉。

@@ -16,6 +16,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -695,7 +696,20 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
             openError != null -> SheetBodyState.FAILED
             else -> SheetBodyState.OPENING
         }
-        Crossfade(targetState = body, animationSpec = MovoMotion.standard(), label = "sheetBody") { current ->
+        // 先淡出再淡入（不交叉）：交叉淡化时「正在打开对话…」会和已加载的消息叠在一起（真机）。
+        androidx.compose.animation.AnimatedContent(
+            targetState = body,
+            transitionSpec = {
+                androidx.compose.animation.fadeIn(
+                    androidx.compose.animation.core.tween(
+                        MovoMotion.STANDARD,
+                        delayMillis = MovoMotion.FAST_EXIT,
+                        easing = MovoMotion.EasingStandard,
+                    ),
+                ) togetherWith androidx.compose.animation.fadeOut(MovoMotion.fastExit())
+            },
+            label = "sheetBody",
+        ) { current ->
             if (current == SheetBodyState.READY) {
                 AgentConversationContent(
                     agentState = agentState,
