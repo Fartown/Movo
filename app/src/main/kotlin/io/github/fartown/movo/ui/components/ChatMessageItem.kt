@@ -394,23 +394,13 @@ internal fun ChatMessageItem(
     }
 }
 
-/** 打开执行详情页（规范 8.8）；参数是执行卡的键。对话浮层等没有详情页的宿主为 null，卡片仍在原地展开。 */
-internal val LocalOpenRunDetail = androidx.compose.runtime.staticCompositionLocalOf<((String) -> Unit)?> { null }
-
-/** 执行中正在操作的 App：取最近一次成功的 launch_app 结果里的 App 名（「已打开 · 美团」）。 */
-internal fun List<AgentChatMessageUi>.operatingAppName(): String? =
-    filterIsInstance<ToolActivityMessageUi>()
-        .lastOrNull { it.toolName == "launch_app" && it.status == ToolActivityStatusUi.Success }
-        ?.resultSummary
-        ?.substringAfter("·", missingDelimiterValue = "")
-        ?.trim()
-        ?.takeIf { it.isNotBlank() }
-
 /**
- * 工作过程卡（规范 8.1「工作过程」、Figma「05 · 执行中」）：一次执行的思考与工具调用收束在一张卡里。
+ * 工作过程卡（规范 8.1「工作过程」、Figma「02 · 执行任务」05–05g，方案 B）：一次执行的思考与工具调用收束在一张卡里，
+ * 完整记录在对话里原地展开，没有底部栏、执行条和执行详情页。
  * 展开：圆角 28、白底 + 发丝描边、无阴影；头部 48（执行中 16 小光球 +「正在执行·第 N 步」Q3 光带 + 收起箭头）
- * → 0.5 分隔线（左右内缩 16）→ 步骤时间线（上下 6）。执行中自动展开；完成后收成 48 高的摘要条
- * （✓ +「已完成 N 个步骤」+ 箭头），用户点过头部则不再自动收起。执行详情页上线前，摘要条点开仍在卡内展开步骤。
+ * → 0.5 分隔线（左右内缩 16）→ 步骤时间线（上下 6）。执行中自动展开，超过 6 步时只显示最近 4 步，上面一行「前面 N 步」；
+ * 回答开始（[answerStarted]）或本轮结束时收成 48 高的摘要条一次（✓ +「已完成 N 个步骤」+ 用时 + ⌄），之后不再自动变化；
+ * 点摘要条原地展开全部步骤，末尾一行起止时间。暂停时的「结束任务」在输入框上方的提示条里（`Composer/Notice`）。
  */
 @Composable
 internal fun AgentWorkProcess(
@@ -424,6 +414,7 @@ internal fun AgentWorkProcess(
     onEditMessage: (String) -> Unit = {},
     onDeleteMessage: (String) -> Unit = {},
     runActive: Boolean = false,
+    answerStarted: Boolean = false,
     outcome: WorkOutcome? = null,
 ) {
     val runUnfinished = outcome?.kind == WorkOutcome.Kind.Unfinished
@@ -435,27 +426,33 @@ internal fun AgentWorkProcess(
         (message is ThinkingMessageUi && message.isStreaming) ||
             (message is ToolActivityMessageUi && message.status == ToolActivityStatusUi.Running)
     }
-    // 执行中 = 有步骤在进行，或本轮仍在进行且未暂停（两步之间模型在思考）。
-    val running = !paused && (stepRunning || runActive)
-    var confirmEndTask by remember(id) { mutableStateOf(false) }
+    // 执行中 = 有步骤在进行，或本轮仍在进行且未暂停（两步之间模型在思考）；回答开始后这张卡的步骤已经结束。
+    val running = !paused && (stepRunning || (runActive && !answerStarted))
     val tools = messages.filterIsInstance<ToolActivityMessageUi>()
     val toolCount = tools.size
     val failedIndex = unrecoveredFailedStep(tools)
     var expanded by rememberSaveable(id) { mutableStateOf(running) }
     var manuallyExpanded by rememberSaveable(id) { mutableStateOf(false) }
 
-    // 执行中自动展开；完成后停留 600ms 再收起（9.4「执行卡 · 完成 → 摘要条」），用户手动操作过则不动。
-    LaunchedEffect(running, paused) {
-        if ((running || paused) && !manuallyExpanded) {
+    // 执行中自动展开；回答开始时立即收成摘要条，没有回答（失败、停止）时在本轮结束后停留 600ms 再收起
+    // （9.4「执行卡 · 完成 → 摘要条」）。只自动收起这一次，之后高度固定；用户手动操作过则不动。
+    var autoCollapsed by rememberSaveable(id) { mutableStateOf(false) }
+    LaunchedEffect(running, paused, answerStarted) {
+        if (manuallyExpanded || autoCollapsed) return@LaunchedEffect
+        if (running || paused) {
             expanded = true
-        } else if (!running && !paused && !manuallyExpanded && expanded) {
-            kotlinx.coroutines.delay(io.github.fartown.movo.ui.theme.MovoMotion.WORK_CARD_COLLAPSE_DELAY.toLong())
-            if (!manuallyExpanded) expanded = false
+        } else if (expanded) {
+            if (!answerStarted) kotlinx.coroutines.delay(io.github.fartown.movo.ui.theme.MovoMotion.WORK_CARD_COLLAPSE_DELAY.toLong())
+            if (!manuallyExpanded) {
+                expanded = false
+                autoCollapsed = true
+            }
         }
     }
+    // 步骤多时（> 6）执行中只显示最近 4 步；点「前面 N 步」或完成后手动展开时显示全部。
+    var showAllSteps by rememberSaveable(id) { mutableStateOf(false) }
 
     val collapsedSummary = !expanded && !running && !paused
-    val openRunDetail = LocalOpenRunDetail.current
     // 圆角只在绘制阶段读取（graphicsLayer 裁剪 + drawWithContent 画底色与描边）：收成摘要条的圆角过渡期间不重组整张卡。
     val corner = androidx.compose.animation.core.animateDpAsState(
         targetValue = if (collapsedSummary) io.github.fartown.movo.ui.theme.MovoRadius.pillLg else io.github.fartown.movo.ui.theme.MovoRadius.xl,
@@ -474,7 +471,6 @@ internal fun AgentWorkProcess(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 20.dp, vertical = 8.dp)
-            .onGloballyPositioned { io.github.fartown.movo.ui.components.movo.RunDetailMorph.report(id, it.windowRect()) }
             .completionGlint(glint) { corner.value }
             .workCardSurface { corner.value }
             .animateContentSize(io.github.fartown.movo.ui.theme.MovoMotion.standard()),
@@ -484,14 +480,10 @@ internal fun AgentWorkProcess(
                 .fillMaxWidth()
                 .height(48.dp)
                 .movoClickableRow {
-                    // 摘要条整条可点，打开执行详情页（箭头 › 表示跳转）；没有详情页的宿主退回原地展开。
-                    val openDetail = openRunDetail
-                    if (collapsedSummary && openDetail != null) {
-                        openDetail(id)
-                    } else {
-                        manuallyExpanded = true
-                        expanded = !expanded
-                    }
+                    // 摘要条整条可点，原地展开完整记录（⌄ / ⌃）；执行中点头部收起 / 展开。
+                    manuallyExpanded = true
+                    if (collapsedSummary) showAllSteps = true
+                    expanded = !expanded
                 }
                 .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -564,25 +556,14 @@ internal fun AgentWorkProcess(
                 animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
                 label = "workChevron",
             )
-            // 展开 / 收起：箭头旋转（`fast`）；收成可跳转的摘要条：↓ 与 › 交叉淡化（`fast`）。
-            val jumps = collapsedSummary && openRunDetail != null
-            AnimatedContent(
-                targetState = jumps,
-                transitionSpec = {
-                    fadeIn(io.github.fartown.movo.ui.theme.MovoMotion.fast())
-                        .togetherWith(fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()))
-                        .using(null)
-                },
-                label = "workChevronSwap",
-            ) { jump ->
-                io.github.fartown.movo.ui.theme.MovoIcon(
-                    if (jump) io.github.fartown.movo.ui.theme.MovoIcons.ChevronRight else io.github.fartown.movo.ui.theme.MovoIcons.ChevronDown,
-                    contentDescription = stringResource(if (expanded) R.string.movo_collapse else R.string.movo_expand),
-                    size = 16.dp,
-                    tint = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
-                    modifier = if (jump) Modifier else Modifier.graphicsLayer { rotationZ = rotation.value },
-                )
-            }
+            // 展开 / 收起：箭头 ⌄ ↔ ⌃ 旋转（`fast`）。
+            io.github.fartown.movo.ui.theme.MovoIcon(
+                io.github.fartown.movo.ui.theme.MovoIcons.ChevronDown,
+                contentDescription = stringResource(if (expanded) R.string.movo_collapse else R.string.movo_expand),
+                size = 16.dp,
+                tint = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
+                modifier = Modifier.graphicsLayer { rotationZ = rotation.value },
+            )
         }
 
         // 展开：高度 `standard`，内容在高度过渡开始 40ms 后淡入 `fast`（规范 9.3「展开 / 收起」）。
@@ -606,8 +587,15 @@ internal fun AgentWorkProcess(
                         .height(io.github.fartown.movo.ui.theme.MovoSize.hairline)
                         .background(io.github.fartown.movo.ui.theme.MovoColors.borderHairline),
                 )
+                val folded = !showAllSteps && (running || paused) && messages.size > WORK_FOLD_THRESHOLD
+                if (folded) {
+                    WorkEarlierSteps(
+                        count = messages.size - WORK_FOLD_VISIBLE,
+                        onClick = { showAllSteps = true },
+                    )
+                }
                 WorkSteps(
-                    messages = messages,
+                    messages = if (folded) messages.takeLast(WORK_FOLD_VISIBLE) else messages,
                     running = running,
                     onOpenBrowser = onOpenBrowser,
                     currentBrowserMessageId = currentBrowserMessageId,
@@ -615,66 +603,61 @@ internal fun AgentWorkProcess(
                     actionsEnabled = actionsEnabled,
                     onEditMessage = onEditMessage,
                     onDeleteMessage = onDeleteMessage,
-                    modifier = Modifier.padding(vertical = 6.dp),
+                    modifier = Modifier.padding(top = if (folded) 0.dp else 6.dp, bottom = 6.dp),
                 )
-                // 底部栏（执行中）：说明 +「查看」（打开执行详情页）；不放停止（停止在输入框主按钮 ■）。内边距 12。
-                if ((running || paused) && openRunDetail != null) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
-                            .height(io.github.fartown.movo.ui.theme.MovoSize.hairline)
-                            .background(io.github.fartown.movo.ui.theme.MovoColors.borderHairline),
+                // 结束后展开：末尾一行起止时间「15:02 开始·15:03 结束」（Figma「05e」）。
+                val span = if (!running && !paused) workTimeSpan(tools, outcome) else null
+                if (span != null) {
+                    Text(
+                        text = span,
+                        style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular,
+                        color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 14.dp),
                     )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp)
-                            .padding(start = 16.dp, end = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        val app = messages.operatingAppName()
-                        Text(
-                            text = when {
-                                paused -> stringResource(R.string.movo_work_paused)
-                                app != null -> stringResource(R.string.movo_work_operating_app, app)
-                                else -> stringResource(R.string.movo_work_operating)
-                            },
-                            style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular,
-                            color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        if (paused) {
-                            // 已暂停：「结束任务」（二次确认，说明已完成的步骤会保留）+「查看」。
-                            io.github.fartown.movo.ui.components.movo.MovoPillButton(
-                                label = stringResource(R.string.movo_work_end_task),
-                                onClick = { confirmEndTask = true },
-                            )
-                            Spacer(Modifier.width(8.dp))
-                        }
-                        io.github.fartown.movo.ui.components.movo.MovoPillButton(
-                            label = stringResource(R.string.movo_work_view),
-                            onClick = { openRunDetail(id) },
-                        )
-                    }
                 }
             }
         }
     }
-    io.github.fartown.movo.ui.components.movo.MovoConfirmDialog(
-        show = confirmEndTask,
-        title = stringResource(R.string.movo_end_task_title),
-        message = stringResource(R.string.movo_end_task_message),
-        confirmText = stringResource(R.string.movo_work_end_task),
-        destructive = true,
-        onConfirm = {
-            confirmEndTask = false
-            runControls.onEndTask()
-        },
-        onDismissRequest = { confirmEndTask = false },
-    )
+}
+
+/** 执行中步骤超过这个数时折叠较早的步骤（规范 8.1「工作过程 · 展开」）。 */
+private const val WORK_FOLD_THRESHOLD = 6
+
+/** 折叠时保留的最近步骤数。 */
+private const val WORK_FOLD_VISIBLE = 4
+
+/** 时间线最上面一行「前面 N 步 ⌄」：`Label/Medium` 次要色，文字对齐步骤标题（左 44），上下 8，整行可点展开。 */
+@Composable
+private fun WorkEarlierSteps(count: Int, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .movoClickableRow(onClick)
+            .padding(start = 44.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = stringResource(R.string.movo_work_earlier_steps, count),
+            style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
+            color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+        )
+        Spacer(Modifier.width(4.dp))
+        io.github.fartown.movo.ui.theme.MovoIcon(
+            io.github.fartown.movo.ui.theme.MovoIcons.ChevronDown,
+            contentDescription = null,
+            size = 16.dp,
+            tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+        )
+    }
+}
+
+/** 本轮起止时间（本地时区 HH:mm）；拿不到开始或结束时间时为 null。 */
+@Composable
+private fun workTimeSpan(tools: List<ToolActivityMessageUi>, outcome: WorkOutcome?): String? {
+    val start = outcome?.startedAt ?: tools.mapNotNull { it.startedAtMillis }.minOrNull() ?: return null
+    val end = outcome?.finishedAt ?: tools.mapNotNull { it.finishedAtMillis }.maxOrNull() ?: return null
+    val format = remember { java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()) }
+    return stringResource(R.string.movo_run_detail_span, format.format(java.util.Date(start)), format.format(java.util.Date(end)))
 }
 
 /** 执行卡 / 执行条 / 执行详情概要卡的状态图标（规范 8.1、8.8）。 */

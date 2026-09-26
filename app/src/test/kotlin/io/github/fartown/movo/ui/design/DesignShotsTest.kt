@@ -208,22 +208,6 @@ class DesignShotsTest {
         )
     }
 
-    @Test
-    fun runDetail() = shot("21-run-detail") {
-        io.github.fartown.movo.ui.screens.run.RunDetailScreen(
-            title = "点一杯生椰拿铁", steps = steps(running = false).toList(), onBack = {}, onOpenBrowser = {},
-            onSwitchToApp = null, composer = {},
-        )
-    }
-
-    @Test
-    fun runDetailRunning() = shot("20-run-detail-running") {
-        io.github.fartown.movo.ui.screens.run.RunDetailScreen(
-            title = "点一杯生椰拿铁", steps = steps().toList(), onBack = {}, onOpenBrowser = {},
-            onSwitchToApp = {}, composer = { composer(running = true) },
-        )
-    }
-
     private fun overlayState(phase: io.github.fartown.movo.agent.overlay.AgentOverlayPhase): io.github.fartown.movo.agent.overlay.AgentOverlayState {
         val now = System.currentTimeMillis()
         return io.github.fartown.movo.agent.overlay.AgentOverlayState(

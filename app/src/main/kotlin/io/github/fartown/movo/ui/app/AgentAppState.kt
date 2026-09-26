@@ -918,6 +918,7 @@ internal class AgentAppState(
         io.github.fartown.movo.ui.share.ShareIntake.clear()
         if (homeState.messageEdit != null) cancelMessageEdit()
         val state = conversationsById[conversationId] ?: return
+        io.github.fartown.movo.ui.components.AgentConversationDraftStore.shared.clearAssignment()
         fileAttachmentOwnerVersion += 1
         selectedConversationId = conversationId
         val normalized = currentReasoningCapabilities?.normalize(state.reasoningEffort)
@@ -937,6 +938,7 @@ internal class AgentAppState(
         io.github.fartown.movo.ui.share.ShareIntake.clear()
         if (homeState.messageEdit != null) cancelMessageEdit()
         io.github.fartown.movo.ui.components.AgentConversationDraftStore.shared.remove(null)
+        io.github.fartown.movo.ui.components.AgentConversationDraftStore.shared.clearAssignment()
         fileAttachmentOwnerVersion += 1
         selectedConversationId = null
         homeState = emptyChatState(defaultThinkingEnabled).withCurrentReasoningCapabilities()

@@ -12,6 +12,8 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
+import io.github.fartown.movo.ui.components.AgentTimelineEntry
+import io.github.fartown.movo.ui.components.toTimelineEntries
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -143,10 +145,21 @@ private fun ChatBody(
     onAction: (AgentChatAction) -> Unit,
 ) {
     val state = frame.state
+    val paused = state.isStreaming && state.isPaused
+    // 暂停提示条「已完成 N 步」：本轮最后一张执行卡里已成功的步骤（只在暂停时算）。
+    val completedSteps = remember(state.messages, paused) {
+        if (!paused) 0 else {
+            (state.messages.toTimelineEntries().lastOrNull { it is AgentTimelineEntry.WorkProcess } as? AgentTimelineEntry.WorkProcess)
+                ?.messages
+                ?.count { it is io.github.fartown.movo.ui.model.ToolActivityMessageUi && it.status == io.github.fartown.movo.ui.model.ToolActivityStatusUi.Success }
+                ?: 0
+        }
+    }
     CompositionLocalProvider(
         LocalConversationComposer provides AgentConversationDraftStore.shared.get(frame.conversationKey, state.input),
         io.github.fartown.movo.ui.components.LocalRunControls provides io.github.fartown.movo.ui.components.RunControls(
-            isPaused = state.isStreaming && state.isPaused,
+            isPaused = paused,
+            completedSteps = completedSteps,
             onResume = { onAction(AgentChatAction.ResumeRun) },
             onEndTask = { onAction(AgentChatAction.StopRun) },
         ),

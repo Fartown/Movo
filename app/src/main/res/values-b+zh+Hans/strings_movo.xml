@@ -168,16 +168,9 @@
   <string name="movo_supplement_applied">已采纳</string>
   <string name="movo_work_elapsed_seconds">用时 %1$d 秒</string>
   <string name="movo_work_elapsed_minutes">用时 %1$d 分 %2$d 秒</string>
-  <string name="movo_work_operating_app">正在「%1$s」中操作</string>
-  <string name="movo_work_operating">Movo 正在处理</string>
   <string name="movo_work_view">查看</string>
-  <string name="movo_run_detail_steps">步骤</string>
-  <string name="movo_run_detail_privacy">截图不保存，敏感结果不写入记录。</string>
-  <string name="movo_run_detail_started">%1$s 开始</string>
   <string name="movo_run_detail_span">%1$s 开始·%2$s 结束</string>
   <string name="movo_run_detail_title">执行详情</string>
-  <string name="movo_run_detail_missing">这次执行已不在对话里。</string>
-  <string name="movo_run_switch_to_app">切过去看</string>
   <string name="movo_dictation_stop">停止语音输入</string>
   <string name="movo_notice_mic_title">麦克风权限未开启</string>
   <string name="movo_notice_mic_desc">语音输入和语音对话需要麦克风</string>
@@ -198,6 +191,10 @@
   <string name="movo_work_paused_step">已暂停·第 %1$d 步</string>
   <string name="movo_work_paused">已暂停</string>
   <string name="movo_work_end_task">结束任务</string>
+  <string name="movo_work_earlier_steps">前面 %1$d 步</string>
+  <string name="movo_paused_notice_title">任务已暂停</string>
+  <string name="movo_paused_notice_message">已完成 %1$d 步，点 ▶ 继续</string>
+  <string name="movo_paused_notice_message_none">点 ▶ 继续</string>
   <string name="movo_end_task_title">结束这个任务？</string>
   <string name="movo_end_task_message">已完成的步骤会保留。</string>
   <string name="movo_run_failed">任务没有完成</string>

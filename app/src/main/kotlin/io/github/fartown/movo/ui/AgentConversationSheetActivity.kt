@@ -711,12 +711,23 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
             label = "sheetBody",
         ) { current ->
             if (current == SheetBodyState.READY) {
-                AgentConversationContent(
-                    agentState = agentState,
-                    onOpenBrowser = ::openBrowser,
-                    onNavigateBack = ::finish,
-                    initiallyShowLatestMessage = true,
-                )
+                // 与 App 一致（规范 8.9）：失败卡的「查看日志」先展开到 App，再在 App 里打开运行日志。
+                androidx.compose.runtime.CompositionLocalProvider(
+                    io.github.fartown.movo.ui.screens.diagnostics.LocalRunLogOpener provides { runId ->
+                        io.github.fartown.movo.ui.app.AppHandoffRoute.request(
+                            runId?.let(io.github.fartown.movo.ui.navigation.AppRoute::DiagnosticsRun)
+                                ?: io.github.fartown.movo.ui.navigation.AppRoute.Diagnostics,
+                        )
+                        expandIntoApp()
+                    },
+                ) {
+                    AgentConversationContent(
+                        agentState = agentState,
+                        onOpenBrowser = ::openBrowser,
+                        onNavigateBack = ::finish,
+                        initiallyShowLatestMessage = true,
+                    )
+                }
             } else {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {

@@ -211,10 +211,13 @@ internal fun AgentAppRoot(
         } catch (_: Exception) {
             false
         }
+        val then = AppHandoffRoute.consume()
         if (opened) {
             focusManager.clearFocus()
             conversationPaneOpen = false
             navigator.popToHome()
+            // 浮层里点的是「查看日志」等：会话页之上接着打开那一页（浮层仍盖着，切过来时已经在目标页）。
+            then?.let(navigator::push)
             // Let the original chat load its messages, compose and apply its scroll-to-latest before removing the
             // covering result window (a freshly created activity otherwise shows the conversation's first turn).
             withTimeoutOrNull(1_000) {
@@ -342,11 +345,6 @@ internal fun AgentAppRoot(
                 CompositionLocalProvider(
                     LocalRunLogOpener provides openRunLog,
                     LocalOpenCapabilities provides { pushRoute(AppRoute.Tools) },
-                    io.github.fartown.movo.ui.components.LocalOpenRunDetail provides { key ->
-                        // Q4：详情页从这张执行卡的位置长出来。
-                        io.github.fartown.movo.ui.components.movo.RunDetailMorph.prepare(key)
-                        pushRoute(AppRoute.RunDetail(key))
-                    },
                     io.github.fartown.movo.ui.components.LocalOpenVoiceSettings provides { pushRoute(AppRoute.VoiceSettings) },
                 ) {
                     content()
@@ -366,11 +364,6 @@ internal fun AgentAppRoot(
     key(navigationResetKey) {
     Box(modifier = Modifier.fillMaxSize()) {
         val reducedMotion = io.github.fartown.movo.ui.theme.LocalReducedMotion.current
-        val runDetailTransition = remember(reducedMotion) {
-            io.github.fartown.movo.ui.components.movo.movoMorphTransition(reducedMotion) {
-                io.github.fartown.movo.ui.components.movo.RunDetailMorph.origin
-            }
-        }
         NavDisplay(
             backStack = backStack,
             onBack = { popRoute() },
@@ -393,18 +386,9 @@ internal fun AgentAppRoot(
                     )
                 }
             }
-            entry<AppRoute.RunDetail>(transition = runDetailTransition, swipeDismiss = swipeDismiss) { route ->
-                val requestNotifications = rememberExecutionNotificationRequest()
-                RunDetailRoute(
-                    agentState = agentState,
-                    workKey = route.workKey,
-                    onBack = ::popRoute,
-                    onOpenBrowser = { pushRoute(AppRoute.Browser) },
-                    onSendMessage = { text ->
-                        requestNotifications()
-                        agentState.sendCurrentMessage(text)
-                    },
-                )
+            entry<AppRoute.RunDetail> {
+                // 执行详情页已取消（方案 B，执行记录在对话里原地展开）：恢复旧的导航状态时回到对话。
+                LaunchedEffect(Unit) { navigator.popToHome() }
             }
             entry<AppRoute.Chat>(swipeDismiss = swipeDismiss) {
                 // Restore old saved navigation into the one canonical conversation page.

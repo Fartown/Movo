@@ -23,6 +23,15 @@ internal class AgentConversationDraftStore {
     var lastAssignedConversationId: String? = null
         private set
 
+    /**
+     * 用户主动切换 / 新建会话时调用：之后再打开那个会话不是「草稿就地变成会话」，要换一份新组合并停在最新消息。
+     * 不清的话，从侧边栏打开最近一次由草稿建出的会话（尤其是在对话浮层或上一个主界面里建的）会沿用草稿的组合，
+     * 「打开即停在最新」不会重跑，停在会话开头。
+     */
+    fun clearAssignment() {
+        lastAssignedConversationId = null
+    }
+
     /** Consume the submitted snapshot, retaining edits/transcription appended during mode switching. */
     fun consume(conversationId: String?, submittedText: String): String {
         val draft = get(conversationId)
@@ -59,6 +68,8 @@ internal val LocalConversationComposer = staticCompositionLocalOf<TextFieldState
  */
 internal data class RunControls(
     val isPaused: Boolean = false,
+    /** 本轮已完成的步骤数，暂停提示条「已完成 N 步」用。 */
+    val completedSteps: Int = 0,
     val onResume: () -> Unit = {},
     val onEndTask: () -> Unit = {},
 )

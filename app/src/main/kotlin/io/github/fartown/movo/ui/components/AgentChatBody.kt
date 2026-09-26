@@ -506,6 +506,8 @@ internal fun AgentConversationMessages(
     val timelineEntries = remember(visibleMessages) { visibleMessages.toTimelineEntries() }
     val lastWorkKey = timelineEntries.lastOrNull { it is AgentTimelineEntry.WorkProcess }?.key
     val workOutcomes = remember(timelineEntries) { workOutcomes(timelineEntries) }
+    // 执行卡后面紧接着出现了有正文的回答：这张卡的步骤已经结束，收成摘要条（方案 B，只收一次）。
+    val answeredWorkKeys = remember(timelineEntries) { answeredWorkKeys(timelineEntries) }
     // 复制按钮只出现在每轮对话的最终结果上，中间步骤的过渡文本不提供复制入口。
     // 流式进行中当前这一轮尚未收尾，此时的“最后一条正文”只是中间步骤，不标记。
     val finalResultMessageIds = remember(visibleMessages, isStreaming) {
@@ -786,6 +788,7 @@ internal fun AgentConversationMessages(
                             messages = entry.messages,
                             // 本轮仍在进行：模型在两步之间思考时步骤都已完成，但执行卡不能当作完成收起。
                             runActive = isStreaming && entry.key == lastWorkKey,
+                            answerStarted = entry.key in answeredWorkKeys,
                             outcome = workOutcomes[entry.key],
                             onOpenBrowser = onOpenBrowser,
                             currentBrowserMessageId = currentBrowserMessageId,
@@ -831,46 +834,12 @@ internal fun AgentConversationMessages(
             }
         }
 
-        // 执行条 `Composer/TaskBar`（规范 8.2.1）：执行中的任务卡滚出屏幕时，在输入框上方 8 出现；
-        // 点条身滚回任务卡，「查看」打开执行详情。只显示进度，不放停止（停止在正下方的主按钮 ■）。
-        val runControls = LocalRunControls.current
-        val workEntry = lastWorkKey?.let { key ->
-            timelineEntries.lastOrNull { it.key == key } as? AgentTimelineEntry.WorkProcess
-        }
-        val workVisible by remember(lastWorkKey) {
-            derivedStateOf { scrollState.layoutInfo.visibleItemsInfo.any { it.key == lastWorkKey } }
-        }
-        val showTaskBar = isStreaming && workEntry != null && !workVisible
-        val openRunDetail = LocalOpenRunDetail.current
-        AnimatedVisibility(
-            visible = showTaskBar,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(start = 20.dp, end = 20.dp, bottom = bottomInset + 8.dp),
-            enter = fadeIn(io.github.fartown.movo.ui.theme.MovoMotion.fast()) +
-                androidx.compose.animation.slideInVertically(io.github.fartown.movo.ui.theme.MovoMotion.fast()) { it / 4 },
-            exit = fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()),
-        ) {
-            workEntry?.let { entry ->
-                TaskBar(
-                    workKey = entry.key,
-                    messages = entry.messages,
-                    paused = runControls.isPaused,
-                    onScrollToCard = {
-                        val index = timelineEntries.indexOfFirst { it.key == entry.key }
-                        if (index >= 0) coroutineScope.launch { scrollState.animateScrollToItem(listIndexOf(index)) }
-                    },
-                    onView = openRunDetail?.let { open -> { open(entry.key) } },
-                )
-            }
-        }
-
-        // 回到底部（9.3）：离开底部时出现，淡入 + 缩放 0.86 → 1（fast）；执行条出现时让到它上方。
+        // 回到底部（9.3）：离开底部时出现，淡入 + 缩放 0.86 → 1（fast）。
         AnimatedVisibility(
             visible = !keepBottomAnchored && !isAtBottom,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = bottomInset + if (showTaskBar) 56.dp else 12.dp),
+                .padding(bottom = bottomInset + 12.dp),
             enter = fadeIn(io.github.fartown.movo.ui.theme.MovoMotion.fast()) +
                 scaleIn(io.github.fartown.movo.ui.theme.MovoMotion.fast(), initialScale = 0.86f),
             exit = fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()),
@@ -901,74 +870,6 @@ internal fun AgentConversationMessages(
 
 private fun Modifier.movoElevationCard(shape: androidx.compose.ui.graphics.Shape): Modifier =
     movoElevation(io.github.fartown.movo.ui.theme.MovoElevation.Card, shape)
-
-/**
- * `Composer/TaskBar`：宽 372、高 40、圆角 20，bg/surface + 描边 + E1；16 小光球 +「正在执行·第 N 步」（Q3）+ 计时 +
- * `Button/Pill`「查看」；左内边距 12，「查看」距右 4，上下 4。
- */
-@Composable
-private fun TaskBar(
-    workKey: String,
-    messages: List<AgentChatMessageUi>,
-    paused: Boolean,
-    onScrollToCard: () -> Unit,
-    onView: (() -> Unit)?,
-) {
-    val tools = messages.filterIsInstance<ToolActivityMessageUi>()
-    val firstStart = tools.mapNotNull { it.startedAtMillis }.minOrNull()
-    val now by produceState(System.currentTimeMillis(), paused) {
-        while (!paused) {
-            value = System.currentTimeMillis()
-            kotlinx.coroutines.delay(1_000)
-        }
-    }
-    val shape = RoundedCornerShape(20.dp)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            // Q4：执行卡不在屏幕上时，从执行条打开的详情页从执行条的位置长出来。
-            .onGloballyPositioned { io.github.fartown.movo.ui.components.movo.RunDetailMorph.report(workKey, it.windowRect()) }
-            .height(40.dp)
-            .movoElevationCard(shape)
-            .movoClickable(io.github.fartown.movo.ui.components.movo.PressKind.Card, shape = shape, onClick = onScrollToCard)
-            .clip(shape)
-            .background(io.github.fartown.movo.ui.theme.MovoColors.bgSurface)
-            .border(io.github.fartown.movo.ui.theme.MovoSize.hairline, io.github.fartown.movo.ui.theme.MovoColors.borderHairline, shape)
-            .padding(start = 12.dp, end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // 执行中 ↔ 已暂停：图标交叉淡化 + 缩放 0.72 ↔ 1、状态文字交叉淡化，`fast`（规范 9.3、9.4）；步数直接换。
-        WorkStatusIcon(if (paused) WorkStatusIconKind.Paused else WorkStatusIconKind.Running)
-        Spacer(Modifier.width(8.dp))
-        WorkPhaseCrossfade(
-            phase = if (paused) WorkPhase.Paused else WorkPhase.Running,
-            modifier = Modifier.weight(1f),
-        ) { phase ->
-            io.github.fartown.movo.ui.components.movo.MovoShimmerText(
-                text = when {
-                    phase == WorkPhase.Paused -> stringResource(R.string.movo_work_paused_step, tools.size)
-                    tools.isNotEmpty() -> stringResource(R.string.movo_work_running_step, tools.size)
-                    else -> stringResource(R.string.movo_work_analyzing)
-                },
-                style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
-                color = io.github.fartown.movo.ui.theme.MovoColors.textPrimary,
-                active = phase == WorkPhase.Running,
-            )
-        }
-        if (firstStart != null) {
-            val seconds = ((now - firstStart) / 1000).coerceAtLeast(0)
-            Text(
-                String.format(java.util.Locale.ROOT, "%02d:%02d", seconds / 60, seconds % 60),
-                style = io.github.fartown.movo.ui.theme.MovoTypography.numericLabel,
-                color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
-            )
-            Spacer(Modifier.width(8.dp))
-        }
-        if (onView != null) {
-            io.github.fartown.movo.ui.components.movo.MovoPillButton(label = stringResource(R.string.movo_work_view), onClick = onView)
-        }
-    }
-}
 
 private data class BottomFollowLayout(
     val enabled: Boolean,
@@ -1019,6 +920,15 @@ internal fun smoothBottomFollowStep(
  * 执行卡所在这一轮没有正常完成的原因与这一轮总共执行的步数（一轮里的回答会把执行卡分成几张，
  * 摘要写整轮的步数）；正常完成的执行卡不在结果里。
  */
+/** 后面紧接着一条有正文的回答的执行卡。 */
+internal fun answeredWorkKeys(entries: List<AgentTimelineEntry>): Set<String> =
+    entries.zipWithNext().mapNotNullTo(mutableSetOf()) { (entry, next) ->
+        entry.key.takeIf {
+            entry is AgentTimelineEntry.WorkProcess &&
+                ((next as? AgentTimelineEntry.Message)?.message as? AgentMessageUi)?.content?.isNotBlank() == true
+        }
+    }
+
 internal data class WorkOutcome(
     val kind: Kind,
     val steps: Int,

@@ -55,7 +55,7 @@ sealed interface AppRoute : NavKey {
     @Serializable
     data object SystemAssistant : AppRoute
 
-    /** 执行详情（规范 8.8）：当前会话里 [workKey] 对应的那张执行卡的完整记录。 */
+    /** 已取消的执行详情页（规范 8.8，方案 B）；只为恢复旧的导航状态保留，打开即回到对话。 */
     @Serializable
     data class RunDetail(val workKey: String) : AppRoute
 

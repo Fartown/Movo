@@ -169,16 +169,9 @@
   <string name="movo_supplement_applied">Applied</string>
   <string name="movo_work_elapsed_seconds">%1$d s</string>
   <string name="movo_work_elapsed_minutes">%1$d min %2$d s</string>
-  <string name="movo_work_operating_app">Working in %1$s</string>
-  <string name="movo_work_operating">Movo is working</string>
   <string name="movo_work_view">View</string>
-  <string name="movo_run_detail_steps">Steps</string>
-  <string name="movo_run_detail_privacy">Screenshots aren\'t kept, and sensitive results aren\'t saved.</string>
-  <string name="movo_run_detail_started">Started %1$s</string>
   <string name="movo_run_detail_span">%1$s–%2$s</string>
   <string name="movo_run_detail_title">Run details</string>
-  <string name="movo_run_detail_missing">This run is no longer in the conversation.</string>
-  <string name="movo_run_switch_to_app">Switch to it</string>
   <string name="movo_dictation_stop">Stop voice input</string>
   <string name="movo_notice_mic_title">Microphone is off</string>
   <string name="movo_notice_mic_desc">Voice input needs the microphone</string>
@@ -199,6 +192,10 @@
   <string name="movo_work_paused_step">Paused · step %1$d</string>
   <string name="movo_work_paused">Paused</string>
   <string name="movo_work_end_task">End task</string>
+  <string name="movo_work_earlier_steps">%1$d earlier steps</string>
+  <string name="movo_paused_notice_title">Task paused</string>
+  <string name="movo_paused_notice_message">%1$d steps done. Tap ▶ to continue</string>
+  <string name="movo_paused_notice_message_none">Tap ▶ to continue</string>
   <string name="movo_end_task_title">End this task?</string>
   <string name="movo_end_task_message">Steps already completed are kept.</string>
   <string name="movo_run_failed">Task didn\'t finish</string>
