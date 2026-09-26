@@ -26,6 +26,8 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.fartown.movo.ui.theme.MovoColors
@@ -110,6 +112,15 @@ internal fun SettingsRow(
                         onLongClick = onLongClick,
                         interactionSource = rowInteraction,
                         onClick = clickAction,
+                    ).then(
+                        // 开关行读屏要报出「已开启 / 已关闭」：开关本身不接收点击，状态挂在整行上。
+                        if (switch != null) {
+                            Modifier.semantics {
+                                toggleableState = androidx.compose.ui.state.ToggleableState(switch.checked)
+                            }
+                        } else {
+                            Modifier
+                        },
                     )
                 } else {
                     Modifier

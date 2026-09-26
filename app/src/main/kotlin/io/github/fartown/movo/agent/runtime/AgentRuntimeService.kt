@@ -1238,6 +1238,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     private fun expandBubble() {
+        // Movo 自己的界面在前台时悬浮球藏着，展开卡也不出现（例如 App 内开始语音、失败自动弹出）。
+        if (VoiceSurfaceTracker.appVisible) return
         collapsed.value = false
         val wm = windowManager ?: return
         mainHandler.removeCallbacksAndMessages(bubbleRemovalToken)
@@ -1835,9 +1837,13 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         val phase = state.value.phase
         val running = !standby.value && activeSession != null &&
             (phase == AgentOverlayPhase.RUNNING || phase == AgentOverlayPhase.PAUSED)
-        val show = if (io.github.fartown.movo.agent.overlay.OrbPrefs.keepOrbAfterExit(this)) {
-            // 常驻（默认）：Movo 自己在前台且没有执行中任务时藏起，其余时候都在（待命、✓ / ! 保留到点开）。
-            running || !VoiceSurfaceTracker.appVisible
+        val show = if (VoiceSurfaceTracker.appVisible) {
+            // Movo 自己的界面在前台时一律藏起（含执行中 / 暂停）：App 里已有执行卡、暂停提示条与主按钮，
+            // 悬浮球和展开卡只会重复并压住这些控件（2026-09-27 定）。离开后按当时的状态出现。
+            false
+        } else if (io.github.fartown.movo.agent.overlay.OrbPrefs.keepOrbAfterExit(this)) {
+            // 常驻（默认）：离开 App 后一直在（待命、执行中、✓ / ! 保留到点开）。
+            true
         } else {
             val holdingResult = !running && !standby.value &&
                 android.os.SystemClock.uptimeMillis() < resultOrbVisibleUntil && !VoiceSurfaceTracker.appVisible
