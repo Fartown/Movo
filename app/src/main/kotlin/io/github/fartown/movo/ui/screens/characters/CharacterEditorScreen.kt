@@ -29,7 +29,6 @@ import io.github.fartown.movo.ui.components.movo.MovoIconButton
 import io.github.fartown.movo.ui.components.movo.MovoListPage
 import io.github.fartown.movo.ui.components.movo.MovoPillButton
 import io.github.fartown.movo.ui.theme.MovoColors
-import io.github.fartown.movo.ui.theme.MovoIcon
 import io.github.fartown.movo.ui.theme.MovoIcons
 import io.github.fartown.movo.ui.theme.MovoSize
 import io.github.fartown.movo.ui.theme.MovoSpacing

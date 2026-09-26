@@ -1,7 +1,6 @@
 package io.github.fartown.movo.ui.screens.characters
 
 import androidx.compose.runtime.key
-import io.github.fartown.movo.ui.components.movo.movoAnimateContentSize
 import io.github.fartown.movo.ui.components.movo.movoAnimateItem
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,7 +24,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions

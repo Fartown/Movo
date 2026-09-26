@@ -6,5 +6,4 @@
   <string name="feedback_try_again_later">Please try again later.</string>
   <string name="feedback_saved">Saved</string>
   <string name="feedback_memory_read_failed_title">Couldn\'t read memory</string>
-  <string name="feedback_skill_description_title">About this skill</string>
 </resources>

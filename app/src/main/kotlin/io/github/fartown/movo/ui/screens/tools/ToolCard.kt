@@ -11,9 +11,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -31,10 +29,6 @@ import io.github.fartown.movo.agent.tool.AgentToolCapabilities
 import io.github.fartown.movo.agent.tool.RootRequirement
 import io.github.fartown.movo.ui.components.toolIcon
 import io.github.fartown.movo.ui.components.movo.MovoInfoDialog
-import io.github.fartown.movo.ui.components.movo.BlockTone
-import io.github.fartown.movo.ui.components.movo.MovoBlockButton
-import io.github.fartown.movo.ui.components.movo.MovoDialogHost
-import io.github.fartown.movo.ui.components.movo.MovoButtonRow
 import io.github.fartown.movo.ui.components.movo.MovoIconButton
 import io.github.fartown.movo.ui.components.movo.PressKind
 import io.github.fartown.movo.ui.components.movo.movoClickable
@@ -50,7 +44,6 @@ import io.github.fartown.movo.ui.theme.MovoRadius
 import io.github.fartown.movo.ui.theme.MovoSize
 import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.theme.MovoTypography
-import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Text
 
 /** 类别色（规范 4.2）：浅底 + 深色图标，成对使用。 */

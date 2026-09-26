@@ -1,7 +1,6 @@
 package io.github.fartown.movo.ui.screens.characters
 
 import androidx.compose.runtime.key
-import io.github.fartown.movo.ui.components.movo.movoAnimateContentSize
 import io.github.fartown.movo.ui.components.movo.movoAnimateItem
 import io.github.fartown.movo.ui.components.movo.MovoExpandable
 import io.github.fartown.movo.ui.components.movo.MovoExpandChevron
@@ -22,9 +21,7 @@ import io.github.fartown.movo.ui.components.movo.MovoSwitch
 import io.github.fartown.movo.ui.components.movo.RowTrailing
 import io.github.fartown.movo.ui.components.movo.SettingsRow
 import io.github.fartown.movo.ui.theme.MovoColors
-import io.github.fartown.movo.ui.theme.MovoIcon
 import io.github.fartown.movo.ui.theme.MovoIcons
-import io.github.fartown.movo.ui.theme.MovoSize
 import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.theme.MovoTypography
 import top.yukonga.miuix.kmp.basic.Text

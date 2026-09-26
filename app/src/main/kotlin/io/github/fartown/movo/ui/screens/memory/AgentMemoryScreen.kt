@@ -2,7 +2,6 @@ package io.github.fartown.movo.ui.screens.memory
 
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.LaunchedEffect
 import io.github.fartown.movo.ui.theme.MovoSize
 import io.github.fartown.movo.ui.theme.MovoIcons
@@ -11,9 +10,7 @@ import io.github.fartown.movo.ui.components.movo.rememberLastNonNull
 import io.github.fartown.movo.ui.components.movo.rememberDoneFlash
 import io.github.fartown.movo.ui.components.movo.MovoFailureDialog
 import io.github.fartown.movo.ui.components.movo.MovoDoneBlockButton
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,7 +21,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,7 +49,6 @@ import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.theme.MovoTypography
 import top.yukonga.miuix.kmp.basic.Text
 import io.github.fartown.movo.ui.components.movo.TextField
-import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 import java.text.NumberFormat
 
