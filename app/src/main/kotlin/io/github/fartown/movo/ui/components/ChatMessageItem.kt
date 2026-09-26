@@ -2870,10 +2870,10 @@ private fun ToolActivityInline(
                 .padding(horizontal = 4.dp, vertical = 5.dp),
         ) {
             // 工具图标与思考行的灯泡共用同一前导槽位，保证卡片内左边缘对齐。
-            Icon(
-                imageVector = iconForTool(message.toolName),
+            io.github.fartown.movo.ui.theme.MovoIcon(
+                toolIcon(message.toolName),
                 contentDescription = null,
-                modifier = Modifier.size(15.dp),
+                size = 15.dp,
                 tint = when (message.status) {
                     ToolActivityStatusUi.Running -> MiuixTheme.colorScheme.primary
                     ToolActivityStatusUi.Failed -> StatusError
@@ -3604,11 +3604,11 @@ private fun ToolSummaryInline(
                     .padding(horizontal = 9.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = iconForTool(tool),
+                io.github.fartown.movo.ui.theme.MovoIcon(
+                    toolIcon(tool),
                     contentDescription = null,
-                    modifier = Modifier.size(12.dp),
-                    tint = MiuixTheme.colorScheme.primary
+                    size = 12.dp,
+                    tint = MiuixTheme.colorScheme.primary,
                 )
                 Spacer(modifier = Modifier.width(5.dp))
                 Text(

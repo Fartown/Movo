@@ -1,14 +1,9 @@
 package io.github.fartown.movo.ui.app
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Build
-import androidx.compose.material.icons.rounded.Extension
-import androidx.compose.material.icons.rounded.Language
-import androidx.compose.material.icons.rounded.TravelExplore
 import io.github.fartown.movo.agent.model.AgentToolCatalog
 import io.github.fartown.movo.agent.tool.AgentToolCapabilities
 import io.github.fartown.movo.agent.tool.RootRequirement
-import io.github.fartown.movo.ui.components.iconForTool
 import io.github.fartown.movo.ui.components.toolIcon
 import io.github.fartown.movo.ui.theme.MovoIcons
 import io.github.fartown.movo.ui.model.projectToolGroups
@@ -43,7 +38,6 @@ class ToolCatalogUiTest {
         val cardIds = buildToolsState(RuntimeEnvironment.getApplication()).groups
             .flatMap { it.tools }.map { it.id }
         (runtimeNames + cardIds).distinct().forEach { name ->
-            assertNotEquals(name, Icons.Rounded.Build, iconForTool(name))
             assertNotEquals(name, MovoIcons.Wrench, toolIcon(name))
         }
     }
@@ -55,15 +49,6 @@ class ToolCatalogUiTest {
         assertEquals(MovoIcons.Globe, toolIcon("browser_use"))
         assertEquals(MovoIcons.Plug, toolIcon("mcp_server_search_012345"))
         assertEquals(MovoIcons.Wrench, toolIcon("unknown_tool"))
-    }
-
-    @Test
-    fun hostedSearchNamesAndDynamicMcpNamesUseTheirToolIcons() {
-        assertEquals(Icons.Rounded.TravelExplore, iconForTool("网页搜索"))
-        assertEquals(iconForTool("网页搜索"), iconForTool("web_search"))
-        assertEquals(Icons.Rounded.Language, iconForTool("browser_use"))
-        assertEquals(Icons.Rounded.Extension, iconForTool("mcp_server_search_012345"))
-        assertEquals(Icons.Rounded.Build, iconForTool("unknown_tool"))
     }
 
     @Test
