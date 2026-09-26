@@ -159,8 +159,8 @@ private fun RunSummaryCard(
                 Box(Modifier.size(MovoSize.iconSmall), contentAlignment = Alignment.Center) {
                     when {
                         running -> MovoOrb(size = MovoSize.iconSmall)
-                        outcome == io.github.fartown.movo.ui.components.WorkOutcome.Stopped -> MovoIcon(MovoIcons.Square, null, size = MovoSize.iconSmall, tint = MovoColors.textSecondary)
-                        failedIndex >= 0 || outcome == io.github.fartown.movo.ui.components.WorkOutcome.Unfinished -> MovoIcon(MovoIcons.X, null, size = MovoSize.iconSmall, tint = MovoColors.roseFg)
+                        outcome?.kind == io.github.fartown.movo.ui.components.WorkOutcome.Kind.Stopped -> MovoIcon(MovoIcons.Square, null, size = MovoSize.iconSmall, tint = MovoColors.textSecondary)
+                        failedIndex >= 0 || outcome?.kind == io.github.fartown.movo.ui.components.WorkOutcome.Kind.Unfinished -> MovoIcon(MovoIcons.X, null, size = MovoSize.iconSmall, tint = MovoColors.roseFg)
                         else -> MovoIcon(MovoIcons.Check, null, size = MovoSize.iconSmall, tint = MovoColors.greenFg)
                     }
                 }
@@ -169,9 +169,9 @@ private fun RunSummaryCard(
                     text = when {
                         running && tools.isNotEmpty() -> stringResource(R.string.movo_work_running_step, tools.size)
                         running -> stringResource(R.string.movo_work_analyzing)
-                        outcome == io.github.fartown.movo.ui.components.WorkOutcome.Stopped -> stringResource(R.string.movo_work_stopped_steps, tools.size)
+                        outcome?.kind == io.github.fartown.movo.ui.components.WorkOutcome.Kind.Stopped -> stringResource(R.string.movo_work_stopped_steps, outcome.steps)
                         failedIndex >= 0 -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
-                        outcome == io.github.fartown.movo.ui.components.WorkOutcome.Unfinished -> stringResource(R.string.movo_work_unfinished_steps, tools.size)
+                        outcome?.kind == io.github.fartown.movo.ui.components.WorkOutcome.Kind.Unfinished -> stringResource(R.string.movo_work_unfinished_steps, outcome.steps)
                         tools.isNotEmpty() -> stringResource(R.string.movo_work_done_steps, tools.size)
                         else -> stringResource(R.string.movo_work_done)
                     },

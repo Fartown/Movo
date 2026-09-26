@@ -929,8 +929,13 @@ internal fun smoothBottomFollowStep(
     return min(distancePx, min(easedStep.coerceAtLeast(BOTTOM_FOLLOW_MIN_STEP_PX), speedLimitedStep))
 }
 
-/** 执行卡所在这一轮没有正常完成的原因；正常完成的执行卡不在结果里。 */
-internal enum class WorkOutcome { Unfinished, Stopped }
+/**
+ * 执行卡所在这一轮没有正常完成的原因与这一轮总共执行的步数（一轮里的回答会把执行卡分成几张，
+ * 摘要写整轮的步数）；正常完成的执行卡不在结果里。
+ */
+internal data class WorkOutcome(val kind: Kind, val steps: Int) {
+    enum class Kind { Unfinished, Stopped }
+}
 
 /**
  * 执行卡之后、下一条用户消息之前出现了失败 / 中断卡（[WorkOutcome.Unfinished]）或「已停止」（[WorkOutcome.Stopped]）。
@@ -939,19 +944,26 @@ internal enum class WorkOutcome { Unfinished, Stopped }
 internal fun workOutcomes(entries: List<AgentTimelineEntry>): Map<String, WorkOutcome> {
     val outcomes = mutableMapOf<String, WorkOutcome>()
     var pending: String? = null
+    var turnSteps = 0
     for (entry in entries) {
         when (entry) {
-            is AgentTimelineEntry.WorkProcess -> pending = entry.key
+            is AgentTimelineEntry.WorkProcess -> {
+                pending = entry.key
+                turnSteps += entry.messages.count { it is ToolActivityMessageUi }
+            }
             is AgentTimelineEntry.Message -> when (val message = entry.message) {
-                is UserMessageUi -> pending = null
+                is UserMessageUi -> if (!message.isRunSupplement()) {
+                    pending = null
+                    turnSteps = 0
+                }
                 is SystemNoticeMessageUi -> {
-                    val outcome = when (message.code) {
-                        SystemNoticeCode.RuntimeFailed, SystemNoticeCode.Interrupted -> WorkOutcome.Unfinished
-                        SystemNoticeCode.Stopped -> WorkOutcome.Stopped
+                    val kind = when (message.code) {
+                        SystemNoticeCode.RuntimeFailed, SystemNoticeCode.Interrupted -> WorkOutcome.Kind.Unfinished
+                        SystemNoticeCode.Stopped -> WorkOutcome.Kind.Stopped
                         else -> null
                     }
-                    if (outcome != null) {
-                        pending?.let { outcomes[it] = outcome }
+                    if (kind != null) {
+                        pending?.let { outcomes[it] = WorkOutcome(kind, turnSteps) }
                         pending = null
                     }
                 }
@@ -991,34 +1003,68 @@ internal fun List<AgentChatMessageUi>.toTimelineEntries(): List<AgentTimelineEnt
         workMessages.clear()
     }
 
-    // 执行中的模型自动重试：重试成功（后面接着有步骤）就不在对话里留提示，也不把执行卡切成几段；
-    // 仍在重试或最终失败时，提示放在执行卡之后。重试细节在运行日志里。
-    val pendingRetries = mutableListOf<AgentChatMessageUi>()
-
-    this@toTimelineEntries.forEach { message ->
+    arrangeTurnsForTimeline(this@toTimelineEntries).forEach { message ->
         // 执行中的补充紧跟在工作过程之后时，作为「你的补充」步骤留在同一张执行卡里（规范 8.1、8.4）。
         if (message.isWorkProcessMessage() || (message.isRunSupplement() && workMessages.isNotEmpty())) {
-            pendingRetries.clear()
             workMessages += message
-        } else if (message.isModelRetryNotice() && workMessages.isNotEmpty()) {
-            pendingRetries += message
         } else {
             flushWorkProcess()
-            pendingRetries.forEach { add(AgentTimelineEntry.Message(it)) }
-            pendingRetries.clear()
             add(AgentTimelineEntry.Message(message))
         }
     }
     flushWorkProcess()
-    pendingRetries.forEach { add(AgentTimelineEntry.Message(it)) }
 }
 
 /** 运行时补充以 `user-<runId>-supplement-<index>` 的用户消息投影进来（见 AgentRunMessageProjector）。 */
 internal fun AgentChatMessageUi.isRunSupplement(): Boolean =
     this is UserMessageUi && id.startsWith("user-") && id.contains("-supplement-")
 
-private fun AgentChatMessageUi.isModelRetryNotice(): Boolean =
-    this is SystemNoticeMessageUi && code == SystemNoticeCode.ModelRetry
+private val RETRY_NOTICE_ID = Regex("^assistant-(.+)-retry-(\\d+)$")
+
+/**
+ * 只影响显示，不改消息本身（导出、重放仍用原始消息）。按轮（两条用户消息之间）整理：
+ * - 模型自动重试后恢复了（后面还有步骤或回答）：去掉重试提示，以及失败那一轮已经输出的半截回答（它不进上下文，
+ *   重试会重新生成），执行卡与回答都不被切开；仍在重试或最终失败时照常显示。
+ * - 「已停止」「运行失败」「已中断」是这一轮的结尾：停止后才到的步骤排在它们前面。
+ */
+internal fun arrangeTurnsForTimeline(messages: List<AgentChatMessageUi>): List<AgentChatMessageUi> {
+    val result = ArrayList<AgentChatMessageUi>(messages.size)
+    var turn = ArrayList<AgentChatMessageUi>()
+    fun flushTurn() {
+        if (turn.isEmpty()) return
+        val dropped = HashSet<String>()
+        turn.forEachIndexed { index, message ->
+            if (message !is SystemNoticeMessageUi || message.code != SystemNoticeCode.ModelRetry) return@forEachIndexed
+            val recovered = turn.subList(index + 1, turn.size).any { it.isWorkProcessMessage() || it is AgentMessageUi }
+            if (!recovered) return@forEachIndexed
+            dropped += message.id
+            RETRY_NOTICE_ID.find(message.id)?.let { match ->
+                val failedRoundText = "assistant-${match.groupValues[1]}-${match.groupValues[2]}-"
+                turn.forEach { if (it is AgentMessageUi && it.id.startsWith(failedRoundText)) dropped += it.id }
+            }
+        }
+        val kept = turn.filterNot { it.id in dropped }
+        val (endings, body) = kept.partition { it.isTurnEnding() }
+        result += body
+        result += endings
+        turn = ArrayList()
+    }
+    for (message in messages) {
+        if (message is UserMessageUi && !message.isRunSupplement()) {
+            flushTurn()
+            result += message
+        } else {
+            turn += message
+        }
+    }
+    flushTurn()
+    return result
+}
+
+private fun AgentChatMessageUi.isTurnEnding(): Boolean =
+    this is SystemNoticeMessageUi && (
+        code == SystemNoticeCode.Stopped || code == SystemNoticeCode.RuntimeFailed || code == SystemNoticeCode.Interrupted
+    )
 
 private fun AgentChatMessageUi.isWorkProcessMessage(): Boolean =
     this is ThinkingMessageUi || this is ToolActivityMessageUi || this is ToolSummaryMessageUi

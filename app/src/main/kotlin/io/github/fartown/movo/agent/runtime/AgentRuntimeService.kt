@@ -113,6 +113,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private var windowManager: WindowManager? = null
     /** [windowManager] 取自哪个 context（无障碍服务实例或本服务）；变了就要整体重建浮窗。 */
     private var overlayOwner: Context? = null
+    /** 打开补充输入时自动暂停了任务：发送或取消后自动继续（用户自己暂停的不自动继续）。 */
+    private var pausedForTyping = false
     /** 下一次创建悬浮球时是否播进场；重建浮窗时为 false。 */
     private var orbEntrance = true
     /** 重建浮窗时沿用的悬浮球位置（用户可能拖过）。 */
@@ -887,6 +889,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     private fun requestResume() {
+        pausedForTyping = false
         activeSession?.controller?.resume()
         activeSession?.broadcast(AgentEvent.RunResumed)
         state.value = state.value.markResumed()
@@ -1220,6 +1223,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         bubbleView = bubble
         bubbleParams = lp
         bubbleBaseY = lp.y
+        bubbleTargetY = lp.y
     }
 
     /**
@@ -1243,22 +1247,55 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             }
     }.getOrNull()
 
+    /** 上次读到的键盘高度（距屏幕底）；下次打开补充输入时先按它上移，不等输入法窗口出现。 */
+    private var lastImeHeight = 0
+    private var bubbleYAnimator: android.animation.ValueAnimator? = null
+    private var bubbleTargetY = 0
+
+    private fun screenRealHeight(): Int = runCatching {
+        android.graphics.Point().also { @Suppress("DEPRECATION") windowManager?.defaultDisplay?.getRealSize(it) }.y
+    }.getOrDefault(0).takeIf { it > 0 } ?: resources.displayMetrics.heightPixels
+
+    /** 展开卡底边放在距屏幕底 [imeHeight] 的键盘上方 8（窗口按底部对齐，卡片四周有阴影余量）。 */
+    private fun bubbleYAbove(imeHeight: Int): Int =
+        maxOf(bubbleBaseY, imeHeight + dpToPx(8) - dpToPx(PANEL_SHADOW_DP))
+
+    /** 打开补充输入：立刻按估计的键盘高度上移（上次实测值，没有则按屏高 42%），读到实际位置后再修正。 */
+    private fun liftBubbleForTyping() {
+        val estimate = lastImeHeight.takeIf { it > 0 } ?: (screenRealHeight() * 0.42f).toInt()
+        moveBubbleTo(bubbleYAbove(estimate))
+    }
+
     private fun placeBubbleAboveIme(imeTop: Int?) {
+        // 输入法窗口还没出现（正在升起）时保持估计位置，不退回原位。
+        imeTop ?: return
+        lastImeHeight = screenRealHeight() - imeTop
+        moveBubbleTo(bubbleYAbove(lastImeHeight))
+    }
+
+    /** 展开卡窗口的上下移动：`fast` + `standard`；减少动画时直接到位。 */
+    private fun moveBubbleTo(target: Int) {
         val wm = windowManager ?: return
         val bubble = bubbleView ?: return
         val lp = bubbleParams ?: return
-        val target = if (imeTop == null) {
-            bubbleBaseY
-        } else {
-            val screenHeight = runCatching {
-                android.graphics.Point().also { @Suppress("DEPRECATION") wm.defaultDisplay.getRealSize(it) }.y
-            }.getOrDefault(resources.displayMetrics.heightPixels)
-            // 窗口按底部对齐，y = 窗口底边到屏幕底边的距离；卡片四周有阴影余量，减掉它让卡片本身离键盘 8。
-            maxOf(bubbleBaseY, screenHeight - imeTop + dpToPx(8) - dpToPx(PANEL_SHADOW_DP))
+        if (target == bubbleTargetY && (lp.y == target || bubbleYAnimator?.isRunning == true)) return
+        bubbleTargetY = target
+        bubbleYAnimator?.cancel()
+        if (io.github.fartown.movo.ui.theme.isReducedMotion(this)) {
+            lp.y = target
+            runCatching { wm.updateViewLayout(bubble, lp) }
+            return
         }
-        if (lp.y == target) return
-        lp.y = target
-        runCatching { wm.updateViewLayout(bubble, lp) }
+        bubbleYAnimator = android.animation.ValueAnimator.ofInt(lp.y, target).apply {
+            duration = io.github.fartown.movo.ui.theme.MovoMotion.FAST.toLong()
+            interpolator = android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f)
+            addUpdateListener { animator ->
+                if (bubbleParams !== lp || bubbleView !== bubble) return@addUpdateListener
+                lp.y = animator.animatedValue as Int
+                runCatching { wm.updateViewLayout(bubble, lp) }
+            }
+            start()
+        }
     }
 
     private fun createOverlayComposeView(content: @Composable () -> Unit): ComposeView =
@@ -1500,15 +1537,28 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             lp.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
         }
         if (lp.flags == nextFlags) return
+        // 打字期间 Agent 不能同时操作屏幕：展开卡拿走了输入焦点，前台会被判成 Movo，「返回」也只会收起键盘。
+        // 所以打开补充输入时先暂停（停在下一步之前），发送或取消后再继续。
+        if (focusable && activeSession != null && state.value.phase == AgentOverlayPhase.RUNNING) {
+            pausedForTyping = true
+            requestPause()
+        } else if (!focusable && pausedForTyping) {
+            pausedForTyping = false
+            if (activeSession != null && state.value.phase == AgentOverlayPhase.PAUSED) requestResume()
+        }
         lp.flags = nextFlags
-        if (!focusable) lp.y = bubbleBaseY
         runCatching { wm.updateViewLayout(bubble, lp) }.onFailure { throwable ->
             AndroidAgentLogger.warnThrottled("runtime_bubble_focus_update_failed") {
                 "Agent runtime bubble focus update failed: type=${throwable.safeLogType()}"
             }
         }
         mainHandler.removeCallbacks(trackImeForBubble)
-        if (focusable) mainHandler.postDelayed(trackImeForBubble, IME_TRACK_INTERVAL_MS)
+        if (focusable) {
+            liftBubbleForTyping()
+            mainHandler.postDelayed(trackImeForBubble, IME_TRACK_INTERVAL_MS)
+        } else {
+            moveBubbleTo(bubbleBaseY)
+        }
     }
 
     private fun openResultConversation(autoListen: Boolean = false) {
@@ -1573,6 +1623,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         (dp * resources.displayMetrics.density).toInt()
 
     private fun enterFinalState(finalState: AgentOverlayState, keepVisible: Boolean = false) {
+        pausedForTyping = false
         state.value = finalState
 
         if (hasExecutedForegroundTool || isResultConversation) {
@@ -1582,8 +1633,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             collapseBubble()
             if (!AgentConversationSheetActivity.isConversationVisible(resultConversationTarget)) {
                 ensureOverlayVisible()
+                updateStandbyOrbVisibility()
                 // 失败：展开卡自动弹出显示原因，保持失败态直到用户点开（规范 9.5）。
-                if (finalState.phase == AgentOverlayPhase.FAILED && finalState.status != AgentOverlayStatus.Stopped) {
+                // Movo 自己在前台时原因已在 App 里显示，球也藏着，不单独弹展开卡。
+                if (finalState.phase == AgentOverlayPhase.FAILED && finalState.status != AgentOverlayStatus.Stopped &&
+                    !VoiceSurfaceTracker.appVisible
+                ) {
                     mainHandler.postDelayed({
                         if (state.value.phase == AgentOverlayPhase.FAILED && activeSession == null) expandBubble()
                     }, BUBBLE_EXIT_MS)
@@ -1627,9 +1682,14 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         updateStandbyOrbVisibility()
     }
 
+    /**
+     * Movo 自己的界面在前台时藏起悬浮球：待命时如此，任务结束（✓ / !）后也是——结果已经在 App 里，
+     * 球留着只会盖住键盘和输入框；回到其他 App 时再出现，✓ / ! 仍保留到点开。执行中始终显示。
+     */
     private fun updateStandbyOrbVisibility() {
         val view = orbView ?: return
-        view.visibility = if (standby.value && VoiceSurfaceTracker.appVisible) View.GONE else View.VISIBLE
+        val idle = standby.value || activeSession == null
+        view.visibility = if (idle && VoiceSurfaceTracker.appVisible) View.GONE else View.VISIBLE
     }
 
     private fun onVoiceActiveChanged(active: Boolean) {

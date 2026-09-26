@@ -409,8 +409,9 @@ internal fun AgentWorkProcess(
     runActive: Boolean = false,
     outcome: WorkOutcome? = null,
 ) {
-    val runUnfinished = outcome == WorkOutcome.Unfinished
-    val runStopped = outcome == WorkOutcome.Stopped
+    val runUnfinished = outcome?.kind == WorkOutcome.Kind.Unfinished
+    val runStopped = outcome?.kind == WorkOutcome.Kind.Stopped
+    val turnSteps = outcome?.steps ?: 0
     val runControls = LocalRunControls.current
     val paused = runActive && runControls.isPaused
     val stepRunning = messages.any { message ->
@@ -521,9 +522,9 @@ internal fun AgentWorkProcess(
                             paused -> stringResource(R.string.movo_work_paused)
                             running && toolCount > 0 -> stringResource(R.string.movo_work_running_step, toolCount)
                             running -> stringResource(R.string.movo_work_analyzing)
-                            runStopped -> stringResource(R.string.movo_work_stopped_steps, toolCount)
+                            runStopped -> stringResource(R.string.movo_work_stopped_steps, turnSteps)
                             failedIndex >= 0 -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
-                            runUnfinished -> stringResource(R.string.movo_work_unfinished_steps, toolCount)
+                            runUnfinished -> stringResource(R.string.movo_work_unfinished_steps, turnSteps)
                             toolCount > 0 -> stringResource(R.string.movo_work_done_steps, toolCount)
                             else -> stringResource(R.string.movo_work_done)
                         },

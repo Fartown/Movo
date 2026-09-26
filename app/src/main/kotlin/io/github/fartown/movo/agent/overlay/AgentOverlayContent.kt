@@ -81,6 +81,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
@@ -988,7 +992,17 @@ private fun SupplementInput(
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
-                modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester)
+                    // 实体键盘 / 注入的回车同样发送（Shift+回车仍换行）。
+                    .onPreviewKeyEvent { event ->
+                        val enter = event.key == androidx.compose.ui.input.key.Key.Enter ||
+                            event.key == androidx.compose.ui.input.key.Key.NumPadEnter
+                        if (!enter || event.isShiftPressed) return@onPreviewKeyEvent false
+                        if (event.type == androidx.compose.ui.input.key.KeyEventType.KeyDown && value.isNotBlank()) onSend()
+                        true
+                    },
                 textStyle = MovoTypography.labelRegular.copy(color = MovoColors.textPrimary),
                 // 键盘的回车键直接发送（展开卡里的发送键可能被键盘挡住）。
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
