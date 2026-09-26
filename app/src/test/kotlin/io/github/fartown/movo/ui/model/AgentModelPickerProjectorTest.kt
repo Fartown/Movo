@@ -89,6 +89,14 @@ class AgentModelPickerProjectorTest {
     }
 
     @Test
+    fun missingModel_onlyAfterFirstProjectionWithNoUsableProvider() {
+        // 首次加载前不算「未配置模型」，避免提示条在启动时闪一下（7.3）。
+        org.junit.Assert.assertFalse(AgentModelPickerUiState().missingModel)
+        val none = AgentModelPickerProjector.project(emptyList(), selectedProviderId = null, selectedModelId = null)
+        org.junit.Assert.assertTrue(none.missingModel)
+    }
+
+    @Test
     fun providerGroups_expandCurrentByDefault() {
         val selected = AgentModelOptionUi(
             id = "model",

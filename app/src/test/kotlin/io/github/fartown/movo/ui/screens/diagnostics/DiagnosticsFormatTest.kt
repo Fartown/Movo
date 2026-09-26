@@ -72,6 +72,8 @@ class DiagnosticsFormatTest {
         assertEquals("用时 3 秒", chat.duration)
         assertEquals("5 分 38 秒", format.chatDuration(337_500))
         assertEquals(FailureAction.MODEL_SETTINGS, chat.action)
+        // 限流先重试：失败卡主操作仍是「重试」，不是「去模型设置」（7.2）。
+        assertFalse(chat.modelConfig)
 
         val markdown = format.exportMarkdown(
             header = ExportHeader("Xiaomi 2312", "Android 15（API 35）", "3.0.9（debug）"),
@@ -88,6 +90,22 @@ class DiagnosticsFormatTest {
         assertFalse(markdown.contains(" · "))
         assertFalse(markdown.contains("run-abc"))
         assertFalse(markdown.contains("conversation="))
+    }
+
+    @Test
+    fun invalidApiKeyIsModelConfigFailure() {
+        val buffer = DiagnosticBuffer()
+        fun add(time: Long, event: String, run: String = "", request: String = "", level: DiagnosticLevel = DiagnosticLevel.INFO, details: String = "") =
+            buffer.append(WALL + time, time, level, "test", event, DiagnosticContext(run, request), details)
+        add(0, "run.started", "R1")
+        add(10, "attempt.started", "R1", "Q1", details = "purpose=CHAT\nprovider=openai_responses\nround=1\nattempt=1")
+        add(300, "attempt.failed", "R1", "Q1", DiagnosticLevel.ERROR, "code=HTTP_401\nhttp_status=401")
+        add(310, "run.ended", "R1", details = "duration_ms=310")
+        val run = DiagnosticTraceBuilder.build(buffer.snapshot().entries).runs.single()
+
+        val chat = format.chatFailure(run)!!
+        assertEquals("模型接口认证失败（HTTP 401）", chat.title)
+        assertTrue(chat.modelConfig)
     }
 
     @Test

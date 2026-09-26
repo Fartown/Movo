@@ -26,6 +26,16 @@ internal object UserFacingFailure {
     fun isTransportError(raw: String?): Boolean =
         !raw.isNullOrBlank() && transportPatterns.any { it.containsMatchIn(raw) }
 
+    /** Runtime 准备请求时发现没有可用模型（[io.github.fartown.movo.agent.runtime.AgentRuntimeService]）。 */
+    const val MODEL_UNAVAILABLE = "请先在 Movo 中配置可用的模型"
+
+    /** 发请求前就能确定的模型配置缺失（见 AgentModelClient 的前置检查）。 */
+    private val modelConfigMessages = listOf(MODEL_UNAVAILABLE, "请先配置 API 地址", "请先配置 API Key", "请先配置模型名")
+
+    /** 失败原文属于「没配好模型」：对话失败卡主操作换成「去模型设置」。 */
+    fun isModelConfigError(raw: String?): Boolean =
+        !raw.isNullOrBlank() && modelConfigMessages.any { raw.contains(it) }
+
     /** [networkMessage] 由调用方按当前语言传入（`R.string.movo_failure_network`）。 */
     fun message(raw: String?, networkMessage: String): String? = when {
         raw.isNullOrBlank() -> raw

@@ -290,6 +290,101 @@ private object StaticPulse : androidx.compose.runtime.State<Float> {
     override val value: Float = 1f
 }
 
+/**
+ * 3.3「模型请求重试中」`Notice/Retry`：执行卡下方一行 `Label/Regular` 次要色（左右 20，与卡间距 12），
+ * 前面 16 加载圈、间距 8：「模型请求重试·连接超时，正在重试（第 2 次）」。重试恢复后这一行和失败那轮的半截回答
+ * 一起隐藏（见 [arrangeTurnsForTimeline]）；最终没恢复时留在失败卡上方，加载圈换成静态图标、不再写「正在重试」。
+ */
+@Composable
+private fun ModelRetryNotice(
+    message: SystemNoticeMessageUi,
+    active: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val retry = remember(message.detail) { parseModelRetry(message.detail) }
+    val text = if (retry == null) {
+        stringResource(R.string.system_notice_model_retry)
+    } else {
+        stringResource(
+            if (active) R.string.movo_retry_notice_active else R.string.movo_retry_notice_done,
+            stringResource(retry.reasonRes),
+            retry.attempt,
+        )
+    }
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+            if (active) {
+                io.github.fartown.movo.ui.components.movo.MovoSpinner(color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary)
+            } else {
+                io.github.fartown.movo.ui.theme.MovoIcon(
+                    io.github.fartown.movo.ui.theme.MovoIcons.RotateCw, null, size = 16.dp,
+                    tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                )
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = text,
+            style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular,
+            color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+        )
+    }
+}
+
+/**
+ * 5.7「已停止」：有执行卡时停止方块在摘要条上（「已停止·已执行 3 步」），下方照常是正文「已停止」；
+ * 这一轮还没有执行卡（等首个事件或纯回答时停止）就由这一行自己带次要色停止方块 +「已停止」。
+ */
+@Composable
+private fun StoppedNotice(modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        io.github.fartown.movo.ui.theme.MovoIcon(
+            io.github.fartown.movo.ui.theme.MovoIcons.Square, null, size = 16.dp,
+            tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = stringResource(R.string.system_notice_stopped),
+            style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
+            color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+        )
+    }
+}
+
+/** 模型重试提示里能读出的信息：第几次重试与原因（原文见 [io.github.fartown.movo.agent.runtime.AgentEvent.ModelRetryScheduled]）。 */
+internal data class ModelRetryInfo(val attempt: Int, @androidx.annotation.StringRes val reasonRes: Int)
+
+private val RETRY_ATTEMPT = Regex("（(\\d+)/\\d+）")
+private val RETRY_REASON_CODE = Regex("原因：.*（([^（）]+)）")
+
+/** 从持久化的重试提示原文里取出次数和原因码；旧格式读不出次数时为 null（只显示「模型请求重试」）。 */
+internal fun parseModelRetry(detail: String?): ModelRetryInfo? {
+    if (detail.isNullOrBlank()) return null
+    val attempt = RETRY_ATTEMPT.find(detail)?.groupValues?.get(1)?.toIntOrNull() ?: return null
+    val code = RETRY_REASON_CODE.find(detail)?.groupValues?.get(1)
+    return ModelRetryInfo(attempt, modelRetryReasonRes(code))
+}
+
+internal fun modelRetryReasonRes(code: String?): Int = when {
+    code == "MODEL_TIMEOUT" -> R.string.movo_retry_reason_timeout
+    code == "MODEL_CONNECTION_FAILED" -> R.string.movo_retry_reason_connection
+    code == "MODEL_EMPTY_RESPONSE" -> R.string.movo_retry_reason_empty
+    code == "STREAM_INCOMPLETE" || code == "MODEL_OUTPUT_INCOMPLETE" -> R.string.movo_retry_reason_incomplete
+    code?.contains("429") == true -> R.string.movo_retry_reason_rate_limit
+    code?.removePrefix("HTTP_")?.toIntOrNull()?.let { it in 500..599 } == true -> R.string.movo_retry_reason_server
+    else -> R.string.movo_retry_reason_other
+}
+
 @Composable
 internal fun ChatMessageItem(
     message: AgentChatMessageUi,
@@ -308,6 +403,10 @@ internal fun ChatMessageItem(
     onDeleteMessage: (String) -> Unit = {},
     onRegenerateMessage: (String) -> Unit = {},
     onSelectReplyCandidate: (String, Int) -> Unit = { _, _ -> },
+    /** 模型重试提示：本轮仍在进行（还在重试）。 */
+    noticeActive: Boolean = false,
+    /** 「已停止」所在这一轮没有执行卡（没有摘要条上的停止方块），提示自己带停止方块。 */
+    stoppedWithoutWork: Boolean = false,
 ) {
     when (message) {
         is UserMessageUi -> UserMessageBubble(
@@ -332,6 +431,10 @@ internal fun ChatMessageItem(
         )
         is SystemNoticeMessageUi -> if (message.code == SystemNoticeCode.ContextCompaction) {
             ContextCompactionMarker(message = message, modifier = modifier)
+        } else if (message.code == SystemNoticeCode.ModelRetry) {
+            ModelRetryNotice(message = message, active = noticeActive, modifier = modifier)
+        } else if (message.code == SystemNoticeCode.Stopped && stoppedWithoutWork) {
+            StoppedNotice(modifier = modifier)
         } else if (message.code == SystemNoticeCode.RuntimeFailed || message.code == SystemNoticeCode.Interrupted) {
             RunFailureCard(
                 message = message,
@@ -2628,13 +2731,12 @@ private fun ThinkingRow(
     }
 
     if (compact) {
+        // 执行卡里的思考（3.2）：默认只显示两行摘要（思考中也是），点这一步才展开全文。
+        var stepExpanded by rememberSaveable(message.id) { mutableStateOf(false) }
         WorkThinkingStep(
             message = message,
-            expanded = expanded,
-            onToggle = {
-                manuallyExpanded = true
-                expanded = !expanded
-            },
+            expanded = stepExpanded,
+            onToggle = { stepExpanded = !stepExpanded },
             streamingState = streamingState,
             completedMarkdownState = completedMarkdownState,
             stableMarkdownState = stableMarkdownState,
@@ -3129,7 +3231,7 @@ private fun WorkThinkingStep(
                     else -> stringResource(R.string.movo_thinking_done)
                 },
                 style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
-                color = io.github.fartown.movo.ui.theme.MovoColors.textPrimary,
+                color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
                 active = message.isStreaming,
                 modifier = Modifier.weight(1f),
             )
@@ -3154,9 +3256,10 @@ private fun WorkThinkingStep(
                 val contentModifier = Modifier.fillMaxWidth().padding(start = 28.dp, top = 2.dp)
                 if (!showFull) {
                     Text(
-                        text = message.content.plainPreview(),
+                        // 思考中摘要跟着最新一段走（两行，末尾省略）；思考完是整段的开头。
+                        text = if (message.isStreaming) message.content.latestParagraph().plainPreview() else message.content.plainPreview(),
                         style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular,
-                        color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                        color = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         modifier = contentModifier,
@@ -3197,6 +3300,12 @@ private fun expandContentEnter(): androidx.compose.animation.EnterTransition = f
 private fun expandContentExit(): androidx.compose.animation.ExitTransition =
     fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) +
         shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard())
+
+/** 流式思考的最新一段（按空行分段）；只有一段时就是全文。 */
+private fun String.latestParagraph(): String =
+    split(PARAGRAPH_BREAK).lastOrNull { it.isNotBlank() } ?: this
+
+private val PARAGRAPH_BREAK = Regex("\\n\\s*\\n")
 
 /** 思考摘要：去掉常见 Markdown 标记后折叠空白。 */
 private fun String.plainPreview(): String =
@@ -3698,12 +3807,27 @@ private fun RunFailureCard(
     val noticeText = stringResource(
         if (message.code == SystemNoticeCode.Interrupted) R.string.system_notice_interrupted else R.string.system_notice_runtime_failed,
     )
-    val title = failure?.failure?.title ?: noticeText
+    val rawDetail = message.detail?.takeIf(String::isNotBlank)
+    // 没有可用模型时 Runtime 直接拒绝（诊断里可能没有这次任务）：原因卡与输入框上方的提前提示同一说法。
+    val modelUnavailable = failure == null &&
+        rawDetail?.contains(io.github.fartown.movo.agent.model.UserFacingFailure.MODEL_UNAVAILABLE) == true
+    val title = failure?.failure?.title
+        ?: if (modelUnavailable) stringResource(R.string.movo_notice_model_title) else noticeText
     // 网络 / TLS 原始报错换成可操作的说明，原文留在运行日志。
-    val detail = io.github.fartown.movo.agent.model.UserFacingFailure.message(
-        failure?.failure?.message ?: message.detail?.takeIf(String::isNotBlank),
-        stringResource(R.string.movo_failure_network),
-    )
+    val detail = if (modelUnavailable) {
+        stringResource(R.string.movo_notice_model_desc)
+    } else {
+        io.github.fartown.movo.agent.model.UserFacingFailure.message(
+            failure?.failure?.message ?: rawDetail,
+            stringResource(R.string.movo_failure_network),
+        )
+    }
+    // 7.2：原因属于模型配置（API Key 无效、无权限、模型不存在、参数无效、额度不足、未配置模型）时，
+    // 主操作是「去模型设置」（重试不会好），其次「查看日志」。
+    val openModelSettings = LocalOpenModelSettings.current?.takeIf {
+        failure?.failure?.modelConfig == true ||
+            (failure == null && io.github.fartown.movo.agent.model.UserFacingFailure.isModelConfigError(rawDetail))
+    }
     val openRunLog = openLog?.let { open -> { open(failure?.runId ?: io.github.fartown.movo.ui.screens.diagnostics.DiagnosticsLinks.runForMessage(message.id)) } }
     @Suppress("DEPRECATION")
     val clipboardManager = LocalClipboardManager.current
@@ -3754,11 +3878,19 @@ private fun RunFailureCard(
             }
             Spacer(Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                io.github.fartown.movo.ui.components.movo.MovoPillButton(
-                    label = stringResource(R.string.movo_run_retry),
-                    onClick = onRetry,
-                    enabled = actionsEnabled,
-                )
+                if (openModelSettings != null) {
+                    io.github.fartown.movo.ui.components.movo.MovoPillButton(
+                        label = stringResource(R.string.movo_run_model_settings),
+                        onClick = openModelSettings,
+                        primary = true,
+                    )
+                } else {
+                    io.github.fartown.movo.ui.components.movo.MovoPillButton(
+                        label = stringResource(R.string.movo_run_retry),
+                        onClick = onRetry,
+                        enabled = actionsEnabled,
+                    )
+                }
                 if (openRunLog != null) {
                     Spacer(Modifier.width(8.dp))
                     io.github.fartown.movo.ui.components.movo.MovoPillButton(

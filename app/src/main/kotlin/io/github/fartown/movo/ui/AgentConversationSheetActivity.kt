@@ -720,6 +720,11 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                         )
                         expandIntoApp()
                     },
+                    // 同上：「去模型设置」（失败卡）与「去配置」（未配置模型提示）展开到 App 后打开设置里的模型页。
+                    io.github.fartown.movo.ui.components.LocalOpenModelSettings provides {
+                        io.github.fartown.movo.ui.app.AppHandoffRoute.request(io.github.fartown.movo.ui.navigation.AppRoute.ModelProviders)
+                        expandIntoApp()
+                    },
                 ) {
                     AgentConversationContent(
                         agentState = agentState,

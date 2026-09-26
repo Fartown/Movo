@@ -124,4 +124,25 @@ class WorkSummaryOutcomeTest {
         assertEquals(listOf("u1", "work-run-thinking-1-0"), entries.map { it.key })
         assertEquals(2, (entries[1] as AgentTimelineEntry.WorkProcess).messages.size)
     }
+
+    @Test
+    fun stoppedWithoutWorkCardCarriesItsOwnStopMark() {
+        val entries = listOf(
+            message(UserMessageUi("u1", "打开设置")),
+            work("w1"),
+            message(SystemNoticeMessageUi("s1", SystemNoticeCode.Stopped)),
+            message(UserMessageUi("u2", "你好")),
+            message(SystemNoticeMessageUi("s2", SystemNoticeCode.Stopped)),
+        )
+        assertEquals(setOf("s2"), stoppedNoticesWithoutWork(entries))
+    }
+
+    @Test
+    fun retryNoticeReadsAttemptAndReason() {
+        val detail = "模型请求暂时中断，3 秒后重试（2/3）；此前工具结果已保留。\n原因：等待模型数据超时（MODEL_TIMEOUT）。可在设置 → 运行日志查看详情。"
+        assertEquals(ModelRetryInfo(2, io.github.fartown.movo.R.string.movo_retry_reason_timeout), parseModelRetry(detail))
+        assertEquals(io.github.fartown.movo.R.string.movo_retry_reason_rate_limit, modelRetryReasonRes("HTTP_429"))
+        assertEquals(io.github.fartown.movo.R.string.movo_retry_reason_server, modelRetryReasonRes("HTTP_503"))
+        assertEquals(null, parseModelRetry("模型请求重试"))
+    }
 }

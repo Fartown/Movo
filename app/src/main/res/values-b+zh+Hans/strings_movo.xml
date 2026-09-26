@@ -250,4 +250,18 @@
   <!-- 输入框上方的「下一条」排队提示（D11） -->
   <string name="movo_queued_title">下一条</string>
   <string name="movo_queued_withdraw">撤回</string>
+  <!-- 对话页动线 3.3 / 7.2 / 7.3 -->
+  <string name="movo_notice_model_title">还没有配置模型</string>
+  <string name="movo_notice_model_desc">先添加模型服务商和模型</string>
+  <string name="movo_notice_model_action">去配置</string>
+  <string name="movo_run_model_settings">去模型设置</string>
+  <string name="movo_retry_notice_active">模型请求重试·%1$s，正在重试（第 %2$d 次）</string>
+  <string name="movo_retry_notice_done">模型请求重试·%1$s（第 %2$d 次）</string>
+  <string name="movo_retry_reason_timeout">连接超时</string>
+  <string name="movo_retry_reason_connection">网络连接中断</string>
+  <string name="movo_retry_reason_empty">模型没有返回内容</string>
+  <string name="movo_retry_reason_incomplete">回答没有正常结束</string>
+  <string name="movo_retry_reason_rate_limit">服务商限流</string>
+  <string name="movo_retry_reason_server">服务暂时不可用</string>
+  <string name="movo_retry_reason_other">请求失败</string>
 </resources>
