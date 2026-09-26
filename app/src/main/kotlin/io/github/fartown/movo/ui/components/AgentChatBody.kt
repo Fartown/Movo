@@ -835,9 +835,9 @@ internal fun AgentConversationMessages(
                 }
             }
             if (orbAfterIndex == null) {
-                items(items = timelineEntries, key = { it.key }) { entry -> entryItem(entry) }
+                items(items = timelineEntries, key = { it.key }, contentType = ::timelineContentType) { entry -> entryItem(entry) }
             } else {
-                items(items = timelineEntries.subList(0, orbAfterIndex + 1), key = { it.key }) { entry -> entryItem(entry) }
+                items(items = timelineEntries.subList(0, orbAfterIndex + 1), key = { it.key }, contentType = ::timelineContentType) { entry -> entryItem(entry) }
                 item(key = "waiting-orb") {
                     // 只淡入，不用列表退场：离场由 WaitingOrb 自己淡出，播完再移除。
                     Box(
@@ -853,6 +853,7 @@ internal fun AgentConversationMessages(
                 items(
                     items = timelineEntries.subList(orbAfterIndex + 1, timelineEntries.size),
                     key = { it.key },
+                    contentType = ::timelineContentType,
                 ) { entry -> entryItem(entry) }
             }
             if (isStreaming && !runPaused) {
@@ -980,6 +981,12 @@ internal fun currentTurnCompletedSteps(entries: List<AgentTimelineEntry>): Int {
             it is ToolActivityMessageUi && (it.status == ToolActivityStatusUi.Success || it.status == ToolActivityStatusUi.Failed)
         } ?: 0
     }
+}
+
+/** 列表项复用分组：同一种消息的组合可以互相复用，滚动时少建节点。 */
+internal fun timelineContentType(entry: AgentTimelineEntry): Any = when (entry) {
+    is AgentTimelineEntry.Message -> entry.message::class
+    is AgentTimelineEntry.WorkProcess -> AgentTimelineEntry.WorkProcess::class
 }
 
 /** 后面紧接着一条有正文的回答的执行卡。 */
