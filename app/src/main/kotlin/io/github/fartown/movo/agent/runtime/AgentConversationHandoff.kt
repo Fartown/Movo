@@ -73,4 +73,42 @@ internal object AgentConversationHandoff {
         intent.action = null
         listOf(EXTRA_SOURCE, EXTRA_KEY, EXTRA_RUN_ID, EXTRA_CURRENT_CONVERSATION, EXTRA_RECEIVER).forEach(intent::removeExtra)
     }
+
+    /**
+     * 当前主界面实例，仅当它的 ActivityRecord 不是 Movo 自己拉起的（桌面图标、最近任务、系统界面等）。
+     *
+     * 系统对这种记录不认 `windowDisablePreview`（AOSP `launchedFromSystemSurface()`）；而「展开到 App」送来的
+     * OPEN_CONVERSATION 又不是 MAIN/LAUNCHER intent，不能用任务快照，于是 HyperOS 在它回到前台时整屏插一个启动画面
+     * （深色模式下深灰 + 光球，约 100–200ms），盖在已推满全屏的浮层上就是一闪。换成 MAIN intent 只会改成任务快照，
+     * 显示离开 App 时的旧画面（例如开着的侧边栏），同样会闪；`setSplashScreenStyle` 对这条路径无效（真机验证）。
+     */
+    private var systemLaunchedMain: java.lang.ref.WeakReference<android.app.Activity>? = null
+
+    fun onMainCreated(activity: android.app.Activity) {
+        // launchedFromPackage 只在拉起方是本应用（或主动共享身份）时才有值，桌面图标拉起时为 null。
+        val external = activity.launchedFromPackage != activity.packageName
+        systemLaunchedMain = if (external) java.lang.ref.WeakReference(activity) else null
+    }
+
+    fun onMainDestroyed(activity: android.app.Activity) {
+        if (systemLaunchedMain?.get() === activity) systemLaunchedMain = null
+    }
+
+    /**
+     * 「展开到 App」前调用：主界面若是系统入口拉起的，先结束它所在的任务，随后的 OPEN_CONVERSATION 会新建任务、
+     * 由 Movo 自己拉起主界面——这时 `windowDisablePreview` 生效、不加启动窗，浮层一直盖到主界面画好首帧。
+     * 会话状态在进程级 [io.github.fartown.movo.ui.app.AgentAppSession]，重建主界面不丢会话。
+     */
+    fun releaseSystemLaunchedMain(context: Context, ownTaskId: Int) {
+        val main = systemLaunchedMain?.get() ?: return
+        systemLaunchedMain = null
+        if (main.isFinishing || main.isDestroyed || main.taskId == ownTaskId) return
+        val tasks = runCatching { context.getSystemService(android.app.ActivityManager::class.java).appTasks }
+            .getOrDefault(emptyList())
+        val task = tasks.firstOrNull { runCatching { it.taskInfo?.taskId == main.taskId }.getOrDefault(false) }
+        val removed = task != null && runCatching { task.finishAndRemoveTask() }.isSuccess
+        io.github.fartown.movo.core.AndroidAgentLogger.info(
+            "Conversation handoff: replaced system-launched main task=${main.taskId} removed=$removed",
+        )
+    }
 }

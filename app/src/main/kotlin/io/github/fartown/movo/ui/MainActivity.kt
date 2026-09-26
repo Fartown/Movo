@@ -37,9 +37,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         logRelaunchConfigDiff()
+        AgentConversationHandoff.onMainCreated(this)
         var contentReady = false
-        // 冷启动：首页进场等启动页开始退场再播。
-        if (savedInstanceState == null) io.github.fartown.movo.ui.app.StartupReveal.hold()
+        // 冷启动：首页进场等启动页开始退场再播。浮层「展开到 App」拉起的实例没有启动页，不等。
+        if (savedInstanceState == null && intent?.action != AgentConversationHandoff.ACTION_OPEN) {
+            io.github.fartown.movo.ui.app.StartupReveal.hold()
+        }
         installStartupSplash { contentReady }
         enableEdgeToEdge()
         updateAssistantHandoff(intent)
@@ -125,6 +128,11 @@ class MainActivity : ComponentActivity() {
             view.viewTreeObserver.registerFrameCommitCallback { view.post(afterFrame) }
         }
         view.invalidate()
+    }
+
+    override fun onDestroy() {
+        AgentConversationHandoff.onMainDestroyed(this)
+        super.onDestroy()
     }
 
     override fun onResume() {
