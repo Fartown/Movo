@@ -36,6 +36,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.core.content.ContextCompat
 import io.github.fartown.movo.R
 import io.github.fartown.movo.agent.voice.MovoWakeWordService
@@ -59,14 +61,51 @@ import top.yukonga.miuix.kmp.basic.Text
 /** 打开「语音与唤醒词」设置；由 App 根提供（对话浮层里打开主界面对应页）。 */
 internal val LocalOpenVoiceSettings = staticCompositionLocalOf<(() -> Unit)?> { null }
 
-/** 输入框上方的异常提示（`Composer/Notice`，规范 8.5）。 */
+/**
+ * 输入框上方的提示（`Composer/Notice`，规范 8.5、8.11）：语音异常，以及取代 Toast 的输入相关反馈（发送被拦下、
+ * 附件没能添加、模型没切换成功等）。
+ *
+ * @param autoDismissMillis 自动消失时长；null = 一直显示到处理完成或手动关闭（语音异常）。
+ * @param id 每条提示唯一，用于只关掉「这一条」而不误关之后出现的新提示。
+ */
 internal data class ComposerNotice(
     val icon: MovoIconData,
     val title: String,
     val description: String,
     val actionLabel: String?,
     val action: (() -> Unit)?,
+    val autoDismissMillis: Long? = null,
+    val id: Long = ComposerNotices.nextId(),
 )
+
+/**
+ * App 层交给输入框的「当前提示」（取代 Toast，规范 8.11「轻提示」）。由 `AgentAppState` 设置与到时清除，
+ * 所有输入框（App 内对话、对话浮层、执行详情页）渲染同一条；同时最多一条，新的替换旧的。
+ */
+internal object ComposerNotices {
+    /** 取代 Toast 的提示默认停留时长。 */
+    const val AUTO_DISMISS_MS = 4_000L
+
+    private val ids = java.util.concurrent.atomic.AtomicLong()
+
+    var current by mutableStateOf<ComposerNotice?>(null)
+        private set
+
+    fun nextId(): Long = ids.incrementAndGet()
+
+    fun show(notice: ComposerNotice) {
+        current = notice
+    }
+
+    /** 只关掉 [id] 这一条；之后已经换成别的提示时不动。 */
+    fun dismiss(id: Long) {
+        if (current?.id == id) current = null
+    }
+
+    fun clear() {
+        current = null
+    }
+}
 
 /**
  * 语音输入 `Composer/Dictation`（规范 8.2）：说的话直接写进输入框（光标跟随），可编辑后再发。
@@ -259,26 +298,12 @@ internal fun ComposerNoticeBar(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val shape = RoundedCornerShape(MovoRadius.lg)
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .movoElevation(MovoElevation.Card, shape)
-            .movoSurface(shape)
-            .padding(start = MovoSpacing.sm, end = MovoSpacing.xs, top = MovoSpacing.sm, bottom = MovoSpacing.sm),
-        verticalAlignment = Alignment.CenterVertically,
+    ComposerNoticeLayout(
+        icon = notice.icon,
+        title = notice.title,
+        description = notice.description,
+        modifier = modifier,
     ) {
-        Box(
-            modifier = Modifier.size(MovoSize.controlSmall).clip(RoundedCornerShape(MovoRadius.xs)).background(MovoColors.roseBg),
-            contentAlignment = Alignment.Center,
-        ) {
-            MovoIcon(notice.icon, null, size = MovoSize.iconSmall, tint = MovoColors.roseFg)
-        }
-        Spacer(Modifier.width(MovoSpacing.md))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(notice.title, style = MovoTypography.labelMedium, color = MovoColors.textPrimary, maxLines = 1)
-            Text(notice.description, style = MovoTypography.labelRegular, color = MovoColors.textSecondary, maxLines = 2)
-        }
         val action = notice.action
         if (notice.actionLabel != null && action != null) {
             Spacer(Modifier.width(MovoSpacing.sm))
@@ -291,5 +316,57 @@ internal fun ComposerNoticeBar(
             iconSize = MovoSize.iconSmall,
             tint = MovoColors.textSecondary,
         )
+    }
+}
+
+/**
+ * `Composer/Notice` 的骨架：图标底 32（圆角 8）+ 12 + 标题 `Label/Medium` 主色 / 说明 `Label/Regular` 次要色 + 右侧操作。
+ * 默认 Rose 图标底（异常）；[iconBackground] / [iconTint] 给不是异常的提示（如「下一条」排队）换成中性色。
+ */
+@Composable
+internal fun ComposerNoticeLayout(
+    icon: MovoIconData,
+    title: String,
+    description: String,
+    modifier: Modifier = Modifier,
+    iconBackground: androidx.compose.ui.graphics.Color = MovoColors.roseBg,
+    iconTint: androidx.compose.ui.graphics.Color = MovoColors.roseFg,
+    descriptionMaxLines: Int = 2,
+    actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit,
+) {
+    val shape = RoundedCornerShape(MovoRadius.lg)
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .movoElevation(MovoElevation.Card, shape)
+            .movoSurface(shape)
+            .padding(start = MovoSpacing.sm, end = MovoSpacing.xs, top = MovoSpacing.sm, bottom = MovoSpacing.sm)
+            .semantics(mergeDescendants = false) { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier.size(MovoSize.controlSmall).clip(RoundedCornerShape(MovoRadius.xs)).background(iconBackground),
+            contentAlignment = Alignment.Center,
+        ) {
+            MovoIcon(icon, null, size = MovoSize.iconSmall, tint = iconTint)
+        }
+        Spacer(Modifier.width(MovoSpacing.md))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MovoTypography.labelMedium,
+                color = MovoColors.textPrimary,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+            Text(
+                description,
+                style = MovoTypography.labelRegular,
+                color = MovoColors.textSecondary,
+                maxLines = descriptionMaxLines,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+        }
+        actions()
     }
 }

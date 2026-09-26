@@ -236,4 +236,21 @@
   <string name="share_chip_describe_image">描述图片</string>
   <string name="share_chip_extract_text">提取文字</string>
   <string name="share_chip_key_points">总结要点</string>
+  <!-- 输入框提示 `Composer/Notice`：取代 Toast 的输入相关反馈（规范 8.5、8.11） -->
+  <string name="movo_notice_model_failed_title">模型切换失败</string>
+  <string name="movo_notice_model_failed_desc">仍在使用原来的模型，请稍后重试</string>
+  <string name="movo_notice_queued_title">已有一条待发送消息</string>
+  <string name="movo_notice_queued_desc">请先编辑或撤回它，新内容保留在输入框</string>
+  <string name="movo_notice_file_tools_title">终端与文件工具未开启</string>
+  <string name="movo_notice_file_tools_desc">引用文件路径前需要先开启</string>
+  <string name="movo_notice_image_failed_title">无法读取这张图片</string>
+  <string name="movo_notice_image_failed_desc">请重试或改用其他图片</string>
+  <string name="movo_notice_path_switched_title">所选路径没有添加</string>
+  <string name="movo_notice_path_switched_desc">选择期间对话已切换</string>
+  <plurals name="movo_notice_attach_failed_title">
+    <item quantity="other">有 %1$d 项没能添加</item>
+  </plurals>
+  <!-- 输入框上方的「下一条」排队提示（D11） -->
+  <string name="movo_queued_title">下一条</string>
+  <string name="movo_queued_withdraw">撤回</string>
 </resources>

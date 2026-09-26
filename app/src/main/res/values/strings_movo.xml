@@ -238,4 +238,22 @@
   <string name="share_chip_describe_image">Describe the image</string>
   <string name="share_chip_extract_text">Extract the text</string>
   <string name="share_chip_key_points">Summarize key points</string>
+  <!-- 输入框提示 `Composer/Notice`：取代 Toast 的输入相关反馈（规范 8.5、8.11） -->
+  <string name="movo_notice_model_failed_title">Couldn\'t switch models</string>
+  <string name="movo_notice_model_failed_desc">Still using the previous model. Try again later.</string>
+  <string name="movo_notice_queued_title">A message is already waiting</string>
+  <string name="movo_notice_queued_desc">Edit or withdraw it first. Your new text stays in the box.</string>
+  <string name="movo_notice_file_tools_title">Terminal and file tools are off</string>
+  <string name="movo_notice_file_tools_desc">Turn them on before sending file paths.</string>
+  <string name="movo_notice_image_failed_title">Couldn\'t read this image</string>
+  <string name="movo_notice_image_failed_desc">Try again or pick another image.</string>
+  <string name="movo_notice_path_switched_title">The selected path wasn\'t added</string>
+  <string name="movo_notice_path_switched_desc">The conversation changed while you were choosing.</string>
+  <plurals name="movo_notice_attach_failed_title">
+    <item quantity="one">%1$d item wasn\'t added</item>
+    <item quantity="other">%1$d items weren\'t added</item>
+  </plurals>
+  <!-- 输入框上方的「下一条」排队提示（D11） -->
+  <string name="movo_queued_title">Up next</string>
+  <string name="movo_queued_withdraw">Withdraw</string>
 </resources>

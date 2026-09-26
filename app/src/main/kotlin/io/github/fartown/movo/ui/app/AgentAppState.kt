@@ -5,6 +5,10 @@ import io.github.fartown.movo.agent.voice.session.VoiceConversationHost
 import io.github.fartown.movo.agent.voice.session.VoiceSessionOwner
 import io.github.fartown.movo.agent.voice.session.VoiceSessionManager
 import io.github.fartown.movo.ui.components.AgentConversationDraftStore
+import io.github.fartown.movo.ui.components.ComposerNotice
+import io.github.fartown.movo.ui.components.ComposerNotices
+import io.github.fartown.movo.ui.theme.MovoIconData
+import io.github.fartown.movo.ui.theme.MovoIcons
 
 import android.content.ComponentName
 import android.content.ContentResolver
@@ -14,7 +18,6 @@ import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
 import android.text.format.DateFormat
-import android.widget.Toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -171,6 +174,37 @@ internal class AgentAppState(
         }
     override val voiceSelectedConversationId: String? get() = selectedConversationId
     override val voiceRuntimeBusy: Boolean get() = currentRunId != null || conversationsById.values.any { it.isStreaming }
+
+    /**
+     * 输入框上方当前的提示（`Composer/Notice`，规范 8.5、8.11「不用 Toast」）：发送被拦下、附件没能添加、模型没切换成功等
+     * 输入相关的反馈就地显示在输入框上方，[ComposerNotices.AUTO_DISMISS_MS] 后自动消失，也可手动关闭。
+     */
+    val composerNotice: ComposerNotice? get() = ComposerNotices.current
+    private var composerNoticeJob: Job? = null
+
+    private fun showComposerNotice(icon: MovoIconData, title: String, description: String) {
+        val notice = ComposerNotice(
+            icon = icon,
+            title = title,
+            description = description,
+            actionLabel = null,
+            action = null,
+            autoDismissMillis = ComposerNotices.AUTO_DISMISS_MS,
+        )
+        ComposerNotices.show(notice)
+        composerNoticeJob?.cancel()
+        composerNoticeJob = scope.launch {
+            delay(ComposerNotices.AUTO_DISMISS_MS)
+            ComposerNotices.dismiss(notice.id)
+        }
+    }
+
+    /** 已有一条排队的消息时再发送：新内容留在输入框，提示先处理排队的那条。 */
+    private fun showQueuedConflictNotice() = showComposerNotice(
+        MovoIcons.Clock,
+        appContext.getString(R.string.movo_notice_queued_title),
+        appContext.getString(R.string.movo_notice_queued_desc),
+    )
     private var conversationsById: Map<String, AgentChatHomeUiState> by mutableStateOf(initialConversations.conversationsById)
     private var conversationTitles: Map<String, String> = initialConversations.titles
     private var conversationUpdatedAt: Map<String, Long> = initialConversations.updatedAt
@@ -861,7 +895,11 @@ internal class AgentAppState(
                 throw cancelled
             } catch (_: Throwable) {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(appContext, appContext.getString(R.string.state_ui_model_switching_failed_please_try_again_later_4af439), Toast.LENGTH_SHORT).show()
+                    showComposerNotice(
+                        MovoIcons.CircleAlert,
+                        appContext.getString(R.string.movo_notice_model_failed_title),
+                        appContext.getString(R.string.movo_notice_model_failed_desc),
+                    )
                 }
             } finally {
                 withContext(Dispatchers.Main) {
@@ -1124,9 +1162,7 @@ internal class AgentAppState(
                     val draft = AgentConversationDraftStore.shared.get(conversationId, state.input)
                     draft.edit { replace(0, 0, prompt + if (length > 0) "\n" else "") }
                     updateConversation(conversationId, state.copy(input = draft.text.toString()))
-                    if (voiceRuntimeBusy) {
-                        Toast.makeText(appContext, "已有一条待发送消息，请先编辑或撤回；新内容保留在输入框", Toast.LENGTH_LONG).show()
-                    }
+                    if (voiceRuntimeBusy) showQueuedConflictNotice()
                 }
             }
         }
@@ -1167,11 +1203,11 @@ internal class AgentAppState(
                 terminalToolsEnabled = agentBooleanForUi(Prefs.Keys.AGENT_TERMINAL_TOOLS),
             )
         ) {
-            Toast.makeText(
-                appContext,
-                appContext.getString(R.string.state_ui_file_path_reference_requires_opening_the_termina_deca4c),
-                Toast.LENGTH_SHORT,
-            ).show()
+            showComposerNotice(
+                MovoIcons.Terminal,
+                appContext.getString(R.string.movo_notice_file_tools_title),
+                appContext.getString(R.string.movo_notice_file_tools_desc),
+            )
             return
         }
         // 规范 8.4：执行中再发的话不排队、不开新任务，作为补充交给当前任务（下一步生效）。
@@ -1190,7 +1226,7 @@ internal class AgentAppState(
         }
         if (voiceRuntimeBusy) {
             if (queuedTextSubmission != null || homeState.messageEdit != null) {
-                Toast.makeText(appContext, "已有一条待发送消息，请先编辑或撤回；新内容保留在输入框", Toast.LENGTH_LONG).show()
+                showQueuedConflictNotice()
                 return
             }
             val id = voiceConversationId()
@@ -1358,7 +1394,6 @@ internal class AgentAppState(
                 ),
             )
         )
-        if (boundary.contextWasCompacted) showCompactedRevisionNotice()
     }
 
     fun cancelMessageEdit() {
@@ -1451,7 +1486,6 @@ internal class AgentAppState(
             text = boundary.userMessage.content,
             images = images.toHistoryImages(),
         )
-        if (boundary.contextWasCompacted) showCompactedRevisionNotice()
         launchConversationRun(
             conversationId = conversationId,
             runId = runId,
@@ -1680,14 +1714,6 @@ internal class AgentAppState(
         return defaultConversationTitle(parsed.request, parsed.references)
     }
 
-    private fun showCompactedRevisionNotice() {
-        Toast.makeText(
-            appContext,
-            appContext.getString(R.string.state_ui_the_earlier_context_has_been_compressed_and_will_cf6c86),
-            Toast.LENGTH_LONG,
-        ).show()
-    }
-
     fun attachImage(uri: String) {
         scope.launch(Dispatchers.IO) {
             try {
@@ -1698,11 +1724,11 @@ internal class AgentAppState(
                 )
                 if (image == null) {
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(
-                            appContext,
-                            appContext.getString(R.string.state_ui_unable_to_read_this_image_please_try_again_or_us_d94978),
-                            Toast.LENGTH_SHORT,
-                        ).show()
+                        showComposerNotice(
+                            MovoIcons.Image,
+                            appContext.getString(R.string.movo_notice_image_failed_title),
+                            appContext.getString(R.string.movo_notice_image_failed_desc),
+                        )
                     }
                     return@launch
                 }
@@ -1788,7 +1814,11 @@ internal class AgentAppState(
             }
             withContext(Dispatchers.Main) {
                 if (ownerVersion != fileAttachmentOwnerVersion) {
-                    Toast.makeText(appContext, appContext.getString(R.string.state_ui_conversation_switched_selected_path_not_added_5bf91e), Toast.LENGTH_SHORT).show()
+                    showComposerNotice(
+                        MovoIcons.Folder,
+                        appContext.getString(R.string.movo_notice_path_switched_title),
+                        appContext.getString(R.string.movo_notice_path_switched_desc),
+                    )
                     return@withContext
                 }
                 val existingPaths = homeState.pendingFileReferences
@@ -1809,19 +1839,18 @@ internal class AgentAppState(
                         )
                     )
                 }
-                val message = when {
-                    failures.size == 1 && references.isEmpty() -> failures.single().userMessage
-                    failures.isNotEmpty() -> appContext.resources.getQuantityString(
-                        R.plurals.file_references_added_with_failures,
-                        failures.size,
-                        additions.size,
-                        failures.size,
+                // 规范 8.11：添加成功的项直接出现在输入框上方的附件条里（已在条里的不重复添加，条本身就是结果）；
+                // 没能添加的项用 `Composer/Notice` 说明「有 N 项没能添加」+ 最主要的原因（与 8.9.1 分享跳过项同一写法）。
+                if (failures.isNotEmpty()) {
+                    showComposerNotice(
+                        MovoIcons.File,
+                        appContext.resources.getQuantityString(
+                            R.plurals.movo_notice_attach_failed_title,
+                            failures.size,
+                            failures.size,
+                        ),
+                        failures.groupingBy { it }.eachCount().maxBy { it.value }.key.userMessage,
                     )
-                    additions.isEmpty() -> appContext.getString(R.string.state_ui_the_selected_path_has_been_added_42b432)
-                    else -> null
-                }
-                if (message != null) {
-                    Toast.makeText(appContext, message, Toast.LENGTH_SHORT).show()
                 }
             }
         }

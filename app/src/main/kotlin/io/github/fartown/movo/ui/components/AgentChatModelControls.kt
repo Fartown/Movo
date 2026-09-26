@@ -1,38 +1,38 @@
 package io.github.fartown.movo.ui.components
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.Dns
-import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -40,35 +40,38 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.fartown.movo.R
+import io.github.fartown.movo.ui.components.movo.MovoDivider
+import io.github.fartown.movo.ui.components.movo.MovoPillButton
+import io.github.fartown.movo.ui.components.movo.MovoPopover
+import io.github.fartown.movo.ui.components.movo.MovoPopoverGroupHeader
+import io.github.fartown.movo.ui.components.movo.MovoPopoverItem
+import io.github.fartown.movo.ui.components.movo.PressKind
+import io.github.fartown.movo.ui.components.movo.movoClickable
 import io.github.fartown.movo.ui.model.AgentContextUsageUi
-import io.github.fartown.movo.ui.model.AgentModelOptionUi
 import io.github.fartown.movo.ui.model.AgentModelPickerUiState
 import io.github.fartown.movo.ui.model.defaultExpandedModelProviderIds
 import io.github.fartown.movo.ui.model.formatContextUsage
-import kotlinx.coroutines.launch
-import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
-import top.yukonga.miuix.kmp.basic.HorizontalDivider
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.ListPopupColumn
-import top.yukonga.miuix.kmp.basic.PopupPositionProvider
-import top.yukonga.miuix.kmp.basic.ProgressIndicatorDefaults
-import top.yukonga.miuix.kmp.basic.RichTooltip
+import io.github.fartown.movo.ui.theme.LocalReducedMotion
+import io.github.fartown.movo.ui.theme.MovoColors
+import io.github.fartown.movo.ui.theme.MovoIcon
+import io.github.fartown.movo.ui.theme.MovoIcons
+import io.github.fartown.movo.ui.theme.MovoMotion
+import io.github.fartown.movo.ui.theme.MovoSize
+import io.github.fartown.movo.ui.theme.MovoSpacing
+import io.github.fartown.movo.ui.theme.MovoTypography
+import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.basic.TooltipAnchorPosition
-import top.yukonga.miuix.kmp.basic.TooltipBox
-import top.yukonga.miuix.kmp.basic.TooltipDefaults
-import top.yukonga.miuix.kmp.basic.rememberTooltipState
-import top.yukonga.miuix.kmp.overlay.OverlayListPopup
-import top.yukonga.miuix.kmp.squircle.squircleSurface
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import io.github.fartown.movo.ui.components.movo.movoClickable
 
+/**
+ * 模型按钮（规范 8 组件表）：40 浅底圆，内放 22 品牌 Logo（圆形裁切 + 0.5 描边），不显示模型名；
+ * 点击弹出按服务商分组的模型列表（`Popover/Menu`，出现在输入框上方）。
+ * 选中：新 ✓ 先出现，停留 160ms 再关闭菜单（9.3.1「单选」，同 `MovoChoiceDialog`）；
+ * 关闭后按钮里的 Logo 交叉淡化 + 缩放 0.72 → 1，`fast`（9.3.1「模型切换」）。
+ */
 @Composable
 internal fun AgentModelPickerButton(
     state: AgentModelPickerUiState,
@@ -80,57 +83,73 @@ internal fun AgentModelPickerButton(
 ) {
     var showPopup by remember { mutableStateOf(false) }
     var expandedProviderIds by remember { mutableStateOf(emptySet<String>()) }
+    // 刚点选、还没交给业务层的模型：✓ 先落到它上面，停留后再关菜单并切换。
+    var pendingModelId by remember { mutableStateOf<String?>(null) }
     val selected = state.selectedModel
     val enabled = !isStreaming && !state.isChanging && state.providerGroups.isNotEmpty()
+    val reduced = LocalReducedMotion.current
     LaunchedEffect(enabled) {
         if (!enabled) showPopup = false
     }
-    val density = LocalDensity.current
-    val popupWindowInsetPx = with(density) { 14.dp.roundToPx() }
-    val popupPositionProvider = remember(popupAnchorTopPx, popupWindowInsetPx) {
-        InputPopupPositionProvider(
-            inputContainerTopPx = popupAnchorTopPx,
-            windowHorizontalInsetPx = popupWindowInsetPx,
-        )
+    LaunchedEffect(pendingModelId) {
+        val chosen = pendingModelId ?: return@LaunchedEffect
+        delay(MovoMotion.FAST.toLong() + MovoMotion.MENU_CLOSE_DELAY)
+        showPopup = false
+        onModelSelected(chosen)
     }
     val currentModel = selected?.displayName ?: stringResource(R.string.model_not_selected)
     val switchModelDescription = stringResource(R.string.model_switch_current, currentModel)
     Box(modifier = modifier) {
-        // 模型按钮：40 浅底圆，内放 22 品牌 Logo（圆形裁切 + 0.5 描边），不显示模型名（规范 8）。
         Box(
             modifier = Modifier
                 .size(ChatInputActionSize)
                 .movoClickable(
-                    io.github.fartown.movo.ui.components.movo.PressKind.Solid,
+                    PressKind.Solid,
                     shape = CircleShape,
                     enabled = enabled,
                     onClick = {
+                        pendingModelId = null
                         expandedProviderIds = defaultExpandedModelProviderIds(state.selectedModel)
                         showPopup = true
                     },
                 )
                 .clip(CircleShape)
-                .background(io.github.fartown.movo.ui.theme.MovoColors.bgSurfaceMuted)
+                .background(MovoColors.bgSurfaceMuted)
                 .semantics { contentDescription = switchModelDescription },
             contentAlignment = Alignment.Center,
         ) {
-            ModelBrandMark(
-                modelId = selected?.modelId,
-                sourceType = selected?.providerSourceType,
-                size = 22.dp,
-            )
+            AnimatedContent(
+                targetState = selected?.let { it.modelId to it.providerSourceType },
+                transitionSpec = {
+                    if (reduced) {
+                        fadeIn(MovoMotion.fast()) togetherWith fadeOut(MovoMotion.fastExit())
+                    } else {
+                        (fadeIn(MovoMotion.fast()) + scaleIn(MovoMotion.fast(), initialScale = 0.72f)) togetherWith
+                            (fadeOut(MovoMotion.fastExit()) + scaleOut(MovoMotion.fastExit(), targetScale = 0.72f))
+                    }.using(SizeTransform(clip = false))
+                },
+                contentAlignment = Alignment.Center,
+                label = "modelLogo",
+            ) { model ->
+                ModelBrandMark(
+                    modelId = model?.first,
+                    sourceType = model?.second,
+                    size = 22.dp,
+                )
+            }
         }
 
-        OverlayListPopup(
+        MovoPopover(
             show = showPopup && popupAnchorTopPx > 0,
-            popupPositionProvider = popupPositionProvider,
-            alignment = PopupPositionProvider.Align.TopEnd,
-            onDismissRequest = { showPopup = false },
+            onDismiss = { showPopup = false },
+            aboveYPx = popupAnchorTopPx,
+            alignEnd = true,
             maxHeight = popupMaxHeight,
-            minWidth = 236.dp,
+            width = rememberModelPopoverWidth(state),
         ) {
             ModelPickerPopupContent(
                 state = state,
+                selectedModelId = pendingModelId ?: state.selectedModel?.id,
                 expandedProviderIds = expandedProviderIds,
                 onProviderExpandedChange = { providerId, expanded ->
                     expandedProviderIds = if (expanded) {
@@ -139,40 +158,82 @@ internal fun AgentModelPickerButton(
                         expandedProviderIds - providerId
                     }
                 },
-                onModelSelected = { modelId ->
-                    showPopup = false
-                    onModelSelected(modelId)
-                },
+                onModelSelected = { modelId -> if (pendingModelId == null) pendingModelId = modelId },
             )
         }
     }
 }
 
+/**
+ * 模型菜单宽度按所有模型名（含折叠分组里的）中最宽的一项定，展开 / 收起分组时菜单不跳宽；
+ * 最小 236（原列表最小宽），最大 320，更长的名字一行省略。
+ */
+@Composable
+private fun rememberModelPopoverWidth(state: AgentModelPickerUiState): Dp {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    return remember(state.providerGroups, density) {
+        val widestPx = state.providerGroups
+            .flatMap { group -> group.models.map { it.displayName } }
+            .maxOfOrNull { name -> measurer.measure(name, MovoTypography.bodyRegular, maxLines = 1).size.width }
+            ?: 0
+        // 文字 + 行内边距 12 × 2 + ✓ 20 与间距 8 + 菜单内边距 8 × 2。
+        val chrome = MovoSpacing.md * 2 + MovoSize.iconMedium + MovoSpacing.sm + MovoSpacing.sm * 2
+        (with(density) { widestPx.toDp() } + chrome).coerceIn(ModelPopoverMinWidth, ModelPopoverMaxWidth)
+    }
+}
+
+private val ModelPopoverMinWidth = 236.dp
+private val ModelPopoverMaxWidth = 320.dp
+
 @Composable
 private fun ModelPickerPopupContent(
     state: AgentModelPickerUiState,
+    selectedModelId: String?,
     expandedProviderIds: Set<String>,
     onProviderExpandedChange: (String, Boolean) -> Unit,
     onModelSelected: (String) -> Unit,
 ) {
-    ListPopupColumn {
-        state.providerGroups.forEachIndexed { groupIndex, group ->
-            if (groupIndex > 0) {
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 12.dp))
-            }
-            val expanded = group.providerId in expandedProviderIds
-            ModelProviderGroupHeader(
-                name = group.providerName,
-                expanded = expanded,
-                onClick = {
-                    onProviderExpandedChange(group.providerId, !expanded)
-                },
+    val reduced = LocalReducedMotion.current
+    state.providerGroups.forEachIndexed { groupIndex, group ->
+        if (groupIndex > 0) {
+            MovoDivider(
+                start = MovoSpacing.md,
+                end = MovoSpacing.md,
+                modifier = Modifier.padding(vertical = MovoSpacing.xs),
             )
-            if (expanded) {
+        }
+        val expanded = group.providerId in expandedProviderIds
+        MovoPopoverGroupHeader(
+            title = group.providerName,
+            expanded = expanded,
+            onToggle = { onProviderExpandedChange(group.providerId, !expanded) },
+            toggleDescription = if (expanded) {
+                stringResource(R.string.model_collapse_provider, group.providerName)
+            } else {
+                stringResource(R.string.model_expand_provider, group.providerName)
+            },
+        )
+        // 分组展开 / 收起（规范 9.3）：高度 `standard`，内容在高度开始 40ms 后淡入 `fast`；收起时淡出 120ms、高度同时收起。
+        AnimatedVisibility(
+            visible = expanded,
+            enter = if (reduced) {
+                fadeIn(MovoMotion.fast())
+            } else {
+                fadeIn(tween(MovoMotion.FAST, delayMillis = MovoMotion.STAGGER, easing = MovoMotion.EasingStandard)) +
+                    expandVertically(MovoMotion.standard())
+            },
+            exit = if (reduced) {
+                fadeOut(MovoMotion.fastExit())
+            } else {
+                fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard())
+            },
+        ) {
+            Column {
                 group.models.forEach { model ->
-                    ModelPickerRow(
-                        model = model,
-                        selected = model.id == state.selectedModel?.id,
+                    MovoPopoverItem(
+                        label = model.displayName,
+                        selected = model.id == selectedModelId,
                         onClick = { onModelSelected(model.id) },
                     )
                 }
@@ -181,106 +242,23 @@ private fun ModelPickerPopupContent(
     }
 }
 
-@Composable
-private fun ModelProviderGroupHeader(
-    name: String,
-    expanded: Boolean,
-    onClick: () -> Unit,
-) {
-    val arrowRotation by animateFloatAsState(
-        targetValue = if (expanded) 180f else 0f,
-        animationSpec = tween(durationMillis = 160),
-        label = "model_provider_arrow",
-    )
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(start = 16.dp, end = 14.dp, top = 11.dp, bottom = 9.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = name,
-            style = MiuixTheme.textStyles.footnote1,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        Spacer(modifier = Modifier.width(8.dp))
-        Icon(
-            imageVector = Icons.Rounded.ExpandMore,
-            contentDescription = if (expanded) {
-                stringResource(R.string.model_collapse_provider, name)
-            } else {
-                stringResource(R.string.model_expand_provider, name)
-            },
-            modifier = Modifier
-                .size(15.dp)
-                .graphicsLayer { rotationZ = arrowRotation },
-            tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
-        )
-    }
-}
-
-@Composable
-private fun ModelPickerRow(
-    model: AgentModelOptionUi,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 2.dp)
-            .squircleSurface(
-                color = if (selected) {
-                    MiuixTheme.colorScheme.surfaceContainerHigh
-                } else {
-                    Color.Transparent
-                },
-                cornerRadius = 12.dp,
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = model.displayName,
-            style = MiuixTheme.textStyles.body2,
-            color = MiuixTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        if (selected) {
-            Spacer(modifier = Modifier.width(8.dp))
-            Icon(
-                imageVector = Icons.Rounded.Check,
-                contentDescription = stringResource(R.string.ui_current_model_a0af8f),
-                modifier = Modifier.size(18.dp),
-                tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
-            )
-        }
-    }
-}
-
+/**
+ * 上下文用量 `Button/ContextUsage`（规范 8.1）：40 浅底圆，内含 20 用量表（外圈 1.5 描边 + 扇形表示已用比例）；
+ * ≥ 80% 改为 Amber。弧长过渡 `standard`（9.3「进度数值」）。
+ * 点击弹出用量浮层：与 `Popover/Menu` 同一表面（圆角 20、白底、E3），出现在输入框上方；用量条颜色与外面的用量表一致；
+ * 可压缩时右下「压缩」为主操作 `Button/Pill`（action/primary）。
+ */
 @Composable
 internal fun AgentContextUsageButton(
     usage: AgentContextUsageUi,
     onCompact: () -> Unit = {},
     canCompact: Boolean = false,
     modifier: Modifier = Modifier,
+    popupAnchorTopPx: Int = 0,
 ) {
-    val scope = rememberCoroutineScope()
-    val tooltipState = rememberTooltipState(isPersistent = true)
+    var showPopover by remember { mutableStateOf(false) }
     val progress = usage.progress
-    val progressColor = when {
-        progress == null -> MiuixTheme.colorScheme.onSurfaceVariantActions
-        progress >= 0.95f -> StatusError
-        progress >= 0.80f -> StatusWarning
-        else -> MiuixTheme.colorScheme.primary
-    }
+    val meterColor = if ((progress ?: 0f) >= ContextUsageWarnThreshold) MovoColors.amberFg else MovoColors.textPrimary
     val locale = LocalConfiguration.current.locales[0]
     val summary = formatContextUsage(
         usage = usage,
@@ -292,90 +270,26 @@ internal fun AgentContextUsageButton(
         R.string.context_usage_description,
         summary.replace('\n', ' '),
     )
-    val tooltipColors = TooltipDefaults.richTooltipColors()
-    TooltipBox(
-        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
-        tooltip = {
-            RichTooltip(
-                colors = tooltipColors,
-            ) {
-                Column(
-                    modifier = Modifier.width(200.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = stringResource(R.string.ui_contextual_usage_d12810),
-                            style = MiuixTheme.textStyles.body2,
-                            color = tooltipColors.titleContentColor,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text(
-                            text = progress?.let { String.format(locale, "%.1f%%", it * 100) } ?: "—",
-                            style = MiuixTheme.textStyles.body2,
-                            color = tooltipColors.contentColor,
-                        )
-                    }
-                    Text(
-                        text = summary,
-                        style = MiuixTheme.textStyles.body2,
-                        color = tooltipColors.contentColor,
-                    )
-                    Box(
-                        Modifier.fillMaxWidth().height(4.dp).clip(CircleShape)
-                            .background(MiuixTheme.colorScheme.surfaceContainerHigh),
-                    ) {
-                        Box(
-                            Modifier.fillMaxWidth((progress ?: 0f).coerceIn(0f, 1f))
-                                .height(4.dp).clip(CircleShape).background(progressColor),
-                        )
-                    }
-                    if (canCompact) {
-                        TextButton(
-                            text = stringResource(R.string.context_compact_action),
-                            onClick = {
-                                onCompact()
-                                tooltipState.dismiss()
-                            },
-                            modifier = Modifier.align(Alignment.End),
-                            minWidth = 48.dp,
-                            minHeight = 40.dp,
-                            insideMargin = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        )
-                    }
-                }
-            }
-        },
-        state = tooltipState,
-        focusable = true,
-        modifier = modifier,
-    ) {
-        // 上下文用量 `Button/ContextUsage`：40 浅底圆，内含 20 用量表（外圈 1.5 描边 + 扇形表示已用比例）；
-        // ≥ 80% 改为 Amber（规范 8.1）。弧长过渡 `standard`（9.3「进度数值」）。
-        val animatedProgress by androidx.compose.animation.core.animateFloatAsState(
-            targetValue = (progress ?: 0f).coerceIn(0f, 1f),
-            animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.standard(),
-            label = "contextUsage",
-        )
-        val meterColor = if ((progress ?: 0f) >= 0.80f) {
-            io.github.fartown.movo.ui.theme.MovoColors.amberFg
-        } else {
-            io.github.fartown.movo.ui.theme.MovoColors.textPrimary
-        }
+    val animatedProgress by animateFloatAsState(
+        targetValue = (progress ?: 0f).coerceIn(0f, 1f),
+        animationSpec = MovoMotion.standard(),
+        label = "contextUsage",
+    )
+    Box(modifier = modifier) {
         Box(
             modifier = Modifier
                 .size(ChatInputActionSize)
                 .movoClickable(
-                    io.github.fartown.movo.ui.components.movo.PressKind.Solid,
+                    PressKind.Solid,
                     shape = CircleShape,
-                    onClick = { scope.launch { tooltipState.show() } },
+                    onClick = { showPopover = true },
                 )
                 .clip(CircleShape)
-                .background(io.github.fartown.movo.ui.theme.MovoColors.bgSurfaceMuted)
+                .background(MovoColors.bgSurfaceMuted)
                 .semantics { contentDescription = usageDescription },
             contentAlignment = Alignment.Center,
         ) {
-            androidx.compose.foundation.Canvas(Modifier.size(20.dp)) {
+            androidx.compose.foundation.Canvas(Modifier.size(MovoSize.iconMedium)) {
                 val stroke = 1.5.dp.toPx()
                 val radius = size.minDimension / 2 - stroke / 2
                 drawCircle(meterColor, radius = radius, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
@@ -390,9 +304,74 @@ internal fun AgentContextUsageButton(
                 )
             }
         }
+
+        MovoPopover(
+            show = showPopover,
+            onDismiss = { showPopover = false },
+            aboveYPx = popupAnchorTopPx,
+            alignEnd = true,
+        ) {
+            Column(
+                modifier = Modifier
+                    .width(ContextPopoverContentWidth)
+                    .padding(horizontal = MovoSpacing.md, vertical = MovoSpacing.sm),
+                verticalArrangement = Arrangement.spacedBy(MovoSpacing.sm),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stringResource(R.string.ui_contextual_usage_d12810),
+                        style = MovoTypography.labelMedium,
+                        color = MovoColors.textSecondary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = progress?.let { String.format(locale, "%.1f%%", it * 100) } ?: "—",
+                        style = MovoTypography.numericLabel,
+                        color = MovoColors.textPrimary,
+                    )
+                }
+                Text(
+                    text = summary,
+                    style = MovoTypography.labelRegular,
+                    color = MovoColors.textSecondary,
+                )
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(ContextBarHeight)
+                        .clip(CircleShape)
+                        .background(MovoColors.bgSurfaceMuted),
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth((progress ?: 0f).coerceIn(0f, 1f))
+                            .height(ContextBarHeight)
+                            .clip(CircleShape)
+                            .background(meterColor),
+                    )
+                }
+                if (canCompact) {
+                    MovoPillButton(
+                        label = stringResource(R.string.context_compact_action),
+                        onClick = {
+                            showPopover = false
+                            onCompact()
+                        },
+                        primary = true,
+                        modifier = Modifier.align(Alignment.End),
+                    )
+                }
+            }
+        }
     }
 }
 
+/** 规范 8.1：用量 ≥ 80% 改为 Amber（只有这一档）。 */
+private const val ContextUsageWarnThreshold = 0.80f
+private val ContextPopoverContentWidth = 216.dp
+private val ContextBarHeight = 4.dp
+
+/** 品牌 Logo（规范 6）：圆形裁切；没有对应 Logo 时为 Indigo 浅底圆 + Cpu 图标（Agent 与 AI）。 */
 @Composable
 private fun ModelBrandMark(
     modelId: String?,
@@ -413,15 +392,10 @@ private fun ModelBrandMark(
         Box(
             modifier = Modifier
                 .size(size)
-                .background(MiuixTheme.colorScheme.primaryContainer, CircleShape),
+                .background(MovoColors.indigoBg, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                imageVector = Icons.Rounded.Dns,
-                contentDescription = null,
-                modifier = Modifier.size(size * 0.56f),
-                tint = MiuixTheme.colorScheme.primary,
-            )
+            MovoIcon(MovoIcons.Cpu, null, size = MovoSize.iconLabel, tint = MovoColors.indigoFg)
         }
     }
 }
