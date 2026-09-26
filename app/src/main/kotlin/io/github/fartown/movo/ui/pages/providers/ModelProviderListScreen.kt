@@ -67,7 +67,7 @@ internal fun ModelProviderListScreen(
     // flow 只建一次；初始值 null = 还在读取，读到之前不先闪「还没有提供商」（B8）。
     val loadedProviders by remember { ProviderRepository.providersFlow() }.collectAsState(initial = null)
     val providers = loadedProviders.orEmpty()
-    val selectedProviderId by RuntimeConfigRepository.selectedProviderIdFlow().collectAsState(initial = null)
+    val selectedProviderId by remember { RuntimeConfigRepository.selectedProviderIdFlow() }.collectAsState(initial = null)
     var searchQuery by remember { mutableStateOf("") }
     var providerToDelete by remember { mutableStateOf<ProviderSetting?>(null) }
     // 对话框退场动画期间仍显示被删除的提供商名称。

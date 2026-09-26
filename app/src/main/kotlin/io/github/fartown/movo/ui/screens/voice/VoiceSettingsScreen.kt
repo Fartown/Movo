@@ -106,7 +106,7 @@ internal fun VoiceSettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
-    val settings by VoiceSettingsRepository.wakeSettingsFlow().collectAsState(initial = null)
+    val settings by remember { VoiceSettingsRepository.wakeSettingsFlow() }.collectAsState(initial = null)
     val listeningState by MovoWakeWordService.listeningState.collectAsState()
     val roleManager = remember { context.getSystemService(RoleManager::class.java) }
     var assistantRole by remember { mutableStateOf(roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)) }
