@@ -111,6 +111,7 @@ import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Text
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import top.yukonga.miuix.kmp.blur.BlendColorEntry
 import top.yukonga.miuix.kmp.blur.BlurDefaults
 import top.yukonga.miuix.kmp.blur.LayerBackdrop
@@ -164,6 +165,8 @@ internal fun AgentChatBody(
     characterName: String? = null,
     isDrawerOpen: Boolean = false,
     initiallyShowLatestMessage: Boolean = false,
+    /** 分享进来的新会话（规范 8.9.1）：空白处显示来源提示与快捷建议，代替首页问候与能力卡。 */
+    shareIntro: io.github.fartown.movo.ui.share.ShareIntro? = null,
     modifier: Modifier = Modifier,
 ) {
     val scrollState = rememberLazyListState()
@@ -242,6 +245,7 @@ internal fun AgentChatBody(
         messageEdit = messageEdit,
         showEmptySuggestions = !isKeyboardVisible,
         characterName = characterName,
+        shareIntro = shareIntro,
         keepBottomAnchored = keepBottomAnchored,
         onBottomAnchorChanged = { keepBottomAnchored = it },
         onSubmit = { text ->
@@ -293,6 +297,7 @@ private fun AgentChatScaffold(
     messageEdit: MessageEditUiState?,
     showEmptySuggestions: Boolean,
     characterName: String?,
+    shareIntro: io.github.fartown.movo.ui.share.ShareIntro?,
     keepBottomAnchored: Boolean,
     onBottomAnchorChanged: (Boolean) -> Unit,
     onSubmit: (String) -> Unit,
@@ -405,14 +410,30 @@ private fun AgentChatScaffold(
                     if (reducedMotion) 0 else -homeExitShift
                 },
         ) {
-            MovoHomeContent(
-                characterName = characterName,
-                showCapabilities = showEmptySuggestions,
-                onSend = onSuggestionClick,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(bottom = bottomPadding),
-            )
+            val composer = LocalConversationComposer.current
+            if (shareIntro != null) {
+                io.github.fartown.movo.ui.share.ShareIntroContent(
+                    intro = shareIntro,
+                    composerText = composer?.text?.toString() ?: input,
+                    onChip = { prompt ->
+                        // 快捷建议 = 以芯片文字为指令连同预填内容发送：先把草稿换成要发的内容，发送后草稿才能清空。
+                        composer?.setTextAndPlaceCursorAtEnd(prompt)
+                        onSubmit(prompt)
+                    },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(bottom = bottomPadding),
+                )
+            } else {
+                MovoHomeContent(
+                    characterName = characterName,
+                    showCapabilities = showEmptySuggestions,
+                    onSend = onSuggestionClick,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(bottom = bottomPadding),
+                )
+            }
         }
         }
     }

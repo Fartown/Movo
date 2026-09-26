@@ -877,6 +877,7 @@ internal class AgentAppState(
     }
 
     fun selectConversation(conversationId: String) {
+        io.github.fartown.movo.ui.share.ShareIntake.clear()
         if (homeState.messageEdit != null) cancelMessageEdit()
         val state = conversationsById[conversationId] ?: return
         fileAttachmentOwnerVersion += 1
@@ -895,6 +896,7 @@ internal class AgentAppState(
     }
 
     fun createConversation() {
+        io.github.fartown.movo.ui.share.ShareIntake.clear()
         if (homeState.messageEdit != null) cancelMessageEdit()
         io.github.fartown.movo.ui.components.AgentConversationDraftStore.shared.remove(null)
         fileAttachmentOwnerVersion += 1
@@ -905,6 +907,19 @@ internal class AgentAppState(
             searchQuery = "",
         )
         refreshConversationSummaries()
+    }
+
+    /**
+     * 分享到 Movo（规范 8.9.1）：新建会话，文字预填进输入框，图片与文件作为附件挂上，并请求输入框获焦。
+     * 必须先新建会话再挂附件：附件解析回来时会校验会话没被切走。
+     */
+    fun openSharedContent(content: io.github.fartown.movo.ui.share.SharedContent) {
+        createConversation()
+        updateCurrentConversation(homeState.copy(input = content.text))
+        content.imagePaths.forEach(::attachImage)
+        content.filePaths.forEach(::attachFilePath)
+        io.github.fartown.movo.ui.share.ShareIntake.intro = io.github.fartown.movo.ui.share.ShareIntro.of(content)
+        io.github.fartown.movo.ui.components.ComposerFocusRequest.request()
     }
 
     fun startCharacterConversation(binding: RoleplayBinding, greeting: String) {
@@ -1186,6 +1201,8 @@ internal class AgentAppState(
             return
         }
         val runtimePrompt = AgentFileReferencePromptCodec.format(prompt, fileReferences)
+        // 真正发出：分享进来的那条会话已经开始，来源提示与快捷建议不再显示（规范 8.9.1）。
+        io.github.fartown.movo.ui.share.ShareIntake.clear()
 
         val edit = homeState.messageEdit
 

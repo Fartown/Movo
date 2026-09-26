@@ -221,4 +221,19 @@
   <string name="movo_overlay_mic_required">需要麦克风权限才能开始语音</string>
   <string name="movo_overlay_voice_failed">暂时无法开始语音，请回到 Movo 再试</string>
   <string name="movo_failure_network">网络连接中断，模型没有返回结果，请重试</string>
+  <!-- 分享到 Movo（规范 8.9.1） -->
+  <string name="share_intro_hint">补一句要 Movo 做什么</string>
+  <string name="share_intro_from_source">来自「%1$s」· 补一句要 Movo 做什么</string>
+  <plurals name="share_intro_skipped">
+    <item quantity="other">有 %1$d 项没能添加：%2$s</item>
+  </plurals>
+  <string name="share_skip_too_large">超过 32 MiB</string>
+  <string name="share_skip_too_many_images">图片超过 8 张</string>
+  <string name="share_skip_unreadable">无法读取</string>
+  <string name="share_chip_summarize">总结</string>
+  <string name="share_chip_translate">翻译</string>
+  <string name="share_chip_explain">解释</string>
+  <string name="share_chip_describe_image">描述图片</string>
+  <string name="share_chip_extract_text">提取文字</string>
+  <string name="share_chip_key_points">总结要点</string>
 </resources>

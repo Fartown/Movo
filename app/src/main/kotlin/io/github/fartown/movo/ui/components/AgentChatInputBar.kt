@@ -185,6 +185,13 @@ internal fun AgentChatInputBar(
             keyboard?.show()
         }
     }
+    // 外部请求获焦（分享到 Movo 打开时，规范 8.9.1）：只处理刚发出的请求，旧请求不会在之后的输入框上重放。
+    LaunchedEffect(ComposerFocusRequest.generation) {
+        if (!voice.active && ComposerFocusRequest.consume()) {
+            runCatching { focusRequester.requestFocus() }
+            keyboard?.show()
+        }
+    }
     LaunchedEffect(voice.active, focusAfterVoice) {
         if (!voice.active && focusAfterVoice) {
             focusAfterVoice = false

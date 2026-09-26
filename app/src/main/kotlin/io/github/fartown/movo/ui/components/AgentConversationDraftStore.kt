@@ -1,6 +1,8 @@
 package io.github.fartown.movo.ui.components
 
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 
 /** Text, selection and composing state belong to the conversation, not its window. */
@@ -62,3 +64,21 @@ internal data class RunControls(
 )
 
 internal val LocalRunControls = staticCompositionLocalOf { RunControls() }
+
+/** 请求当前输入框获焦并弹出键盘（例如分享到 Movo 打开浮层时）。请求 3 秒内有效、只被消费一次。 */
+internal object ComposerFocusRequest {
+    var generation by androidx.compose.runtime.mutableIntStateOf(0)
+        private set
+    private var requestedAt = 0L
+
+    fun request() {
+        requestedAt = android.os.SystemClock.uptimeMillis()
+        generation++
+    }
+
+    fun consume(): Boolean {
+        val pending = requestedAt > 0L && android.os.SystemClock.uptimeMillis() - requestedAt < 3_000L
+        requestedAt = 0L
+        return pending
+    }
+}
