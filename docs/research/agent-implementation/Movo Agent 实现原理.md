@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 调研对象 | Movo 仓库中产品名为 Eta 的 Android Agent |
+| 调研对象 | Movo 仓库中产品名为 Movo 的 Android Agent |
 | 目的与类型 | 理解现有实现原理；机制型调研 |
 | 范围 | 普通聊天入口、Runtime、模型循环、工具分发、上下文与恢复 |
 | 未展开 | 角色改写、各厂商 Hook 内部适配、全部 Provider 兼容细节、真机验收 |
@@ -77,7 +77,7 @@ Executor 加载兼容的 Skill 索引、长期记忆和本次 MCP 快照，创�
 
 ### 4.2 上下文与模型请求
 
-`AgentPromptBuilder` 将配置系统提示词、Eta 身份和手机操作约束、按条件注入的工具规则、记忆与 Skill 索引、历史和当前输入组成消息。`AgentToolCatalog` 根据开关与设备能力生成 JSON Schema，再追加 MCP 等本次工具。
+`AgentPromptBuilder` 将配置系统提示词、Movo 身份和手机操作约束、按条件注入的工具规则、记忆与 Skill 索引、历史和当前输入组成消息。`AgentToolCatalog` 根据开关与设备能力生成 JSON Schema，再追加 MCP 等本次工具。
 
 `ProviderClientFactory` 根据 `providerType` 和 `openAiEndpointMode` 选择三个协议实现。以 Chat Completions 为例，Provider 用 OkHttp 发 POST、读取 SSE，将文本和工具增量转为统一事件，最终返回 `ProviderResponse`。模型推理由配置的模型服务承担。
 
@@ -152,7 +152,7 @@ stateDiagram-v2
 
 ## 7. 冲突与未知项
 
-没有把目录名 Movo 当作运行时产品名；当前源码仍使用 Eta。
+没有把目录名 Movo 当作运行时产品名；当前源码仍使用 Movo。
 
 未取得实际设备 Root、无障碍授权、ROM、模型与远程 MCP 配置。未对进程被杀、持久化失败、断连等场景做故障注入。角色改写、厂商 Hook 内部适配和全部协议兼容分支没有全面审计。
 
@@ -166,33 +166,33 @@ stateDiagram-v2
 
 | 章节 | 文件 | 关键符号或职责 |
 |---|---|---|
-| 4、5 | `app/src/main/kotlin/io/github/mangi/eta/ui/app/AgentAppState.kt` | RunRequest 提交、结果保存与恢复 |
-| 4 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRuntimeClient.kt` | Messenger 客户端 |
-| 4、5 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRuntimeService.kt` | startRun、executeRun、persistRunArtifacts |
-| 4 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRuntimeRunExecutor.kt` | 工具初始化、模型执行与检查点回调 |
-| 4 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentModelClient.kt` | complete、ToolExecutor |
-| 4 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentPromptBuilder.kt` | 系统消息与 Skill 索引 |
-| 4、5 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentLoop.kt` | run、executeTool |
-| 4 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/ProviderClientFactory.kt` | 协议选择 |
-| 4 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/OpenAiChatCompletionsProvider.kt` | HTTP 与 SSE |
-| 4 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentToolCatalog.kt` | 工具 schema 汇总 |
-| 4 | `app/src/main/kotlin/io/github/mangi/eta/agent/tool/AgentLocalTools.kt` | 本地路由、tapElement、Skill 读取 |
-| 4 | `app/src/main/kotlin/io/github/mangi/eta/agent/device/RootShellDeviceController.kt` | 观察与设备动作 |
-| 4 | `app/src/main/kotlin/io/github/mangi/eta/agent/accessibility/AgentAccessibilityService.kt` | clickNode、performNodeAction、dispatchGesture |
-| 4 | `app/src/main/kotlin/io/github/mangi/eta/agent/tool/AgentStructuredDeviceTools.kt` | 闹钟 Intent、AudioManager |
-| 4 | `app/src/main/kotlin/io/github/mangi/eta/agent/terminal/RootShellTerminalController.kt` | shell 工具执行 |
-| 4 | `app/src/main/kotlin/io/github/mangi/eta/agent/terminal/ShellProcessSupervisor.kt` | 真实进程启动与管理 |
-| 4 | `app/src/main/kotlin/io/github/mangi/eta/agent/mcp/McpRunContext.kt` | schema 投影与 RoutingToolExecutor |
-| 4 | `app/src/main/kotlin/io/github/mangi/eta/agent/mcp/McpHttpClient.kt` | tools/call |
-| 5 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentModelRetry.kt` | 有限请求重试 |
-| 5 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentContextBudget.kt` | 上下文估算与阈值 |
-| 5 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentContextSession.kt` | 摘要候选的持久化提交 |
-| 5 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentContextCompactor.kt` | 安全分组与模型摘要 |
-| 5 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRunController.kt` | pause、cancel、steer |
-| 5 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRuntimeSession.kt` | 唯一终态 |
-| 5 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRunCheckpointStore.kt` | 执行中检查点 |
-| 5 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRuntimeResultStore.kt` | 结果 outbox |
-| 5 | `app/src/main/kotlin/io/github/mangi/eta/ui/app/AgentRunRecoveryCoordinator.kt` | completed / reattach / interrupted 判定 |
+| 4、5 | `app/src/main/kotlin/io/github/fartown/movo/ui/app/AgentAppState.kt` | RunRequest 提交、结果保存与恢复 |
+| 4 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeClient.kt` | Messenger 客户端 |
+| 4、5 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeService.kt` | startRun、executeRun、persistRunArtifacts |
+| 4 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeRunExecutor.kt` | 工具初始化、模型执行与检查点回调 |
+| 4 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentModelClient.kt` | complete、ToolExecutor |
+| 4 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentPromptBuilder.kt` | 系统消息与 Skill 索引 |
+| 4、5 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentLoop.kt` | run、executeTool |
+| 4 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/ProviderClientFactory.kt` | 协议选择 |
+| 4 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/OpenAiChatCompletionsProvider.kt` | HTTP 与 SSE |
+| 4 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentToolCatalog.kt` | 工具 schema 汇总 |
+| 4 | `app/src/main/kotlin/io/github/fartown/movo/agent/tool/AgentLocalTools.kt` | 本地路由、tapElement、Skill 读取 |
+| 4 | `app/src/main/kotlin/io/github/fartown/movo/agent/device/RootShellDeviceController.kt` | 观察与设备动作 |
+| 4 | `app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt` | clickNode、performNodeAction、dispatchGesture |
+| 4 | `app/src/main/kotlin/io/github/fartown/movo/agent/tool/AgentStructuredDeviceTools.kt` | 闹钟 Intent、AudioManager |
+| 4 | `app/src/main/kotlin/io/github/fartown/movo/agent/terminal/RootShellTerminalController.kt` | shell 工具执行 |
+| 4 | `app/src/main/kotlin/io/github/fartown/movo/agent/terminal/ShellProcessSupervisor.kt` | 真实进程启动与管理 |
+| 4 | `app/src/main/kotlin/io/github/fartown/movo/agent/mcp/McpRunContext.kt` | schema 投影与 RoutingToolExecutor |
+| 4 | `app/src/main/kotlin/io/github/fartown/movo/agent/mcp/McpHttpClient.kt` | tools/call |
+| 5 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentModelRetry.kt` | 有限请求重试 |
+| 5 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentContextBudget.kt` | 上下文估算与阈值 |
+| 5 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentContextSession.kt` | 摘要候选的持久化提交 |
+| 5 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentContextCompactor.kt` | 安全分组与模型摘要 |
+| 5 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRunController.kt` | pause、cancel、steer |
+| 5 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeSession.kt` | 唯一终态 |
+| 5 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRunCheckpointStore.kt` | 执行中检查点 |
+| 5 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeResultStore.kt` | 结果 outbox |
+| 5 | `app/src/main/kotlin/io/github/fartown/movo/ui/app/AgentRunRecoveryCoordinator.kt` | completed / reattach / interrupted 判定 |
 
 ## 10. 关联文档与过程件
 

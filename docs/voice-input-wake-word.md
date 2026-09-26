@@ -1,11 +1,11 @@
-# Eta 语音输入与自定义唤醒词方案
+# Movo 语音输入与自定义唤醒词方案
 
 > **方案范围更新（2026-09-22）**：后续完整语音助手交付以 [Movo 连续语音对话方案](solutions/voice-conversation.md) 为准。用户已明确要求自然停顿自动发送、有声回复、打断与连续多轮，本文件原先将这些能力后置的范围被新方案取代。以下保留历史设计和已实现记录；既有手动停止测试不能作为完整语音对话验收。
 
 > 状态（2026-09-22）：已接入豆包双向流式 ASR 和内置 Sherpa-ONNX 本地唤醒模型；Release 云真机验证了语音输入与唤醒链路，权限撤销/恢复修复已复测。仍观察到识别文字差异及提交后模型空响应，详见本轮测试报告。
 > **听写策略更新（2026-09-22）**：语音输入仅使用豆包；未配置凭证时提示前往设置，连接或识别失败时提示错误并结束本次听写，不切换系统识别。
-> 调研仓库：当前 cloud checkout（Origin `superchao/genesis`，内容对应 Fartown/Movo / Eta Android 应用）  
-> 版本锚点：`applicationId io.github.mangi.eta`，`versionName 3.0.5`，`minSdk 34` / `targetSdk 36`
+> 调研仓库：当前 cloud checkout（Origin `superchao/genesis`，内容对应 Fartown/Movo / Movo Android 应用）  
+> 版本锚点：`applicationId io.github.fartown.movo`，`versionName 3.0.5`，`minSdk 34` / `targetSdk 36`
 > 读者：产品负责人（Chao）与后续实现同学  
 > **已拍板（2026-09-20）**：① App 打开后即常听（等待唤醒词）② ASR = **豆包语音双向流式 WebSocket（BYOK）**，文档见 [双向流式语音识别 WebSocket](https://docs.volcengine.com/docs/DoubaoVoice/bidirectional-streaming-automatic-speech-recognition-websocket?lang=zh) ③ 默认唤醒词 **「小王同学」**，且允许用户在设置里修改
 
@@ -21,9 +21,9 @@
 - 自定义词支持词典覆盖的中文与英文单词。非法词拒绝保存；修改后重建仅含当前词的关键词图。没有系统识别降级路径。
 - KWS 前有能量门控（`WakeEnergyGate`）：每 100 ms 计算一次音量，噪声底低于 -50 dBFS（安静环境）时，只有高于噪声底 6 dB 且不低于 -62 dBFS 才创建识别流并送入模型；开门时先补送 1 s 预录，最后一个大声片段后再送 2 s 才关门并释放识别流。收尾必须长于 KWS 的出结果延迟（离线复现约为唤醒词峰值后 1.3 s），原先 1 s 的收尾会把命中时刻截掉。噪声底达到 -50 dBFS 及以上时不再拦截，所有音频照常送入模型：吵闹环境里唤醒词只比噪声高几 dB，门控无法既保住唤醒又省下推理。门控只降低推理 CPU，不影响麦克风采集本身。2026-09-23 云真机（小米 15，机房噪声约 -25 dBFS）上，旧参数（8 dB 门槛、0.6 s 预录、1 s 收尾、无放行）85% 音量 0/6 命中，未门控 3/3；离线回放与安静环境模拟见 `tmp/tasks/2026-09-23-wake-power/offline/`。
 - 运行日志每累计 10 分钟音频以及每次监听结束时记录 `voice / wake.usage`：`audio_s` 采集时长、`model_s` 实际送入模型时长、`gate_opens` 开门次数、`cpu_ms` 唤醒线程 CPU 时间、`floor_db` 当时的噪声底，只含计数不含音频。同一内容也写入 logcat（`Wake usage:`）。
-- 息屏时暂停监听（2026-09-23 拍板）：`EtaWakeWordService` 监听 `ACTION_SCREEN_OFF` / `ACTION_SCREEN_ON`，息屏时暂停引擎并释放 `AudioRecord`，亮屏后若不在听写中则自动恢复；前台服务与已加载的模型保留，恢复不需要回到 App。原因：录音期间 audioserver 以 Eta 的 WorkSource 持有 `AudioIn` 部分唤醒锁（云真机息屏 10 分钟内占 98%），用户实机一晚「保持唤醒」8 小时 41 分，Eta 占当晚总耗电约 30%（系统电量页的百分比是占该时段总耗电的份额，不是电池容量，见 AOSP `BatteryDiffEntry`）。App 无法使用系统助手的 DSP 低功耗唤醒通路，所以息屏时不能用自定义唤醒词唤起。通知与设置页显示「息屏时暂停监听，亮屏后自动恢复」。
-- 下拉快捷开关（`EtaWakeTileService`，「语音唤醒」磁贴）：点按开关语音唤醒，长按进入「语音与唤醒词」设置；副标题显示监听中、息屏暂停、对话中、已关闭等状态。关闭时只写入设置，由 `EtaWakeWordController` 停止服务。开启时麦克风前台服务只能在界面可见时启动，因此经透明的 `WakeTileBridgeActivity` 中转：写入设置、在可见状态下启动服务，等服务转入前台（最多 3 s）后关闭。缺少麦克风权限时点按直接进入语音设置。HyperOS 需在控制中心编辑里手动添加该磁贴。
-- 监听范围（2026-09-23，设置项「监听范围」）：默认「仅在 Eta 打开时」，任何 Eta 界面都不可见时暂停引擎、释放 `AudioRecord`（Activity 离开后防抖 1.5 s，避免 Eta 内部切页反复开关麦克风），回到 Eta 自动恢复；可选「亮屏时（含其他 App）」保持现有行为。两种范围在息屏时都暂停。依据：高德地图 17.00 的「小德小德」只在其界面可见时录音，切后台、息屏、导航中退后台都会立即释放麦克风；相同条件下高德与 Eta 的录音分项估算几乎相同（6.10 / 5.98 mAh/10 min），省电来自监听时间短。调研与实测见 `tmp/tasks/2026-09-23-wake-lowpower-research/`。
+- 息屏时暂停监听（2026-09-23 拍板）：`MovoWakeWordService` 监听 `ACTION_SCREEN_OFF` / `ACTION_SCREEN_ON`，息屏时暂停引擎并释放 `AudioRecord`，亮屏后若不在听写中则自动恢复；前台服务与已加载的模型保留，恢复不需要回到 App。原因：录音期间 audioserver 以 Movo 的 WorkSource 持有 `AudioIn` 部分唤醒锁（云真机息屏 10 分钟内占 98%），用户实机一晚「保持唤醒」8 小时 41 分，Movo 占当晚总耗电约 30%（系统电量页的百分比是占该时段总耗电的份额，不是电池容量，见 AOSP `BatteryDiffEntry`）。App 无法使用系统助手的 DSP 低功耗唤醒通路，所以息屏时不能用自定义唤醒词唤起。通知与设置页显示「息屏时暂停监听，亮屏后自动恢复」。
+- 下拉快捷开关（`MovoWakeTileService`，「语音唤醒」磁贴）：点按开关语音唤醒，长按进入「语音与唤醒词」设置；副标题显示监听中、息屏暂停、对话中、已关闭等状态。关闭时只写入设置，由 `MovoWakeWordController` 停止服务。开启时麦克风前台服务只能在界面可见时启动，因此经透明的 `WakeTileBridgeActivity` 中转：写入设置、在可见状态下启动服务，等服务转入前台（最多 3 s）后关闭。缺少麦克风权限时点按直接进入语音设置。HyperOS 需在控制中心编辑里手动添加该磁贴。
+- 监听范围（2026-09-23，设置项「监听范围」）：默认「仅在 Movo 打开时」，任何 Movo 界面都不可见时暂停引擎、释放 `AudioRecord`（Activity 离开后防抖 1.5 s，避免 Movo 内部切页反复开关麦克风），回到 Movo 自动恢复；可选「亮屏时（含其他 App）」保持现有行为。两种范围在息屏时都暂停。依据：高德地图 17.00 的「小德小德」只在其界面可见时录音，切后台、息屏、导航中退后台都会立即释放麦克风；相同条件下高德与 Movo 的录音分项估算几乎相同（6.10 / 5.98 mAh/10 min），省电来自监听时间短。调研与实测见 `tmp/tasks/2026-09-23-wake-lowpower-research/`。
 - 麦克风权限成功后持久化开启状态。缺权限时不启动麦服务；停止或销毁时清理通知；返回 App 时重新检查权限。通知分别表示启动、实际监听、听写暂停和失败。
 - Release 3.0.5 的修复构建及本轮云真机证据保存在 `tmp/tasks/2026-09-22-voice-fix-regression/`；`build-r2.log` 对应 30 项语音相关单测与 Release 构建。测试报告区分旧包失败、首次修复、权限状态追加修复。
 
@@ -41,7 +41,7 @@
 
 ## 0. 一句话结论
 
-Eta **已经具备「系统助理入口 → 浮窗 → Runtime 对话」整条链路**，但浮窗与聊天栏目前都是**纯文字输入**；`RECORD_AUDIO` 已声明却从未运行时申请或使用。
+Movo **已经具备「系统助理入口 → 浮窗 → Runtime 对话」整条链路**，但浮窗与聊天栏目前都是**纯文字输入**；`RECORD_AUDIO` 已声明却从未运行时申请或使用。
 
 按已拍板方向，目标体验是：
 
@@ -58,7 +58,7 @@ Eta **已经具备「系统助理入口 → 浮窗 → Runtime 对话」整条�
 
 ### 1.1 产品是什么
 
-Eta 是面向 Android 14+ 的**第三方系统级 AI 助手**（单模块 `:app`）：
+Movo 是面向 Android 14+ 的**第三方系统级 AI 助手**（单模块 `:app`）：
 
 - 应用内聊天（Compose + MIUIX）
 - 数字助理角色：电源键 / `ACTION_ASSIST` / `VoiceInteractionService` → 全屏浮窗
@@ -69,14 +69,14 @@ Eta 是面向 Android 14+ 的**第三方系统级 AI 助手**（单模块 `:app`
 
 | 能力 | 现状 | 关键路径（绝对路径前缀 `/workspace/`） |
 | --- | --- | --- |
-| 应用内聊天输入 | `AgentChatInputBar`：文本框 + 附件 + 发送/停止，**无麦克风** | `app/src/main/kotlin/io/github/mangi/eta/ui/components/AgentChatInputBar.kt` |
+| 应用内聊天输入 | `AgentChatInputBar`：文本框 + 附件 + 发送/停止，**无麦克风** | `app/src/main/kotlin/io/github/fartown/movo/ui/components/AgentChatInputBar.kt` |
 | 提交消息 | `SubmitMessage` → `AgentAppState.sendCurrentMessage` | `ui/app/AgentAppRoot.kt`、`AgentAppState.kt` |
-| 数字助理浮窗 | `EtaAssistantOverlayService` + `EtaVoicePanel`：**键盘文本** | `agent/voice/EtaAssistantOverlayService.kt`、`EtaVoicePanel.kt` |
-| 浮窗提交 | `submitPrompt(text)` → Runtime，`handoff.source = "eta_voice"` | 同上 + `agent/runtime/AgentRuntimeWire.kt` |
-| 系统入口 | VIS / ASSIST / 电源键 Hook | `EtaVoiceInteractionService.kt`、`hook/system/` |
+| 数字助理浮窗 | `MovoAssistantOverlayService` + `MovoVoicePanel`：**键盘文本** | `agent/voice/MovoAssistantOverlayService.kt`、`MovoVoicePanel.kt` |
+| 浮窗提交 | `submitPrompt(text)` → Runtime，`handoff.source = "movo_voice"` | 同上 + `agent/runtime/AgentRuntimeWire.kt` |
+| 系统入口 | VIS / ASSIST / 电源键 Hook | `MovoVoiceInteractionService.kt`、`hook/system/` |
 | 图片附件 | 相册选图，无拍照 CameraX | `AgentChatFileAttachments.kt` |
 | TTS / 朗读 | **无**（文档明确：当前不语音朗读） | `docs/TECHNICAL.md` |
-| 厂商语音 | 小爱/小布接管复用**厂商 ASR/TTS**，不是 Eta 自己的麦 | `hook/xiaoai/`、`hook/breeno/` |
+| 厂商语音 | 小爱/小布接管复用**厂商 ASR/TTS**，不是 Movo 自己的麦 | `hook/xiaoai/`、`hook/breeno/` |
 
 **文字 → Agent 数据流（已存在，语音只需接到「文本」这一步）：**
 
@@ -85,19 +85,19 @@ Eta 是面向 Android 14+ 的**第三方系统级 AI 助手**（单模块 `:app`
   ├─ 应用内：AgentChatInputBar.onSubmit
   │     → AgentAppState.sendCurrentMessage
   │     → AgentRuntimeClient.run (handoff: agent UI)
-  └─ 浮窗：EtaVoicePanel → submitPrompt
-        → AgentRuntimeClient.run (handoff: eta_voice, 可附屏幕截图)
+  └─ 浮窗：MovoVoicePanel → submitPrompt
+        → AgentRuntimeClient.run (handoff: movo_voice, 可附屏幕截图)
               → AgentRuntimeService → AgentLoop → OkHttp SSE 云端模型
 ```
 
 ### 1.3 现有「语音」相关代码（容易误解，需分清）
 
-| 组件 | 作用 | 与「Eta 听你说话」的关系 |
+| 组件 | 作用 | 与「Movo 听你说话」的关系 |
 | --- | --- | --- |
 | `RECORD_AUDIO` 权限声明 | Manifest 已声明 | **从未** `requestPermissions` / 权限健康页未列麦克风 |
-| `EtaRecognitionService`（`:recognition` 进程） | 满足数字助理角色资格；若系统调用则转发给外部 ASR | **浮窗不调用** |
+| `MovoRecognitionService`（`:recognition` 进程） | 满足数字助理角色资格；若系统调用则转发给外部 ASR | **浮窗不调用** |
 | `SystemSpeechRecognizer` | 解析系统默认 / 厂商 `RecognitionService`，否则尝试 on-device | **现成可复用的 ASR 工厂**，UI 未接线 |
-| `EtaVoiceInteraction*` | 系统助理会话，打开浮窗 | 是「唤醒入口」，不是热词检测 |
+| `MovoVoiceInteraction*` | 系统助理会话，打开浮窗 | 是「唤醒入口」，不是热词检测 |
 | `HotwordSelfHealHooks` | 息屏后恢复 **Google Hey Google** | **与自定义「xx」无关**，勿混用 |
 | 字符串 `voice_listening` / `voice_tap_to_speak` 等 | 中英繁已本地化 | UI 文案已备好，逻辑未用 |
 
@@ -134,23 +134,23 @@ Eta 是面向 Android 14+ 的**第三方系统级 AI 助手**（单模块 `:app`
 **与现有代码的接法：**
 
 1. **聊天页**：在 `AgentChatInputBar` 增加麦克风；最终文本调用已有 `onSubmit(text)` → `SubmitMessage` → `sendCurrentMessage`。不必改 Runtime 协议。
-2. **助理浮窗**：在 `EtaVoicePanel` 用已有文案（「点击说话」「正在聆听…」）；识别完成调用 `EtaAssistantOverlayService.submitPrompt(transcript)`（或先写入输入框再确认）。
-3. **ASR 引擎封装**：`agent/voice/asr/EtaAsrSessionFactory.kt` 仅创建豆包听写会话；统一回调 `onPartial` / `onFinal` / `onError`，失败后结束会话。
+2. **助理浮窗**：在 `MovoVoicePanel` 用已有文案（「点击说话」「正在聆听…」）；识别完成调用 `MovoAssistantOverlayService.submitPrompt(transcript)`（或先写入输入框再确认）。
+3. **ASR 引擎封装**：`agent/voice/asr/MovoAsrSessionFactory.kt` 仅创建豆包听写会话；统一回调 `onPartial` / `onFinal` / `onError`，失败后结束会话。
 4. **权限**：首次使用前运行时申请 `RECORD_AUDIO`；纳入 Permission Health 列表（当前未列麦克风）。
 
 **不包含（本能力可后置）：** TTS 播报回复、打断说话、多轮自动听。
 
 ### 2.2 能力 B — 自定义语音提示词 / 唤醒词（如「xx」）
 
-**目标：** 设备在特定条件下持续听环境音，检测到约定短语后**唤起 Eta 助理**（浮窗或会话），再进入听写或等待用户说话。
+**目标：** 设备在特定条件下持续听环境音，检测到约定短语后**唤起 Movo 助理**（浮窗或会话），再进入听写或等待用户说话。
 
 **重要澄清：**
 
 | 已有「唤醒」 | 是不是自定义热词？ |
 | --- | --- |
 | 设为默认数字助理 + 电源键 / 手势 | ❌ 系统入口，不是「xx」 |
-| 小布 / 小爱入口接管 | ❌ 厂商热词 + Eta 接棒 |
-| Hey Google 自愈 | ❌ 只修 Google，不服务 Eta 品牌词 |
+| 小布 / 小爱入口接管 | ❌ 厂商热词 + Movo 接棒 |
+| Hey Google 自愈 | ❌ 只修 Google，不服务 Movo 品牌词 |
 | **「xx」常听** | ✅ 本方案新增 |
 
 **唤醒后做什么（建议默认）：**
@@ -158,8 +158,8 @@ Eta 是面向 Android 14+ 的**第三方系统级 AI 助手**（单模块 `:app`
 ```
 检测到唤醒词
   →（可选）短震动 / 提示音
-  → EtaVoiceInteractionService.requestSession()
-     或直接 EtaAssistantOverlayService.show(...)
+  → MovoVoiceInteractionService.requestSession()
+     或直接 MovoAssistantOverlayService.show(...)
   → 浮窗出现后自动进入「听写」一小段时间（能力 A）
   → 超时无语音则保持浮窗键盘态
 ```
@@ -186,7 +186,7 @@ Eta 是面向 Android 14+ 的**第三方系统级 AI 助手**（单模块 `:app`
 
 ## 3. Android 方案对比（端侧 vs 云端）
 
-评分说明：★ 越多越利于 Eta 当前产品（中文、自定义词、BYOK 隐私、APK、商店政策）。「自定义词」特指用户可改成任意「xx」类短语。
+评分说明：★ 越多越利于 Movo 当前产品（中文、自定义词、BYOK 隐私、APK、商店政策）。「自定义词」特指用户可改成任意「xx」类短语。
 
 ### 3.1 语音识别（ASR）方案
 
@@ -209,7 +209,7 @@ Eta 是面向 Android 14+ 的**第三方系统级 AI 助手**（单模块 `:app`
 | **Sherpa-ONNX KWS** | **开放词表**，改 keywords 即可（拼音@汉字） | **强（Wenetspeech 等）** | 低 | 优 | 良（模型 ~3M 级仍需常听） | 中（native + onnx） | 免费（Apache + 模型许可自查） | 误唤醒需调阈值；集成 JNI | **中文自定义「xx」强烈推荐评估** |
 | **openWakeWord** | 可训练自定义 | 官方偏英文 | 低 | 优 | 良 | 中 | 免费 | 中文需自训数据 | 非首选 |
 | **Snowboy 等旧方案** | 有 | 一般 | 低 | 优 | 良 | 小 | — | 项目停滞 | **不推荐** |
-| **系统 Assistant / Hotword API** | 基本不可自定义 Eta 品牌词 | — | — | — | — | 0 | — | 权限与 OEM 封闭 | 只能继续用现有 VIS/电源键 |
+| **系统 Assistant / Hotword API** | 基本不可自定义 Movo 品牌词 | — | — | — | — | 0 | — | 权限与 OEM 封闭 | 只能继续用现有 VIS/电源键 |
 | **厂商热词（小爱/小布）** | 厂商词 | 强 | 极低 | 厂商云 | 优（硬件通路） | 0 | — | 需 LSPosed；非自有品牌 | 已有接管路径，**不能替代「xx」** |
 | **云端流式 ASR 当「伪唤醒」** | 任意 | 强 | 高、贵 | 差 | 差 | 小 | 高 | 商店对常传麦极敏感 | **拒绝作为默认常听** |
 
@@ -219,7 +219,7 @@ Eta 是面向 Android 14+ 的**第三方系统级 AI 助手**（单模块 `:app`
 - **要「xx」可改、中文好、可离线、无 AccessKey**：Sherpa-ONNX KWS。  
 - **要最少踩坑、体积最小、接受商业授权**：Porcupine。  
 - **其他云端 ASR**：仅作为调研对比，不接入本方案听写。
-- **不要**把 Whisper 端侧当常听；**不要**用 Google Hotword Hook 冒充 Eta 唤醒。
+- **不要**把 Whisper 端侧当常听；**不要**用 Google Hotword Hook 冒充 Movo 唤醒。
 
 ---
 
@@ -229,7 +229,7 @@ Eta 是面向 Android 14+ 的**第三方系统级 AI 助手**（单模块 `:app`
 
 | 层级 | 目标行为 | 选型 |
 | --- | --- | --- |
-| 常听起点 | **App 打开并取得麦权后**启动唤醒监听；通知栏可停；设置可关 | `EtaWakeWordService` + `FOREGROUND_SERVICE_MICROPHONE` |
+| 常听起点 | **App 打开并取得麦权后**启动唤醒监听；通知栏可停；设置可关 | `MovoWakeWordService` + `FOREGROUND_SERVICE_MICROPHONE` |
 | 自定义热词 | 本地 KWS；**默认词 + 设置可改** | **Sherpa-ONNX KWS（主，改 keywords 即可）** / Porcupine（备，改词需重新导出 `.ppn`） |
 | ASR | **豆包双向流式 WebSocket BYOK**；仅听写窗上传 | `DoubaoBidirectionalAsrEngine`（官方 SAUC 协议） |
 | 听写失败处理 | 无 Key 提示配置；连接/识别失败提示错误并结束 | 仅使用豆包，不切换识别服务 |
@@ -241,15 +241,15 @@ Eta 是面向 Android 14+ 的**第三方系统级 AI 助手**（单模块 `:app`
 ### 4.2 组件划分
 
 ```
-io.github.mangi.eta.agent.voice/
+io.github.fartown.movo.agent.voice/
   asr/
-    EtaAsrEngine
+    MovoAsrEngine
     DoubaoBidirectionalAsrEngine  // 主：官方双向流式 WebSocket（SAUC）
   wake/
     WakeWordEngine
     SherpaWakeEngine
-  EtaMicSessionCoordinator
-  EtaWakeWordService
+  MovoMicSessionCoordinator
+  MovoWakeWordService
 data/ + ui/settings/
   DoubaoSpeechCredentials     // APP ID+Access Token 或 Api-Key；Resource-Id；加密存
   WakePhrasePreferences       // default=小王同学 + userOverride
@@ -261,7 +261,7 @@ data/ + ui/settings/
 [双向流式语音识别 WebSocket（DoubaoVoice）](https://docs.volcengine.com/docs/DoubaoVoice/bidirectional-streaming-automatic-speech-recognition-websocket?lang=zh)  
 （同系内容亦见于火山文档 `6561/1354869`。）
 
-产品侧：设置页「豆包语音」——用户自备控制台凭证，Eta **不内置官方 Key**。
+产品侧：设置页「豆包语音」——用户自备控制台凭证，Movo **不内置官方 Key**。
 
 | 端点 | URL | 选用 |
 | --- | --- | --- |
@@ -304,9 +304,9 @@ data/ + ui/settings/
 **主路径：App 常听 → 唤醒 → 云 ASR → Runtime**
 
 ```
-MainActivity / EtaApp 进入前台（或用户开启「语音唤醒」）
+MainActivity / MovoApp 进入前台（或用户开启「语音唤醒」）
   → 申请 RECORD_AUDIO + 通知权限
-  → startForegroundService(EtaWakeWordService)
+  → startForegroundService(MovoWakeWordService)
   → AudioRecord → 本地 WakeWordEngine（音频不出设备）
   → onDetect("小王同学" 或用户词)
   → 暂停 KWS → Overlay.show / requestSession()
@@ -326,13 +326,13 @@ MainActivity / EtaApp 进入前台（或用户开启「语音唤醒」）
 
 | 优先级 | 文件 | 改动意图 |
 | --- | --- | --- |
-| P0 | 新建 `agent/voice/EtaWakeWordService.kt` | App 打开后常听 FGS |
+| P0 | 新建 `agent/voice/MovoWakeWordService.kt` | App 打开后常听 FGS |
 | P0 | 新建 `agent/voice/asr/DoubaoBidirectionalAsrEngine.kt` + 凭证 DataStore | 官方双向流式 WebSocket 听写 |
-| P0 | `ui/MainActivity.kt` / `EtaApp` 生命周期 | 进入可用态后拉起/停用常听 |
+| P0 | `ui/MainActivity.kt` / `MovoApp` 生命周期 | 进入可用态后拉起/停用常听 |
 | P0 | `AndroidManifest.xml` | `FOREGROUND_SERVICE_MICROPHONE` + FGS 声明 |
 | P0 | Prefs / 设置页 | 豆包语音凭证；**默认唤醒词展示 + 用户编辑**；常听总开关 |
 | P0 | `ui/app/AgentAppState.kt` + Permission Health | 麦克风 +「语音唤醒运行中」状态 |
-| P0 | `agent/voice/EtaAssistantOverlayService.kt` / `EtaVoicePanel.kt` | 唤醒后自动听写 → `submitPrompt` |
+| P0 | `agent/voice/MovoAssistantOverlayService.kt` / `MovoVoicePanel.kt` | 唤醒后自动听写 → `submitPrompt` |
 | P1 | `ui/components/AgentChatInputBar.kt` | 手动麦克风（直连豆包 ASR） |
 | — | `hook/system/HotwordSelfHealHooks.kt` | **不要**接业务 |
 
@@ -340,7 +340,7 @@ MainActivity / EtaApp 进入前台（或用户开启「语音唤醒」）
 
 | 需求 | Manifest / 运行时 |
 | --- | --- |
-| App 打开后常听 | **必须** `FOREGROUND_SERVICE_MICROPHONE` + 持续通知「Eta 正在等待唤醒词（当前：xxx）」；通知 Action：停止 |
+| App 打开后常听 | **必须** `FOREGROUND_SERVICE_MICROPHONE` + 持续通知「Movo 正在等待唤醒词（当前：xxx）」；通知 Action：停止 |
 | 听写上传 | `INTERNET`（已有）+ 用户豆包凭证；**仅听写窗**上传音频，唤醒阶段音频不出设备、不落盘（默认） |
 | 首次引导 | 打开 App → 说明常听仅本地检词 + 说话内容经豆包语音识别（用户自己的账号）→ 申请麦权 → 引导填写豆包凭证 |
 | Android 14+ | 引导「允许麦克风」「电池不受限/自启动」（国产 ROM）；进程被杀后需用户再次打开 App 恢复常听（除非另做保活，本方案不默认强保活） |
@@ -401,7 +401,7 @@ MainActivity / EtaApp 进入前台（或用户开启「语音唤醒」）
 **范围：**
 
 - Sherpa-ONNX KWS + 出厂「小王同学」+ 设置编辑热更新  
-- `EtaWakeWordService`；App 可用后自动常听  
+- `MovoWakeWordService`；App 可用后自动常听  
 - 唤醒 → 自动打开双向流式听写 → 恢复常听  
 - 通知展示当前唤醒词 + 停止 Action
 
@@ -456,15 +456,15 @@ MainActivity / EtaApp 进入前台（或用户开启「语音唤醒」）
 ```
 /workspace/app/src/main/AndroidManifest.xml
 /workspace/docs/TECHNICAL.md
-/workspace/app/src/main/kotlin/io/github/mangi/eta/ui/components/AgentChatInputBar.kt
-/workspace/app/src/main/kotlin/io/github/mangi/eta/ui/app/AgentAppState.kt
-/workspace/app/src/main/kotlin/io/github/mangi/eta/agent/voice/EtaAssistantOverlayService.kt
-/workspace/app/src/main/kotlin/io/github/mangi/eta/agent/voice/EtaVoicePanel.kt
-/workspace/app/src/main/kotlin/io/github/mangi/eta/agent/voice/SystemSpeechRecognizer.kt
-/workspace/app/src/main/kotlin/io/github/mangi/eta/agent/voice/EtaRecognitionService.kt
-/workspace/app/src/main/kotlin/io/github/mangi/eta/agent/voice/EtaVoiceInteractionService.kt
-/workspace/app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRuntimeClient.kt
-/workspace/app/src/main/kotlin/io/github/mangi/eta/hook/system/HotwordSelfHealHooks.kt
+/workspace/app/src/main/kotlin/io/github/fartown/movo/ui/components/AgentChatInputBar.kt
+/workspace/app/src/main/kotlin/io/github/fartown/movo/ui/app/AgentAppState.kt
+/workspace/app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoAssistantOverlayService.kt
+/workspace/app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoVoicePanel.kt
+/workspace/app/src/main/kotlin/io/github/fartown/movo/agent/voice/SystemSpeechRecognizer.kt
+/workspace/app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoRecognitionService.kt
+/workspace/app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoVoiceInteractionService.kt
+/workspace/app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeClient.kt
+/workspace/app/src/main/kotlin/io/github/fartown/movo/hook/system/HotwordSelfHealHooks.kt
 ```
 
 架构探索底稿（内部）：  
