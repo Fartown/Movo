@@ -83,6 +83,35 @@
             android:taskAffinity=""
             android:theme="@style/Theme.MovoVoiceAssistBridge" />
 
+        <!-- 系统分享面板里的「Movo」（规范 8.9.1）：不显示界面，复制内容后转交对话浮层。 -->
+        <activity
+            android:name=".ui.share.ShareReceiverActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:label="@string/app_name"
+            android:theme="@style/Theme.MovoVoiceAssistBridge">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/*" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/*" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="video/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/*" />
+                <data android:mimeType="text/*" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="video/*" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name=".ui.AgentConversationSheetActivity"
             android:exported="false"

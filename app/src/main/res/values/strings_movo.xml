@@ -222,4 +222,20 @@
   <string name="movo_overlay_mic_required">Allow microphone access to start voice</string>
   <string name="movo_overlay_voice_failed">Couldn\'t start voice. Open Movo and try again</string>
   <string name="movo_failure_network">The network connection dropped before the model replied. Please try again.</string>
+  <!-- 分享到 Movo（规范 8.9.1） -->
+  <string name="share_intro_hint">Add a line telling Movo what to do</string>
+  <string name="share_intro_from_source">From %1$s · add a line telling Movo what to do</string>
+  <plurals name="share_intro_skipped">
+    <item quantity="one">%1$d item wasn\'t added: %2$s</item>
+    <item quantity="other">%1$d items weren\'t added: %2$s</item>
+  </plurals>
+  <string name="share_skip_too_large">larger than 32 MiB</string>
+  <string name="share_skip_too_many_images">more than 8 images</string>
+  <string name="share_skip_unreadable">couldn\'t be read</string>
+  <string name="share_chip_summarize">Summarize</string>
+  <string name="share_chip_translate">Translate</string>
+  <string name="share_chip_explain">Explain</string>
+  <string name="share_chip_describe_image">Describe the image</string>
+  <string name="share_chip_extract_text">Extract the text</string>
+  <string name="share_chip_key_points">Summarize key points</string>
 </resources>

@@ -3491,32 +3491,38 @@ private fun SuggestionChipsRow(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             message.prompts.forEach { prompt ->
-                val shape = RoundedCornerShape(16.dp)
-                Row(
-                    modifier = Modifier
-                        .height(32.dp)
-                        .clip(shape)
-                        .background(io.github.fartown.movo.ui.theme.MovoColors.bgSurface)
-                        .border(0.5.dp, io.github.fartown.movo.ui.theme.MovoColors.borderHairline, shape)
-                        .movoClickable(io.github.fartown.movo.ui.components.movo.PressKind.Card, shape = shape) { onSuggestionClick(prompt) }
-                        .padding(start = 12.dp, end = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    io.github.fartown.movo.ui.theme.MovoIcon(
-                        io.github.fartown.movo.ui.theme.MovoIcons.Sparkle, null, size = 14.dp,
-                        tint = io.github.fartown.movo.ui.theme.MovoColors.indigoFg,
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = prompt,
-                        style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
-                        color = io.github.fartown.movo.ui.theme.MovoColors.textPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                SuggestionChip(prompt) { onSuggestionClick(prompt) }
             }
         }
+    }
+}
+
+/** 推荐追问 `Chip/Suggestion`（规范 8.1）：高 32、圆角 16、bg/surface + 0.5 描边；sparkle 14 Indigo + Label/Medium，左 12 / 右 14、间距 6。 */
+@Composable
+internal fun SuggestionChip(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(16.dp)
+    Row(
+        modifier = modifier
+            .height(32.dp)
+            .clip(shape)
+            .background(io.github.fartown.movo.ui.theme.MovoColors.bgSurface)
+            .border(0.5.dp, io.github.fartown.movo.ui.theme.MovoColors.borderHairline, shape)
+            .movoClickable(io.github.fartown.movo.ui.components.movo.PressKind.Card, shape = shape, onClick = onClick)
+            .padding(start = 12.dp, end = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        io.github.fartown.movo.ui.theme.MovoIcon(
+            io.github.fartown.movo.ui.theme.MovoIcons.Sparkle, null, size = 14.dp,
+            tint = io.github.fartown.movo.ui.theme.MovoColors.indigoFg,
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text = label,
+            style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
+            color = io.github.fartown.movo.ui.theme.MovoColors.textPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
