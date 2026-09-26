@@ -2,7 +2,6 @@ package io.github.fartown.movo.ui.screens.terminal
 
 import io.github.fartown.movo.ui.components.movo.rememberLastNonNull
 import io.github.fartown.movo.ui.components.movo.MovoExpandable
-import io.github.fartown.movo.ui.components.movo.CheckMark
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.SizeTransform
@@ -75,6 +74,10 @@ import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.theme.MovoTypography
 import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Text
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import io.github.fartown.movo.ui.components.movo.movoSelectedTextColor
+import io.github.fartown.movo.ui.components.movo.movoSelectedRow
 
 /**
  * 状态卡：Graphite 图标底块（终端类别色）+ 发行版与版本 + 运行方式；进度 / 结果就地显示；
@@ -277,40 +280,43 @@ internal fun LinuxChoiceDialog(
             color = MovoColors.textPrimary,
             modifier = Modifier.padding(start = MovoSpacing.xxl, end = MovoSpacing.xxl, top = MovoSpacing.xxl, bottom = MovoSpacing.sm),
         )
+        // 与 `Dialog/Choice` 同一套选项条（规范 8.11）：左右 12、间距 8、下 12；每条圆角 16、`bg/surface-muted`，选中整行浅紫。
         Column(
             modifier = Modifier
                 .heightIn(max = 420.dp)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = MovoSpacing.sm)
-                .padding(bottom = MovoSpacing.sm),
+                .padding(horizontal = MovoSpacing.md)
+                .padding(bottom = MovoSpacing.md),
+            verticalArrangement = Arrangement.spacedBy(MovoSpacing.sm),
         ) {
             options.forEachIndexed { index, option ->
                 val selected = if (pending >= 0) index == pending else index == selectedIndex
-                val shape = RoundedCornerShape(MovoRadius.sm)
+                val shape = RoundedCornerShape(16.dp)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = MovoSize.controlLarge)
+                        .heightIn(min = 52.dp)
                         .clip(shape)
+                        .background(MovoColors.bgSurfaceMuted)
+                        .movoSelectedRow(selected, inset = 0.dp, radius = 16.dp)
                         .movoClickable(PressKind.Row, shape = shape, enabled = option.enabled, role = Role.RadioButton) {
                             if (pending < 0) pending = index
                         }
-                        .padding(horizontal = MovoSpacing.lg, vertical = MovoSpacing.sm),
+                        .semantics { this.selected = selected }
+                        .padding(horizontal = MovoSpacing.md, vertical = MovoSpacing.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             option.title,
                             style = if (selected) MovoTypography.bodyStrong else MovoTypography.bodyRegular,
-                            color = MovoColors.textPrimary,
+                            color = movoSelectedTextColor(selected),
                         )
                         option.summary?.let {
                             Text(it, style = MovoTypography.labelRegular, color = MovoColors.textSecondary)
                         }
                     }
-                    // 单选 ✓（9.3.1）：与 `MovoChoiceDialog` 同一个 CheckMark，旧 ✓ 淡出、新 ✓ 缩放 0.72 → 1 淡入 `fast`。
-                    Spacer(Modifier.width(MovoSpacing.sm))
-                    CheckMark(visible = selected)
+                    // 单选选中态：整行浅紫，不放 ✓（Figma「10 · 单选样式」）。
                 }
             }
         }

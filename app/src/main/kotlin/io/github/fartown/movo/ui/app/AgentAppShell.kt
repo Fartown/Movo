@@ -278,14 +278,8 @@ private fun HomeTopBar(
                 modifier = Modifier.align(Alignment.CenterEnd),
             )
         }
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxWidth()
-                .height(MovoSize.hairline)
-                .graphicsLayer { alpha = chrome }
-                .background(MovoColors.borderHairline),
-        )
+        // 首页 / 会话页顶栏滚动后不画底部分隔线：设计稿没有（Figma 定稿页会话页顶栏各帧），只靠底色与模糊区分；
+        // 二级页顶栏（M7d）才有分隔线。
     }
 }
 

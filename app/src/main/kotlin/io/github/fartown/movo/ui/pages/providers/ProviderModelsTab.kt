@@ -47,6 +47,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -78,6 +80,8 @@ import io.github.fartown.movo.ui.components.movo.PressKind
 import io.github.fartown.movo.ui.components.movo.RowTrailing
 import io.github.fartown.movo.ui.components.movo.SettingsRow
 import io.github.fartown.movo.ui.components.movo.movoClickable
+import io.github.fartown.movo.ui.components.movo.movoSelectedRow
+import io.github.fartown.movo.ui.components.movo.movoSelectedTextColor
 import io.github.fartown.movo.ui.components.movo.movoSurface
 import io.github.fartown.movo.ui.model.formatCompactTokenCount
 import io.github.fartown.movo.ui.theme.MovoColors
@@ -611,8 +615,8 @@ private fun ModelSelectionBar(
 }
 
 /**
- * 模型行：显示名（Body/Strong）、Model ID（Label 次要色）、能力标签；右侧编辑（笔）+ 单选（设为当前），
- * 多选模式换成复选框。点行 = 设为当前（多选模式下 = 勾选），长按进入多选。
+ * 模型行：显示名（Body/Strong）、Model ID（Label 次要色）、能力标签；右侧编辑（笔），多选模式换成复选框。
+ * 当前模型整行浅紫（Figma「10 · 单选样式」，不放单选按钮）；点行 = 设为当前（多选模式下 = 勾选），长按进入多选。
  */
 @Composable
 private fun ModelListItem(
@@ -638,15 +642,22 @@ private fun ModelListItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .then(if (selectionMode) Modifier else Modifier.movoSelectedRow(isSelected))
                 .movoClickable(
                     kind = PressKind.Row,
                     enabled = enabled,
-                    role = if (selectionMode) Role.Checkbox else Role.Button,
+                    role = if (selectionMode) Role.Checkbox else Role.RadioButton,
                     onLongClick = {
                         if (selectionMode) onToggleChecked() else onEnterSelection()
                     },
                     onClick = if (selectionMode) onToggleChecked else onSetCurrent,
                 )
+                .semantics {
+                    if (!selectionMode) {
+                        selected = isSelected
+                        stateDescription = setCurrentDescription
+                    }
+                }
                 .heightIn(min = 68.dp)
                 .padding(start = MovoSpacing.lg, top = MovoSpacing.md, bottom = MovoSpacing.md, end = MovoSpacing.xs),
             verticalAlignment = Alignment.CenterVertically,
@@ -655,7 +666,7 @@ private fun ModelListItem(
                 Text(
                     text = model.displayName,
                     style = MovoTypography.bodyStrong,
-                    color = MovoColors.textPrimary,
+                    color = movoSelectedTextColor(isSelected && !selectionMode),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -666,8 +677,10 @@ private fun ModelListItem(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Row(
+                // 标签放不下一行时换行（真机：「1.05M 上下文」「支持思考」之后的「当前」被挤成空胶囊）。
+                androidx.compose.foundation.layout.FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.padding(top = MovoSpacing.sm),
                 ) {
                     capabilityTags(model).forEach { tag ->
@@ -691,15 +704,6 @@ private fun ModelListItem(
                     iconSize = MovoSize.iconMedium,
                     tint = MovoColors.textSecondary,
                 )
-                Box(
-                    modifier = Modifier
-                        .size(MovoSize.touchTarget)
-                        .semantics { contentDescription = setCurrentDescription }
-                        .movoClickable(PressKind.Icon, enabled = enabled, role = Role.RadioButton, onClick = onSetCurrent),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    MovoRadioMark(selected = isSelected)
-                }
             }
         }
         if (showDivider) {

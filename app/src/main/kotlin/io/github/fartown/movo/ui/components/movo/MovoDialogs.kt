@@ -44,6 +44,8 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -180,11 +182,10 @@ internal fun MovoConfirmDialog(
 }
 
 /**
- * 单选对话框 `Dialog/Choice`（Figma「10 · 单选对话框」）：内容区上 24：标题 Title/Section（左 24）→ 8 → 可选说明
+ * 单选对话框 `Dialog/Choice`（Figma「10 · 单选样式」）：内容区上 24：标题 Title/Section（左 24）→ 8 → 可选说明
  * Body/Regular 次要色 → 16 → 选项条（左右 12、间距 8、下 12）：每条高 52、圆角 16（28 − 12 同心）、左右内边距 12，
- * 文字 Body 左缘与标题对齐（24）；未选中 `bg/surface-muted` + 主色 Regular + 空心圈（1.5 `border/strong`），
- * 选中 `accent/indigo-bg` + `accent/indigo-fg` Medium + 实心勾圈。切换按 9.3.1「单选」：底色与文字 `fast` 过渡，
- * 新勾缩放 0.72 → 1 淡入；松手后停留 160ms 再关闭。
+ * 文字 Body 左缘与标题对齐（24）；未选中 `bg/surface-muted` + 主色 Regular，选中 `accent/indigo-bg` +
+ * `accent/indigo-fg` Medium，不放图标（Figma「10 · 单选样式」整行浅紫）。底色与文字 `fast` 过渡；松手后停留 160ms 再关闭。
  */
 @Composable
 internal fun MovoChoiceDialog(
@@ -244,6 +245,7 @@ private fun ChoiceOption(label: String, selected: Boolean, onClick: () -> Unit) 
             .clip(shape)
             .drawBehind { drawRect(background) }
             .movoClickable(PressKind.Row, shape = shape, role = Role.RadioButton, onClick = onClick)
+            .semantics { this.selected = selected }
             .padding(horizontal = MovoSpacing.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -255,49 +257,6 @@ private fun ChoiceOption(label: String, selected: Boolean, onClick: () -> Unit) 
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
-        Spacer(Modifier.width(MovoSpacing.md))
-        RadioIndicator(selected)
     }
 }
 
-/** 单选圈 20：未选中 1.5 `border/strong` 空心圈；选中 Indigo 实心圈 + 白勾（缩放 0.72 → 1 淡入）。 */
-@Composable
-private fun RadioIndicator(selected: Boolean) {
-    Box(modifier = Modifier.size(20.dp), contentAlignment = Alignment.Center) {
-        androidx.compose.foundation.Canvas(Modifier.matchParentSize()) {
-            if (!selected) {
-                val stroke = 1.5.dp.toPx()
-                drawCircle(MovoColors.borderStrong, radius = size.minDimension / 2 - stroke / 2, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
-            }
-        }
-        AnimatedVisibility(
-            visible = selected,
-            enter = fadeIn(MovoMotion.fast()) + scaleIn(MovoMotion.fast(), initialScale = 0.72f),
-            exit = fadeOut(MovoMotion.fastExit()),
-        ) {
-            Box(
-                modifier = Modifier.size(20.dp).clip(androidx.compose.foundation.shape.CircleShape).background(MovoColors.indigoFg),
-                contentAlignment = Alignment.Center,
-            ) {
-                MovoIcon(MovoIcons.Check, null, size = 14.dp, tint = MovoColors.bgSurface)
-            }
-        }
-    }
-}
-
-@Composable
-internal fun CheckMark(visible: Boolean) {
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(MovoMotion.fast()) + scaleIn(MovoMotion.fast(), initialScale = 0.72f),
-        exit = fadeOut(MovoMotion.fastExit()),
-    ) {
-        MovoIcon(
-            MovoIcons.Check,
-            null,
-            size = MovoSize.iconMedium,
-            tint = MovoColors.indigoFg,
-            modifier = Modifier.graphicsLayer { },
-        )
-    }
-}

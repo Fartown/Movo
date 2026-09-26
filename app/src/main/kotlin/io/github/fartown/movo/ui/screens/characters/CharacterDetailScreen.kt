@@ -6,7 +6,6 @@ import io.github.fartown.movo.ui.components.movo.rememberDoneFlash
 import io.github.fartown.movo.ui.components.movo.RowLeading
 import io.github.fartown.movo.ui.components.movo.MovoExpandable
 import io.github.fartown.movo.ui.components.movo.MovoExpandChevron
-import io.github.fartown.movo.ui.components.movo.CheckMark
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.Alignment
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -49,6 +48,9 @@ import io.github.fartown.movo.ui.theme.MovoSize
 import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.theme.MovoTypography
 import top.yukonga.miuix.kmp.basic.Text
+import androidx.compose.ui.unit.dp
+import io.github.fartown.movo.ui.components.movo.movoSelectedTextColor
+import io.github.fartown.movo.ui.components.movo.movoSelectedRow
 
 private const val GreetingPreviewChars = 240
 
@@ -164,7 +166,8 @@ internal fun CharacterDetailScreen(
                         subtitleMaxLines = Int.MAX_VALUE,
                         role = Role.RadioButton,
                         showDivider = index != greetings.lastIndex,
-                        modifier = Modifier.semantics { this.selected = selected },
+                        modifier = Modifier.movoSelectedRow(selected).semantics { this.selected = selected },
+                        titleColor = movoSelectedTextColor(selected),
                         onClick = { store.greetingIndex = index },
                         below = if (greeting.length > GreetingPreviewChars) {
                             {
@@ -174,12 +177,7 @@ internal fun CharacterDetailScreen(
                         } else {
                             null
                         },
-                    ) {
-                        // 单选（9.3.1）：旧 ✓ 淡出 120ms，新 ✓ 缩放 0.72 → 1 淡入 `fast`；占位保持行宽不跳。
-                        Box(Modifier.size(MovoSize.iconMedium), contentAlignment = Alignment.Center) {
-                            CheckMark(visible = selected)
-                        }
-                    }
+                    )
                 }
             }
         }

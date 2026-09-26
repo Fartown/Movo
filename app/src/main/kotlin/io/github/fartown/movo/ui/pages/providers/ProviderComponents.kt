@@ -110,7 +110,7 @@ internal fun ProviderIcon(
 
 internal enum class TagChipTone { Normal, Emphasized }
 
-/** 小标签（圆角 8，Micro 12 Medium）：普通为浅底次要色，强调（「当前」）为 Indigo 浅底 + Indigo 文字。 */
+/** 小标签（圆角 8，Micro 12 Medium）：普通为浅底次要色，强调（「当前」，在整行浅紫的选中行里）为白底 + Indigo 文字。 */
 @Composable
 internal fun TagChip(
     text: String,
@@ -123,8 +123,9 @@ internal fun TagChip(
             background = MovoColors.bgSurfaceMuted
             foreground = MovoColors.textSecondary
         }
+        // 「当前」只出现在当前模型那一行，而那一行整行是浅紫（单选选中态）：用白底才看得出来。
         TagChipTone.Emphasized -> {
-            background = MovoColors.indigoBg
+            background = MovoColors.bgSurface
             foreground = MovoColors.indigoFg
         }
     }

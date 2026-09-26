@@ -31,6 +31,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
 import io.github.fartown.movo.MovoApp
 import io.github.fartown.movo.R
 import io.github.fartown.movo.data.model.ProviderSetting
@@ -45,6 +47,8 @@ import io.github.fartown.movo.ui.components.movo.PressKind
 import io.github.fartown.movo.ui.components.movo.RowLeading
 import io.github.fartown.movo.ui.components.movo.SettingsRow
 import io.github.fartown.movo.ui.components.movo.movoClickable
+import io.github.fartown.movo.ui.components.movo.movoSelectedRow
+import io.github.fartown.movo.ui.components.movo.movoSelectedTextColor
 import io.github.fartown.movo.ui.navigation.AppRoute
 import io.github.fartown.movo.ui.navigation.NewProviderType
 import io.github.fartown.movo.ui.theme.MovoColors
@@ -148,12 +152,6 @@ internal fun ModelProviderListScreen(
                             } else {
                                 null
                             },
-                            onSelect = {
-                                scope.launch {
-                                    RuntimeConfigRepository.setSelectedProviderId(provider.id)
-                                    RuntimeConfigRepository.syncToRemotePreferences(MovoApp.serviceInstance)
-                                }
-                            },
                         )
                         }
                     }
@@ -184,8 +182,9 @@ internal fun ModelProviderListScreen(
 }
 
 /**
- * 提供商行（`icon=true` 行，规范 8.7）：20 Logo → 12 → 名称 / Base URL / 类型 · 模型数 · 内置（/ 已停用）→ 单选按钮。
- * 点行进入详情，长按删除（仅自定义），停用的提供商整体降为 60% 不透明度。
+ * 提供商行（`icon=true` 行，规范 8.7）：20 Logo → 12 → 名称 / Base URL / 类型 · 模型数 · 内置（/ 已停用）。
+ * 当前提供商整行浅紫（Figma「10 · 单选样式」，不放单选按钮）；点行进入详情（在详情里点模型设为当前），
+ * 长按删除（仅自定义），停用的提供商整体降为 60% 不透明度。
  */
 @Composable
 private fun ProviderListItem(
@@ -194,7 +193,6 @@ private fun ProviderListItem(
     showDivider: Boolean,
     onOpen: () -> Unit,
     onDelete: (() -> Unit)?,
-    onSelect: () -> Unit,
 ) {
     val opacity = if (provider.isEnabled) 1f else 0.6f
     val selectDescription = if (isSelected) {
@@ -205,7 +203,12 @@ private fun ProviderListItem(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .movoClickable(kind = PressKind.Row, onLongClick = onDelete, onClick = onOpen),
+            .movoSelectedRow(isSelected)
+            .movoClickable(kind = PressKind.Row, onLongClick = onDelete, onClick = onOpen)
+            .semantics {
+                selected = isSelected
+                if (isSelected) stateDescription = selectDescription
+            },
     ) {
         Row(
             modifier = Modifier
@@ -225,7 +228,7 @@ private fun ProviderListItem(
                 Text(
                     text = provider.name,
                     style = MovoTypography.bodyStrong,
-                    color = MovoColors.textPrimary,
+                    color = movoSelectedTextColor(isSelected),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -248,15 +251,6 @@ private fun ProviderListItem(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-            }
-            Box(
-                modifier = Modifier
-                    .size(MovoSize.touchTarget)
-                    .semantics { contentDescription = selectDescription }
-                    .movoClickable(PressKind.Icon, role = Role.RadioButton, onClick = onSelect),
-                contentAlignment = Alignment.Center,
-            ) {
-                MovoRadioMark(selected = isSelected)
             }
         }
         if (showDivider) {

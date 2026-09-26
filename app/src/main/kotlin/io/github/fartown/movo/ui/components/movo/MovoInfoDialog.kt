@@ -34,7 +34,7 @@ import io.github.fartown.movo.ui.theme.MovoTypography
 import top.yukonga.miuix.kmp.basic.Text
 
 /**
- * 说明对话框 `Dialog/Info`（规范 8.11，Figma「09 · 工具说明弹窗」）：容器同 `Dialog/Confirm`。
+ * 说明对话框 `Dialog/Info`（规范 8.11，Figma「09 · 对话框（说明 / 确认，按钮区 v2）」）：容器同 `Dialog/Confirm`。
  * 内容区 24：类别色图标块 40（圆角 12，图标 20）→ 16 → 标题 Title/Section 主色 → 8 → 说明 Body/Regular 次要色（超长可滚动）
  * → 16 → 条件提示块（有条件时：bg/surface-muted、圆角 12、内边距 12 × 10，shield-alert 16 次要色 + 8 + Label/Regular 次要色）。
  * 按钮区同 `Dialog/Confirm`：有动作时左「知道了」+ 右动作（主操作色）；没有动作时只有整行「知道了」（Secondary）。

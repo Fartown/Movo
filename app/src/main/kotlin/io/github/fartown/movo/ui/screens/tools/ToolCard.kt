@@ -181,7 +181,7 @@ internal fun ToolCard(
     )
 }
 
-/** 工具说明 `Dialog/Info`（规范 8.11，Figma「09 · 工具说明弹窗」）：类别色图标块 + 说明 + 条件提示块；有动作时「知道了」+ 主操作。 */
+/** 工具说明 `Dialog/Info`（规范 8.11，Figma「09 · 对话框（说明 / 确认，按钮区 v2）」）：类别色图标块 + 说明 + 条件提示块；有动作时「知道了」+ 主操作。 */
 @Composable
 private fun ToolDescriptionDialog(
     show: Boolean,
