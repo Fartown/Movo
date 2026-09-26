@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.MeasureResult
 import androidx.compose.ui.layout.MeasureScope
@@ -33,6 +34,7 @@ import java.util.Locale
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
+import kotlin.math.roundToInt
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -389,7 +391,8 @@ internal class SmoothTextRevealNode(
             clipPath(path) { contentScope.drawContent() }
         }
 
-        // 正在显现的块：淡入 + 模糊 4 → 0（`fast` + `enter`）。
+        // 正在显现的块：淡入 + 模糊 4 → 0（`fast` + `enter`）。每块只在范围变化时录一次、只录这一块的范围
+        // （模糊只作用在块上，不是整段）；之后每帧只改图层的透明度与模糊半径，不重录、不重算路径。
         val blurMax = BLUR_START.toPx()
         chunks.forEachIndexed { index, chunk ->
             val start = offsetOf(chunk.from)
@@ -397,11 +400,32 @@ internal class SmoothTextRevealNode(
             if (end <= start) return@forEachIndexed
             val eased = MovoMotion.EasingEnter.transform(chunk.fraction)
             val layer = chunkLayer(index)
+            val cache = chunkCache(index)
+            if (cache.layout !== layout || cache.start != start || cache.end != end || cache.size != size) {
+                cache.layout = layout
+                cache.start = start
+                cache.end = end
+                cache.size = size
+                val path = layout.getPathForRange(start, end)
+                cache.path = path
+                val bounds = path.getBounds().inflate(blurMax).intersect(Rect(Offset.Zero, size))
+                val left = floor(bounds.left).toInt()
+                val top = floor(bounds.top).toInt()
+                val width = (ceil(bounds.right).toInt() - left).coerceAtLeast(1)
+                val height = (ceil(bounds.bottom).toInt() - top).coerceAtLeast(1)
+                layer.topLeft = androidx.compose.ui.unit.IntOffset(left, top)
+                layer.record(size = androidx.compose.ui.unit.IntSize(width, height)) {
+                    translate(-left.toFloat(), -top.toFloat()) { contentScope.drawContent() }
+                }
+            }
             layer.alpha = eased
-            val radius = blurMax * (1f - eased)
-            layer.renderEffect = if (radius > 0.05f) BlurEffect(radius, radius, TileMode.Decal) else null
-            layer.record { contentScope.drawContent() }
-            clipPath(layout.getPathForRange(start, end)) { drawLayer(layer) }
+            // 模糊半径按 0.25px 取整：相邻几帧同一半径时复用同一个效果对象。
+            val radius = (blurMax * (1f - eased) * 4f).roundToInt() / 4f
+            if (radius != cache.blurRadius) {
+                cache.blurRadius = radius
+                layer.renderEffect = if (radius > 0.05f) BlurEffect(radius, radius, TileMode.Decal) else null
+            }
+            clipPath(checkNotNull(cache.path)) { drawLayer(layer) }
         }
     }
 
@@ -410,7 +434,25 @@ internal class SmoothTextRevealNode(
         return chunkLayers[index]
     }
 
+    /** 每个图层槽位上次录制的块：范围、路径与模糊半径（同一块跨帧复用）。 */
+    private class ChunkCache {
+        var layout: TextLayoutResult? = null
+        var start = -1
+        var end = -1
+        var size = androidx.compose.ui.geometry.Size.Zero
+        var path: Path? = null
+        var blurRadius = -1f
+    }
+
+    private val chunkCaches = ArrayList<ChunkCache>(MAX_ACTIVE_CHUNKS)
+
+    private fun chunkCache(index: Int): ChunkCache {
+        while (chunkCaches.size <= index) chunkCaches += ChunkCache()
+        return chunkCaches[index]
+    }
+
     private fun releaseLayers() {
+        chunkCaches.clear()
         if (chunkLayers.isEmpty()) return
         val context = requireGraphicsContext()
         chunkLayers.forEach(context::releaseGraphicsLayer)
@@ -427,6 +469,7 @@ internal class SmoothTextRevealNode(
     }
 
     private fun clearPathCache() {
+        chunkCaches.forEach { it.layout = null }
         cachedLayoutResult = null
         cachedSettledEnd = -1
         cachedSettledPath = null
