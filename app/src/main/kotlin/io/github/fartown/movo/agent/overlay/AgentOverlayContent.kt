@@ -82,6 +82,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.isShiftPressed
@@ -536,6 +539,8 @@ internal fun AgentOverlayBubble(
     onStop: () -> Unit,
     onSupplementModeChange: (Boolean) -> Unit,
     onSupplement: (String) -> Unit,
+    /** 补充输入框被点（键盘收起后再弹出）：让窗口按缓存的键盘高度提前上移。 */
+    onSupplementKeyboardRequested: () -> Unit = {},
     anchorEnd: Boolean = true,
     visible: Boolean = true,
     onInteraction: () -> Unit = {},
@@ -624,6 +629,7 @@ internal fun AgentOverlayBubble(
                     onValueChange = { supplementText = it; onInteraction() },
                     onCancel = ::closeSupplementMode,
                     onSend = ::submitSupplement,
+                    onTap = onSupplementKeyboardRequested,
                 )
             }
             AnimatedVisibility(
@@ -965,6 +971,7 @@ private fun SupplementInput(
     onValueChange: (String) -> Unit,
     onCancel: () -> Unit,
     onSend: () -> Unit,
+    onTap: () -> Unit = {},
 ) {
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -998,6 +1005,13 @@ private fun SupplementInput(
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusRequester(focusRequester)
+                    // 只观察按下、不消费：点输入框会弹出键盘，先通知窗口上移。
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            onTap()
+                        }
+                    }
                     // 实体键盘 / 注入的回车同样发送（Shift+回车仍换行）。
                     .onPreviewKeyEvent { event ->
                         val enter = event.key == androidx.compose.ui.input.key.Key.Enter ||

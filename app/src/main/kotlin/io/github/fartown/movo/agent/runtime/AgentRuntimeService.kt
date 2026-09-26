@@ -1203,6 +1203,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 onStop = ::requestStop,
                 onSupplementModeChange = ::setBubbleInputMode,
                 onSupplement = ::requestSupplement,
+                onSupplementKeyboardRequested = ::onSupplementKeyboardRequested,
                 anchorEnd = orbOnEnd.value,
                 visible = bubbleVisible.value,
                 onInteraction = ::scheduleBubbleAutoCollapse,
@@ -1276,6 +1277,13 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         // 没有实测值时先按屏高 33% 上移：不高于常见键盘，之后读到实际位置只会再往上补一点，不会先高后掉。
         val estimate = lastImeHeight.takeIf { it > 0 } ?: (screenRealHeight() * 0.33f).toInt()
         liftBubbleTo(bubbleYAbove(estimate))
+    }
+
+    /** 键盘收起后再点输入框：键盘即将弹出，按缓存高度提前上移（键盘已在时高度不变，不会移动）。 */
+    private fun onSupplementKeyboardRequested() {
+        val lp = bubbleParams ?: return
+        if (lp.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE != 0) return
+        if (sessionImeMax == 0) liftBubbleForTyping()
     }
 
     /** 本次补充输入里读到的最大键盘高度；0 = 键盘还没出现过（或已被收起）。 */
