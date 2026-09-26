@@ -47,4 +47,12 @@ class StatusWithTimerTest {
         compose.onNodeWithText("已完成 8 个步骤").assertIsDisplayed()
         compose.onNodeWithText("1:13").assertIsDisplayed()
     }
+
+    @Test
+    @Config(fontScale = 1.4f)
+    fun largeFontStillShowsSomeTimerWhenThereIsRoom() {
+        show(250)
+        compose.onNodeWithText("已完成 8 个步骤").assertIsDisplayed()
+        compose.onNodeWithText("1:13").assertIsDisplayed()
+    }
 }

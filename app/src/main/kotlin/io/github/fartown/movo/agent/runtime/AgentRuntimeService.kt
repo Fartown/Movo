@@ -1266,21 +1266,26 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
      * （猜高了会先跳上去再掉下来），等读到稳定的输入法位置再移。
      */
     private fun liftBubbleForTyping() {
-        lastImeReading = null
-        if (lastImeHeight > 0) moveBubbleTo(bubbleYAbove(lastImeHeight))
+        typingLift = 0
+        if (lastImeHeight > 0) liftBubbleTo(bubbleYAbove(lastImeHeight))
     }
 
-    private var lastImeReading: Int? = null
+    /** 本次补充输入里展开卡已经抬到的高度：输入期间只升不降（键盘升起过程中的读数会变小，跟着降就会上下晃）。 */
+    private var typingLift = 0
+
+    private fun liftBubbleTo(target: Int) {
+        if (target <= typingLift) return
+        typingLift = target
+        moveBubbleTo(target)
+    }
 
     private fun placeBubbleAboveIme(imeTop: Int?) {
         // 输入法窗口还没出现时保持当前位置，不退回原位。
         imeTop ?: return
-        // 键盘升起过程中读到的位置在变：连续两次相同才算到位，避免跟着中间值上下晃。
-        val stable = imeTop == lastImeReading
-        lastImeReading = imeTop
-        if (!stable) return
-        lastImeHeight = screenRealHeight() - imeTop
-        moveBubbleTo(bubbleYAbove(lastImeHeight))
+        val height = screenRealHeight() - imeTop
+        if (height <= 0) return
+        lastImeHeight = height
+        liftBubbleTo(bubbleYAbove(height))
     }
 
     /** 展开卡窗口的上下移动：`fast` + `standard`；减少动画时直接到位。 */

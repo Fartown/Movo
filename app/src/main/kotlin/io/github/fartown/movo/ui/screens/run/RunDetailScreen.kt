@@ -142,8 +142,9 @@ private fun RunSummaryCard(
 ) {
     val tools = steps.filterIsInstance<ToolActivityMessageUi>()
     val failedIndex = io.github.fartown.movo.ui.components.unrecoveredFailedStep(tools)
-    val firstStart = tools.mapNotNull { it.startedAtMillis }.minOrNull()
-    val lastFinish = tools.mapNotNull { it.finishedAtMillis }.maxOrNull()
+    // 失败 / 停止的一轮用时与对话里的摘要条一致，按整轮算。
+    val firstStart = outcome?.startedAt ?: tools.mapNotNull { it.startedAtMillis }.minOrNull()
+    val lastFinish = outcome?.finishedAt ?: tools.mapNotNull { it.finishedAtMillis }.maxOrNull()
     val now by produceState(System.currentTimeMillis(), running) {
         while (running) {
             value = System.currentTimeMillis()
