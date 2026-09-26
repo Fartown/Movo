@@ -407,8 +407,10 @@ internal fun AgentWorkProcess(
     onEditMessage: (String) -> Unit = {},
     onDeleteMessage: (String) -> Unit = {},
     runActive: Boolean = false,
-    runUnfinished: Boolean = false,
+    outcome: WorkOutcome? = null,
 ) {
+    val runUnfinished = outcome == WorkOutcome.Unfinished
+    val runStopped = outcome == WorkOutcome.Stopped
     val runControls = LocalRunControls.current
     val paused = runActive && runControls.isPaused
     val stepRunning = messages.any { message ->
@@ -449,7 +451,7 @@ internal fun AgentWorkProcess(
     val runMillis = finishedTools.mapNotNull { it.finishedAtMillis }.maxOrNull()?.let { end ->
         finishedTools.mapNotNull { it.startedAtMillis }.minOrNull()?.let { end - it }
     } ?: 0L
-    val glint = sawRunning && !running && !paused && failedIndex < 0 && !runUnfinished && runMillis >= 10_000L
+    val glint = sawRunning && !running && !paused && failedIndex < 0 && outcome == null && runMillis >= 10_000L
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -484,6 +486,10 @@ internal fun AgentWorkProcess(
                         io.github.fartown.movo.ui.theme.MovoIcons.Pause, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
                     )
                     running -> io.github.fartown.movo.ui.components.movo.MovoOrb(size = 16.dp)
+                    // 用户主动停止不是出错：次要色停止方块。
+                    runStopped -> io.github.fartown.movo.ui.theme.MovoIcon(
+                        io.github.fartown.movo.ui.theme.MovoIcons.Square, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                    )
                     failedIndex >= 0 || runUnfinished -> io.github.fartown.movo.ui.theme.MovoIcon(
                         io.github.fartown.movo.ui.theme.MovoIcons.X, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.roseFg,
                     )
@@ -499,6 +505,7 @@ internal fun AgentWorkProcess(
                     paused -> stringResource(R.string.movo_work_paused)
                     running && toolCount > 0 -> stringResource(R.string.movo_work_running_step, toolCount)
                     running -> stringResource(R.string.movo_work_analyzing)
+                    runStopped -> stringResource(R.string.movo_work_stopped_steps, toolCount)
                     failedIndex >= 0 -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
                     runUnfinished -> stringResource(R.string.movo_work_unfinished_steps, toolCount)
                     toolCount > 0 -> stringResource(R.string.movo_work_done_steps, toolCount)

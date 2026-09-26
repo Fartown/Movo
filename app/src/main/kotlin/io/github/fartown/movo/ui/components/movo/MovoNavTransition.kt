@@ -64,8 +64,10 @@ private fun androidx.compose.ui.graphics.GraphicsLayerScope.applyGestureBack(sco
     val scale = 1f - GESTURE_SCALE_DROP * hidden
     scaleX = scale
     scaleY = scale
+    // 确认返回后的收尾：导航库在收尾期间仍保留手势上下文（gesture 非空），只能按收尾阶段判断。
     val settle = scope.settle
-    alpha = if (scope.gesture == null && settle?.phase == NavSettlePhase.Commit) {
+    // 只淡出正在离开的页（hidden > 0）；回到栈顶的页在最后一帧深度正好为 0，不能跟着变透明。
+    alpha = if (settle?.phase == NavSettlePhase.Commit && hidden > 0f) {
         1f - (settle.elapsedMillis / MovoMotion.STANDARD).coerceIn(0f, 1f)
     } else {
         1f

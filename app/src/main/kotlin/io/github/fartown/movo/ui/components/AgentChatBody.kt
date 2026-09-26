@@ -444,7 +444,7 @@ internal fun AgentConversationMessages(
 ) {
     val timelineEntries = remember(visibleMessages) { visibleMessages.toTimelineEntries() }
     val lastWorkKey = timelineEntries.lastOrNull { it is AgentTimelineEntry.WorkProcess }?.key
-    val unfinishedWorkKeys = remember(timelineEntries) { unfinishedWorkKeys(timelineEntries) }
+    val workOutcomes = remember(timelineEntries) { workOutcomes(timelineEntries) }
     // 复制按钮只出现在每轮对话的最终结果上，中间步骤的过渡文本不提供复制入口。
     // 流式进行中当前这一轮尚未收尾，此时的“最后一条正文”只是中间步骤，不标记。
     val finalResultMessageIds = remember(visibleMessages, isStreaming) {
@@ -706,7 +706,7 @@ internal fun AgentConversationMessages(
                             messages = entry.messages,
                             // 本轮仍在进行：模型在两步之间思考时步骤都已完成，但执行卡不能当作完成收起。
                             runActive = isStreaming && entry.key == lastWorkKey,
-                            runUnfinished = entry.key in unfinishedWorkKeys,
+                            outcome = workOutcomes[entry.key],
                             onOpenBrowser = onOpenBrowser,
                             currentBrowserMessageId = currentBrowserMessageId,
                             retainedStreamingStates = streamingMarkdownStates,
@@ -929,29 +929,37 @@ internal fun smoothBottomFollowStep(
     return min(distancePx, min(easedStep.coerceAtLeast(BOTTOM_FOLLOW_MIN_STEP_PX), speedLimitedStep))
 }
 
+/** 执行卡所在这一轮没有正常完成的原因；正常完成的执行卡不在结果里。 */
+internal enum class WorkOutcome { Unfinished, Stopped }
+
 /**
- * 这一轮以失败 / 中断告终的执行卡：执行卡之后、下一条用户消息之前出现了失败卡。
+ * 执行卡之后、下一条用户消息之前出现了失败 / 中断卡（[WorkOutcome.Unfinished]）或「已停止」（[WorkOutcome.Stopped]）。
  * 这类执行卡即使每一步都成功，摘要条也不能显示「✓ 已完成」。
  */
-internal fun unfinishedWorkKeys(entries: List<AgentTimelineEntry>): Set<String> {
-    val keys = mutableSetOf<String>()
+internal fun workOutcomes(entries: List<AgentTimelineEntry>): Map<String, WorkOutcome> {
+    val outcomes = mutableMapOf<String, WorkOutcome>()
     var pending: String? = null
     for (entry in entries) {
         when (entry) {
             is AgentTimelineEntry.WorkProcess -> pending = entry.key
             is AgentTimelineEntry.Message -> when (val message = entry.message) {
                 is UserMessageUi -> pending = null
-                is SystemNoticeMessageUi -> if (
-                    message.code == SystemNoticeCode.RuntimeFailed || message.code == SystemNoticeCode.Interrupted
-                ) {
-                    pending?.let(keys::add)
-                    pending = null
+                is SystemNoticeMessageUi -> {
+                    val outcome = when (message.code) {
+                        SystemNoticeCode.RuntimeFailed, SystemNoticeCode.Interrupted -> WorkOutcome.Unfinished
+                        SystemNoticeCode.Stopped -> WorkOutcome.Stopped
+                        else -> null
+                    }
+                    if (outcome != null) {
+                        pending?.let { outcomes[it] = outcome }
+                        pending = null
+                    }
                 }
                 else -> Unit
             }
         }
     }
-    return keys
+    return outcomes
 }
 
 internal sealed interface AgentTimelineEntry {
@@ -983,21 +991,34 @@ internal fun List<AgentChatMessageUi>.toTimelineEntries(): List<AgentTimelineEnt
         workMessages.clear()
     }
 
+    // 执行中的模型自动重试：重试成功（后面接着有步骤）就不在对话里留提示，也不把执行卡切成几段；
+    // 仍在重试或最终失败时，提示放在执行卡之后。重试细节在运行日志里。
+    val pendingRetries = mutableListOf<AgentChatMessageUi>()
+
     this@toTimelineEntries.forEach { message ->
         // 执行中的补充紧跟在工作过程之后时，作为「你的补充」步骤留在同一张执行卡里（规范 8.1、8.4）。
         if (message.isWorkProcessMessage() || (message.isRunSupplement() && workMessages.isNotEmpty())) {
+            pendingRetries.clear()
             workMessages += message
+        } else if (message.isModelRetryNotice() && workMessages.isNotEmpty()) {
+            pendingRetries += message
         } else {
             flushWorkProcess()
+            pendingRetries.forEach { add(AgentTimelineEntry.Message(it)) }
+            pendingRetries.clear()
             add(AgentTimelineEntry.Message(message))
         }
     }
     flushWorkProcess()
+    pendingRetries.forEach { add(AgentTimelineEntry.Message(it)) }
 }
 
 /** 运行时补充以 `user-<runId>-supplement-<index>` 的用户消息投影进来（见 AgentRunMessageProjector）。 */
 internal fun AgentChatMessageUi.isRunSupplement(): Boolean =
     this is UserMessageUi && id.startsWith("user-") && id.contains("-supplement-")
+
+private fun AgentChatMessageUi.isModelRetryNotice(): Boolean =
+    this is SystemNoticeMessageUi && code == SystemNoticeCode.ModelRetry
 
 private fun AgentChatMessageUi.isWorkProcessMessage(): Boolean =
     this is ThinkingMessageUi || this is ToolActivityMessageUi || this is ToolSummaryMessageUi

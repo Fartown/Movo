@@ -156,6 +156,7 @@
   <string name="movo_work_done">已完成</string>
   <string name="movo_work_failed_step">第 %1$d 步未完成</string>
   <string name="movo_work_unfinished_steps">未完成·已执行 %1$d 步</string>
+  <string name="movo_work_stopped_steps">已停止·已执行 %1$d 步</string>
   <string name="movo_thinking_in_progress">思考中</string>
   <string name="movo_thinking_seconds">思考·%1$d 秒</string>
   <string name="movo_thinking_done">思考</string>

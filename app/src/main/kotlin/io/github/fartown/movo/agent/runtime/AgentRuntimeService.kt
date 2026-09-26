@@ -1189,25 +1189,41 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         bubbleView = bubble
         bubbleParams = lp
         bubbleBaseY = lp.y
-        bubble.setOnApplyWindowInsetsListener { view, insets ->
-            liftBubbleAboveIme(insets)
-            view.onApplyWindowInsets(insets)
-        }
     }
 
     /**
-     * 键盘补充：浮窗不会被系统随键盘挪动，键盘盖住展开卡的输入框和发送键时把窗口抬到键盘上方；
-     * 键盘收起后回到原位。insets 是相对本窗口的遮挡量，抬起后变为 0，所以只在有遮挡时累加。
+     * 键盘补充：浮窗不会被系统随键盘挪动，无障碍浮窗也收不到键盘 insets。输入期间定时从无障碍服务读取
+     * 输入法窗口的位置，把展开卡抬到键盘上方 8；键盘收起或退出输入后回到原位。
      */
-    private fun liftBubbleAboveIme(insets: android.view.WindowInsets) {
+    private val trackImeForBubble = object : Runnable {
+        override fun run() {
+            val lp = bubbleParams ?: return
+            if (lp.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE != 0) return
+            placeBubbleAboveIme(imeTopOnScreen())
+            mainHandler.postDelayed(this, IME_TRACK_INTERVAL_MS)
+        }
+    }
+
+    private fun imeTopOnScreen(): Int? = runCatching {
+        AgentAccessibilityService.current()?.windows
+            ?.firstOrNull { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+            ?.let { window ->
+                android.graphics.Rect().also(window::getBoundsInScreen).takeIf { it.height() > 0 }?.top
+            }
+    }.getOrNull()
+
+    private fun placeBubbleAboveIme(imeTop: Int?) {
         val wm = windowManager ?: return
         val bubble = bubbleView ?: return
         val lp = bubbleParams ?: return
-        val ime = android.view.WindowInsets.Type.ime()
-        val target = when {
-            !insets.isVisible(ime) -> bubbleBaseY
-            insets.getInsets(ime).bottom > 0 -> lp.y + insets.getInsets(ime).bottom + dpToPx(8)
-            else -> return
+        val target = if (imeTop == null) {
+            bubbleBaseY
+        } else {
+            val screenHeight = runCatching {
+                android.graphics.Point().also { @Suppress("DEPRECATION") wm.defaultDisplay.getRealSize(it) }.y
+            }.getOrDefault(resources.displayMetrics.heightPixels)
+            // 窗口按底部对齐，y = 窗口底边到屏幕底边的距离；卡片四周有阴影余量，减掉它让卡片本身离键盘 8。
+            maxOf(bubbleBaseY, screenHeight - imeTop + dpToPx(8) - dpToPx(PANEL_SHADOW_DP))
         }
         if (lp.y == target) return
         lp.y = target
@@ -1454,11 +1470,14 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
         if (lp.flags == nextFlags) return
         lp.flags = nextFlags
+        if (!focusable) lp.y = bubbleBaseY
         runCatching { wm.updateViewLayout(bubble, lp) }.onFailure { throwable ->
             AndroidAgentLogger.warnThrottled("runtime_bubble_focus_update_failed") {
                 "Agent runtime bubble focus update failed: type=${throwable.safeLogType()}"
             }
         }
+        mainHandler.removeCallbacks(trackImeForBubble)
+        if (focusable) mainHandler.postDelayed(trackImeForBubble, IME_TRACK_INTERVAL_MS)
     }
 
     private fun openResultConversation(autoListen: Boolean = false) {
@@ -1690,6 +1709,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         const val PANEL_SHADOW_DP = 12
         const val BUBBLE_EXIT_MS = 150L
         const val PANEL_AUTO_COLLAPSE_MS = 4_000L
+        const val IME_TRACK_INTERVAL_MS = 120L
         const val GLOW_FADE_MS = 300L
         const val ORB_EXIT_MS = 200L
         const val REMOVE_ZONE_DP = 48

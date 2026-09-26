@@ -32,7 +32,7 @@ class WorkSummaryOutcomeTest {
             message(UserMessageUi("u2", "再试一次")),
             work("w2"),
         )
-        assertEquals(setOf("w1"), unfinishedWorkKeys(entries))
+        assertEquals(mapOf("w1" to WorkOutcome.Unfinished), workOutcomes(entries))
     }
 
     @Test
@@ -42,6 +42,35 @@ class WorkSummaryOutcomeTest {
             message(UserMessageUi("u2", "继续")),
             message(SystemNoticeMessageUi("n1", SystemNoticeCode.Interrupted)),
         )
-        assertEquals(emptySet<String>(), unfinishedWorkKeys(entries))
+        assertEquals(emptyMap<String, WorkOutcome>(), workOutcomes(entries))
+    }
+
+    @Test
+    fun stoppedRunIsStoppedNotFinished() {
+        val entries = listOf(work("w1"), message(SystemNoticeMessageUi("n1", SystemNoticeCode.Stopped)))
+        assertEquals(mapOf("w1" to WorkOutcome.Stopped), workOutcomes(entries))
+    }
+
+    @Test
+    fun recoveredRetryKeepsOneWorkCard() {
+        val messages = listOf(
+            UserMessageUi("u1", "打开设置"),
+            tool("t1", ToolActivityStatusUi.Success),
+            SystemNoticeMessageUi("r1", SystemNoticeCode.ModelRetry),
+            tool("t2", ToolActivityStatusUi.Success),
+        )
+        val entries = messages.toTimelineEntries()
+        assertEquals(2, entries.size)
+        assertEquals(listOf("t1", "t2"), (entries[1] as AgentTimelineEntry.WorkProcess).messages.map { it.id })
+    }
+
+    @Test
+    fun pendingRetryStaysVisibleAfterWorkCard() {
+        val messages = listOf(
+            tool("t1", ToolActivityStatusUi.Success),
+            SystemNoticeMessageUi("r1", SystemNoticeCode.ModelRetry),
+            SystemNoticeMessageUi("f1", SystemNoticeCode.RuntimeFailed),
+        )
+        assertEquals(listOf("work-t1", "r1", "f1"), messages.toTimelineEntries().map { it.key })
     }
 }
