@@ -1,5 +1,8 @@
 package io.github.fartown.movo.ui.screens.characters
 
+import androidx.compose.runtime.key
+import io.github.fartown.movo.ui.components.movo.movoAnimateContentSize
+import io.github.fartown.movo.ui.components.movo.movoAnimateItem
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloat
@@ -122,7 +125,9 @@ internal fun CharacterLibraryScreen(
             store.busy && store.characters.isEmpty() -> {
                 item(key = "loading") {
                     Box(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = MovoSpacing.section + MovoSpacing.lg),
+                        modifier = movoAnimateItem(contentSize = false)
+                            .fillMaxWidth()
+                            .padding(vertical = MovoSpacing.section + MovoSpacing.lg),
                         contentAlignment = Alignment.Center,
                     ) {
                         CharacterSpinner(size = MovoSize.iconLarge)
@@ -131,7 +136,7 @@ internal fun CharacterLibraryScreen(
             }
             store.characters.isEmpty() -> {
                 item(key = "empty-library") {
-                    MovoCard {
+                    MovoCard(modifier = movoAnimateItem()) {
                         CharacterEmptyBlock(
                             title = "还没有角色",
                             summary = "创建一个角色，或导入 PNG、JSON 角色卡开始对话",
@@ -155,7 +160,7 @@ internal fun CharacterLibraryScreen(
             }
             store.filteredCharacters.isEmpty() -> {
                 item(key = "empty-search") {
-                    MovoCard {
+                    MovoCard(modifier = movoAnimateItem()) {
                         CharacterEmptyBlock(
                             title = "没有找到匹配的角色",
                             summary = "换个关键词试试，搜索会匹配名称与标签",
@@ -167,9 +172,11 @@ internal fun CharacterLibraryScreen(
         val characters = store.filteredCharacters
         if (characters.isNotEmpty()) {
             item(key = "characters") {
-                MovoCard {
+                // 列表增删（9.3）：卡片高度随行增删过渡，每行按 id 保持身份。
+                MovoCard(modifier = movoAnimateItem()) {
                     CardTitle(stringResource(R.string.movo_character_group_library), trailing = characters.size.toString())
                     characters.forEachIndexed { index, profile ->
+                        key(profile.id) {
                         CharacterRow(
                             title = profile.card.name,
                             subtitle = profile.card.description.ifBlank {
@@ -180,12 +187,13 @@ internal fun CharacterLibraryScreen(
                         ) {
                             MovoIcon(MovoIcons.ChevronRight, null, size = MovoSize.iconSmall, tint = MovoColors.textTertiary)
                         }
+                        }
                     }
                 }
             }
         }
         item(key = "persona") {
-            MovoCard {
+            MovoCard(modifier = movoAnimateItem(contentSize = false)) {
                 CardTitle("我的")
                 SettingsRow(
                     title = "我的人设",
@@ -233,7 +241,7 @@ internal fun CharacterFieldCard(
 
 /**
  * 二级页行（icon=false，规范 8.7）：左右 16、上下 14，最小高 56 / 68；标题 15 Medium，说明 13 Regular 次要色、最多两行。
- * 与公共 `SettingsRow` 同样式，额外支持说明行数限制、标题颜色（删除用 Rose）与自定义右侧。
+ * 与公共 `SettingsRow` 同样式，额外支持说明行数限制与自定义右侧（Rose 只用在图标上，标题始终主色）。
  */
 @Composable
 internal fun CharacterRow(
@@ -246,6 +254,7 @@ internal fun CharacterRow(
     role: Role = Role.Button,
     titleColor: Color = MovoColors.textPrimary,
     subtitleMaxLines: Int = 2,
+    onSubtitleOverflow: ((Boolean) -> Unit)? = null,
     below: (@Composable ColumnScope.() -> Unit)? = null,
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
@@ -276,6 +285,7 @@ internal fun CharacterRow(
                         color = MovoColors.textSecondary,
                         maxLines = subtitleMaxLines,
                         overflow = TextOverflow.Ellipsis,
+                        onTextLayout = { layout -> onSubtitleOverflow?.invoke(layout.hasVisualOverflow) },
                     )
                 }
                 below?.invoke(this)
@@ -395,23 +405,23 @@ private fun CharacterSearchField(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
-        if (query.isNotEmpty()) {
-            Box(
-                modifier = Modifier
-                    .size(MovoSize.controlMedium)
-                    .movoClickable(PressKind.Icon, shape = CircleShape) { onQueryChange("") },
-                contentAlignment = Alignment.Center,
-            ) {
-                MovoIcon(
-                    MovoIcons.X,
-                    contentDescription = stringResource(R.string.movo_action_clear_search),
-                    size = MovoSize.iconSmall,
-                    tint = MovoColors.textSecondary,
-                )
-            }
-        } else {
-            Spacer(Modifier.width(MovoSpacing.md))
+        // ✕ 清空：出现 / 消失淡入淡出 + 缩放（9.3.1「图标状态切换」），热区 44（图标按钮）。
+        androidx.compose.animation.AnimatedVisibility(
+            visible = query.isNotEmpty(),
+            enter = androidx.compose.animation.fadeIn(MovoMotion.fast()) +
+                androidx.compose.animation.scaleIn(MovoMotion.fast(), initialScale = 0.72f),
+            exit = androidx.compose.animation.fadeOut(MovoMotion.fastExit()) +
+                androidx.compose.animation.scaleOut(MovoMotion.fastExit(), targetScale = 0.72f),
+        ) {
+            io.github.fartown.movo.ui.components.movo.MovoIconButton(
+                icon = MovoIcons.X,
+                contentDescription = stringResource(R.string.movo_action_clear_search),
+                onClick = { onQueryChange("") },
+                iconSize = MovoSize.iconSmall,
+                tint = MovoColors.textSecondary,
+            )
         }
+        if (query.isEmpty()) Spacer(Modifier.width(MovoSpacing.md))
     }
 }
 

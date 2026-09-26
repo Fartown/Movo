@@ -1,12 +1,17 @@
 package io.github.fartown.movo.ui.app
 
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Spacer
+import io.github.fartown.movo.ui.theme.MovoSpacing
+import io.github.fartown.movo.ui.components.movo.rememberLastNonNull
+import io.github.fartown.movo.ui.components.movo.MovoFailureDialog
+import io.github.fartown.movo.ui.components.movo.MovoConfirmDialog
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
@@ -54,7 +59,6 @@ import io.github.fartown.movo.ui.screens.settings.attentionLabel
 import io.github.fartown.movo.ui.screens.settings.SettingsScreen
 import io.github.fartown.movo.ui.screens.settings.SystemAssistantScreen
 import io.github.fartown.movo.ui.screens.settings.ToolSettingsScreen
-import io.github.fartown.movo.ui.components.MiuixDialogActions
 import io.github.fartown.movo.ui.model.AgentMemoryAction
 import io.github.fartown.movo.ui.model.AgentSkillsAction
 import io.github.fartown.movo.ui.model.AgentSystemEnhanceAction
@@ -97,7 +101,6 @@ import top.yukonga.miuix.kmp.nav.core.NavDisplayEffects
 import top.yukonga.miuix.kmp.nav.core.rememberNavBackStack
 import top.yukonga.miuix.kmp.nav.core.rememberNavSystemCornerRadius
 import top.yukonga.miuix.kmp.nav.transition.NavSwipeDirection
-import top.yukonga.miuix.kmp.window.WindowDialog
 
 /**
  * Agent App 根组件：持有本地导航栈，并把 Screen actions 交给 [AgentAppState]。
@@ -161,6 +164,8 @@ internal fun AgentAppRoot(
     var conversationRenameTarget by remember { mutableStateOf<ConversationSummaryUi?>(null) }
     var conversationDeleteTarget by remember { mutableStateOf<ConversationSummaryUi?>(null) }
     var conversationExportTarget by remember { mutableStateOf<ConversationSummaryUi?>(null) }
+    // 需要用户知情的失败（规范 8.11「不用 Toast」）：`Dialog/Info`，标题写哪件事没成，说明写原因。成功不再提示。
+    var failureNotice by remember { mutableStateOf<AppFailureNotice?>(null) }
     val conversationExportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/markdown"),
     ) { uri ->
@@ -176,19 +181,14 @@ internal fun AgentAppRoot(
                 withContext(Dispatchers.IO) {
                     output.use { it.write(markdown.toByteArray(Charsets.UTF_8)) }
                 }
-                Toast.makeText(
-                    context,
-                    context.getString(R.string.conversation_exported),
-                    Toast.LENGTH_SHORT,
-                ).show()
+                // 导出成功：文件已写到用户刚选的位置，不另外提示（8.11 轻提示不用 Toast）。
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {
-                Toast.makeText(
-                    context,
-                    context.getString(R.string.conversation_export_failed),
-                    Toast.LENGTH_LONG,
-                ).show()
+                failureNotice = AppFailureNotice(
+                    title = context.getString(R.string.feedback_conversation_export_failed_title),
+                    message = context.getString(R.string.feedback_write_file_failed),
+                )
             }
         }
     }
@@ -275,11 +275,10 @@ internal fun AgentAppRoot(
         if (appViewModel.kimiWebState.phase != KimiWebPhase.NOT_INSTALLED) {
             appViewModel.launchKimiWeb { result ->
                 if (result is KimiWebLaunchResult.Failed) {
-                    Toast.makeText(
-                        context,
-                        result.message(context),
-                        Toast.LENGTH_LONG,
-                    ).show()
+                    failureNotice = AppFailureNotice(
+                        title = context.getString(R.string.linux_kimi_web_failed_start),
+                        message = result.message(context),
+                    )
                 }
             }
         } else {
@@ -745,60 +744,65 @@ internal fun AgentAppRoot(
     }
     }
 
-    characterStore.notice?.let { notice ->
-        WindowDialog(show = true, title = "角色", summary = notice, onDismissRequest = characterStore::dismissNotice) {
-            top.yukonga.miuix.kmp.basic.TextButton(
-                text = "知道了", onClick = characterStore::dismissNotice, modifier = Modifier.fillMaxWidth(),
+    // 角色库的失败（读取、保存、导入、导出等）：`Dialog/Info` + 具体标题；成功由角色页面就地反馈。
+    val characterNotice = rememberLastNonNull(characterStore.notice)
+    MovoFailureDialog(
+        show = characterStore.notice != null,
+        title = characterNotice?.title.orEmpty(),
+        message = characterNotice?.message.orEmpty(),
+        onDismiss = characterStore::dismissNotice,
+    )
+
+    val appFailure = rememberLastNonNull(failureNotice)
+    MovoFailureDialog(
+        show = failureNotice != null,
+        title = appFailure?.title.orEmpty(),
+        message = appFailure?.message.orEmpty(),
+        onDismiss = { failureNotice = null },
+    )
+
+    // 重命名（规范 8.11 `Dialog/Confirm` + 输入框）：退场动画期间保留原会话与输入。
+    val renaming = rememberLastNonNull(conversationRenameTarget)
+    var renameInput by remember(renaming?.id) { mutableStateOf(renaming?.title.orEmpty()) }
+    MovoConfirmDialog(
+        show = conversationRenameTarget != null,
+        title = stringResource(R.string.conversation_rename_title),
+        message = null,
+        confirmText = stringResource(R.string.action_save),
+        confirmEnabled = renameInput.isNotBlank(),
+        onDismissRequest = { conversationRenameTarget = null },
+        onConfirm = {
+            val conversation = conversationRenameTarget ?: return@MovoConfirmDialog
+            agentState.renameConversation(conversation.id, renameInput)
+            conversationRenameTarget = null
+        },
+        extraContent = {
+            Spacer(Modifier.height(MovoSpacing.lg))
+            TextField(
+                value = renameInput,
+                onValueChange = { renameInput = it },
+                label = stringResource(R.string.conversation_rename_hint),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
             )
-        }
-    }
+        },
+    )
 
-    conversationRenameTarget?.let { conversation ->
-        var renameInput by remember(conversation.id) { mutableStateOf(conversation.title) }
-        WindowDialog(
-            show = true,
-            title = stringResource(R.string.conversation_rename_title),
-            onDismissRequest = { conversationRenameTarget = null },
-        ) {
-            Column {
-                TextField(
-                    value = renameInput,
-                    onValueChange = { renameInput = it },
-                    label = stringResource(R.string.conversation_rename_hint),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                MiuixDialogActions(
-                    confirmText = stringResource(R.string.action_save),
-                    confirmEnabled = renameInput.isNotBlank(),
-                    onCancel = { conversationRenameTarget = null },
-                    onConfirm = {
-                        agentState.renameConversation(conversation.id, renameInput)
-                        conversationRenameTarget = null
-                    },
-                    modifier = Modifier.padding(top = 16.dp),
-                )
-            }
-        }
-    }
-
-    conversationDeleteTarget?.let { conversation ->
-        WindowDialog(
-            show = true,
-            title = stringResource(R.string.conversation_delete_title),
-            summary = stringResource(R.string.conversation_delete_message),
-            onDismissRequest = { conversationDeleteTarget = null },
-        ) {
-            MiuixDialogActions(
-                confirmText = stringResource(R.string.action_delete),
-                destructive = true,
-                onCancel = { conversationDeleteTarget = null },
-                onConfirm = {
-                    agentState.deleteConversation(conversation.id)
-                    conversationDeleteTarget = null
-                },
-            )
-        }
-    }
-
+    // 删除对话（规范 8.11 举例）：危险确认 = 标题前 Rose 警示图标 + bg/inverse 白字确认按钮。
+    MovoConfirmDialog(
+        show = conversationDeleteTarget != null,
+        title = stringResource(R.string.conversation_delete_title),
+        message = stringResource(R.string.conversation_delete_message),
+        confirmText = stringResource(R.string.action_delete),
+        destructive = true,
+        onDismissRequest = { conversationDeleteTarget = null },
+        onConfirm = {
+            val conversation = conversationDeleteTarget ?: return@MovoConfirmDialog
+            agentState.deleteConversation(conversation.id)
+            conversationDeleteTarget = null
+        },
+    )
 }
+
+/** App 根部的失败说明（`Dialog/Info`）。 */
+private data class AppFailureNotice(val title: String, val message: String)

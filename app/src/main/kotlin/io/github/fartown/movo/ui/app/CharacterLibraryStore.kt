@@ -1,5 +1,6 @@
 package io.github.fartown.movo.ui.app
 
+import androidx.compose.runtime.mutableIntStateOf
 import android.app.Application
 import android.content.Context
 import android.net.Uri
@@ -28,6 +29,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/**
+ * 需要用户知情的失败（规范 8.11，界面用 `Dialog/Info`）：[title] 写哪件事没成，[message] 写原因与下一步。
+ * 成功不再弹窗，由页面就地反馈（保存按钮 ✓、设置行右侧值、列表行增删）。
+ */
+internal data class CharacterNotice(val title: String, val message: String)
 
 internal class CharacterLibraryViewModel(application: Application) : AndroidViewModel(application) {
     val store = CharacterLibraryStore(application, viewModelScope)
@@ -59,7 +66,18 @@ internal class CharacterLibraryStore(
         private set
     var busy by mutableStateOf(false)
         private set
-    var notice by mutableStateOf<String?>(null)
+    var notice by mutableStateOf<CharacterNotice?>(null)
+        private set
+    /** 编辑页名称为空时的校验错误，显示在名称输入框下方。 */
+    var nameError by mutableStateOf<String?>(null)
+        private set
+    /** 最近一次导出成功的格式与序号（页面据此在对应行就地显示「已导出」）。 */
+    var exportedFormat by mutableStateOf<CharacterCardFormat?>(null)
+        private set
+    var exportedToken by mutableIntStateOf(0)
+        private set
+    /** 剧情记忆保存成功的序号（保存按钮据此原地换成 ✓）。 */
+    var memorySavedToken by mutableIntStateOf(0)
         private set
     private var operation: Job? = null
     private var pendingLoad: (() -> Unit)? = null
@@ -79,14 +97,14 @@ internal class CharacterLibraryStore(
             }
         }
 
-    fun loadLibrary() = runOperation("角色库读取失败，请重试", queueIfBusy = true) {
+    fun loadLibrary() = runOperation("角色库读取失败", "请稍后重试。", queueIfBusy = true) {
         io { CharacterRepository.ensureDefaultCharacter() }
         characters = io { CharacterRepository.list() }
     }
 
     fun dismissNotice() { notice = null }
 
-    fun loadDetail(id: String) = runOperation("角色读取失败，请返回角色库重试", queueIfBusy = true) {
+    fun loadDetail(id: String) = runOperation("角色读取失败", "请返回角色库重试。", queueIfBusy = true) {
         val profile = io { CharacterRepository.get(id) } ?: error("CHARACTER_NOT_FOUND")
         val warnings = io { CharacterCardCompatibility.warnings(profile.card) }
         if (selected?.id != id) greetingIndex = 0
@@ -97,11 +115,12 @@ internal class CharacterLibraryStore(
 
     fun loadEditor(id: String?) {
         if (editorLoaded && editorKey == id) return
-        runOperation("角色读取失败，请重试", queueIfBusy = true) {
+        runOperation("角色读取失败", "请稍后重试。", queueIfBusy = true) {
             val profile = id?.let { io { CharacterRepository.get(it) } ?: error("CHARACTER_NOT_FOUND") }
             selected = profile
             draft = profile?.card ?: CharacterCardCodec.create("新角色")
             draftName = profile?.card?.name.orEmpty()
+            nameError = null
             editorKey = id
             editorLoaded = true
         }
@@ -117,19 +136,24 @@ internal class CharacterLibraryStore(
         if (!busy) draft = draft?.let(update)
     }
 
-    fun updateName(name: String) { if (!busy) draftName = name }
+    fun updateName(name: String) {
+        if (busy) return
+        draftName = name
+        if (name.isNotBlank()) nameError = null
+    }
 
     fun updateWorldbook(update: (CharacterBookDraft) -> CharacterBookDraft) {
         if (busy) return
         try {
             draft = draft?.let { it.withWorldbook(update(it.worldbookDraft())) }
         } catch (_: IllegalArgumentException) {
-            notice = "世界书设置无效，请检查扫描深度、预算与条目位置"
+            notice = CharacterNotice("世界书设置无效", "请检查扫描深度、预算与条目位置。")
         }
     }
 
     fun importCard(uri: Uri, onImported: (String) -> Unit) = runOperation(
-        "导入失败，请确认文件是完整的 PNG 或 JSON 角色卡，且未超过大小限制",
+        "角色卡导入失败",
+        "请确认文件是完整的 PNG 或 JSON 角色卡，且未超过大小限制。",
         diagnoseCardImport = true,
     ) {
         val profile = io {
@@ -145,12 +169,13 @@ internal class CharacterLibraryStore(
     fun saveEditor(onSaved: (String) -> Unit) {
         val originalDraft = draft ?: return
         if (draftName.isBlank()) {
-            notice = "请填写角色名称"
+            // 校验错误放在名称输入框下方（规范 8.11），不弹窗。
+            nameError = "请填写角色名称"
             return
         }
         val card = originalDraft.withEdits(name = draftName)
         val original = selected
-        runOperation("角色保存失败，请重试") {
+        runOperation("角色保存失败", "请稍后重试。") {
             val profile = io {
                 if (original == null) CharacterRepository.create(card)
                 else CharacterRepository.save(original.copy(card = card))
@@ -163,35 +188,37 @@ internal class CharacterLibraryStore(
         }
     }
 
-    fun duplicate(id: String, onDuplicated: (String) -> Unit) = runOperation("角色复制失败，请重试") {
+    fun duplicate(id: String, onDuplicated: (String) -> Unit) = runOperation("角色复制失败", "请稍后重试。") {
         val profile = io { CharacterRepository.duplicate(id) }
         characters = io { CharacterRepository.list() }
         onDuplicated(profile.id)
     }
 
-    fun restoreDefaultCharacter() = runOperation("默认角色恢复失败，请重试") {
+    fun restoreDefaultCharacter() = runOperation("默认角色恢复失败", "请稍后重试。") {
         io { CharacterRepository.createDefaultCharacter() }
         characters = io { CharacterRepository.list() }
     }
 
-    fun delete(id: String, onDeleted: () -> Unit) = runOperation("角色删除失败，请重试") {
+    fun delete(id: String, onDeleted: () -> Unit) = runOperation("角色删除失败", "请稍后重试。") {
         io { CharacterRepository.delete(id) }
         if (selected?.id == id) selected = null
         characters = io { CharacterRepository.list() }
         onDeleted()
     }
 
-    fun export(id: String, format: CharacterCardFormat, uri: Uri) = runOperation("角色卡导出失败，请重试") {
+    fun export(id: String, format: CharacterCardFormat, uri: Uri) = runOperation("角色卡导出失败", "无法写入所选文件，请换个位置再试。") {
         io {
             context.contentResolver.openOutputStream(uri, "wt")?.use {
                 CharacterRepository.export(id, format, it)
             } ?: error("CHARACTER_OUTPUT_UNAVAILABLE")
         }
-        notice = "角色卡已导出"
+        exportedFormat = format
+        exportedToken++
     }
 
     fun startConversation(id: String, onReady: (RoleplayBinding, String) -> Unit) = runOperation(
-        "新对话创建失败，请重试",
+        "新对话创建失败",
+        "请稍后重试。",
     ) {
         val profile = io { CharacterRepository.get(id) } ?: error("CHARACTER_NOT_FOUND")
         val storedBinding = io { CharacterRepository.binding(id) }
@@ -202,7 +229,7 @@ internal class CharacterLibraryStore(
 
     fun loadPersona() {
         if (personaLoaded && personaDraft != persona) return
-        runOperation("用户人设读取失败，请重试", queueIfBusy = true) {
+        runOperation("用户人设读取失败", "请稍后重试。", queueIfBusy = true) {
             persona = io { CharacterRepository.persona() }
             personaDraft = persona
             personaLoaded = true
@@ -213,7 +240,7 @@ internal class CharacterLibraryStore(
         if (!busy) personaDraft = UserPersona(name, description)
     }
 
-    fun savePersona(onSaved: () -> Unit) = runOperation("用户人设保存失败，请重试") {
+    fun savePersona(onSaved: () -> Unit) = runOperation("用户人设保存失败", "请稍后重试。") {
         val normalized = personaDraft.copy(name = personaDraft.name.trim().ifBlank { "用户" })
         io { CharacterRepository.savePersona(normalized) }
         persona = normalized
@@ -223,7 +250,7 @@ internal class CharacterLibraryStore(
 
     fun loadMemory(id: String, force: Boolean = false) {
         if (!force && memoryCharacterId == id && memorySnapshot != null && memoryDraft != memorySnapshot?.content) return
-        runOperation("剧情记忆读取失败，请重试", queueIfBusy = true) {
+        runOperation("剧情记忆读取失败", "请稍后重试。", queueIfBusy = true) {
             val snapshot = io { CharacterMemoryRepository.snapshot(context, id) }
             memoryCharacterId = id
             memorySnapshot = snapshot
@@ -236,29 +263,33 @@ internal class CharacterLibraryStore(
     fun saveMemory(id: String) {
         val original = memorySnapshot ?: return
         val content = memoryDraft
-        runOperation("剧情记忆保存失败，请检查内容长度后重试") {
+        runOperation("剧情记忆保存失败", "请检查内容长度后重试。") {
             when (val result = io {
                 CharacterMemoryRepository.replaceAllIfRevision(context, id, original.revision, content)
             }) {
                 is AgentMemoryWriteResult.Success -> {
                     memorySnapshot = result.snapshot
-                    notice = "剧情记忆已保存"
+                    memorySavedToken++
                 }
                 is AgentMemoryWriteResult.Conflict -> {
-                    notice = "剧情记忆已被对话更新。当前草稿仍保留，请复制需要的内容后重新载入，再合并保存。"
+                    notice = CharacterNotice(
+                        "剧情记忆已被对话更新",
+                        "当前草稿仍保留，请复制需要的内容后重新载入，再合并保存。",
+                    )
                 }
             }
         }
     }
 
     private fun runOperation(
-        failure: String,
+        failureTitle: String,
+        failureMessage: String,
         queueIfBusy: Boolean = false,
         diagnoseCardImport: Boolean = false,
         block: suspend () -> Unit,
     ) {
         if (operation?.isActive == true) {
-            if (queueIfBusy) pendingLoad = { runOperation(failure, queueIfBusy = true, block = block) }
+            if (queueIfBusy) pendingLoad = { runOperation(failureTitle, failureMessage, queueIfBusy = true, block = block) }
             return
         }
         operation = scope.launch {
@@ -270,9 +301,10 @@ internal class CharacterLibraryStore(
                 throw cancelled
             } catch (error: Exception) {
                 AndroidAgentLogger.warn("CharacterLibrary operation_failed type=${error.javaClass.simpleName}")
-                notice = if (diagnoseCardImport) {
-                    characterCardImportMessage((error as? CharacterCardException)?.code) ?: failure
-                } else failure
+                val message = if (diagnoseCardImport) {
+                    characterCardImportMessage((error as? CharacterCardException)?.code) ?: failureMessage
+                } else failureMessage
+                notice = CharacterNotice(failureTitle, message)
             } finally {
                 busy = false
                 operation = null

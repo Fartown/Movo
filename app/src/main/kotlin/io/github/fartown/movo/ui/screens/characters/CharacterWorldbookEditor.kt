@@ -1,5 +1,10 @@
 package io.github.fartown.movo.ui.screens.characters
 
+import androidx.compose.runtime.key
+import io.github.fartown.movo.ui.components.movo.movoAnimateContentSize
+import io.github.fartown.movo.ui.components.movo.movoAnimateItem
+import io.github.fartown.movo.ui.components.movo.MovoExpandable
+import io.github.fartown.movo.ui.components.movo.MovoExpandChevron
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -39,7 +44,7 @@ internal fun LazyListScope.characterWorldbookEditor(
     val book = card.worldbookDraft()
     val enabled = !store.busy
     item(key = "worldbook") {
-        MovoCard {
+        MovoCard(modifier = movoAnimateItem(contentSize = false)) {
             CardTitle("世界书")
             CharacterRow(
                 title = "内嵌世界书",
@@ -47,14 +52,10 @@ internal fun LazyListScope.characterWorldbookEditor(
                 showDivider = expanded,
                 onClick = onToggleExpanded,
             ) {
-                MovoIcon(
-                    if (expanded) MovoIcons.ChevronUp else MovoIcons.ChevronDown,
-                    null,
-                    size = MovoSize.iconSmall,
-                    tint = MovoColors.textTertiary,
-                )
+                // 9.3「展开 / 收起」：单一箭头旋转 `fast`，内容高度 `standard`、40ms 后淡入。
+                MovoExpandChevron(expanded = expanded)
             }
-            if (expanded) {
+            MovoExpandable(visible = expanded) {
                 Spacer(Modifier.height(MovoSpacing.sm))
                 CharacterTextField("世界书名称", book.name, { value -> store.updateWorldbook { it.copy(name = value) } }, enabled, singleLine = true)
                 CharacterTextField("扫描最近消息数（留空使用默认值）", book.scanDepth?.toString().orEmpty(), { value ->
@@ -78,9 +79,10 @@ internal fun LazyListScope.characterWorldbookEditor(
     if (!expanded) return
     val unsupported = CharacterWorldbook.unsupportedEntries(card).associate { it.index to it.reasons }
     item(key = "worldbook-entries") {
-        MovoCard(bottomPadding = MovoSpacing.md) {
+        MovoCard(modifier = movoAnimateItem(), bottomPadding = MovoSpacing.md) {
             CardTitle("条目", trailing = book.entries.size.toString())
             book.entries.forEachIndexed { index, entry ->
+                key(index) {
                 CharacterRow(
                     title = entry.name.take(120).ifBlank { "条目 ${index + 1}" },
                     subtitle = when {
@@ -101,7 +103,7 @@ internal fun LazyListScope.characterWorldbookEditor(
                         },
                     )
                 }
-                if (expandedEntry == index) {
+                MovoExpandable(visible = expandedEntry == index) {
                     CharacterWorldbookEntryEditor(
                         entry = entry,
                         enabled = enabled,
@@ -115,6 +117,7 @@ internal fun LazyListScope.characterWorldbookEditor(
                         },
                     )
                     MovoDivider(start = MovoSpacing.lg)
+                }
                 }
             }
             MovoPillButton(
