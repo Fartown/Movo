@@ -51,7 +51,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.draw.drawWithCache
-import io.github.fartown.movo.ui.components.movo.rememberSmoothedLevel
+import io.github.fartown.movo.ui.components.movo.rememberSmoothedLevelState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -624,7 +624,8 @@ private fun ComposerLineButton(
         MovoMotion.fast(),
         label = "lineButtonBg",
     )
-    val pulse = rememberSmoothedLevel(if (active) level else 0f)
+    // 电平每帧变化：只在绘制阶段读，不让按钮随电平重组。
+    val pulseState = rememberSmoothedLevelState(if (active) level else 0f)
     val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     val vertical = (MovoSize.touchTarget - MovoSize.controlSmall) / 2
     Box(
@@ -644,6 +645,7 @@ private fun ComposerLineButton(
             modifier = Modifier
                 .size(MovoSize.controlSmall)
                 .drawBehind {
+                    val pulse = pulseState.value
                     if (pulse > 0.01f) {
                         drawCircle(
                             color = MovoColors.indigoFg.copy(alpha = 0.12f * pulse + 0.04f),

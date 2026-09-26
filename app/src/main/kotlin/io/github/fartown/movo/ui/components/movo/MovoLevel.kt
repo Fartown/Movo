@@ -28,12 +28,6 @@ internal fun rememberSmoothedLevelState(target: Float): State<Float> {
     return level.asState()
 }
 
-/**
- * 兼容旧签名（待迁移）：在组合期读取平滑音量，调用方会逐帧重组。
- * 新代码用 [rememberSmoothedLevelState]，把 `.value` 放进 `graphicsLayer` / `drawBehind` 里读。
- */
-@Composable
-internal fun rememberSmoothedLevel(target: Float): Float = rememberSmoothedLevelState(target).value
 
 private const val LEVEL_RISE_MS = 80
 private const val LEVEL_FALL_MS = 200
