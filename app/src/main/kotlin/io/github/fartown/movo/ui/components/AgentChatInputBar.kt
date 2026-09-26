@@ -9,6 +9,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.expandVertically
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.layout.layout
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -36,12 +41,6 @@ import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowUpward
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Keyboard
-import androidx.compose.material.icons.rounded.Mic
-import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -59,20 +58,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.shadow.Shadow
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.Dp
@@ -93,11 +88,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import io.github.fartown.movo.ui.components.movo.MovoCircleButton
 import io.github.fartown.movo.ui.components.movo.PressKind
 import io.github.fartown.movo.ui.components.movo.movoClickable
-import io.github.fartown.movo.ui.components.movo.movoElevation
 import io.github.fartown.movo.ui.components.movo.movoSurface
 import io.github.fartown.movo.ui.theme.LocalReducedMotion
 import io.github.fartown.movo.ui.theme.MovoColors
-import io.github.fartown.movo.ui.theme.MovoElevation
 import io.github.fartown.movo.ui.theme.MovoIcon
 import io.github.fartown.movo.ui.theme.MovoIcons
 import io.github.fartown.movo.ui.theme.MovoMotion
@@ -112,18 +105,8 @@ import io.github.fartown.movo.ui.model.AgentModelPickerUiState
 import io.github.fartown.movo.ui.model.PendingFileReferenceUi
 import io.github.fartown.movo.ui.model.PendingImageUi
 import kotlin.math.roundToInt
-import top.yukonga.miuix.kmp.basic.DropdownImpl
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.ListPopupColumn
-import top.yukonga.miuix.kmp.basic.ListPopupDefaults
-import top.yukonga.miuix.kmp.basic.PopupPositionProvider
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.squircle.squircleBorder
-import top.yukonga.miuix.kmp.squircle.squircleSurface
-import top.yukonga.miuix.kmp.theme.LocalDismissState
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.overlay.OverlayListPopup
 
 private val SendButtonVisualSize = ChatInputActionIconSize
 private val SendIconSize = 16.dp
@@ -237,7 +220,7 @@ internal fun AgentChatInputBar(
     val thinkingPopupMaxHeight = with(density) {
         (inputContainerTopPx - statusBarTopPx).coerceAtLeast(0).toDp()
     }.minus(ChatInputPopupMargin * 2)
-        .coerceAtLeast(ListPopupDefaults.MinPopupHeight)
+        .coerceAtLeast(MovoSize.touchTarget + MovoSpacing.lg)
 
     LaunchedEffect(isEditingMessage) {
         // 编辑态由外部业务状态驱动；普通输入只保留在本地，避免每个字符把聊天舞台
@@ -260,66 +243,94 @@ internal fun AgentChatInputBar(
         }
     }
 
+    // 输入框上方的附件条、排队条、提示条（规范 9.3「展开 / 收起」「列表增删」）：高度展开 `standard`，内容在高度开始 40ms 后
+    // 淡入 `fast`；消失时内容淡出 120ms、高度同时收起 `standard`。减少动画时只淡入淡出、高度直接到位（9.8）。
+    val aboveEnter = if (reducedMotion) {
+        fadeIn(MovoMotion.fast())
+    } else {
+        fadeIn(tween(MovoMotion.FAST, delayMillis = MovoMotion.STAGGER, easing = MovoMotion.EasingStandard)) +
+            expandVertically(MovoMotion.standard())
+    }
+    val aboveExit = if (reducedMotion) {
+        fadeOut(MovoMotion.fastExit())
+    } else {
+        fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard())
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth(),
     ) {
+        // 收起动画期间列表已被清空，沿用最后一次非空的内容，避免条先变空再收起。
+        val shownReferences = rememberLastNonEmpty(pendingFileReferences)
         AnimatedVisibility(
             visible = pendingFileReferences.isNotEmpty(),
-            enter = fadeIn(tween(160)),
-            exit = fadeOut(tween(100)) + shrinkVertically(tween(160)),
+            enter = aboveEnter,
+            exit = aboveExit,
         ) {
             PendingFileReferenceStrip(
-                references = pendingFileReferences,
+                references = shownReferences,
                 onRemoveReference = onRemoveFileReference,
-                modifier = Modifier.padding(bottom = 8.dp),
+                modifier = Modifier.padding(bottom = MovoSpacing.sm),
             )
         }
 
+        val shownImages = rememberLastNonEmpty(pendingImages)
         AnimatedVisibility(
             visible = pendingImages.isNotEmpty(),
-            enter = fadeIn(tween(160)),
-            exit = fadeOut(tween(100)) + shrinkVertically(tween(160)),
+            enter = aboveEnter,
+            exit = aboveExit,
         ) {
             PendingImageStrip(
-                images = pendingImages,
+                images = shownImages,
                 onRemoveImage = onRemoveImage,
-                modifier = Modifier.padding(bottom = 8.dp),
+                modifier = Modifier.padding(bottom = MovoSpacing.sm),
             )
         }
 
-        queued.text?.let { text ->
-            Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                Text("下一条：$text", maxLines = 3, style = MiuixTheme.textStyles.body2)
-                Row {
-                    Text("编辑", modifier = Modifier.clickable { queued.edit(); enterText() }.padding(12.dp))
-                    Text("撤回", modifier = Modifier.clickable(onClick = queued.discard).padding(12.dp))
-                }
-            }
+        // 「下一条」排队条（`Composer/Notice` 写法）：右侧「编辑」「撤回」两个 `Button/Pill`。
+        var lastQueuedText by remember { mutableStateOf("") }
+        queued.text?.let { if (it != lastQueuedText) lastQueuedText = it }
+        AnimatedVisibility(
+            visible = queued.text != null,
+            enter = aboveEnter,
+            exit = aboveExit,
+        ) {
+            QueuedMessageNotice(
+                text = lastQueuedText,
+                onEdit = { queued.edit(); enterText() },
+                onWithdraw = queued.discard,
+                modifier = Modifier.padding(bottom = MovoSpacing.sm),
+            )
         }
         // 退出动画期间 notice 已被清空，沿用最后一条文案，避免提示条空白收起。
         var lastVoiceNotice by remember { mutableStateOf("") }
         voice.notice?.let { if (it != lastVoiceNotice) lastVoiceNotice = it }
         AnimatedVisibility(
             visible = !voice.active && voice.notice != null,
-            enter = fadeIn(tween(160)),
-            exit = fadeOut(tween(100)) + shrinkVertically(tween(160)),
+            enter = aboveEnter,
+            exit = aboveExit,
         ) {
-            AgentVoiceNotice(text = lastVoiceNotice, modifier = Modifier.padding(bottom = 8.dp))
+            AgentVoiceNotice(text = lastVoiceNotice, modifier = Modifier.padding(bottom = MovoSpacing.sm))
         }
 
-        // `Composer/Notice`：缺麦克风权限或未配置语音时，输入框上方 8 显示，同时最多一条。
+        // `Composer/Notice`：输入框上方 8，同时最多一条。点麦克风时的语音异常（本地）优先；其次是 App 层交来的
+        // 输入相关反馈（取代 Toast，规范 8.11，由 `AgentAppState` 设置并到时清除）。
+        val appNotice = ComposerNotices.current
+        val activeNotice = dictation.notice ?: appNotice
         var lastNotice by remember { mutableStateOf<ComposerNotice?>(null) }
-        dictation.notice?.let { if (it != lastNotice) lastNotice = it }
+        activeNotice?.let { if (it != lastNotice) lastNotice = it }
         AnimatedVisibility(
-            visible = dictation.notice != null,
-            enter = fadeIn(MovoMotion.fast()),
-            exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
+            visible = activeNotice != null,
+            enter = aboveEnter,
+            exit = aboveExit,
         ) {
             lastNotice?.let { notice ->
                 ComposerNoticeBar(
                     notice = notice,
-                    onDismiss = { dictation.notice = null },
+                    onDismiss = {
+                        if (dictation.notice?.id == notice.id) dictation.notice = null else ComposerNotices.dismiss(notice.id)
+                    },
                     modifier = Modifier.padding(bottom = MovoSpacing.sm),
                 )
             }
@@ -327,8 +338,8 @@ internal fun AgentChatInputBar(
 
         AnimatedVisibility(
             visible = isEditingMessage,
-            enter = fadeIn(tween(160)),
-            exit = fadeOut(tween(100)) + shrinkVertically(tween(140)),
+            enter = aboveEnter,
+            exit = aboveExit,
         ) {
             Text(
                 text = if (preserveFollowingMessages) {
@@ -354,7 +365,7 @@ internal fun AgentChatInputBar(
                 .onGloballyPositioned { coordinates ->
                     inputContainerTopPx = coordinates.positionInWindow().y.roundToInt()
                 }
-                .movoElevation(MovoElevation.Composer, composerShape)
+                .composerShadow(composerShape)
                 .movoSurface(composerShape)
                 // 输入框变高（打字换行、字幕变化）`standard`；到 6 行后高度固定、框内滚动（规范 9.4）。
                 // 底部对齐：输入框向上长高，工具栏不随高度过渡先向下错位。
@@ -408,16 +419,10 @@ internal fun AgentChatInputBar(
                             .onFocusChanged { if (it.isFocused && voice.active) onEndVoice() },
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
                         textStyle = MovoTypography.inputPlaceholder.copy(color = MovoColors.textPrimary),
-                        // 语音输入中未确认的部分三级色；刚确认的一段三级色 → 主色过渡 `fast`（规范 8.2 `Composer/Dictation`、9.6）。
-                        outputTransformation = run {
-                            val pending = dictation.pendingRange
-                            val confirming = dictation.confirmingRange?.takeIf { confirmProgress.value < 1f }
-                            if (pending == null && confirming == null) {
-                                null
-                            } else {
-                                val p = confirmProgress.value
-                                remember(pending, confirming, p) { dictationStyle(pending, confirming, p) }
-                            }
+                        // 语音输入中未确认的部分三级色（规范 8.2 `Composer/Dictation`）；刚确认的一段三级色 → 主色的 `fast` 过渡
+                        // 在绘制阶段完成（`dictationConfirmBlur`），这里只随区间变化，不随进度逐帧重建。
+                        outputTransformation = dictation.pendingRange?.let { pending ->
+                            remember(pending) { dictationStyle(pending) }
                         },
                         scrollState = textScroll,
                         onTextLayout = { getResult -> textLayout = getResult },
@@ -439,6 +444,9 @@ internal fun AgentChatInputBar(
                         active = dictation.listening,
                         onClick = toggleDictation,
                         level = if (dictation.listening) dictation.level else 0f,
+                        // 右侧紧挨声波（中心相距 40）：向右只扩 4，向左扩 8，两者热区不重叠。
+                        touchStart = 8.dp,
+                        touchEnd = 4.dp,
                     )
                 }
                 if (!isEditingMessage && onToggleListen != null) {
@@ -457,6 +465,8 @@ internal fun AgentChatInputBar(
                                     focusManager.clearFocus(); keyboard?.hide(); onToggleListen()
                                 }
                             },
+                            touchStart = 4.dp,
+                            touchEnd = 8.dp,
                         )
                     }
                 }
@@ -526,7 +536,12 @@ internal fun AgentChatInputBar(
                 if (!voice.active) Spacer(modifier = Modifier.weight(1f))
 
                 if (showContextUsage && !isStreaming && !voice.active) {
-                    AgentContextUsageButton(usage = contextUsage, onCompact = onCompactContext, canCompact = canCompactContext)
+                    AgentContextUsageButton(
+                        usage = contextUsage,
+                        onCompact = onCompactContext,
+                        canCompact = canCompactContext,
+                        popupAnchorTopPx = inputContainerTopPx,
+                    )
                 }
                 if (!isStreaming && !voice.active) {
                     AgentModelPickerButton(
@@ -588,7 +603,11 @@ internal fun AgentChatInputBar(
 
 }
 
-/** 文字行右端 32 按钮（麦克风 / 声波），图标 20；正在听时 Indigo 浅底。 */
+/**
+ * 文字行右端 32 按钮（麦克风 / 声波），图标 20；正在听时 Indigo 浅底。
+ * 热区向外扩到 44（规范 2.3）：上下各 6；左右共 12，按 [touchStart] / [touchEnd] 分配——麦克风与声波中心相距 40，
+ * 各自向对方只扩 4、向外扩 8，两者热区不重叠。视觉尺寸与布局位置不变。
+ */
 @Composable
 private fun ComposerLineButton(
     icon: io.github.fartown.movo.ui.theme.MovoIconData,
@@ -596,6 +615,8 @@ private fun ComposerLineButton(
     active: Boolean,
     onClick: () -> Unit,
     level: Float = 0f,
+    touchStart: Dp = LineButtonTouchInset,
+    touchEnd: Dp = LineButtonTouchInset,
 ) {
     // 语音输入中：Indigo 浅底 `fast` 过渡 + 外圈随音量脉动（最大外扩 6，规范 9.6）。
     val background by animateColorAsState(
@@ -604,46 +625,153 @@ private fun ComposerLineButton(
         label = "lineButtonBg",
     )
     val pulse = rememberSmoothedLevel(if (active) level else 0f)
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val vertical = (MovoSize.touchTarget - MovoSize.controlSmall) / 2
     Box(
         modifier = Modifier
-            .size(MovoSize.controlSmall)
-            .drawBehind {
-                if (pulse > 0.01f) {
-                    drawCircle(
-                        color = MovoColors.indigoFg.copy(alpha = 0.12f * pulse + 0.04f),
-                        radius = size.minDimension / 2 + 6.dp.toPx() * pulse,
-                    )
-                }
-            }
-            .movoClickable(PressKind.Icon, onClick = onClick)
-            .clip(CircleShape)
-            .background(background)
-            .semantics { this.contentDescription = contentDescription },
+            .expandedTouchArea(start = touchStart, end = touchEnd, vertical = vertical)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                role = androidx.compose.ui.semantics.Role.Button,
+                onClick = onClick,
+            )
+            .semantics { this.contentDescription = contentDescription }
+            .padding(start = touchStart, end = touchEnd, top = vertical, bottom = vertical),
         contentAlignment = Alignment.Center,
     ) {
-        MovoIcon(icon, null, size = MovoSize.iconMedium, tint = if (active) MovoColors.indigoFg else MovoColors.textPrimary)
+        Box(
+            modifier = Modifier
+                .size(MovoSize.controlSmall)
+                .drawBehind {
+                    if (pulse > 0.01f) {
+                        drawCircle(
+                            color = MovoColors.indigoFg.copy(alpha = 0.12f * pulse + 0.04f),
+                            radius = size.minDimension / 2 + 6.dp.toPx() * pulse,
+                        )
+                    }
+                }
+                .iconPressOverlay(interaction)
+                .clip(CircleShape)
+                .background(background),
+            contentAlignment = Alignment.Center,
+        ) {
+            MovoIcon(icon, null, size = MovoSize.iconMedium, tint = if (active) MovoColors.indigoFg else MovoColors.textPrimary)
+        }
     }
 }
 
-private fun dictationStyle(
-    pending: Pair<Int, Int>?,
-    confirming: Pair<Int, Int>?,
-    progress: Float,
-) = androidx.compose.foundation.text.input.OutputTransformation {
-    confirming?.let { range ->
-        val start = range.first.coerceIn(0, length)
-        val end = range.second.coerceIn(start, length)
-        val color = androidx.compose.ui.graphics.lerp(MovoColors.textTertiary, MovoColors.textPrimary, progress.coerceIn(0f, 1f))
-        if (end > start) addStyle(androidx.compose.ui.text.SpanStyle(color = color), start, end)
-    }
-    pending?.let { range ->
-        val start = range.first.coerceIn(0, length)
-        val end = range.second.coerceIn(start, length)
-        if (end > start) addStyle(androidx.compose.ui.text.SpanStyle(color = MovoColors.textTertiary), start, end)
+/** 32 按钮的热区左右共扩 12（到 44）；默认两侧各 6。 */
+private val LineButtonTouchInset = 6.dp
+
+/**
+ * 只扩热区、不占布局：内层按 [start] / [end] / [vertical] 加大后测量与响应点击，对外只报告原来的尺寸，
+ * 多出来的部分向四周溢出（外层不裁切，点击命中照常落到内层）。
+ */
+internal fun Modifier.expandedTouchArea(start: Dp, end: Dp, vertical: Dp): Modifier = layout { measurable, constraints ->
+    val s = start.roundToPx()
+    val e = end.roundToPx()
+    val v = vertical.roundToPx()
+    val placeable = measurable.measure(
+        constraints.copy(
+            minWidth = 0,
+            minHeight = 0,
+            maxWidth = if (constraints.hasBoundedWidth) constraints.maxWidth + s + e else constraints.maxWidth,
+            maxHeight = if (constraints.hasBoundedHeight) constraints.maxHeight + 2 * v else constraints.maxHeight,
+        ),
+    )
+    val width = (placeable.width - s - e).coerceAtLeast(0)
+    val height = (placeable.height - 2 * v).coerceAtLeast(0)
+    layout(width, height) { placeable.place(-s, -v) }
+}
+
+/**
+ * 无底色图标按钮的按压反馈（规范 9.3.1）：图标不缩放，40 圆形 `overlay/pressed` 从 0.8 放大到 1 并淡入（`instant`），
+ * 松手淡出 `fast`。点击由外层（扩大后的热区）处理，这里只读同一个 [interaction] 画反馈。
+ */
+@Composable
+private fun Modifier.iconPressOverlay(interaction: androidx.compose.foundation.interaction.InteractionSource): Modifier {
+    val pressed by interaction.collectIsPressedAsState()
+    val overlay by animateFloatAsState(
+        targetValue = if (pressed) 1f else 0f,
+        animationSpec = if (pressed) MovoMotion.instant() else MovoMotion.fast(),
+        label = "lineButtonPress",
+    )
+    return drawWithContent {
+        drawContent()
+        if (overlay > 0f) {
+            drawCircle(MovoColors.overlayPressed, radius = 20.dp.toPx() * (0.8f + 0.2f * overlay), alpha = overlay)
+        }
     }
 }
 
-/** 刚确认的一段模糊 2 → 0（Q2「语音字幕由未确认变确认」）：这段单独放进模糊图层绘制，其余文字照常。 */
+/** 列表清空后仍返回最后一次非空的内容，给收起动画使用。 */
+@Composable
+private fun <T> rememberLastNonEmpty(items: List<T>): List<T> {
+    var last by remember { mutableStateOf(items) }
+    if (items.isNotEmpty() && items != last) last = items
+    return if (items.isNotEmpty()) items else last
+}
+
+/**
+ * E2 `Elevation/Composer` 的硬件阴影（规范 7，暖灰 #2B2419）：由 RenderThread 按轮廓绘制，输入框高度动画时只更新轮廓，
+ * 不像 `dropShadow` 那样逐帧重建 40 的模糊。环境光阴影近似 `0 1 3 / 6%`，投影近似 `0 16 40 −12 / 12%`
+ * （最终不透明度 = 颜色 alpha × 主题 spotShadowAlpha，需真机对照 E2 调校）。
+ */
+private fun Modifier.composerShadow(shape: androidx.compose.ui.graphics.Shape): Modifier = shadow(
+    elevation = ComposerShadowElevation,
+    shape = shape,
+    clip = false,
+    ambientColor = MovoColors.shadow,
+    spotColor = MovoColors.shadow.copy(alpha = ComposerSpotShadowAlpha),
+)
+
+private val ComposerShadowElevation = 12.dp
+private const val ComposerSpotShadowAlpha = 0.6f
+
+/**
+ * 「下一条」排队条（D11）：`Composer/Notice` 写法——图标底 32（中性色，不是异常）+「下一条」+ 排队的原话，
+ * 右侧「编辑」「撤回」两个 `Button/Pill`；不自动消失，处理后收起。
+ */
+@Composable
+private fun QueuedMessageNotice(
+    text: String,
+    onEdit: () -> Unit,
+    onWithdraw: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    ComposerNoticeLayout(
+        icon = MovoIcons.Clock,
+        title = stringResource(R.string.movo_queued_title),
+        description = text,
+        iconBackground = MovoColors.bgSurfaceMuted,
+        iconTint = MovoColors.textSecondary,
+        modifier = modifier,
+    ) {
+        Spacer(Modifier.width(MovoSpacing.sm))
+        io.github.fartown.movo.ui.components.movo.MovoPillButton(
+            label = stringResource(R.string.action_edit),
+            onClick = onEdit,
+        )
+        Spacer(Modifier.width(MovoSpacing.sm))
+        io.github.fartown.movo.ui.components.movo.MovoPillButton(
+            label = stringResource(R.string.movo_queued_withdraw),
+            onClick = onWithdraw,
+            modifier = Modifier.padding(end = MovoSpacing.xs),
+        )
+    }
+}
+
+private fun dictationStyle(pending: Pair<Int, Int>) = androidx.compose.foundation.text.input.OutputTransformation {
+    val start = pending.first.coerceIn(0, length)
+    val end = pending.second.coerceIn(start, length)
+    if (end > start) addStyle(androidx.compose.ui.text.SpanStyle(color = MovoColors.textTertiary), start, end)
+}
+
+/**
+ * 刚确认的一段（Q2「语音字幕由未确认变确认」，`fast`）：颜色三级色 → 主色、模糊 2 → 0。这段单独放进图层，
+ * 用 SrcIn 着色画出过渡中的颜色并模糊，其余文字照常；进度只在绘制阶段读取，不触发重组。
+ */
 private fun Modifier.dictationConfirmBlur(
     range: () -> Pair<Int, Int>?,
     progress: () -> Float,
@@ -682,6 +810,10 @@ private fun Modifier.dictationConfirmBlur(
         } else {
             null
         }
+        layer.colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(
+            androidx.compose.ui.graphics.lerp(MovoColors.textTertiary, MovoColors.textPrimary, p.coerceIn(0f, 1f)),
+            androidx.compose.ui.graphics.BlendMode.SrcIn,
+        )
         layer.record { content.drawContent() }
         clipPath(rangePath) { drawLayer(layer) }
     }
@@ -783,7 +915,12 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMainActionGlyph
     }
 }
 
-/** 思考强度选择保持为单一图标，当前状态仅通过图标颜色表达。 */
+/**
+ * 思考芯片（规范 8 组件表）：高 40；关 = 透明底 + 1 宽 border/strong +「思考」次要色；默认 = Indigo 浅底 +「思考」；
+ * 指定档位 = Indigo 浅底，只显示档位名。关 ↔ 开：底色、描边（淡出）、图标与文字颜色 `fast`（9.3.1「芯片开关」）；
+ * 换档：文字交叉淡化 `fast`，宽度 `standard`（只由一个 animateContentSize 驱动，9.3.1「芯片换档」）。
+ * 点击弹出档位菜单（`Popover/Menu`，出现在输入框上方）；选中后 ✓ 先更新，停留 160ms 再关闭（9.3.1「单选」）。
+ */
 @Composable
 private fun ThinkingEffortChip(
     effort: ReasoningEffort,
@@ -795,26 +932,35 @@ private fun ThinkingEffortChip(
     modifier: Modifier = Modifier,
 ) {
     var showPopup by remember { mutableStateOf(false) }
+    var pendingEffort by remember { mutableStateOf<ReasoningEffort?>(null) }
     val active = effort != ReasoningEffort.OFF
     val menuEnabled = enabled && options.size > 1
+    val reduced = LocalReducedMotion.current
     LaunchedEffect(menuEnabled) {
         if (!menuEnabled) showPopup = false
     }
-    val popupPositionProvider = remember(popupAnchorTopPx) {
-        InputPopupPositionProvider(popupAnchorTopPx)
+    LaunchedEffect(pendingEffort) {
+        val chosen = pendingEffort ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(MovoMotion.FAST.toLong() + MovoMotion.MENU_CLOSE_DELAY)
+        showPopup = false
+        if (chosen != effort) onEffortChange(chosen)
     }
     val contentColor by animateColorAsState(
         targetValue = if (active) MovoColors.indigoFg else MovoColors.textSecondary,
         animationSpec = MovoMotion.fast(),
         label = "thinking_content",
     )
-    // 思考芯片（规范 8 组件表）：高 40；关 = 透明底 + 1 宽 border/strong +「思考」次要色；
-    // 默认 = Indigo 浅底 +「思考」；指定档位 = Indigo 浅底，只显示档位名。颜色过渡 `fast`，换档宽度 `standard`。
     val chipShape = RoundedCornerShape(MovoRadius.lg)
     val chipBg by animateColorAsState(
         if (active) MovoColors.indigoBg else Color.Transparent,
         MovoMotion.fast(),
         label = "thinking_bg",
+    )
+    // 关 → 开时描边淡出（颜色过渡到透明），开 → 关时淡入。
+    val chipBorder by animateColorAsState(
+        if (active) Color.Transparent else MovoColors.borderStrong,
+        MovoMotion.fast(),
+        label = "thinking_border",
     )
     val chipLabel = effort.chipLabel()
     Box(modifier = modifier) {
@@ -825,52 +971,55 @@ private fun ThinkingEffortChip(
                     PressKind.Solid,
                     shape = chipShape,
                     enabled = menuEnabled,
-                    onClick = { showPopup = true },
+                    onClick = {
+                        pendingEffort = null
+                        showPopup = true
+                    },
                 )
                 .clip(chipShape)
-                // 换档时宽度变化 `standard`（规范 9.3「思考芯片」）。
-                .animateContentSize(MovoMotion.standard())
                 .background(chipBg)
-                .then(
-                    if (active) Modifier else Modifier.border(1.dp, MovoColors.borderStrong, chipShape),
-                )
-                .animateContentSize(MovoMotion.standard())
+                .border(1.dp, chipBorder, chipShape)
+                // 换档时宽度变化 `standard`（规范 9.3「思考芯片」）；减少动画时直接到位。
+                .animateContentSize(if (reduced) snap() else MovoMotion.standard())
                 .padding(start = 12.dp, end = 16.dp)
                 .semantics { contentDescription = "思考强度：${effort.chipLabelPlain()}" },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             MovoIcon(MovoIcons.Atom, null, size = MovoSize.iconSmall, tint = contentColor)
             Spacer(Modifier.width(6.dp))
-            Text(chipLabel, style = MovoTypography.labelMedium, color = contentColor, maxLines = 1)
+            AnimatedContent(
+                targetState = chipLabel,
+                transitionSpec = {
+                    (fadeIn(MovoMotion.fast()) togetherWith fadeOut(MovoMotion.fastExit()))
+                        // 宽度只由外层 animateContentSize 过渡，这里不再另起一个尺寸动画。
+                        .using(null)
+                },
+                label = "thinking_label",
+            ) { label ->
+                Text(label, style = MovoTypography.labelMedium, color = contentColor, maxLines = 1)
+            }
         }
-        OverlayListPopup(
+        io.github.fartown.movo.ui.components.movo.MovoPopover(
             show = showPopup && menuEnabled && popupAnchorTopPx > 0,
-            popupPositionProvider = popupPositionProvider,
-            alignment = PopupPositionProvider.Align.TopStart,
-            onDismissRequest = { showPopup = false },
+            onDismiss = { showPopup = false },
+            aboveYPx = popupAnchorTopPx,
             maxHeight = popupMaxHeight,
         ) {
-            val dismiss = LocalDismissState.current
-            ListPopupColumn {
-                options.forEachIndexed { index, option ->
-                    DropdownImpl(
-                        text = option.displayName,
-                        optionSize = options.size,
-                        isSelected = option == effort,
-                        index = index,
-                        onSelectedIndexChange = {
-                            onEffortChange(option)
-                            dismiss?.invoke()
-                        },
-                    )
-                }
+            val selected = pendingEffort ?: effort
+            options.forEach { option ->
+                io.github.fartown.movo.ui.components.movo.MovoPopoverItem(
+                    label = option.displayName,
+                    selected = option == selected,
+                    onClick = { if (pendingEffort == null) pendingEffort = option },
+                )
             }
         }
     }
 }
 
 /**
- * 横向跟随 Chip，竖向则避开整个输入面板；默认下拉定位只会避开 Chip 自身。
+ * 输入框上方的图片条（规范 8.9.1「与『+』添加的相同」）：60 缩略图，圆角 8（`radius/xs` 小缩略图），无水波纹；
+ * 右上角删除按钮视觉 20、热区 44（规范 2.3），热区向缩略图外溢出，缩略图本身不裁切热区。
  */
 @Composable
 private fun PendingImageStrip(
@@ -878,49 +1027,91 @@ private fun PendingImageStrip(
     onRemoveImage: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val thumbShape = RoundedCornerShape(MovoRadius.xs)
     Row(
         modifier = modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(MovoSpacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         images.forEach { image ->
-            Box(
-                modifier = Modifier
-                    .size(60.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MiuixTheme.colorScheme.surfaceContainer),
-            ) {
-                rememberDataUrlBitmap(image.dataUrl)?.let { bitmap ->
-                    Image(
-                        bitmap = bitmap,
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                    )
-                }
+            Box(modifier = Modifier.size(PendingThumbnailSize)) {
                 Box(
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(3.dp)
-                        .size(18.dp)
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.58f))
-                        .clickable { onRemoveImage(image.id) },
-                    contentAlignment = Alignment.Center,
+                        .fillMaxSize()
+                        .clip(thumbShape)
+                        .background(MovoColors.bgSurfaceMuted),
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Close,
-                        contentDescription = stringResource(R.string.ui_remove_image_089db3),
-                        modifier = Modifier.size(11.dp),
-                        tint = Color.White,
-                    )
+                    rememberDataUrlBitmap(image.dataUrl)?.let { bitmap ->
+                        Image(
+                            bitmap = bitmap,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                        )
+                    }
                 }
+                PendingRemoveButton(
+                    contentDescription = stringResource(R.string.ui_remove_image_089db3),
+                    onClick = { onRemoveImage(image.id) },
+                    onImage = true,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(MovoSpacing.xs),
+                )
             }
         }
     }
 }
+
+private val PendingThumbnailSize = 60.dp
+
+/**
+ * 附件条上的删除按钮：视觉 20 圆（✕ 12），热区 44（规范 2.3，向四周溢出、不占布局）；按压为无底色图标按钮的 40 圆形叠加。
+ * 文件胶囊上用 `bg/surface-muted` 底 + 次要色 ✕；图片上用 `bg/inverse` 58% 底 + 白色 ✕，保证在任意图片上可见。
+ */
+@Composable
+internal fun PendingRemoveButton(
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    onImage: Boolean = false,
+) {
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val expand = (MovoSize.touchTarget - PendingRemoveVisualSize) / 2
+    Box(
+        modifier = modifier
+            .expandedTouchArea(start = expand, end = expand, vertical = expand)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                role = androidx.compose.ui.semantics.Role.Button,
+                onClick = onClick,
+            )
+            .semantics { this.contentDescription = contentDescription }
+            .padding(expand),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(PendingRemoveVisualSize)
+                .iconPressOverlay(interaction)
+                .clip(CircleShape)
+                .background(if (onImage) MovoColors.bgInverse.copy(alpha = 0.58f) else MovoColors.bgSurfaceMuted),
+            contentAlignment = Alignment.Center,
+        ) {
+            MovoIcon(
+                MovoIcons.X,
+                null,
+                size = MovoSize.iconTiny,
+                tint = if (onImage) MovoColors.textOnInverse else MovoColors.textSecondary,
+            )
+        }
+    }
+}
+
+private val PendingRemoveVisualSize = 20.dp
 
 /** 思考芯片上的文字：关与默认都显示「思考」，指定档位只显示档位名。 */
 @Composable

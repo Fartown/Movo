@@ -15,6 +15,8 @@ import io.github.fartown.movo.agent.voice.conversation.VoiceTurnCoordinator
 import io.github.fartown.movo.data.db.MovoDatabase
 import io.github.fartown.movo.ui.app.AgentAppState
 import io.github.fartown.movo.ui.components.AgentConversationDraftStore
+import io.github.fartown.movo.ui.components.ComposerNotices
+import io.github.fartown.movo.R
 import io.github.fartown.movo.ui.model.PendingImageUi
 import io.github.fartown.movo.ui.model.UserMessageUi
 import kotlinx.coroutines.CoroutineScope
@@ -257,6 +259,60 @@ class VoiceSessionLifecycleTest {
         assertEquals("已补充到当前任务", owner.state.value.statusText)
         assertEquals(1, owner.state.value.supplements)
         assertTrue(owner.state.value.active)
+    }
+
+    @Test fun sendingWhileAMessageIsQueuedShowsAComposerNoticeInsteadOfAToast() {
+        // 规范 8.11「不用 Toast」：被拦下的发送在输入框上方用 `Composer/Notice` 说明，新内容留在输入框。
+        ComposerNotices.clear()
+        val state = app(); val id = state.voiceConversationId()
+        state.sendCurrentMessage("正在执行")
+        state.sendCurrentMessage("排队消息")
+        assertEquals("排队消息", state.queuedTextSubmission?.text)
+        assertNull(state.composerNotice)
+        val draft = AgentConversationDraftStore.shared.get(id)
+        draft.edit { replace(0, length, "再来一条") }
+        state.sendCurrentMessage("再来一条")
+        val notice = state.composerNotice
+        assertNotNull(notice)
+        assertEquals(context.getString(R.string.movo_notice_queued_title), notice!!.title)
+        assertEquals(context.getString(R.string.movo_notice_queued_desc), notice.description)
+        assertEquals(ComposerNotices.AUTO_DISMISS_MS, notice.autoDismissMillis)
+        assertEquals("再来一条", draft.text.toString())
+        ComposerNotices.dismiss(notice.id)
+        assertNull(state.composerNotice)
+    }
+
+    @Test fun fileReferencesWithoutTerminalToolsShowAComposerNotice() {
+        ComposerNotices.clear()
+        val state = app(); state.voiceConversationId()
+        val reference = io.github.fartown.movo.agent.model.AgentFileReference(
+            displayName = "notes.txt",
+            absolutePath = "/sdcard/notes.txt",
+            kind = io.github.fartown.movo.agent.model.AgentFileReferenceKind.File,
+        )
+        val update = AgentAppState::class.java.getDeclaredMethod(
+            "updateCurrentConversation",
+            io.github.fartown.movo.ui.model.AgentChatHomeUiState::class.java,
+        )
+        update.isAccessible = true
+        update.invoke(
+            state,
+            state.homeState.copy(
+                pendingFileReferences = listOf(io.github.fartown.movo.ui.model.PendingFileReferenceUi("file-1", reference)),
+            ),
+        )
+        io.github.fartown.movo.config.Prefs.initLocal(context)
+        val prefs = io.github.fartown.movo.config.Prefs.localAgentPreferences()!!
+        val key = io.github.fartown.movo.config.Prefs.Keys.AGENT_TERMINAL_TOOLS
+        prefs.edit().putBoolean(key, false).commit()
+        try {
+            state.sendCurrentMessage("看看这个文件")
+            assertEquals(context.getString(R.string.movo_notice_file_tools_title), state.composerNotice?.title)
+            assertTrue(state.homeState.messages.isEmpty())
+            assertEquals(1, state.homeState.pendingFileReferences.size)
+        } finally {
+            prefs.edit().remove(key).commit()
+        }
     }
 
     @Test fun withdrawingQueuedTextDoesNotCancelTheRunningTask() {
