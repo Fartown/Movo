@@ -105,6 +105,8 @@ internal fun MovoPage(
     onBack: (() -> Unit)?,
     modifier: Modifier = Modifier,
     actions: @Composable RowScope.() -> Unit = {},
+    /** 页面内容自己知道是否离开顶部时传入（如多个标签各有列表），优先于外层滚动累计判断。 */
+    scrolled: Boolean? = null,
     content: @Composable (contentPadding: PaddingValues, sidePadding: Dp) -> Unit,
 ) {
     val backdrop = rememberMovoBackdrop()
@@ -121,7 +123,7 @@ internal fun MovoPage(
                 content(PaddingValues(top = barHeight), sidePadding)
             }
         }
-        MovoTopBar(title = title, onBack = onBack, scrolled = detector.scrolled, backdrop = backdrop, actions = actions)
+        MovoTopBar(title = title, onBack = onBack, scrolled = scrolled ?: detector.scrolled, backdrop = backdrop, actions = actions)
     }
 }
 

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 就地反馈与失败说明（规范 8.11「不用 Toast」）。 -->
+<resources>
+  <string name="feedback_conversation_export_failed_title">沒能匯出對話</string>
+  <string name="feedback_write_file_failed">無法寫入所選檔案，請換個位置再試。</string>
+  <string name="feedback_try_again_later">請稍後再試。</string>
+  <string name="feedback_saved">已儲存</string>
+  <string name="feedback_memory_read_failed_title">沒能讀取記憶</string>
+  <string name="feedback_skill_description_title">Skill 說明</string>
+</resources>

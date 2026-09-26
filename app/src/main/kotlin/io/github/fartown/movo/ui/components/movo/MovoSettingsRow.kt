@@ -205,29 +205,33 @@ private fun RowValue(
     gap: Boolean = true,
     maxWidth: androidx.compose.ui.unit.Dp = 160.dp,
 ) {
-    if (value == null) return
-    Spacer(Modifier.width(MovoSpacing.sm))
-    if (attention) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(MovoColors.roseFg))
-        Spacer(Modifier.width(6.dp))
-    }
-    // 值变化：交叉淡化 `fast`，宽度变化同步 `standard`（规范 9.3「值变化」）。
+    // 值变化：交叉淡化 `fast`，宽度变化同步 `standard`（规范 9.3「值变化」）；值从无到有（读取完成）同样淡入，
+    // 不直接蹦出。null 渲染为空，间距与状态点一起放进过渡内容里，宽度一并过渡。
     androidx.compose.animation.AnimatedContent(
         targetState = value,
         transitionSpec = {
             (androidx.compose.animation.fadeIn(MovoMotion.fast()) togetherWith androidx.compose.animation.fadeOut(MovoMotion.fastExit()))
                 .using(androidx.compose.animation.SizeTransform(clip = false) { _, _ -> MovoMotion.standard() })
         },
+        contentAlignment = Alignment.CenterEnd,
         label = "rowValue",
     ) { current ->
-        Text(
-            current,
-            style = MovoTypography.labelRegular,
-            color = MovoColors.textSecondary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.widthIn(max = maxWidth),
-        )
+        if (current == null) return@AnimatedContent
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.width(MovoSpacing.sm))
+            if (attention) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(MovoColors.roseFg))
+                Spacer(Modifier.width(6.dp))
+            }
+            Text(
+                current,
+                style = MovoTypography.labelRegular,
+                color = MovoColors.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = maxWidth),
+            )
+            if (gap) Spacer(Modifier.width(MovoSpacing.xs))
+        }
     }
-    if (gap) Spacer(Modifier.width(MovoSpacing.xs))
 }
