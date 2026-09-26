@@ -32,10 +32,10 @@ fun javaStringLiteral(value: String): String = "\"" + value
     .replace("\r", "\\r")
     .replace("\t", "\\t") + "\""
 
-val releaseStoreFile = System.getenv("ETA_RELEASE_STORE_FILE")
-val releaseStorePassword = System.getenv("ETA_RELEASE_STORE_PASSWORD")
-val releaseKeyAlias = System.getenv("ETA_RELEASE_KEY_ALIAS")
-val releaseKeyPassword = System.getenv("ETA_RELEASE_KEY_PASSWORD")
+val releaseStoreFile = System.getenv("MOVO_RELEASE_STORE_FILE")
+val releaseStorePassword = System.getenv("MOVO_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = System.getenv("MOVO_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("MOVO_RELEASE_KEY_PASSWORD")
 val hasReleaseSigning = listOf(
     releaseStoreFile,
     releaseStorePassword,
@@ -51,28 +51,28 @@ java {
 }
 
 android {
-    namespace = "io.github.mangi.eta"
+    namespace = "io.github.fartown.movo"
     compileSdk = 37
     ndkVersion = libs.versions.ndk.get()
 
     defaultConfig {
-        applicationId = "io.github.mangi.eta"
+        applicationId = "io.github.fartown.movo"
         minSdk = 34
         targetSdk = 36
-        testInstrumentationRunner = "io.github.mangi.eta.voice.VoiceAcceptanceInstrumentation"
+        testInstrumentationRunner = "io.github.fartown.movo.voice.VoiceAcceptanceInstrumentation"
         // versionCode 规则：yyyyMMdd + 两位当日序号（01 起），发版时随 versionName 一起手动递增。
         versionCode = 2026092306
         versionName = "3.0.9"
 
         mapOf(
-            "ETA_DEFAULT_PROVIDER_NAME" to "默认模型",
-            "ETA_DEFAULT_BASE_URL" to "",
-            "ETA_DEFAULT_API_KEY" to "",
-            "ETA_DEFAULT_MODEL_ID" to "",
-            "ETA_DEFAULT_MODEL_NAME" to "",
-            "ETA_DEFAULT_ENDPOINT_MODE" to "responses",
-            "ETA_DEFAULT_CONTEXT_WINDOW" to "",
-            "ETA_DEFAULT_HOSTED_WEB_SEARCH" to "false",
+            "MOVO_DEFAULT_PROVIDER_NAME" to "默认模型",
+            "MOVO_DEFAULT_BASE_URL" to "",
+            "MOVO_DEFAULT_API_KEY" to "",
+            "MOVO_DEFAULT_MODEL_ID" to "",
+            "MOVO_DEFAULT_MODEL_NAME" to "",
+            "MOVO_DEFAULT_ENDPOINT_MODE" to "responses",
+            "MOVO_DEFAULT_CONTEXT_WINDOW" to "",
+            "MOVO_DEFAULT_HOSTED_WEB_SEARCH" to "false",
         ).forEach { (name, fallback) ->
             buildConfigField("String", name, javaStringLiteral(packagedModelValue(name, fallback)))
         }
@@ -140,7 +140,7 @@ android {
             // Kotlin uses sherpa-onnx-jni + onnxruntime; the standalone C/C++ wrappers
             // are not dependencies of that JNI library.
             excludes += setOf("**/libsherpa-onnx-c-api.so", "**/libsherpa-onnx-cxx-api.so")
-            keepDebugSymbols += setOf("**/libproot_exec.so", "**/libproot_loader.so", "**/libeta_pty.so")
+            keepDebugSymbols += setOf("**/libproot_exec.so", "**/libproot_loader.so", "**/libmovo_pty.so")
         }
         resources {
             // 合并 Xposed 模块声明，避免 release 裁剪后模块入口失效

@@ -133,31 +133,31 @@ Manifest 没有 `WAKE_LOCK` 权限，运行链路没有持有 WakeLock；电池�
 | 章节 | 文件 | 关键符号 / 职责 |
 | --- | --- | --- |
 | 2、3.4 | `app/src/main/AndroidManifest.xml` | 进程、权限、服务类型 |
-| 2、3.4 | `app/src/main/kotlin/io/github/mangi/eta/ui/app/AgentAppState.kt` | preparationJob、runInterruptible |
-| 3.4 | `app/src/main/kotlin/io/github/mangi/eta/ui/app/AgentAppViewModel.kt` | viewModelScope |
-| 3.4 | `app/src/main/kotlin/io/github/mangi/eta/ui/app/AgentAppRoot.kt` | ON_RESUME、window focus、popRoute |
-| 2、3.1 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRuntimeClient.kt` | run、attachRun、取消与等待 |
-| 2 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRuntimeConnection.kt` | acquire、共享绑定与 idle unbind |
-| 2、3.4 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRuntimeService.kt` | startRun、onUnbind、onDestroy |
-| 2、3.4 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentExecutionService.kt` | acquire、前台服务、停止 |
-| 2 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/ExecutionLeaseRegistry.kt` | 任务引用与服务归属 |
-| 2、4 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRuntimeRunExecutor.kt` | execute、acceptEvent、错误记录 |
-| 2 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentModelClient.kt` | complete、构建并进入 loop |
-| 2、3 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentLoop.kt` | 主循环、工具与上下文恢复 |
-| 3.1 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentModelRetry.kt` | 每请求重试预算与终止条件 |
-| 3.1 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentModelFailure.kt` | HTTP、流、连接错误分类 |
-| 3.1、4 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentHttpClient.kt` | timeout、连接池与自动重试 |
-| 3.2 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/OpenAiResponsesProvider.kt` | complete、readStreamingResponse |
-| 3.2 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/ProviderSseReader.kt` | SSE 分帧与读取 |
-| 3.2 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/ResponsesRequestBuilder.kt` | store/input/previous_response_id |
-| 3.3 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentContextSession.kt` | 压缩触发与失败处理 |
-| 3.3 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentContextBudget.kt` | 85% 阈值与 usage 校准 |
-| 3.3、4 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentContextCompactor.kt` | summarize 与空事件回调 |
-| 4 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRunTiming.kt` | 请求时间边界 |
-| 4 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentEvent.kt` | 重试展示与受控日志字段 |
-| 4 | `app/src/main/kotlin/io/github/mangi/eta/core/AgentLogger.kt` | 日志级别 API |
+| 2、3.4 | `app/src/main/kotlin/io/github/fartown/movo/ui/app/AgentAppState.kt` | preparationJob、runInterruptible |
+| 3.4 | `app/src/main/kotlin/io/github/fartown/movo/ui/app/AgentAppViewModel.kt` | viewModelScope |
+| 3.4 | `app/src/main/kotlin/io/github/fartown/movo/ui/app/AgentAppRoot.kt` | ON_RESUME、window focus、popRoute |
+| 2、3.1 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeClient.kt` | run、attachRun、取消与等待 |
+| 2 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeConnection.kt` | acquire、共享绑定与 idle unbind |
+| 2、3.4 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeService.kt` | startRun、onUnbind、onDestroy |
+| 2、3.4 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentExecutionService.kt` | acquire、前台服务、停止 |
+| 2 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/ExecutionLeaseRegistry.kt` | 任务引用与服务归属 |
+| 2、4 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeRunExecutor.kt` | execute、acceptEvent、错误记录 |
+| 2 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentModelClient.kt` | complete、构建并进入 loop |
+| 2、3 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentLoop.kt` | 主循环、工具与上下文恢复 |
+| 3.1 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentModelRetry.kt` | 每请求重试预算与终止条件 |
+| 3.1 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentModelFailure.kt` | HTTP、流、连接错误分类 |
+| 3.1、4 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentHttpClient.kt` | timeout、连接池与自动重试 |
+| 3.2 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/OpenAiResponsesProvider.kt` | complete、readStreamingResponse |
+| 3.2 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/ProviderSseReader.kt` | SSE 分帧与读取 |
+| 3.2 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/ResponsesRequestBuilder.kt` | store/input/previous_response_id |
+| 3.3 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentContextSession.kt` | 压缩触发与失败处理 |
+| 3.3 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentContextBudget.kt` | 85% 阈值与 usage 校准 |
+| 3.3、4 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentContextCompactor.kt` | summarize 与空事件回调 |
+| 4 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRunTiming.kt` | 请求时间边界 |
+| 4 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentEvent.kt` | 重试展示与受控日志字段 |
+| 4 | `app/src/main/kotlin/io/github/fartown/movo/core/AgentLogger.kt` | 日志级别 API |
 | 4 | `app/proguard-rules.pro` | Release DEBUG 删除规则 |
-| 5 | `app/src/test/kotlin/io/github/mangi/eta/agent/model/AgentModelRetryTest.kt` | 预算、取消、托管工具、错误分类契约 |
+| 5 | `app/src/test/kotlin/io/github/fartown/movo/agent/model/AgentModelRetryTest.kt` | 预算、取消、托管工具、错误分类契约 |
 
 ## 7. 关联文档与过程件
 

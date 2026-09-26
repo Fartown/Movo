@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 调研对象 | Movo / Eta 的 Android Agent 执行核心与会话机制 |
+| 调研对象 | Movo / Movo 的 Android Agent 执行核心与会话机制 |
 | 目的与类型 | 机制审计：判断现有设计的问题，并与开源 Pi、OpenAI Codex 对照 |
 | In scope | 模型协议、执行循环、工具调度、运行中输入、压缩、持久化、恢复、相关测试 |
 | Out of scope | 实施改造、真实模型成功率评测、真机故障注入、厂商 Hook 内部、完整语音链路、上游所有分支 |
@@ -80,7 +80,7 @@ Runtime 通过 Service 和工作线程与界面生命周期解耦，但 `AgentRu
 
 ### 3.3 设计层判断：局部缺陷背后的四个边界
 
-**第一，统一消息格式更接近 Chat Completions 历史，未完整建模 Provider 的状态。** `ConversationMessage` 的主体是 role、content、reasoningContent、toolCallsJson；结束原因、模型归属、签名与原生内容块没有对应的稳定字段。Responses 靠 `_eta_responses_output_items` 在单 run 内补回原生输出，Anthropic 则没有相应回放通道。因此“支持三种请求协议”还不足以证明多轮语义完整。thinking 丢失和 length 原因丢失是这项设计限制的两个表现，不只是两个无关解析 bug。（M2、M3、M4、M23）
+**第一，统一消息格式更接近 Chat Completions 历史，未完整建模 Provider 的状态。** `ConversationMessage` 的主体是 role、content、reasoningContent、toolCallsJson；结束原因、模型归属、签名与原生内容块没有对应的稳定字段。Responses 靠 `_movo_responses_output_items` 在单 run 内补回原生输出，Anthropic 则没有相应回放通道。因此“支持三种请求协议”还不足以证明多轮语义完整。thinking 丢失和 length 原因丢失是这项设计限制的两个表现，不只是两个无关解析 bug。（M2、M3、M4、M23）
 
 Pi 的 [消息类型](https://github.com/earendil-works/pi/blob/898ab804050730e9dcefb4443875d5a932aa6a32/packages/ai/src/types.ts#L364)把 text、thinking、toolCall 分成内容块，并保留 thinkingSignature、provider/api/model、stopReason。可比较的是中间格式承载的语义，不是 TypeScript 与 Kotlin 的差别。
 
@@ -264,36 +264,36 @@ Movo 已有的 `ToolExecutor`、Provider 注入和事件回调使生产循环可
 
 | 编号 / 章节 | 文件 | 关键符号与位置 |
 |---|---|---|
-| M1：4、5.1、5.4、5.7 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentLoop.kt` | run 84；overflow 129；append/execute/publish 170–199；RunFinished 224 |
-| M2：3、5.1 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentModelClient.kt` | complete 84；toolsFor 136；ModelResponse.Text 329 |
-| M3：5.2 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AnthropicMessagesProvider.kt` | convertAssistantContent 156；流解析 218 起 |
-| M4：5.2、5.5 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentConversationCodec.kt` | assistantHistoryMessage 117；transcript 190；redact 212 |
-| M5：5.5 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentContextCompactor.kt` | 压缩输入 40–54；summaryInput 136 |
-| M6：5.5 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentSensitiveToolPolicy.kt` | MCP 前缀及敏感工具列表 |
-| M7：5.5、6 | `app/src/main/kotlin/io/github/mangi/eta/agent/mcp/McpRunContext.kt` | 工具上限 71–98；sensitive 248–262 |
-| M8：5.7 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentModelRetry.kt` | 内部 round 递增与成功回传 |
-| M9：3、5.3、5.6 | `app/src/main/kotlin/io/github/mangi/eta/ui/app/AgentAppState.kt` | queued 槽 133；busy 158；恢复 469；queue 1117；drain 1218；persist 2738 |
-| M10：5.3 | `app/src/main/kotlin/io/github/mangi/eta/ui/app/AgentConversationStore.kt` | Snapshot 与 save 41–106 |
-| M11：4、5.4 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRuntimeRunExecutor.kt` | onTranscript 259；先写事件再交付 395–405 |
-| M12：5.4 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRunCheckpointStore.kt` | 恢复 transcript 与中断补齐 |
-| M13：5.4 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentToolBatchRecovery.kt` | completeInterrupted；只处理已有调用 |
-| M14：5.6 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRuntimeResultStore.kt` | pendingPage 47；未 ACK 不淘汰 |
-| M15：5.6 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRuntimeClient.kt` | queryCompletedRuns 143 |
-| M16：5.6 | `app/src/main/kotlin/io/github/mangi/eta/ui/app/AgentRunRecoveryCoordinator.kt` | Known 下对未命中 checkpoint 判中断 37–49 |
-| M17：5.6 | `app/src/main/kotlin/io/github/mangi/eta/ui/app/AgentPendingResultRecovery.kt` | alreadyApplied 早返回 37 |
-| M18：5.7 | `app/src/main/kotlin/io/github/mangi/eta/ui/app/AgentRunMessageProjector.kt` | 消息 ID 与增量归属 |
-| M19：3、6 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentToolCatalog.kt` | 分类 schema 组合 |
-| M20：3、6 | `app/src/main/kotlin/io/github/mangi/eta/agent/tool/AgentToolRequirements.kt` | 统一工具能力要求 |
-| M21：3、6 | `app/src/main/kotlin/io/github/mangi/eta/agent/tool/AgentLocalTools.kt` | execute 150；本地工具路由与边界检查 |
+| M1：4、5.1、5.4、5.7 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentLoop.kt` | run 84；overflow 129；append/execute/publish 170–199；RunFinished 224 |
+| M2：3、5.1 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentModelClient.kt` | complete 84；toolsFor 136；ModelResponse.Text 329 |
+| M3：5.2 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AnthropicMessagesProvider.kt` | convertAssistantContent 156；流解析 218 起 |
+| M4：5.2、5.5 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentConversationCodec.kt` | assistantHistoryMessage 117；transcript 190；redact 212 |
+| M5：5.5 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentContextCompactor.kt` | 压缩输入 40–54；summaryInput 136 |
+| M6：5.5 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentSensitiveToolPolicy.kt` | MCP 前缀及敏感工具列表 |
+| M7：5.5、6 | `app/src/main/kotlin/io/github/fartown/movo/agent/mcp/McpRunContext.kt` | 工具上限 71–98；sensitive 248–262 |
+| M8：5.7 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentModelRetry.kt` | 内部 round 递增与成功回传 |
+| M9：3、5.3、5.6 | `app/src/main/kotlin/io/github/fartown/movo/ui/app/AgentAppState.kt` | queued 槽 133；busy 158；恢复 469；queue 1117；drain 1218；persist 2738 |
+| M10：5.3 | `app/src/main/kotlin/io/github/fartown/movo/ui/app/AgentConversationStore.kt` | Snapshot 与 save 41–106 |
+| M11：4、5.4 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeRunExecutor.kt` | onTranscript 259；先写事件再交付 395–405 |
+| M12：5.4 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRunCheckpointStore.kt` | 恢复 transcript 与中断补齐 |
+| M13：5.4 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentToolBatchRecovery.kt` | completeInterrupted；只处理已有调用 |
+| M14：5.6 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeResultStore.kt` | pendingPage 47；未 ACK 不淘汰 |
+| M15：5.6 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeClient.kt` | queryCompletedRuns 143 |
+| M16：5.6 | `app/src/main/kotlin/io/github/fartown/movo/ui/app/AgentRunRecoveryCoordinator.kt` | Known 下对未命中 checkpoint 判中断 37–49 |
+| M17：5.6 | `app/src/main/kotlin/io/github/fartown/movo/ui/app/AgentPendingResultRecovery.kt` | alreadyApplied 早返回 37 |
+| M18：5.7 | `app/src/main/kotlin/io/github/fartown/movo/ui/app/AgentRunMessageProjector.kt` | 消息 ID 与增量归属 |
+| M19：3、6 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentToolCatalog.kt` | 分类 schema 组合 |
+| M20：3、6 | `app/src/main/kotlin/io/github/fartown/movo/agent/tool/AgentToolRequirements.kt` | 统一工具能力要求 |
+| M21：3、6 | `app/src/main/kotlin/io/github/fartown/movo/agent/tool/AgentLocalTools.kt` | execute 150；本地工具路由与边界检查 |
 | M22：3 | `app/src/main/AndroidManifest.xml` | Runtime/Execution Service 142–153 |
-| M23：3.3 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/ResponsesEphemeralState.kt` | 单 run 原始输出旁路，稳定 codec 不保存 |
-| M24：3.3、5.8 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentPromptBuilder.kt` | 结果未知先观察规则 91；观察策略 84–99 |
-| M25：3.3 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentTraceFormatter.kt` | isSuccessResult 从 content JSON 读取 ok 227 |
-| M26：5.8 | `app/src/main/kotlin/io/github/mangi/eta/agent/device/RootShellDeviceController.kt` | 滚动未知结果 969–986；动作超时 1077 |
-| M27：3.3 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRuntimeSession.kt` | run 状态、steering、订阅与唯一终态 |
-| M28：5.4 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentEventRecoveryProjection.kt` | 恢复事件过滤工具参数增量 |
-| T1：5、8 | `app/src/test/kotlin/io/github/mangi/eta/agent/model/AgentContextCompactionTest.kt` | 摘要前脱敏 123–147；独立 overflow |
-| T2：5、8 | `app/src/test/kotlin/io/github/mangi/eta/agent/model/AnthropicMessagesProviderTest.kt` | signature/redacted 的可见文本测试 |
+| M23：3.3 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/ResponsesEphemeralState.kt` | 单 run 原始输出旁路，稳定 codec 不保存 |
+| M24：3.3、5.8 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentPromptBuilder.kt` | 结果未知先观察规则 91；观察策略 84–99 |
+| M25：3.3 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentTraceFormatter.kt` | isSuccessResult 从 content JSON 读取 ok 227 |
+| M26：5.8 | `app/src/main/kotlin/io/github/fartown/movo/agent/device/RootShellDeviceController.kt` | 滚动未知结果 969–986；动作超时 1077 |
+| M27：3.3 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeSession.kt` | run 状态、steering、订阅与唯一终态 |
+| M28：5.4 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentEventRecoveryProjection.kt` | 恢复事件过滤工具参数增量 |
+| T1：5、8 | `app/src/test/kotlin/io/github/fartown/movo/agent/model/AgentContextCompactionTest.kt` | 摘要前脱敏 123–147；独立 overflow |
+| T2：5、8 | `app/src/test/kotlin/io/github/fartown/movo/agent/model/AnthropicMessagesProviderTest.kt` | signature/redacted 的可见文本测试 |
 | T3：5、8 | `tmp/tasks/2026-09-23-agent-design-review/AgentDesignReviewProbeTest.kt` | 两条生产循环探针 |
 | T4：5.8、8 | `tmp/tasks/2026-09-24-agent-design-recheck/AgentBatchOutcomeProbeTest.kt` | 一条生产循环批次结果探针 |
 

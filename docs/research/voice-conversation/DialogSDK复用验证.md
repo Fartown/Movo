@@ -46,7 +46,7 @@ sequenceDiagram
 | 输入 | 16 kHz、单声道、PCM16；流输入每 20 ms 一包 |
 | 输出 | 24 kHz、单声道、`pcm_s16le`，避免误按默认 float32 解读 |
 | 凭据 | 现有 Key，官方允许 `x-api-key`，不用另建服务或 Key |
-| 诊断包 | `io.github.mangi.eta.dialogp0`，与正式 Movo 分开 |
+| 诊断包 | `io.github.fartown.movo.dialogp0`，与正式 Movo 分开 |
 
 当前全双工官网页面已更新为 3.0，使用不同 URI、纯 JSON 事件和 `session.model=1.2.6.1`。本轮固定 O2.0，不将新旧参数混用。[旧 API](https://docs.volcengine.com/docs/DoubaoVoice/End-to-endreal-timespeechlargemodelAPIaccessdocument?lang=zh)、[API Key](https://docs.volcengine.com/docs/DoubaoVoice/APIKeyUsage?lang=zh)、[当前全双工 API](https://docs.volcengine.com/docs/DoubaoVoice/endtoend-realtime-voice-full-duplex-version?lang=zh)
 

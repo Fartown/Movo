@@ -204,7 +204,7 @@ Figma「07 · App 图标 · 候选」→「B7 · 定稿导出」；候选演进 
 | M | 两段弧，笔画 6.5、圆头；描边为光球同色系浅调渐变（左→右 `#FFE6DA` → `#EFE8FF` → `#DDEFFF`），90% 不透明度；**不用纯白**，只比底色亮一档 |
 | 单色（Android 13+） | 直径 62 的圆盘镂空同一 M（笔画 6.5 轮廓化），单色，由系统按壁纸取色 |
 | 启动页 | 同一前景，落在 bg/canvas 启动页底色上（不另设背景色） |
-| 名称 | 桌面与系统中显示「Movo」（包名 `io.github.mangi.eta` 不变）；Agent 自称「Movo」（系统提示「你是 Movo」，工具描述与上下文摘要标记同步）；请求头、MCP 客户端名、导出 / 备份文件名等对外技术标识保持 Eta 以兼容 |
+| 名称 | 桌面与系统中显示「Movo」（包名 `io.github.fartown.movo` 不变）；Agent 自称「Movo」（系统提示「你是 Movo」，工具描述与上下文摘要标记同步）；请求头、MCP 客户端名、导出 / 备份文件名等对外技术标识保持 Movo 以兼容 |
 
 代码：`res/mipmap-*/ic_launcher_foreground.png`（由 Figma 白底 / 黑底两次导出还原透明度）、`res/drawable/ic_launcher_background.xml`、`res/drawable/ic_launcher_monochrome.xml`、`res/drawable/ic_splash_icon.xml`。
 

@@ -186,7 +186,7 @@ Movo 的 Agent Loop 本身设计扎实。问题集中在五个方面：
 
 P0 前两条的根因是内部消息模型没有类型，也不记录消息来源。
 
-- **16. 内部消息模型**：采用 org.json 表示的 OpenAI Chat 格式，外加 `_eta_*` 私有字段。消息不记录 provider/api/model，thinking 和 signature 也不是一等块，因此无法像 pi 那样“同一模型原样回放、跨模型降级”。建议逐步迁移到带来源信息的 typed message，参考 pi 的 `transform-messages.ts`。
+- **16. 内部消息模型**：采用 org.json 表示的 OpenAI Chat 格式，外加 `_movo_*` 私有字段。消息不记录 provider/api/model，thinking 和 signature 也不是一等块，因此无法像 pi 那样“同一模型原样回放、跨模型降级”。建议逐步迁移到带来源信息的 typed message，参考 pi 的 `transform-messages.ts`。
 - **17. 内置 Skill 描述失真**：`self-improving-agent/SKILL.md` 声称自己会被固定注入（fixed-injected），失败时还会自动写入 `data/ERRORS.md`。代码中没有任何对应实现，这段描述会误导模型。
 - **18. 状态源过多**：状态分散在 journal、history、展示消息、checkpoint、outbox、context snapshot 和归档 7 处，跨进程还要通过 Binder 传递文件描述符（FD）。`AgentAppState.kt` 有 3108 行，`AgentRuntimeService.kt` 有 1204 行。pi 和 Codex 都以单一的只追加 JSONL 作为权威数据，其余都是投影。建议长期收敛为每个会话一条只追加的事件日志（Room 表）加投影。
 - **19. 待验证**：上下文压缩后，第一条消息是 assistant 角色的摘要。需要确认 Anthropic 端是否接受这种开头。

@@ -77,17 +77,17 @@ updated: 2026-09-22
 
 ### 3.2 复用候选及结论
 
-路径以下均相对 `app/src/main/kotlin/io/github/mangi/eta/`。
+路径以下均相对 `app/src/main/kotlin/io/github/fartown/movo/`。
 
 | 已检查代码 | 可复用内容 / 差异 | 结论 |
 |---|---|---|
-| `agent/voice/EtaWakeWordService.kt`、`EtaWakeWordController.kt` | 已有麦前台服务；wake 开关不等于会话生命周期 | 扩展原服务承载会话，不再建第二套音频服务 |
-| `EtaMicSessionCoordinator.kt`、`asr/AsrPcmCapture.kt`、`wake/SherpaWakeEngine.kt` | 资源协调与 PCM 采集可复用；现有两处各自开麦，没有连续交接 | 抽共享采集，KWS/VAD/ASR 消费同一时间轴 |
+| `agent/voice/MovoWakeWordService.kt`、`MovoWakeWordController.kt` | 已有麦前台服务；wake 开关不等于会话生命周期 | 扩展原服务承载会话，不再建第二套音频服务 |
+| `MovoMicSessionCoordinator.kt`、`asr/AsrPcmCapture.kt`、`wake/SherpaWakeEngine.kt` | 资源协调与 PCM 采集可复用；现有两处各自开麦，没有连续交接 | 抽共享采集，KWS/VAD/ASR 消费同一时间轴 |
 | `asr/DoubaoSaucProtocol.kt`、`SaucAudioStream.kt`、`DoubaoBidirectionalAsrEngine.kt` | 已实现协议、末包和 full 结果；未公开稳定分句事件 | 增量透传，保留网络协议，不因接 TTS SDK 重写 ASR |
 | `agent/runtime/AgentRuntimeClient.kt`、`AgentRuntimeService.kt`、`AgentRunController.kt` | 已有执行、取消、查询、attach、outbox；新 run 当前会替换旧 run，客户端会合成失败结果 | 补服务端准入、结果来源和类型；继续使用原执行器和取消入口 |
 | `agent/model/AgentModelClient.kt`、`AgentPromptBuilder.kt` | 公共提示组装与最终正文可用；roleplay 会忽略普通 config.systemPrompt | 在公共组装入口增加有界语音上下文，不逐 provider 改稳定流协议 |
 | `ui/app/AgentRunMessageProjector.kt`、`AgentRuntimeHistoryReducer.kt`、`AgentConversationStore.kt` | 已有正文、工具事实和按 run 去重 | 复用归档；补共用持久化入口，播放状态另外存 |
-| `EtaVoicePanel.kt`、`AgentChatBody.kt`、`AgentChatInputBar.kt` | 已有面板与输入 UI，录音生命周期仍与页面混杂 | 展示会话 snapshot，移出独立录放状态 |
+| `MovoVoicePanel.kt`、`AgentChatBody.kt`、`AgentChatInputBar.kt` | 已有面板与输入 UI，录音生命周期仍与页面混杂 | 展示会话 snapshot，移出独立录放状态 |
 | `VoiceSettingsRepository.kt`、`DoubaoSpeechSecretStore.kt` | 已有配置 Flow 与加密凭据 | 增量扩 TTS 配置/测试状态，不复制密钥存储 |
 | `hook/xiaoai/XiaoAiStreamRenderer.kt` | 厂商私有朗读，无跨品牌停止/进度契约 | 不移植；新增官方 TTS SDK 薄适配层 |
 
@@ -195,52 +195,52 @@ sequenceDiagram
 
 ### 5.2 拟议改动目录
 
-均为设计落点，尚未修改产品源码。`eta/` 为上述 Kotlin 根目录。
+均为设计落点，尚未修改产品源码。`movo/` 为上述 Kotlin 根目录。
 
 ```text
 app/build.gradle.kts / proguard-rules.pro                [修改] 固定TTS SDK及混淆规则
 app/src/main/AndroidManifest.xml                        [修改] 原前台服务所需声明
 app/src/main/assets/voice-vad/                           [新增] VAD模型与校验说明
-eta/agent/voice/
-  EtaWakeWordService.kt / EtaWakeWordController.kt      [修改] 原服务承载会话
-  EtaMicSessionCoordinator.kt                          [修改] 单麦资源协调
+movo/agent/voice/
+  MovoWakeWordService.kt / MovoWakeWordController.kt      [修改] 原服务承载会话
+  MovoMicSessionCoordinator.kt                          [修改] 单麦资源协调
   VoiceConversationController.kt / VoiceConversationState.kt [新增] 会话与轮次actor
   VoiceEndpointPolicy.kt                               [新增] 有界端点判定
   VoiceDeliveryContext.kt                              [新增] 播放记录生成有界上下文
-  EtaAssistantOverlayService.kt / EtaVoicePanel.kt      [修改] 窗口展示与会话分离
-  EtaVoiceInteractionSession.kt                        [修改] 系统入口转交统一owner
+  MovoAssistantOverlayService.kt / MovoVoicePanel.kt      [修改] 窗口展示与会话分离
+  MovoVoiceInteractionSession.kt                        [修改] 系统入口转交统一owner
   audio/VoiceAudioCapture.kt / VoiceAudioSession.kt     [新增] 抽采集内核、焦点/路由/AEC
   audio/VoiceVad.kt                                    [新增] 适配Sherpa VAD
   asr/AsrPcmCapture.kt                                  [修改] 移出独立开麦逻辑
-  asr/EtaAsrEngine.kt / EtaAsrSessionFactory.kt         [修改] PCM输入和分句事件
+  asr/MovoAsrEngine.kt / MovoAsrSessionFactory.kt         [修改] PCM输入和分句事件
   asr/DoubaoBidirectionalAsrEngine.kt / DoubaoSaucProtocol.kt [修改] 时间边界和收尾
   asr/SaucAudioStream.kt                               [复用] 序号和末包幂等
   wake/SherpaWakeEngine.kt / WakeWordEngine.kt         [修改] 消费共享PCM
   tts/VolcTtsAdapter.kt / VoiceSpeechQueue.kt           [新增] SDK隔离、句级队列和停播
-eta/agent/runtime/
+movo/agent/runtime/
   AgentRuntimeWire.kt / AgentRuntimeClient.kt          [修改] 可选语音元数据、可信结果类型
   AgentRuntimeService.kt / AgentRuntimeSession.kt      [修改] 原子准入、终态和恢复
   AgentRuntimeRunExecutor.kt                          [修改] 传递语音上下文和结果类型
   AgentRuntimeResultStore.kt / AgentRunArchiveStore.kt [修改] 新字段持久化映射
   AgentRunCheckpointStore.kt                          [修改] 保留来源与准入身份
   AgentRunController.kt / AgentRuntimeAttachDelivery.kt [复用] 原取消与结果交付
-eta/agent/model/
+movo/agent/model/
   AgentModelClient.kt / AgentPromptBuilder.kt         [修改] 公共语音上下文参数
   AgentLoop.kt / AgentContextSession.kt / AgentContextCompactor.kt [复用] 原执行/压缩
   AgentProvider.kt / AgentConversationCodec.kt         [复用] 原provider契约和历史编码
-eta/ui/app/
+movo/ui/app/
   AgentAppRoot.kt / AgentAppState.kt                   [修改] 绑定会话、入口转交
   AgentRuntimeHistoryReducer.kt / AgentConversationStore.kt [修改] 服务与页面共用归档入口
   AgentRunMessageProjector.kt                         [复用] 原文字展示
-eta/ui/components/AgentChatBody.kt / AgentChatInputBar.kt [修改] 对话和听写入口
-eta/ui/screens/voice/VoiceSettingsScreen.kt            [修改] 配置、试听和能力状态
-eta/data/model/VoiceSettings.kt                       [修改] TTS资源与音色配置
-eta/data/repository/
+movo/ui/components/AgentChatBody.kt / AgentChatInputBar.kt [修改] 对话和听写入口
+movo/ui/screens/voice/VoiceSettingsScreen.kt            [修改] 配置、试听和能力状态
+movo/data/model/VoiceSettings.kt                       [修改] TTS资源与音色配置
+movo/data/repository/
   VoiceSettingsRepository.kt / DoubaoSpeechSecretStore.kt [修改] 配置版本与凭据复用
   VoiceDeliveryStore.kt                               [新增] 来源与句级交付记录
-eta/data/db/
+movo/data/db/
   VoiceDeliveryEntities.kt / VoiceDeliveryDao.kt       [新增] delivery表
-  EtaDatabase.kt / RuntimeRunEntities.kt / RuntimeRunDao.kt [修改] 兼容迁移与结果字段
+  MovoDatabase.kt / RuntimeRunEntities.kt / RuntimeRunDao.kt [修改] 兼容迁移与结果字段
 app/src/main/res/values*/strings.xml                  [修改] 状态与错误文案
 app/src/test/ / app/src/androidTest/                  [新增/修改] 本文验收用例
 ```
@@ -312,7 +312,7 @@ P0 以外放音量变化、耳机切换、用户和助手同时说话验证。�
 
 ### 5.8 页面、设置与异常
 
-会话状态放在服务层 StateFlow；`AgentAppRoot` 和 `EtaVoicePanel` 订阅相同 snapshot，`AgentChatBody` 保留原正文/附件渲染，`AgentChatInputBar` 只发送入口动作。设置页保留编辑草稿、校验、保存与测试分离。组件局部状态仅管理折叠、输入焦点等展示状态。
+会话状态放在服务层 StateFlow；`AgentAppRoot` 和 `MovoVoicePanel` 订阅相同 snapshot，`AgentChatBody` 保留原正文/附件渲染，`AgentChatInputBar` 只发送入口动作。设置页保留编辑草稿、校验、保存与测试分离。组件局部状态仅管理折叠、输入焦点等展示状态。
 
 界面主状态按优先级展示：错误/系统暂停 → 停止或恢复任务 → 用户正在说话 → 回答播放 → 执行中 → 我在听。额外并列显示任务仍在进行，避免“我在听”被理解为任务已停止。必须覆盖准备中、无声空态、字幕、尾结果等待、忙、取消待确认、断连未知、播放失败、结束等状态。
 

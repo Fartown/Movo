@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 对象与目的 | Movo / Eta 的 Agent 整体设计；评价分层、扩展和执行模型与手机助手定位是否匹配 |
+| 对象与目的 | Movo / Movo 的 Agent 整体设计；评价分层、扩展和执行模型与手机助手定位是否匹配 |
 | 类型 | 架构调研与评价 |
 | In scope | 产品假设、内核与宿主职责、能力组织、扩展路径、任务与资源调度、Pi/Codex 对照 |
 | Out of scope | 协议字段、异常恢复、小功能缺陷、具体重构方案、真实模型成功率评测 |
@@ -11,7 +11,7 @@
 
 ## 1. 结论先行
 
-**Eta 采用“单 Agent + 多种手机能力 + 模型自主组合”的架构，适合一个用户在一部手机上连续完成跨应用任务。执行循环的分层已经成立，主要架构债在产品模式进入内核、能力扩展分散，以及调度单位过于粗。**
+**Movo 采用“单 Agent + 多种手机能力 + 模型自主组合”的架构，适合一个用户在一部手机上连续完成跨应用任务。执行循环的分层已经成立，主要架构债在产品模式进入内核、能力扩展分散，以及调度单位过于粗。**
 
 1. **基本方向合理。** GUI、系统 API、Shell、浏览器、MCP 共用执行循环，便于在同一任务中组合；Provider 和工具执行可注入，模型请求、运行控制、Android 适配已有分工。
 2. **内核与产品策略的分界正在变弱。** 角色投影直接进入 Loop，角色摘要策略进入压缩器，语音、角色改写、设备开关集中进入模型调用门面；新增产品模式的变化会沿多层传播。
@@ -118,11 +118,11 @@ Skill 可以表达复杂工作方法、引用脚本；MCP 可以带来新工具�
 
 **结构性限制：**独占范围覆盖整个 Agent run。比如一个任务正在整理文件或分析网页，用户从系统入口提出另一项独立请求，现有调度不会按两者是否真正争用前台设备来分配执行位置，而是应用全局 run 准入规则。
 
-终端已经支持异步命令和独立守护进程，不能说 Eta 没有后台执行能力。但后台进程继续运行与两个 Agent 任务分别保持模型循环、等待结果并接续，是不同的能力。当前架构对“一次专注完成一件事”合适，对“后台持续做事，同时随时响应另一件事”存在直接限制。
+终端已经支持异步命令和独立守护进程，不能说 Movo 没有后台执行能力。但后台进程继续运行与两个 Agent 任务分别保持模型循环、等待结果并接续，是不同的能力。当前架构对“一次专注完成一件事”合适，对“后台持续做事，同时随时响应另一件事”存在直接限制。
 
 ## 6. 与 Pi、Codex、DeepSeek Harness 的架构对照
 
-| 维度 | Eta | Pi 固定快照 | Codex 固定快照 | DeepSeek Harness 固定快照 |
+| 维度 | Movo | Pi 固定快照 | Codex 固定快照 | DeepSeek Harness 固定快照 |
 |---|---|---|---|---|
 | 主要组织方式 | Android 应用宿主内的单 Agent | 模型层、通用 Agent 核、coding session 分层 | Thread/Session 宿主，进一步区分 Task、Turn、Step | Cordis 插件树；loop、工具、会话、沙箱都是可替换服务，按 profile 分层组装 |
 | 内核与产品关系 | 已分出 Loop；仍直接理解角色等产品模式 | Agent 可注入模型调用、消息转换与上下文处理；coding 策略由上层 session 组织 | 产品导向较强，但会话服务、每轮上下文、执行环境有显式对象 | 产品模式以每会话一组插件（preset）装配，loop 不识别具体模式；行为经 `agent/*`、`tools/*` 事件扩展 |
@@ -137,7 +137,7 @@ Codex 的参考价值集中在**会话、执行轮次和环境的显式建模**�
 
 DeepSeek Harness 的参考价值集中在**把产品差异放在 loop 之外，并以单一事件日志承载会话**。它的 loop 只从日志派生请求，工具、提示片段和模式都以插件注册；这正对应本文 5.1、5.2 的两处耦合。它的 Cordis 全插件框架和 Node 运行时不适合直接搬到 Android 助手上，借鉴范围与边界见[设计评审的补充对比](Movo%20Agent%20设计评审：对比%20pi%20与%20Codex.md)，完整调研见[DeepSeek Harness 技术分析报告](DeepSeek%20Harness%20技术分析报告.md)。来源：[ToolDefinition](https://github.com/deepseek-ai/deepseek-harness/blob/477b4f420553e8a52c2fbccc464d7561b239c443/packages/core/tools/src/index.ts)、[ReactLoopAgent](https://github.com/deepseek-ai/deepseek-harness/blob/477b4f420553e8a52c2fbccc464d7561b239c443/packages/core/agent-loop/src/agent.ts)、[preset 装配](https://github.com/deepseek-ai/deepseek-harness/blob/477b4f420553e8a52c2fbccc464d7561b239c443/packages/preset/agent-preset-registry/src/mount.ts)。
 
-四者都允许模型在反馈循环中决定下一步。现有任务与源码没有证明 Eta 必须采用多 Agent、独立 planner 或通用 judge；这些结构的有无不能直接决定架构质量。
+四者都允许模型在反馈循环中决定下一步。现有任务与源码没有证明 Movo 必须采用多 Agent、独立 planner 或通用 judge；这些结构的有无不能直接决定架构质量。
 
 ## 7. 冲突与未知项
 
@@ -157,21 +157,21 @@ DeepSeek Harness 的参考价值集中在**把产品差异放在 loop 之外，�
 | 章节 | 文件 | 关键符号 / 职责 |
 |---|---|---|
 | 1、3、7 | `README.md` | 当前手机产品定位与长期愿景 |
-| 3—5 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentLoop.kt` | `run`、`RoleplayRunContext`、工具执行 |
-| 3—5 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentModelClient.kt` | `complete`、`ModelConfig`、可注入执行接口 |
-| 3、5 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentPromptBuilder.kt` | 产品操作策略、角色、语音、Skill 与记忆 |
-| 5.1 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentContextSession.kt` | 角色模式传入压缩器 |
-| 5.1 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentContextCompactor.kt` | 角色剧情摘要规则 |
-| 3—5 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRuntimeRunExecutor.kt` | Android 能力组合根 |
-| 3—5 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRuntimeService.kt` | `activeSession`、`ingestRunRequest`、`startRun` |
-| 5.3 | `app/src/main/kotlin/io/github/mangi/eta/agent/runtime/AgentRuntimeAdmission.kt` | 全局 run 准入 |
-| 3—5 | `app/src/main/kotlin/io/github/mangi/eta/ui/app/AgentAppState.kt` | 会话历史、编辑、输入与运行提交 |
-| 5.2 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentToolCatalog.kt` | 分类目录与工具集合 |
-| 5.2 | `app/src/main/kotlin/io/github/mangi/eta/agent/tool/AgentToolRequirements.kt` | 本地工具运行条件 |
-| 5.2 | `app/src/main/kotlin/io/github/mangi/eta/agent/tool/AgentToolCapabilities.kt` | 环境可用性投影 |
-| 5.2、5.3 | `app/src/main/kotlin/io/github/mangi/eta/agent/tool/AgentLocalTools.kt` | 工具名字分发、Android/终端资源构造 |
-| 5.2 | `app/src/main/kotlin/io/github/mangi/eta/agent/mcp/McpRunContext.kt` | MCP 快照、目录、路由 |
-| 5.3 | `app/src/main/kotlin/io/github/mangi/eta/agent/model/AgentTerminalToolCatalog.kt` | 异步命令及守护进程能力 |
+| 3—5 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentLoop.kt` | `run`、`RoleplayRunContext`、工具执行 |
+| 3—5 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentModelClient.kt` | `complete`、`ModelConfig`、可注入执行接口 |
+| 3、5 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentPromptBuilder.kt` | 产品操作策略、角色、语音、Skill 与记忆 |
+| 5.1 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentContextSession.kt` | 角色模式传入压缩器 |
+| 5.1 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentContextCompactor.kt` | 角色剧情摘要规则 |
+| 3—5 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeRunExecutor.kt` | Android 能力组合根 |
+| 3—5 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeService.kt` | `activeSession`、`ingestRunRequest`、`startRun` |
+| 5.3 | `app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeAdmission.kt` | 全局 run 准入 |
+| 3—5 | `app/src/main/kotlin/io/github/fartown/movo/ui/app/AgentAppState.kt` | 会话历史、编辑、输入与运行提交 |
+| 5.2 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentToolCatalog.kt` | 分类目录与工具集合 |
+| 5.2 | `app/src/main/kotlin/io/github/fartown/movo/agent/tool/AgentToolRequirements.kt` | 本地工具运行条件 |
+| 5.2 | `app/src/main/kotlin/io/github/fartown/movo/agent/tool/AgentToolCapabilities.kt` | 环境可用性投影 |
+| 5.2、5.3 | `app/src/main/kotlin/io/github/fartown/movo/agent/tool/AgentLocalTools.kt` | 工具名字分发、Android/终端资源构造 |
+| 5.2 | `app/src/main/kotlin/io/github/fartown/movo/agent/mcp/McpRunContext.kt` | MCP 快照、目录、路由 |
+| 5.3 | `app/src/main/kotlin/io/github/fartown/movo/agent/model/AgentTerminalToolCatalog.kt` | 异步命令及守护进程能力 |
 
 ## 10. 关联文档与过程件
 
