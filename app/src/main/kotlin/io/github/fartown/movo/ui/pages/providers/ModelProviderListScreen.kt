@@ -1,5 +1,9 @@
 package io.github.fartown.movo.ui.pages.providers
 
+import io.github.fartown.movo.ui.theme.MovoMotion
+import io.github.fartown.movo.ui.components.movo.movoAnimateItem
+import androidx.compose.runtime.key
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -60,7 +64,9 @@ internal fun ModelProviderListScreen(
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val providers by ProviderRepository.providersFlow().collectAsState(initial = emptyList())
+    // flow 只建一次；初始值 null = 还在读取，读到之前不先闪「还没有提供商」（B8）。
+    val loadedProviders by remember { ProviderRepository.providersFlow() }.collectAsState(initial = null)
+    val providers = loadedProviders.orEmpty()
     val selectedProviderId by RuntimeConfigRepository.selectedProviderIdFlow().collectAsState(initial = null)
     var searchQuery by remember { mutableStateOf("") }
     var providerToDelete by remember { mutableStateOf<ProviderSetting?>(null) }
@@ -109,11 +115,15 @@ internal fun ModelProviderListScreen(
             }
         }
 
+        if (loadedProviders == null) return@MovoListPage
         item(key = "list_section") {
+            // 列表增删（B7）：卡片高度 `standard`，行按 id 保持身份；空状态 ↔ 列表交叉淡化 `fast`。
             ProviderSection(
                 title = pluralStringResource(R.plurals.provider_configured_count, filteredProviders.size, filteredProviders.size),
+                modifier = movoAnimateItem(),
             ) {
-                if (filteredProviders.isEmpty()) {
+                Crossfade(targetState = filteredProviders.isEmpty(), animationSpec = MovoMotion.fast(), label = "providerListEmpty") { empty ->
+                if (empty) {
                     Text(
                         text = if (searchQuery.isBlank()) {
                             stringResource(R.string.provider_empty)
@@ -125,7 +135,9 @@ internal fun ModelProviderListScreen(
                         modifier = Modifier.padding(horizontal = MovoSpacing.lg, vertical = MovoSpacing.md),
                     )
                 } else {
+                    Column {
                     filteredProviders.forEachIndexed { index, provider ->
+                        key(provider.id) {
                         ProviderListItem(
                             provider = provider,
                             isSelected = provider.id == selectedProviderId,
@@ -143,7 +155,10 @@ internal fun ModelProviderListScreen(
                                 }
                             },
                         )
+                        }
                     }
+                    }
+                }
                 }
             }
         }

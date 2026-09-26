@@ -2,6 +2,16 @@
 
 package io.github.fartown.movo.ui.pages.providers
 
+import io.github.fartown.movo.ui.components.movo.movoAnimateItem
+import io.github.fartown.movo.ui.components.movo.rememberIsScrolled
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.snap
 import androidx.compose.foundation.layout.Arrangement
@@ -93,11 +103,12 @@ internal fun ModelProviderDetailScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val providers by ProviderRepository.providersFlow().collectAsState(initial = emptyList())
+    // flow 只建一次；初始值 null = 还在读取，读到之前不显示「提供商不存在」（B8）。
+    val providers by remember { ProviderRepository.providersFlow() }.collectAsState(initial = null)
     var createdId by remember { mutableStateOf<String?>(null) }
     val effectiveId = providerId ?: createdId
     val provider = remember(providers, effectiveId) {
-        effectiveId?.let { id -> providers.firstOrNull { it.id == id } }
+        effectiveId?.let { id -> providers?.firstOrNull { it.id == id } }
     }
     val draft = remember(newType) {
         when (newType) {
@@ -125,6 +136,7 @@ internal fun ModelProviderDetailScreen(
             title = stringResource(R.string.route_provider_details),
             onBack = onBack,
         ) { contentPadding, sidePadding ->
+            if (providers == null) return@MovoPage
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -147,7 +159,12 @@ internal fun ModelProviderDetailScreen(
 
     val initial = provider ?: draft!!
     val isNew = provider == null
-    var currentTab by remember { mutableIntStateOf(0) }
+    var currentTab by rememberSaveable { mutableIntStateOf(0) }
+    // 两个标签各自的列表状态放在外面（B13）：切回时回到原来的滚动位置；顶栏滚动态跟随当前标签的列表，不残留。
+    val configListState = rememberLazyListState()
+    val modelsListState = rememberLazyListState()
+    val configScrolled by configListState.rememberIsScrolled()
+    val modelsScrolled by modelsListState.rememberIsScrolled()
     var configDraft by rememberSaveable(
         initial.id,
         stateSaver = ProviderConfigDraftSaver,
@@ -157,14 +174,28 @@ internal fun ModelProviderDetailScreen(
     val title = if (isNew) context.getString(R.string.page_create_new_provider_36cab9) else initial.name
     val reduced = LocalReducedMotion.current
 
-    MovoPage(title = title, onBack = onBack) { contentPadding, sidePadding ->
+    MovoPage(
+        title = title,
+        onBack = onBack,
+        scrolled = if (currentTab == 1 && !isNew) modelsScrolled else configScrolled,
+    ) { contentPadding, sidePadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .horizontalCutoutPadding()
                 .padding(top = contentPadding.calculateTopPadding()),
         ) {
-            if (!isNew) {
+            // 新建完成后出现「配置 / 模型」分段：高度展开 `standard` + 淡入，不硬插入（B13）。
+            AnimatedVisibility(
+                visible = !isNew,
+                enter = if (reduced) {
+                    fadeIn(MovoMotion.fast())
+                } else {
+                    expandVertically(MovoMotion.standard()) +
+                        fadeIn(tween(MovoMotion.FAST, delayMillis = MovoMotion.STAGGER, easing = MovoMotion.EasingStandard))
+                },
+                exit = if (reduced) fadeOut(MovoMotion.fastExit()) else shrinkVertically(MovoMotion.standard()) + fadeOut(MovoMotion.fastExit()),
+            ) {
                 MovoSegmentedTabs(
                     tabs = listOf(context.getString(R.string.page_configuration_d7d7ce), context.getString(R.string.page_model_98fd0c)),
                     selectedIndex = currentTab,
@@ -184,6 +215,7 @@ internal fun ModelProviderDetailScreen(
             ) { tab ->
                 when (tab) {
                     0 -> ProviderConfigTab(
+                        listState = configListState,
                         provider = initial,
                         draft = configDraft,
                         onDraftChange = { configDraft = it },
@@ -195,6 +227,7 @@ internal fun ModelProviderDetailScreen(
                     )
                     1 -> if (!isNew) {
                         ProviderModelsTab(
+                            listState = modelsListState,
                             provider = initial,
                             scope = scope,
                             contentSidePadding = sidePadding,
@@ -208,6 +241,7 @@ internal fun ModelProviderDetailScreen(
 
 @Composable
 private fun ProviderConfigTab(
+    listState: LazyListState,
     provider: ProviderSetting,
     draft: ProviderConfigDraft,
     onDraftChange: (ProviderConfigDraft) -> Unit,
@@ -234,6 +268,7 @@ private fun ProviderConfigTab(
     val endpointIndex = if (draft.endpointMode == OpenAiEndpointMode.RESPONSES) 1 else 0
 
     LazyColumn(
+        state = listState,
         modifier = Modifier
             .fillMaxSize()
             // MovoPage 只负责把顶栏 Insets 传给调用方，输入法 Insets 由列表自行消费。
@@ -250,7 +285,8 @@ private fun ProviderConfigTab(
         overscrollEffect = null,
     ) {
         item(key = "connection") {
-            ProviderSection(title = stringResource(R.string.ui_connection_configuration_7d057b)) {
+            // 卡内测试结果、字段增删：卡片高度 `standard` 过渡。
+            ProviderSection(title = stringResource(R.string.ui_connection_configuration_7d057b), modifier = movoAnimateItem()) {
                 Column(
                     modifier = Modifier.padding(horizontal = MovoSpacing.lg, vertical = MovoSpacing.sm),
                     verticalArrangement = Arrangement.spacedBy(MovoSpacing.md),
@@ -380,7 +416,7 @@ private fun ProviderConfigTab(
         )
 
         item(key = "preferences_and_prompt") {
-            ProviderSection(title = stringResource(R.string.ui_preferences_and_strategies_2abd3c)) {
+            ProviderSection(title = stringResource(R.string.ui_preferences_and_strategies_2abd3c), modifier = movoAnimateItem()) {
                 SettingsRow(
                     title = stringResource(R.string.ui_enable_this_provider_683a76),
                     trailing = RowTrailing.Switch(draft.isEnabled) { onDraftChange(draft.copy(isEnabled = it)) },
@@ -401,7 +437,7 @@ private fun ProviderConfigTab(
 
         item(key = "actions") {
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = movoAnimateItem().fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(MovoSpacing.md),
             ) {
                 MovoBlockButton(
@@ -485,7 +521,7 @@ private fun ProviderConfigTab(
 
         if (!isNew) {
             item(key = "danger_zone") {
-                MovoCard {
+                MovoCard(modifier = movoAnimateItem()) {
                     SettingsRow(
                         title = if (provider.isBuiltIn) {
                             context.getString(R.string.page_reset_built_in_configuration_35b6ec)
@@ -568,6 +604,8 @@ private fun ProviderConfigTab(
         title = stringResource(R.string.ui_reset_built_in_configuration_35b6ec),
         message = stringResource(R.string.provider_reset_summary, provider.name),
         confirmText = if (isWorking) context.getString(R.string.page_resetting_616090) else context.getString(R.string.page_reset_3d8134),
+        // 覆盖为内置配置会丢掉当前修改（C10），按危险确认处理。
+        destructive = true,
         cancelEnabled = !isWorking,
         confirmEnabled = !isWorking,
         onDismissRequest = { if (!isWorking) showResetDialog = false },
