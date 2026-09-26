@@ -1,5 +1,10 @@
 package io.github.fartown.movo.ui.screens.skills
 
+import androidx.compose.runtime.key
+import androidx.compose.runtime.LaunchedEffect
+import io.github.fartown.movo.ui.components.movo.movoAnimateItem
+import io.github.fartown.movo.ui.components.movo.rememberLastNonNull
+import io.github.fartown.movo.ui.components.movo.MovoFailureDialog
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
@@ -34,7 +39,8 @@ import top.yukonga.miuix.kmp.basic.Text
 
 /**
  * Skills（规范 8.7 二级页，设置 · 能力与扩展 · Skills）：安装卡（从 ZIP 导入，检查中显示加载圈）、
- * 内置 / 用户安装 / 已移除三张分组卡（标题在卡内），替换 / 删除 / 结果通知对话框。
+ * 内置 / 用户安装 / 已移除三张分组卡（标题在卡内），替换 / 删除确认对话框。
+ * 成功结果就地反馈（新装的 Skill 在列表中淡入、删除的行淡出，C5）；只有失败才弹 `Dialog/Info`。
  * 所有操作仍通过 [AgentSkillsAction] 分派；导入或单个 Skill 处理中时整页操作禁用。
  */
 @Composable
@@ -60,6 +66,12 @@ fun AgentSkillsScreen(
         )
     }
 
+    // 成功类通知（已安装、已删除）不弹窗：列表本身的增删就是结果（8.11）。
+    LaunchedEffect(state.notice) {
+        val notice = state.notice
+        if (notice != null && !notice.isError) onAction(AgentSkillsAction.DismissNotice)
+    }
+
     MovoListPage(
         title = stringResource(R.string.route_skills),
         onBack = { onAction(AgentSkillsAction.NavigateBack) },
@@ -71,7 +83,7 @@ fun AgentSkillsScreen(
         val removed = state.skills.filter { !it.installed }
 
         item(key = "zip-import-card") {
-            MovoCard {
+            MovoCard(modifier = movoAnimateItem()) {
                 CardTitle(stringResource(R.string.ui_install_087db6))
                 SkillRow(
                     title = if (state.isImporting) {
@@ -100,9 +112,10 @@ fun AgentSkillsScreen(
 
         if (builtinInstalled.isNotEmpty()) {
             item(key = "builtin-card") {
-                MovoCard {
+                MovoCard(modifier = movoAnimateItem()) {
                     CardTitle(stringResource(R.string.ui_built_in_skills_1ceedf))
                     builtinInstalled.forEachIndexed { index, skill ->
+                        key(skill.id) {
                         SkillSwitchRow(
                             skill = skill,
                             enabled = !operationPending,
@@ -111,6 +124,7 @@ fun AgentSkillsScreen(
                             },
                             showDivider = index != builtinInstalled.lastIndex,
                         )
+                        }
                     }
                 }
             }
@@ -118,9 +132,10 @@ fun AgentSkillsScreen(
 
         if (userInstalled.isNotEmpty()) {
             item(key = "user-card") {
-                MovoCard {
+                MovoCard(modifier = movoAnimateItem()) {
                     CardTitle(stringResource(R.string.ui_user_skills_748e7f))
                     userInstalled.forEachIndexed { index, skill ->
+                        key(skill.id) {
                         SkillSwitchRow(
                             skill = skill,
                             enabled = !operationPending,
@@ -130,6 +145,7 @@ fun AgentSkillsScreen(
                             onDelete = { deleteTarget = skill },
                             showDivider = index != userInstalled.lastIndex,
                         )
+                        }
                     }
                 }
             }
@@ -137,9 +153,10 @@ fun AgentSkillsScreen(
 
         if (removed.isNotEmpty()) {
             item(key = "removed-card") {
-                MovoCard {
+                MovoCard(modifier = movoAnimateItem()) {
                     CardTitle(stringResource(R.string.ui_removed_4e5c49))
                     removed.forEachIndexed { index, skill ->
+                        key(skill.id) {
                         SkillRow(
                             title = skill.name,
                             subtitle = stringResource(R.string.ui_click_to_reinstall_dc60de),
@@ -149,6 +166,7 @@ fun AgentSkillsScreen(
                         ) {
                             MovoIcon(MovoIcons.Download, null, size = MovoSize.iconSmall, tint = MovoColors.textTertiary)
                         }
+                        }
                     }
                 }
             }
@@ -156,7 +174,7 @@ fun AgentSkillsScreen(
 
         if (state.skills.isEmpty() && !state.isLoading) {
             item(key = "empty") {
-                MovoCard {
+                MovoCard(modifier = movoAnimateItem()) {
                     Column(modifier = Modifier.padding(MovoSpacing.lg)) {
                         Text(
                             stringResource(R.string.ui_no_skills_installed_yet_4e960f),
@@ -209,25 +227,12 @@ fun AgentSkillsScreen(
         onDismissRequest = { deleteTarget = null },
     )
 
-    val notice = rememberLastNonNull(state.notice)
-    SkillTextDialog(
-        show = state.notice != null,
-        title = notice?.title.orEmpty(),
-        text = notice?.message.orEmpty(),
-        buttonText = stringResource(R.string.ui_knew_cb63c6),
-        isError = notice?.isError == true,
+    // 失败说明（8.11）：`Dialog/Info`，标题即具体失败（「无法安装 Skill」等），只有整行「知道了」。
+    val failure = rememberLastNonNull(state.notice?.takeIf { it.isError })
+    MovoFailureDialog(
+        show = state.notice?.isError == true,
+        title = failure?.title.orEmpty(),
+        message = failure?.message.orEmpty(),
         onDismiss = { onAction(AgentSkillsAction.DismissNotice) },
     )
-}
-
-private class LastValue<T : Any> {
-    var value: T? = null
-}
-
-/** 返回 [value]；为 null 时返回上一次的非空值（给对话框退场动画用）。 */
-@Composable
-private fun <T : Any> rememberLastNonNull(value: T?): T? {
-    val holder = remember { LastValue<T>() }
-    if (value != null) holder.value = value
-    return value ?: holder.value
 }

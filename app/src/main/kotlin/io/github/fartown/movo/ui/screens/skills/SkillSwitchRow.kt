@@ -1,5 +1,9 @@
 package io.github.fartown.movo.ui.screens.skills
 
+import io.github.fartown.movo.ui.components.movo.MovoPopoverMenu
+import io.github.fartown.movo.ui.components.movo.MovoMenuItem
+import io.github.fartown.movo.ui.components.movo.MovoInfoDialog
+import io.github.fartown.movo.ui.components.movo.MovoIconButton
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -15,8 +19,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -31,9 +33,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.fartown.movo.R
-import io.github.fartown.movo.ui.components.movo.BlockTone
-import io.github.fartown.movo.ui.components.movo.MovoBlockButton
-import io.github.fartown.movo.ui.components.movo.MovoDialogHost
 import io.github.fartown.movo.ui.components.movo.MovoDivider
 import io.github.fartown.movo.ui.components.movo.MovoSwitch
 import io.github.fartown.movo.ui.components.movo.PressKind
@@ -47,14 +46,13 @@ import io.github.fartown.movo.ui.theme.MovoMotion
 import io.github.fartown.movo.ui.theme.MovoSize
 import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.theme.MovoTypography
-import top.yukonga.miuix.kmp.basic.DropdownEntry
-import top.yukonga.miuix.kmp.basic.DropdownItem
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.menu.OverlayIconDropdownMenu
 
 /**
- * Skill 开关行（规范 8.7 二级页 `Settings/Row`，icon=false）：整行点击切换；右侧「更多」菜单（查看说明 / 删除）+ 开关。
+ * Skill 开关行（规范 8.7 二级页 `Settings/Row`，icon=false）：整行点击切换；右侧「更多」`Popover/Menu` + 开关。
  * 说明最多两行（Skill 描述来自 SKILL.md，可能较长）。
+ * 「查看说明」只在说明被截断时出现（说明为空或行内已完整显示时不出，避免弹窗与行内容重复，C4）；
+ * 删除为 Rose 垃圾桶；菜单没有任何项时不显示「更多」。
  */
 @Composable
 internal fun SkillSwitchRow(
@@ -65,48 +63,54 @@ internal fun SkillSwitchRow(
     showDivider: Boolean = true,
 ) {
     var showDescription by remember(skill.id) { mutableStateOf(false) }
-    val description = skill.description.ifBlank { stringResource(R.string.skills_no_description) }
+    var showMenu by remember(skill.id) { mutableStateOf(false) }
+    var descriptionTruncated by remember(skill.id) { mutableStateOf(false) }
+    val hasDescription = skill.description.isNotBlank()
+    val subtitle = if (hasDescription) skill.description else stringResource(R.string.skills_no_description)
+    val viewDescription = stringResource(R.string.ui_view_description)
+    val deleteLabel = stringResource(R.string.ui_delete_3755f5)
+    val menuItems = buildList {
+        if (hasDescription && descriptionTruncated) {
+            add(MovoMenuItem(icon = MovoIcons.Info, label = viewDescription) { showDescription = true })
+        }
+        if (onDelete != null) {
+            add(MovoMenuItem(icon = MovoIcons.Trash2, label = deleteLabel, destructive = true, enabled = enabled) { onDelete() })
+        }
+    }
     SkillRow(
         title = skill.name,
-        subtitle = description,
+        subtitle = subtitle,
         enabled = enabled,
         showDivider = showDivider,
         role = Role.Switch,
+        onSubtitleOverflow = { descriptionTruncated = it },
         onClick = { onToggle(!skill.enabled) },
     ) {
-        OverlayIconDropdownMenu(
-            modifier = Modifier.align(Alignment.CenterVertically),
-            entry = DropdownEntry(
-                items = listOfNotNull(
-                    DropdownItem(
-                        text = stringResource(R.string.ui_view_description),
-                        onClick = { showDescription = true },
-                    ),
-                    onDelete?.let { delete ->
-                        DropdownItem(
-                            text = stringResource(R.string.ui_delete_3755f5),
-                            enabled = enabled,
-                            onClick = { if (enabled) delete() },
-                        )
-                    },
-                ),
-            ),
-        ) {
-            MovoIcon(
-                MovoIcons.Ellipsis,
-                contentDescription = stringResource(R.string.skills_more_named, skill.name),
-                size = MovoSize.iconMedium,
-                tint = MovoColors.textSecondary,
-            )
+        if (menuItems.isNotEmpty()) {
+            Box(modifier = Modifier.align(Alignment.CenterVertically)) {
+                MovoIconButton(
+                    icon = MovoIcons.Ellipsis,
+                    contentDescription = stringResource(R.string.skills_more_named, skill.name),
+                    onClick = { showMenu = true },
+                    iconSize = MovoSize.iconMedium,
+                    tint = MovoColors.textSecondary,
+                )
+                MovoPopoverMenu(show = showMenu, onDismiss = { showMenu = false }, items = menuItems, alignEnd = true)
+            }
+            Spacer(Modifier.width(MovoSpacing.xs))
         }
-        Spacer(Modifier.width(MovoSpacing.xs))
         // 整行负责切换，开关本身不再接收点击，避免一次点击切两次。
         MovoSwitch(checked = skill.enabled, onCheckedChange = null, enabled = enabled)
     }
-    SkillTextDialog(
+    // `Dialog/Info`：Skill 属于 Agent 的扩展能力，图标块沿用工具页「其他」分组的 Graphite + Skills 图标（puzzle）。
+    // 没有可执行的动作，只有整行「知道了」。
+    MovoInfoDialog(
         show = showDescription,
+        icon = MovoIcons.Puzzle,
+        iconBackground = MovoColors.graphiteBg,
+        iconTint = MovoColors.graphiteFg,
         title = skill.name,
-        text = description,
+        message = skill.description,
         onDismiss = { showDescription = false },
     )
 }
@@ -124,6 +128,7 @@ internal fun SkillRow(
     onClick: (() -> Unit)?,
     role: Role = Role.Button,
     onClickLabel: String? = null,
+    onSubtitleOverflow: ((Boolean) -> Unit)? = null,
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
     Box(
@@ -165,6 +170,7 @@ internal fun SkillRow(
                         color = MovoColors.textSecondary,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
+                        onTextLayout = { layout -> onSubtitleOverflow?.invoke(layout.hasVisualOverflow) },
                     )
                 }
             }
@@ -172,46 +178,6 @@ internal fun SkillRow(
             trailing()
         }
         if (showDivider) MovoDivider(modifier = Modifier.align(Alignment.BottomStart), start = MovoSpacing.lg)
-    }
-}
-
-/** 长文本对话框：标题 + 可滚动正文 + 单个「关闭」/「知道了」按钮（规范 8.11 容器）。 */
-@Composable
-internal fun SkillTextDialog(
-    show: Boolean,
-    title: String,
-    text: String,
-    onDismiss: () -> Unit,
-    buttonText: String = stringResource(R.string.action_close),
-    isError: Boolean = false,
-) {
-    MovoDialogHost(show = show, onDismissRequest = onDismiss) {
-        Column(modifier = Modifier.padding(MovoSpacing.xxl)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (isError) {
-                    MovoIcon(MovoIcons.CircleAlert, null, size = MovoSize.iconMedium, tint = MovoColors.roseFg)
-                    Spacer(Modifier.width(MovoSpacing.sm))
-                }
-                Text(title, style = MovoTypography.titleSection, color = MovoColors.textPrimary)
-            }
-            Spacer(Modifier.size(MovoSpacing.sm))
-            Text(
-                text,
-                style = MovoTypography.bodyRegular,
-                color = MovoColors.textSecondary,
-                modifier = Modifier
-                    .heightIn(max = 360.dp)
-                    .verticalScroll(rememberScrollState()),
-            )
-        }
-        MovoBlockButton(
-            label = buttonText,
-            onClick = onDismiss,
-            tone = if (isError) BlockTone.Secondary else BlockTone.Primary,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(MovoSpacing.xs),
-        )
     }
 }
 
