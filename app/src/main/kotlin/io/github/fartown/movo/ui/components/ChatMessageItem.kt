@@ -518,6 +518,7 @@ internal fun AgentWorkProcess(
     onDeleteMessage: (String) -> Unit = {},
     runActive: Boolean = false,
     answerStarted: Boolean = false,
+    stepOffset: Int = 0,
     outcome: WorkOutcome? = null,
 ) {
     val runUnfinished = outcome?.kind == WorkOutcome.Kind.Unfinished
@@ -533,7 +534,8 @@ internal fun AgentWorkProcess(
     val running = !paused && (stepRunning || (runActive && !answerStarted))
     val tools = messages.filterIsInstance<ToolActivityMessageUi>()
     val toolCount = tools.size
-    val failedIndex = unrecoveredFailedStep(tools)
+    // 后面接着给出了回答、也没有失败 / 停止卡：中途失败的步骤已被绕过，整张卡按完成显示（该步自己仍是 ✕）。
+    val failedIndex = if (answerStarted && outcome == null) -1 else unrecoveredFailedStep(tools)
     var expanded by rememberSaveable(id) { mutableStateOf(running) }
     var manuallyExpanded by rememberSaveable(id) { mutableStateOf(false) }
 
@@ -554,8 +556,10 @@ internal fun AgentWorkProcess(
     }
     // 步骤多时（> 6）执行中只显示最近 4 步；点「前面 N 步」或完成后手动展开时显示全部。
     var showAllSteps by rememberSaveable(id) { mutableStateOf(false) }
+    // 回答开始的这一帧就按收起显示：等上面的副作用下一帧再收，会先把全部步骤展开一下再收（真机跳一下）。
+    val shownExpanded = expanded && !(answerStarted && !manuallyExpanded)
 
-    val collapsedSummary = !expanded && !running && !paused
+    val collapsedSummary = !shownExpanded && !running && !paused
     // 圆角只在绘制阶段读取（graphicsLayer 裁剪 + drawWithContent 画底色与描边）：收成摘要条的圆角过渡期间不重组整张卡。
     val corner = androidx.compose.animation.core.animateDpAsState(
         targetValue = if (collapsedSummary) io.github.fartown.movo.ui.theme.MovoRadius.pillLg else io.github.fartown.movo.ui.theme.MovoRadius.xl,
@@ -586,7 +590,7 @@ internal fun AgentWorkProcess(
                     // 摘要条整条可点，原地展开完整记录（⌄ / ⌃）；执行中点头部收起 / 展开。
                     manuallyExpanded = true
                     if (collapsedSummary) showAllSteps = true
-                    expanded = !expanded
+                    expanded = !shownExpanded
                 }
                 .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -632,8 +636,9 @@ internal fun AgentWorkProcess(
                     WorkPhaseCrossfade(phase) { shownPhase ->
                         io.github.fartown.movo.ui.components.movo.MovoShimmerText(
                             text = when (shownPhase) {
-                                WorkPhase.Paused -> if (toolCount > 0) stringResource(R.string.movo_work_paused_step, toolCount) else stringResource(R.string.movo_work_paused)
-                                WorkPhase.Running -> if (toolCount > 0) stringResource(R.string.movo_work_running_step, toolCount) else stringResource(R.string.movo_work_analyzing)
+                                // 「第 N 步」按整轮计（回答把一轮分成几张卡时接着前面的数），与悬浮球展开卡一致。
+                                WorkPhase.Paused -> if (toolCount > 0) stringResource(R.string.movo_work_paused_step, stepOffset + toolCount) else stringResource(R.string.movo_work_paused)
+                                WorkPhase.Running -> if (toolCount > 0) stringResource(R.string.movo_work_running_step, stepOffset + toolCount) else stringResource(R.string.movo_work_analyzing)
                                 WorkPhase.Stopped -> stringResource(R.string.movo_work_stopped_steps, turnSteps)
                                 WorkPhase.Failed -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
                                 WorkPhase.Unfinished -> stringResource(R.string.movo_work_unfinished_steps, turnSteps)
@@ -655,14 +660,14 @@ internal fun AgentWorkProcess(
                 modifier = Modifier.weight(1f),
             )
             val rotation = androidx.compose.animation.core.animateFloatAsState(
-                targetValue = if (expanded) 180f else 0f,
+                targetValue = if (shownExpanded) 180f else 0f,
                 animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
                 label = "workChevron",
             )
             // 展开 / 收起：箭头 ⌄ ↔ ⌃ 旋转（`fast`）。
             io.github.fartown.movo.ui.theme.MovoIcon(
                 io.github.fartown.movo.ui.theme.MovoIcons.ChevronDown,
-                contentDescription = stringResource(if (expanded) R.string.movo_collapse else R.string.movo_expand),
+                contentDescription = stringResource(if (shownExpanded) R.string.movo_collapse else R.string.movo_expand),
                 size = 16.dp,
                 tint = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
                 modifier = Modifier.graphicsLayer { rotationZ = rotation.value },
@@ -671,7 +676,7 @@ internal fun AgentWorkProcess(
 
         // 展开：高度 `standard`，内容在高度过渡开始 40ms 后淡入 `fast`（规范 9.3「展开 / 收起」）。
         AnimatedVisibility(
-            visible = expanded,
+            visible = shownExpanded,
             enter = fadeIn(
                 tween(
                     io.github.fartown.movo.ui.theme.MovoMotion.FAST,
@@ -690,7 +695,8 @@ internal fun AgentWorkProcess(
                         .height(io.github.fartown.movo.ui.theme.MovoSize.hairline)
                         .background(io.github.fartown.movo.ui.theme.MovoColors.borderHairline),
                 )
-                val folded = !showAllSteps && (running || paused) && messages.size > WORK_FOLD_THRESHOLD
+                // 不看是否执行中：自动收起的过程中仍保持折叠，不在收起前把全部步骤铺开。
+                val folded = !showAllSteps && messages.size > WORK_FOLD_THRESHOLD
                 if (folded) {
                     WorkEarlierSteps(
                         count = messages.size - WORK_FOLD_VISIBLE,
@@ -708,8 +714,8 @@ internal fun AgentWorkProcess(
                     onDeleteMessage = onDeleteMessage,
                     modifier = Modifier.padding(top = if (folded) 0.dp else 6.dp, bottom = 6.dp),
                 )
-                // 结束后展开：末尾一行起止时间「15:02 开始·15:03 结束」（Figma「05e」）。
-                val span = if (!running && !paused) workTimeSpan(tools, outcome) else null
+                // 结束后用户点开：末尾一行起止时间「15:02 开始·15:03 结束」（Figma「05e」）。
+                val span = if (!running && !paused && manuallyExpanded) workTimeSpan(tools, outcome) else null
                 if (span != null) {
                     Text(
                         text = span,

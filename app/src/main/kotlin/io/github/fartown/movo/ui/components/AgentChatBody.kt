@@ -99,6 +99,7 @@ import io.github.fartown.movo.ui.model.ToolSummaryMessageUi
 import io.github.fartown.movo.ui.model.SystemNoticeCode
 import io.github.fartown.movo.ui.model.SystemNoticeMessageUi
 import io.github.fartown.movo.ui.model.UserMessageUi
+import io.github.fartown.movo.ui.model.ToolActivityStatusUi
 import io.github.fartown.movo.ui.model.latestContextUsage
 import kotlin.math.exp
 import kotlin.math.min
@@ -527,6 +528,7 @@ internal fun AgentConversationMessages(
     val workOutcomes = remember(timelineEntries) { workOutcomes(timelineEntries) }
     // 执行卡后面紧接着出现了有正文的回答：这张卡的步骤已经结束，收成摘要条（方案 B，只收一次）。
     val answeredWorkKeys = remember(timelineEntries) { answeredWorkKeys(timelineEntries) }
+    val workStepOffsets = remember(timelineEntries) { workStepOffsets(timelineEntries) }
     // 暂停时本来就不会有数据：不提示「已 N 秒没有收到数据」。
     val runPaused = LocalRunControls.current.isPaused
     val stoppedWithoutWork = remember(timelineEntries) { stoppedNoticesWithoutWork(timelineEntries) }
@@ -817,6 +819,7 @@ internal fun AgentConversationMessages(
                             // 本轮仍在进行：模型在两步之间思考时步骤都已完成，但执行卡不能当作完成收起。
                             runActive = isStreaming && entry.key == lastWorkKey,
                             answerStarted = entry.key in answeredWorkKeys,
+                            stepOffset = workStepOffsets[entry.key] ?: 0,
                             outcome = workOutcomes[entry.key],
                             onOpenBrowser = onOpenBrowser,
                             currentBrowserMessageId = currentBrowserMessageId,
@@ -948,6 +951,31 @@ internal fun smoothBottomFollowStep(
  * 执行卡所在这一轮没有正常完成的原因与这一轮总共执行的步数（一轮里的回答会把执行卡分成几张，
  * 摘要写整轮的步数）；正常完成的执行卡不在结果里。
  */
+/** 同一轮里排在这张执行卡前面的工具步骤数（回答把一轮分成几张卡时，「第 N 步」接着数）。 */
+internal fun workStepOffsets(entries: List<AgentTimelineEntry>): Map<String, Int> {
+    val offsets = mutableMapOf<String, Int>()
+    var steps = 0
+    entries.forEach { entry ->
+        when (entry) {
+            is AgentTimelineEntry.Message -> if (entry.message is UserMessageUi) steps = 0
+            is AgentTimelineEntry.WorkProcess -> {
+                offsets[entry.key] = steps
+                steps += entry.messages.count { it is ToolActivityMessageUi }
+            }
+        }
+    }
+    return offsets
+}
+
+/** 最近一轮（最后一条用户消息之后）已成功的工具步骤数：暂停提示条「已完成 N 步」。 */
+internal fun currentTurnCompletedSteps(entries: List<AgentTimelineEntry>): Int {
+    val start = entries.indexOfLast { it is AgentTimelineEntry.Message && it.message is UserMessageUi }
+    return entries.drop(start + 1).sumOf { entry ->
+        (entry as? AgentTimelineEntry.WorkProcess)?.messages
+            ?.count { it is ToolActivityMessageUi && it.status == ToolActivityStatusUi.Success } ?: 0
+    }
+}
+
 /** 后面紧接着一条有正文的回答的执行卡。 */
 internal fun answeredWorkKeys(entries: List<AgentTimelineEntry>): Set<String> =
     entries.zipWithNext().mapNotNullTo(mutableSetOf()) { (entry, next) ->

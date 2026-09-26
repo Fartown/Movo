@@ -145,4 +145,20 @@ class WorkSummaryOutcomeTest {
         assertEquals(io.github.fartown.movo.R.string.movo_retry_reason_server, modelRetryReasonRes("HTTP_503"))
         assertEquals(null, parseModelRetry("模型请求重试"))
     }
+
+    @Test
+    fun stepCountsContinueAcrossCardsInOneTurn() {
+        val entries = listOf(
+            message(UserMessageUi("u1", "打开设置")),
+            AgentTimelineEntry.WorkProcess("w1", listOf(tool("a", ToolActivityStatusUi.Success), tool("b", ToolActivityStatusUi.Failed))),
+            message(io.github.fartown.movo.ui.model.AgentMessageUi("m1", "先看看网络")),
+            AgentTimelineEntry.WorkProcess("w2", listOf(tool("c", ToolActivityStatusUi.Success), tool("d", ToolActivityStatusUi.Running))),
+        )
+        assertEquals(mapOf("w1" to 0, "w2" to 2), workStepOffsets(entries))
+        assertEquals(2, currentTurnCompletedSteps(entries))
+        assertEquals(setOf("w1"), answeredWorkKeys(entries))
+        val next = entries + message(UserMessageUi("u2", "继续")) + work("w3")
+        assertEquals(0, workStepOffsets(next)["w3"])
+        assertEquals(1, currentTurnCompletedSteps(next))
+    }
 }
