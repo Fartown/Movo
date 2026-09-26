@@ -88,7 +88,7 @@ internal fun iconForTool(toolId: String): ImageVector = when (toolId) {
     "computer", "computer_call", "计算机操作" -> Icons.Rounded.Computer
     "image_generation", "image_generation_call", "图像生成" -> Icons.Rounded.Image
     "mcp_call", "MCP 工具" -> Icons.Rounded.Extension
-    "memory_get", "memory_write" -> Icons.Rounded.Psychology
+    "memory_get", "memory_write", "character_memory_get", "character_memory_write" -> Icons.Rounded.Psychology
     "press_key" -> Icons.Rounded.KeyboardCommandKey
     "open_system_panel" -> Icons.Rounded.WebAsset
     "read_image" -> Icons.Rounded.Image
@@ -164,7 +164,7 @@ internal fun toolIcon(toolId: String): MovoIconData = when (toolId) {
     "computer", "computer_call", "计算机操作" -> MovoIcons.Monitor
     "image_generation", "image_generation_call", "图像生成" -> MovoIcons.ImagePlus
     "mcp_call", "MCP 工具" -> MovoIcons.Plug
-    "memory_get", "memory_write" -> MovoIcons.Brain
+    "memory_get", "memory_write", "character_memory_get", "character_memory_write" -> MovoIcons.Brain
     "press_key" -> MovoIcons.Command
     "open_system_panel" -> MovoIcons.PanelTop
     "read_image" -> MovoIcons.Image
