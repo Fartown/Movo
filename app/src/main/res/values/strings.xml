@@ -1087,7 +1087,7 @@
   <string name="model_expand_provider">Expand %1$s</string>
   <string name="context_no_previous_usage">No usage data yet</string>
   <string name="context_no_model_limit">This model has no context limit</string>
-  <string name="context_usage_after_response">Measured after the first response</string>
+  <string name="context_usage_after_response">Usage appears after the first reply</string>
   <string name="context_usage_previous_response">%1$s\nMeasured last turn</string>
   <string name="context_usage_description">Context usage: %1$s</string>
   <string name="memory_budget_summary">Inject up to %1$s characters per turn. The model reads detailed content as needed</string>
@@ -1179,8 +1179,13 @@
   <string name="data_backup_failed">Backup operation failed</string>
   <string name="data_backup_file_open_failed">Unable to open the selected file</string>
   <string name="context_compaction">Context compaction</string>
-  <string name="context_compact_action">Compact</string>
+  <string name="context_compact_action">Compact now</string>
   <string name="context_usage_estimated">%1$s\nEstimated after compaction</string>
+  <string name="context_used_of_limit">Used %1$s / %2$s</string>
+  <string name="context_auto_compact_hint">Earlier messages are compacted automatically at %1$d%%</string>
+  <string name="context_auto_compact_hint_warn">Almost full · earlier messages are compacted at %1$d%%</string>
+  <string name="context_compacting_hint">Summarizing earlier messages…</string>
+  <string name="context_compacting">Compacting…</string>
 <string name="wake_channel_name">Voice wake</string>
   <string name="wake_notification_title">Movo voice wake</string>
   <string name="wake_notification_waiting">Waiting for wake phrase (current: %1$s)</string>

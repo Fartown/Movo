@@ -722,4 +722,15 @@ internal object MovoIcons {
         "M2 8h20",
         "M6 4v4",
     ))
+    /** lucide:fold-vertical */
+    val FoldVertical = MovoIconData("fold-vertical", listOf(
+        "M12 22v-6",
+        "M12 8V2",
+        "M4 12H2",
+        "M10 12H8",
+        "M16 12h-2",
+        "M22 12h-2",
+        "m15 19-3-3-3 3",
+        "m15 5-3 3-3-3",
+    ))
 }
