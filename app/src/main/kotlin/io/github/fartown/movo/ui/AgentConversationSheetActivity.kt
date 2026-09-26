@@ -659,6 +659,8 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         // MainActivity owns the original Home conversation route and all of its top-bar actions.
         // Both hosts already share AgentAppSession and the conversation-keyed composer draft.
         runCatching {
+            // 主界面是从桌面图标等系统入口拉起的：把它换成由 Movo 自己拉起的新实例，否则切过去时系统会插一个整屏启动画面（真机深灰一闪）。
+            AgentConversationHandoff.releaseSystemLaunchedMain(this, taskId)
             // 浮层已推满全屏，切到 App 内同一会话时不再播窗口动画，看不出切换。
             startActivity(
                 // HyperOS 切换任务栈时会忽略自定义动画、播放系统缩放动画（真机出现 1 帧灰色缩小窗口），显式禁用。
