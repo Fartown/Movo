@@ -38,6 +38,8 @@ internal data class ChatFailure(
     val message: String,
     val duration: String?,
     val action: FailureAction?,
+    /** 模型配置类原因（凭据、权限、模型名、参数、额度）：对话失败卡主操作为「去模型设置」而不是「重试」（7.2）。 */
+    val modelConfig: Boolean = false,
 )
 
 /** 耗时构成的一段；[kind] 决定颜色。 */
@@ -259,7 +261,19 @@ internal class DiagnosticsFormat(
             // 对话里与执行卡摘要条同一写法（「18 秒」「5 分 38 秒」），不用运行日志的一位小数秒。
             duration = run.durationMs?.let { "用时 ${chatDuration(it)}" },
             action = explanation.action,
+            modelConfig = isModelConfigFailure(run),
         )
+    }
+
+    /**
+     * 改了模型设置才可能好的失败：API Key 无效 / 无权限（401、403）、模型或接口不存在（404）、参数无效（400）、额度不足。
+     * 限流（429）和服务商流错误虽然也建议换模型，但先重试更常见，不算在内。
+     */
+    fun isModelConfigFailure(run: RunTrace): Boolean {
+        if (run.status != TraceStatus.FAILED) return false
+        val failure = run.failure ?: return false
+        val http = failure.httpStatus ?: failure.code?.removePrefix("HTTP_")?.toIntOrNull()
+        return failure.providerErrorCode in QUOTA_CODES || http in MODEL_CONFIG_HTTP
     }
 
     // ---- 耗时构成（Q2） ----
@@ -413,6 +427,7 @@ internal class DiagnosticsFormat(
         /** 分隔符「·」，两边不加空格（规范 5、8.10）。 */
         const val SEP = "·"
 
+        private val MODEL_CONFIG_HTTP = setOf(400, 401, 403, 404)
         private val QUOTA_CODES = setOf("insufficient_quota", "quota_exceeded", "billing_error", "usage_limit_reached")
 
         fun purposeName(purpose: String): String = DiagnosticTraceBuilder.purposeName(purpose)

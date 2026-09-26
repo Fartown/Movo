@@ -346,6 +346,7 @@ internal fun AgentAppRoot(
                     LocalRunLogOpener provides openRunLog,
                     LocalOpenCapabilities provides { pushRoute(AppRoute.Tools) },
                     io.github.fartown.movo.ui.components.LocalOpenVoiceSettings provides { pushRoute(AppRoute.VoiceSettings) },
+                    io.github.fartown.movo.ui.components.LocalOpenModelSettings provides { pushRoute(AppRoute.ModelProviders) },
                 ) {
                     content()
                 }

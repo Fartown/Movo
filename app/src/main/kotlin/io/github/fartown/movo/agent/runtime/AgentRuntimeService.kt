@@ -463,7 +463,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                                 is AgentRuntimeImageTransfer.ImageTransferException ->
                                     throwable.message ?: "Agent Runtime 无法读取图片"
                                 is RuntimeConfigUnavailableException ->
-                                    "请先在 Movo 中配置可用的模型"
+                                    io.github.fartown.movo.agent.model.UserFacingFailure.MODEL_UNAVAILABLE
                                 else -> "Agent Runtime 无法准备请求"
                             },
                             replyTo,

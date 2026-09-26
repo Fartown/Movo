@@ -380,6 +380,34 @@ internal fun AgentChatInputBar(
             }
         }
 
+        // 7.3 未配置模型（提前提示）：没有可用模型时常驻，「去配置」打开设置里的模型页；配好后自动消失。
+        // 与其他提示同一位置，同时最多一条（语音 / 轻提示是用户刚触发的，优先；已暂停提示也优先）。
+        val openModelSettings = LocalOpenModelSettings.current
+        val modelNotice = openModelSettings?.let { open ->
+            ComposerNotice(
+                icon = MovoIcons.Cpu,
+                title = stringResource(R.string.movo_notice_model_title),
+                description = stringResource(R.string.movo_notice_model_desc),
+                actionLabel = stringResource(R.string.movo_notice_model_action),
+                action = open,
+            )
+        }
+        AnimatedVisibility(
+            visible = modelNotice != null && modelPickerState.missingModel && activeNotice == null &&
+                !runControls.isPaused && !voice.active,
+            enter = aboveEnter,
+            exit = aboveExit,
+        ) {
+            modelNotice?.let { notice ->
+                ComposerNoticeBar(
+                    notice = notice,
+                    onDismiss = {},
+                    showClose = false,
+                    modifier = Modifier.padding(bottom = MovoSpacing.sm),
+                )
+            }
+        }
+
         AnimatedVisibility(
             visible = isEditingMessage,
             enter = aboveEnter,

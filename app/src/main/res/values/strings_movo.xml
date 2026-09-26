@@ -253,4 +253,18 @@
   <!-- 输入框上方的「下一条」排队提示（D11） -->
   <string name="movo_queued_title">Up next</string>
   <string name="movo_queued_withdraw">Withdraw</string>
+  <!-- 对话页动线 3.3 / 7.2 / 7.3 -->
+  <string name="movo_notice_model_title">No model set up yet</string>
+  <string name="movo_notice_model_desc">Add a model provider and a model first</string>
+  <string name="movo_notice_model_action">Set up</string>
+  <string name="movo_run_model_settings">Model settings</string>
+  <string name="movo_retry_notice_active">Retrying model request · %1$s, attempt %2$d</string>
+  <string name="movo_retry_notice_done">Model request retried · %1$s (attempt %2$d)</string>
+  <string name="movo_retry_reason_timeout">Connection timed out</string>
+  <string name="movo_retry_reason_connection">Connection lost</string>
+  <string name="movo_retry_reason_empty">No reply from the model</string>
+  <string name="movo_retry_reason_incomplete">Reply ended early</string>
+  <string name="movo_retry_reason_rate_limit">Rate limited by the provider</string>
+  <string name="movo_retry_reason_server">Service temporarily unavailable</string>
+  <string name="movo_retry_reason_other">Request failed</string>
 </resources>

@@ -62,6 +62,12 @@ import top.yukonga.miuix.kmp.basic.Text
 internal val LocalOpenVoiceSettings = staticCompositionLocalOf<(() -> Unit)?> { null }
 
 /**
+ * 打开设置里的模型页（服务商与模型）：「未配置模型」提示条的「去配置」、失败卡的「去模型设置」用。
+ * App 根直接打开；对话浮层先展开到 App 同一会话再打开。没有提供时为 null，入口不显示。
+ */
+internal val LocalOpenModelSettings = staticCompositionLocalOf<(() -> Unit)?> { null }
+
+/**
  * 输入框上方的提示（`Composer/Notice`，规范 8.5、8.11）：语音异常，以及取代 Toast 的输入相关反馈（发送被拦下、
  * 附件没能添加、模型没切换成功等）。
  *
@@ -297,6 +303,8 @@ internal fun ComposerNoticeBar(
     notice: ComposerNotice,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 条件解除前一直在的提示（如未配置模型）不给 ✕。 */
+    showClose: Boolean = true,
 ) {
     ComposerNoticeLayout(
         icon = notice.icon,
@@ -309,13 +317,15 @@ internal fun ComposerNoticeBar(
             Spacer(Modifier.width(MovoSpacing.sm))
             MovoPillButton(label = notice.actionLabel, onClick = { action(); onDismiss() })
         }
-        MovoIconButton(
-            icon = MovoIcons.X,
-            contentDescription = stringResource(R.string.action_close),
-            onClick = onDismiss,
-            iconSize = MovoSize.iconSmall,
-            tint = MovoColors.textSecondary,
-        )
+        if (showClose) {
+            MovoIconButton(
+                icon = MovoIcons.X,
+                contentDescription = stringResource(R.string.action_close),
+                onClick = onDismiss,
+                iconSize = MovoSize.iconSmall,
+                tint = MovoColors.textSecondary,
+            )
+        }
     }
 }
 

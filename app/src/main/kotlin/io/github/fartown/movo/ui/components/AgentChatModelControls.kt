@@ -37,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -124,6 +125,8 @@ internal fun AgentModelPickerButton(
                         showPopup = true
                     },
                 )
+                // 没有可用模型（7.3）：按禁用态整体 40%，由输入框上方的提示条引导去配置。
+                .graphicsLayer { alpha = if (state.missingModel) 0.4f else 1f }
                 .clip(CircleShape)
                 .background(MovoColors.bgSurfaceMuted)
                 .semantics { contentDescription = switchModelDescription },

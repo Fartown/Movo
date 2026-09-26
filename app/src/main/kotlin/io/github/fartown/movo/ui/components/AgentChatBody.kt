@@ -527,6 +527,11 @@ internal fun AgentConversationMessages(
     val workOutcomes = remember(timelineEntries) { workOutcomes(timelineEntries) }
     // 执行卡后面紧接着出现了有正文的回答：这张卡的步骤已经结束，收成摘要条（方案 B，只收一次）。
     val answeredWorkKeys = remember(timelineEntries) { answeredWorkKeys(timelineEntries) }
+    val stoppedWithoutWork = remember(timelineEntries) { stoppedNoticesWithoutWork(timelineEntries) }
+    // 仍在进行的这一轮最后一条：模型重试提示在这里才是「正在重试」（恢复后的提示已从时间线去掉）。
+    val activeNoticeId = if (isStreaming) {
+        (timelineEntries.lastOrNull() as? AgentTimelineEntry.Message)?.message?.id
+    } else null
     // 复制按钮只出现在每轮对话的最终结果上，中间步骤的过渡文本不提供复制入口。
     // 流式进行中当前这一轮尚未收尾，此时的“最后一条正文”只是中间步骤，不标记。
     val finalResultMessageIds = remember(visibleMessages, isStreaming) {
@@ -790,6 +795,8 @@ internal fun AgentConversationMessages(
                             onDeleteMessage = onDeleteMessage,
                             onRegenerateMessage = onRegenerateMessage,
                             onSelectReplyCandidate = onSelectReplyCandidate,
+                            noticeActive = message.id == activeNoticeId,
+                            stoppedWithoutWork = message.id in stoppedWithoutWork,
                         )
                         }
                     }
@@ -1000,6 +1007,23 @@ internal fun workOutcomes(entries: List<AgentTimelineEntry>): Map<String, WorkOu
         }
     }
     return outcomes
+}
+
+/** 所在这一轮（两条用户消息之间）没有执行卡的「已停止」提示：摘要条上没有停止方块，提示自己带（5.7）。 */
+internal fun stoppedNoticesWithoutWork(entries: List<AgentTimelineEntry>): Set<String> {
+    val result = mutableSetOf<String>()
+    var turnHasWork = false
+    for (entry in entries) {
+        when (entry) {
+            is AgentTimelineEntry.WorkProcess -> turnHasWork = true
+            is AgentTimelineEntry.Message -> when (val message = entry.message) {
+                is UserMessageUi -> if (!message.isRunSupplement()) turnHasWork = false
+                is SystemNoticeMessageUi -> if (message.code == SystemNoticeCode.Stopped && !turnHasWork) result += message.id
+                else -> Unit
+            }
+        }
+    }
+    return result
 }
 
 internal sealed interface AgentTimelineEntry {
