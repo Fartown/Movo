@@ -168,6 +168,8 @@ internal fun AgentOverlayGlow(state: AgentOverlayState) {
     val glowPaint = remember {
         android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
             style = android.graphics.Paint.Style.STROKE
+            // 半分辨率的光圈图放大绘制时做双线性过滤，边缘不起锯齿。
+            isFilterBitmap = true
         }
     }
     val shaderMatrix = remember { android.graphics.Matrix() }
@@ -181,13 +183,13 @@ internal fun AgentOverlayGlow(state: AgentOverlayState) {
             shaderMatrix.setRotate(rotation?.value ?: 0f, cx, cy)
             shader.setLocalMatrix(shaderMatrix)
             glowPaint.shader = shader
-            // 柔光：10 宽、模糊 14，向内渐隐。
-            glowPaint.strokeWidth = 10.dp.toPx()
-            glowPaint.maskFilter = cache.blur(14.dp.toPx())
-            val inset = 5.dp.toPx()
-            canvas.nativeCanvas.drawRoundRect(inset, inset, size.width - inset, size.height - inset, corner, corner, glowPaint)
-            // 实线：2 宽。
+            // 柔光：10 宽、模糊 14，向内渐隐。模糊后的光圈只按尺寸算一次（半分辨率透明度图），之后每帧只用旋转的
+            // 渐变给这张图着色，由 GPU 贴图；不再每帧对全屏描边做模糊（模糊滤镜走 CPU 光栅化，执行中一直在耗）。
             glowPaint.maskFilter = null
+            val mask = cache.glowMask(size.width, size.height, corner, 10.dp.toPx(), 14.dp.toPx(), 5.dp.toPx())
+            cache.dst.set(0f, 0f, size.width, size.height)
+            canvas.nativeCanvas.drawBitmap(mask, null, cache.dst, glowPaint)
+            // 实线：2 宽。
             glowPaint.strokeWidth = 2.dp.toPx()
             val edge = 1.dp.toPx()
             canvas.nativeCanvas.drawRoundRect(edge, edge, size.width - edge, size.height - edge, corner, corner, glowPaint)
@@ -215,6 +217,39 @@ private class GlowCache {
             blur = it
             blurRadius = radius
         }
+
+    val dst = android.graphics.RectF()
+    private var mask: android.graphics.Bitmap? = null
+    private var maskKey = 0L
+
+    /**
+     * 模糊光圈的透明度图（ALPHA_8，半分辨率）：画一次、按尺寸缓存。绘制时 paint 的渐变着色器决定颜色
+     * （只有透明度的位图按 paint 的颜色 / 着色器上色）。
+     */
+    fun glowMask(width: Float, height: Float, corner: Float, stroke: Float, blurRadius: Float, inset: Float): android.graphics.Bitmap {
+        val key = (width.toLong() shl 32) or height.toLong()
+        mask?.takeIf { maskKey == key && !it.isRecycled }?.let { return it }
+        val scale = MASK_SCALE
+        val w = (width * scale).toInt().coerceAtLeast(1)
+        val h = (height * scale).toInt().coerceAtLeast(1)
+        val bitmap = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ALPHA_8)
+        val canvas = android.graphics.Canvas(bitmap)
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = stroke * scale
+            maskFilter = BlurMaskFilter(blurRadius * scale, BlurMaskFilter.Blur.NORMAL)
+        }
+        val i = inset * scale
+        canvas.drawRoundRect(i, i, w - i, h - i, corner * scale, corner * scale, paint)
+        mask?.recycle()
+        mask = bitmap
+        maskKey = key
+        return bitmap
+    }
+
+    private companion object {
+        const val MASK_SCALE = 0.5f
+    }
 }
 
 /**
