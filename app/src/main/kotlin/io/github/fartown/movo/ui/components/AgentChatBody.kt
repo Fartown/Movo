@@ -527,6 +527,8 @@ internal fun AgentConversationMessages(
     val workOutcomes = remember(timelineEntries) { workOutcomes(timelineEntries) }
     // 执行卡后面紧接着出现了有正文的回答：这张卡的步骤已经结束，收成摘要条（方案 B，只收一次）。
     val answeredWorkKeys = remember(timelineEntries) { answeredWorkKeys(timelineEntries) }
+    // 暂停时本来就不会有数据：不提示「已 N 秒没有收到数据」。
+    val runPaused = LocalRunControls.current.isPaused
     val stoppedWithoutWork = remember(timelineEntries) { stoppedNoticesWithoutWork(timelineEntries) }
     // 仍在进行的这一轮最后一条：模型重试提示在这里才是「正在重试」（恢复后的提示已从时间线去掉）。
     val activeNoticeId = if (isStreaming) {
@@ -848,7 +850,7 @@ internal fun AgentConversationMessages(
                     key = { it.key },
                 ) { entry -> entryItem(entry) }
             }
-            if (isStreaming) {
+            if (isStreaming && !runPaused) {
                 item(key = "run-stall") { RunStallNotice(messageIds = visibleMessages.map { it.id }) }
             }
             item(key = ChatBottomSentinelKey) {
