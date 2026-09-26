@@ -172,6 +172,22 @@ internal open class VoiceSessionOwner(
         if (queued != null) conversationId?.let { app?.retainVoiceDraft(it, queued.text) }
     }
 
+    /**
+     * 语音没能开始时的原因（缺麦克风权限、上一段还在结束、启动失败）：写进输入框上方的语音提示（规范 8.11 不用 Toast），
+     * 与结束原因同一条，停留几秒后过期。语音进行中不显示。
+     */
+    @MainThread
+    fun showNotice(message: String) {
+        if (active || message.isBlank()) return
+        val token = ++noticeToken
+        mutableState.value = state.value.copy(notice = message)
+        expireNotice {
+            if (noticeToken == token && state.value.notice != null) {
+                mutableState.value = state.value.copy(notice = null)
+            }
+        }
+    }
+
     /** [notice] 非空表示这次发布要（重新）展示结束原因；为空时沿用当前提示，直到过期或下一次开始。 */
     private fun publish(event: String, active: Boolean, status: String, transcript: String, notice: String? = null) {
         val previous = state.value

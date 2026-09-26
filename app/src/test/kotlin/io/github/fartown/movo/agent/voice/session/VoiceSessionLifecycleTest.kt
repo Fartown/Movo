@@ -338,6 +338,21 @@ class VoiceSessionLifecycleTest {
         assertEquals("请等上下文整理和模型切换完成后再开始语音", owner.state.value.notice)
     }
 
+    @Test fun startRefusalNoticeShowsAboveTheComposerThenExpiresButNeverDuringVoice() {
+        // 规范 8.11 不用 Toast：没能开始语音的原因写进输入框上方的语音提示。
+        owner.showNotice("需要麦克风权限才能开始语音")
+        assertEquals("需要麦克风权限才能开始语音", owner.state.value.notice)
+        val staleExpiry = noticeExpiries.last()
+        owner.showNotice("上一段语音正在结束，请稍后再试")
+        staleExpiry()
+        assertEquals("上一段语音正在结束，请稍后再试", owner.state.value.notice)
+        noticeExpiries.last().invoke()
+        assertNull(owner.state.value.notice)
+        val host = FakeConversations(); begin(host)
+        owner.showNotice("不该出现")
+        assertNull(owner.state.value.notice)
+    }
+
     @Test fun newSessionClearsTheNoticeAndAStaleExpiryCannotClearTheNextOne() {
         val host = FakeConversations(); begin(host)
         audio.end("网络连接失败")

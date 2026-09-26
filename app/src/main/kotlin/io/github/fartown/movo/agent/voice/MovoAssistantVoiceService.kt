@@ -12,7 +12,6 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.widget.Toast
 import androidx.core.content.ContextCompat
 import io.github.fartown.movo.agent.voice.conversation.DoubaoDialogEngine
 import io.github.fartown.movo.agent.voice.session.VoiceEntry
@@ -55,7 +54,8 @@ internal class MovoAssistantVoiceService : Service(), VoiceSessionOwner.ServiceH
             return
         }
         if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(this, "请在聊天页允许麦克风权限后开始语音", Toast.LENGTH_LONG).show()
+            // 不用 Toast（规范 8.11）：原因写进输入框上方的语音提示；悬浮球发起的由展开卡转述。
+            VoiceSessionManager.showNotice(VoiceEntry.MIC_REQUIRED_NOTICE)
             leaveWithoutVoice()
             return
         }
@@ -65,7 +65,7 @@ internal class MovoAssistantVoiceService : Service(), VoiceSessionOwner.ServiceH
             VoiceSessionManager.beginSession(this)
         }.getOrElse {
             AndroidAgentLogger.warn("Voice session start failed: type=${it.javaClass.simpleName}")
-            Toast.makeText(this, "暂时无法开始语音，请重试", Toast.LENGTH_LONG).show()
+            VoiceSessionManager.showNotice(VoiceEntry.FAILED_NOTICE)
             false
         }
         if (!started) {
