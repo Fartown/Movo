@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredWidth
@@ -71,6 +72,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.composed
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -796,6 +798,45 @@ private fun workTimeSpan(tools: List<ToolActivityMessageUi>, outcome: WorkOutcom
 }
 
 /**
+ * 思考中的滚动预览（规范 8.1，Figma「14-0」）：高度固定两行（`Label/Regular` 行高 18 × 2），显示最新写出的内容：
+ * 文字按底部对齐排版、超出的往上推出视口，上沿 14 渐隐；新字只会让文字上移，高度不变，不随段落切换跳动。
+ */
+@Composable
+private fun ThinkingTicker(content: String, modifier: Modifier = Modifier) {
+    val style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular
+    // 只排最后一段文字：预览只露两行，全文重排没有意义。
+    val tail = remember(content) { content.takeLast(THINKING_TICKER_CHARS).plainPreview() }
+    val fadePx = with(androidx.compose.ui.platform.LocalDensity.current) { 14.dp.toPx() }
+    Box(
+        modifier = modifier
+            .height(with(androidx.compose.ui.platform.LocalDensity.current) { (style.lineHeight * 2).toDp() })
+            .clipToBounds()
+            .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                drawRect(
+                    brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                        0f to androidx.compose.ui.graphics.Color.Transparent,
+                        (fadePx / size.height).coerceIn(0f, 1f) to androidx.compose.ui.graphics.Color.Black,
+                    ),
+                    blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
+                )
+            },
+    ) {
+        Text(
+            text = tail,
+            style = style,
+            color = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .wrapContentHeight(align = Alignment.Bottom, unbounded = true),
+        )
+    }
+}
+
+private const val THINKING_TICKER_CHARS = 240
+
+/**
  * 只有思考的一轮（规范 8.1「思考 · 行内」，Figma「14」）：没有卡片与描边，左对齐 20 的一行 sparkle 14 次要色 +
  *「思考中」（Q3 光带）/「已思考 N 秒」`Label/Medium` 次要色 + ⌄，高 32；点开在下面展开思考内容：左侧 1 宽
  * `border/strong` 竖线，文字三级色（思考正文字号）。默认收起。
@@ -849,6 +890,15 @@ private fun ThinkingOnlyRow(
                 tint = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
                 modifier = Modifier.graphicsLayer { rotationZ = rotation.value },
             )
+        }
+        // 思考中（没点开）：行下方固定两行的滚动预览，左缩进 20 与文字对齐；思考结束后收起一次，只剩这一行。
+        val latest = messages.lastOrNull { it.content.isNotBlank() }?.content
+        AnimatedVisibility(
+            visible = streaming && !expanded && latest != null,
+            enter = expandContentEnter(),
+            exit = expandContentExit(),
+        ) {
+            ThinkingTicker(latest.orEmpty(), modifier = Modifier.fillMaxWidth().padding(start = 20.dp, bottom = 4.dp))
         }
         AnimatedVisibility(visible = expanded, enter = expandContentEnter(), exit = expandContentExit()) {
             Row(
@@ -3376,10 +3426,13 @@ private fun WorkThinkingStep(
                 label = "thinkingStepContent",
             ) { showFull ->
                 val contentModifier = Modifier.fillMaxWidth().padding(start = 28.dp, top = 2.dp)
-                if (!showFull) {
+                if (!showFull && message.isStreaming) {
+                    // 思考中：固定两行高的滚动预览，显示最新写出的内容，不随段落换行跳高（2026-09-27 定）。
+                    ThinkingTicker(message.content, modifier = contentModifier)
+                } else if (!showFull) {
                     Text(
-                        // 思考中摘要跟着最新一段走（两行，末尾省略）；思考完是整段的开头。
-                        text = if (message.isStreaming) message.content.latestParagraph().plainPreview() else message.content.plainPreview(),
+                        // 思考完：整段开头两行，末尾省略。
+                        text = message.content.plainPreview(),
                         style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular,
                         color = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
                         maxLines = 2,
@@ -3422,12 +3475,6 @@ private fun expandContentEnter(): androidx.compose.animation.EnterTransition = f
 private fun expandContentExit(): androidx.compose.animation.ExitTransition =
     fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) +
         shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard())
-
-/** 流式思考的最新一段（按空行分段）；只有一段时就是全文。 */
-private fun String.latestParagraph(): String =
-    split(PARAGRAPH_BREAK).lastOrNull { it.isNotBlank() } ?: this
-
-private val PARAGRAPH_BREAK = Regex("\\n\\s*\\n")
 
 /** 思考摘要：去掉常见 Markdown 标记后折叠空白。 */
 private fun String.plainPreview(): String =
