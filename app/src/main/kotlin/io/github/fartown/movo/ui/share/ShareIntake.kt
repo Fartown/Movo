@@ -117,7 +117,10 @@ internal object ShareIntentParser {
             Intent.ACTION_SEND -> intent.parcelable<Uri>(Intent.EXTRA_STREAM)?.let(uris::add)
             Intent.ACTION_SEND_MULTIPLE -> intent.parcelableList<Uri>(Intent.EXTRA_STREAM)?.let(uris::addAll)
         }
-        intent.clipData?.let { clip -> for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let(uris::add) }
+        // 分享文字时（浏览器分享网页），ClipData 里常附一张给系统分享面板用的预览图，不是用户要分享的内容。
+        if (intent.type?.startsWith("text/") != true) {
+            intent.clipData?.let { clip -> for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let(uris::add) }
+        }
         // 只收 content://：file:// 可能指向 Movo 自己的私有文件，不接受。
         return uris.filter { it.scheme == ContentResolver.SCHEME_CONTENT }
     }

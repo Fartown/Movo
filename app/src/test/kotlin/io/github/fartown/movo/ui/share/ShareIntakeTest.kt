@@ -44,6 +44,13 @@ class ShareIntakeTest {
     }
 
     @Test
+    fun textShareIgnoresPreviewThumbnailInClipData() {
+        val intent = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, "https://example.com/")
+        intent.clipData = ClipData.newRawUri("preview", Uri.parse("content://com.android.chrome.FileProvider/images/screenshot/1.jpg"))
+        assertEquals(emptyList<Uri>(), ShareIntentParser.streams(intent))
+    }
+
+    @Test
     fun importerCopiesAndReportsSkips() {
         val resolver = shadowOf(context.contentResolver)
         val images = (1..9).map { Uri.parse("content://test/images/$it") }
