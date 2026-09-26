@@ -86,6 +86,12 @@ internal class DiagnosticsFormat(
         return if (value < 1_000) "$value 毫秒" else String.format(Locale.ROOT, "%.1f 秒", value / 1_000.0)
     }
 
+    /** 对话里的用时：不足 1 分钟写「18 秒」，否则「5 分 38 秒」（与执行卡摘要条一致）。 */
+    fun chatDuration(ms: Long): String {
+        val seconds = ((ms.coerceAtLeast(0) + 500) / 1_000).coerceAtLeast(1)
+        return if (seconds < 60) "$seconds 秒" else "${seconds / 60} 分 ${seconds % 60} 秒"
+    }
+
     /** 时间线与耗时构成用的紧凑时长，规则同 [duration]。 */
     fun compact(ms: Long): String {
         val value = ms.coerceAtLeast(0)
@@ -250,7 +256,8 @@ internal class DiagnosticsFormat(
         return ChatFailure(
             title = explanation.title,
             message = listOf(explanation.detail, explanation.advice).joinToString("") { it.trimEnd('。') + "。" },
-            duration = run.durationMs?.let { "用时 ${duration(it)}" },
+            // 对话里与执行卡摘要条同一写法（「18 秒」「5 分 38 秒」），不用运行日志的一位小数秒。
+            duration = run.durationMs?.let { "用时 ${chatDuration(it)}" },
             action = explanation.action,
         )
     }

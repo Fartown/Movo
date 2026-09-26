@@ -501,8 +501,9 @@ internal fun AgentWorkProcess(
             }
             Spacer(modifier = Modifier.width(8.dp))
             // 计时：执行中「00:18」每秒直接换数字（9.0 规则 5，不滚动不闪）；结束后「用时 18 秒」。
-            val firstStart = tools.mapNotNull { it.startedAtMillis }.minOrNull()
-            val lastFinish = tools.mapNotNull { it.finishedAtMillis }.maxOrNull()
+            // 失败 / 停止的一轮可能被回答分成几张卡，用时与步数一样按整轮算。
+            val firstStart = outcome?.startedAt ?: tools.mapNotNull { it.startedAtMillis }.minOrNull()
+            val lastFinish = outcome?.finishedAt ?: tools.mapNotNull { it.finishedAtMillis }.maxOrNull()
             val now by androidx.compose.runtime.produceState(System.currentTimeMillis(), running, firstStart) {
                 while (running && firstStart != null) {
                     value = System.currentTimeMillis()
@@ -513,7 +514,7 @@ internal fun AgentWorkProcess(
             val elapsed = firstStart?.let { start -> if (running) now - start else lastFinish?.let { it - start } }
             val timerText = elapsed?.let { if (running) formatClock(it) else formatElapsed(it) }
             // 放不下完整计时时退成「1:06」，状态文字不让位（规范：摘要条状态优先完整显示）。
-            val compactTimer = elapsed?.takeIf { !running }?.let(::formatClock)
+            val compactTimer = elapsed?.takeIf { !running }?.let(::formatCompactElapsed)
             StatusWithTimer(
                 status = {
                     io.github.fartown.movo.ui.components.movo.MovoShimmerText(
@@ -737,7 +738,7 @@ private fun Modifier.movoClickableRow(onClick: () -> Unit): Modifier =
  * 放不下退成 [compactTimer]（「1:06」），再放不下就不显示计时。计时右对齐，与状态之间至少 8。
  */
 @Composable
-private fun StatusWithTimer(
+internal fun StatusWithTimer(
     status: @Composable () -> Unit,
     timer: String?,
     compactTimer: String?,
@@ -779,6 +780,12 @@ private fun StatusWithTimer(
 private fun formatClock(elapsedMillis: Long): String {
     val seconds = (elapsedMillis / 1000).coerceAtLeast(0)
     return String.format(java.util.Locale.ROOT, "%02d:%02d", seconds / 60, seconds % 60)
+}
+
+/** 摘要条放不下完整用时时的紧凑写法：「1:13」「0:09」（分钟不补零）。 */
+private fun formatCompactElapsed(elapsedMillis: Long): String {
+    val seconds = ((elapsedMillis + 500) / 1000).coerceAtLeast(1)
+    return String.format(java.util.Locale.ROOT, "%d:%02d", seconds / 60, seconds % 60)
 }
 
 /** 结束后的总用时：「用时 18 秒」「用时 2 分 5 秒」。 */

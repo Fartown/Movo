@@ -1073,10 +1073,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             glowView = null
             glowParams = null
         }
-        if (wasStandby) {
-            standby.value = true
-            updateStandbyOrbVisibility()
-        }
+        if (wasStandby) standby.value = true
+        // 重建出来的球默认可见：Movo 自己在前台时要重新按规则藏起来。
+        updateStandbyOrbVisibility()
     }
 
     /** 氛围光窗口：全屏触摸穿透，彩虹光圈，截图时被 takeScreenshotOfWindow 过滤。 */
@@ -1248,7 +1247,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }.getOrNull()
 
     /** 上次读到的键盘高度（距屏幕底）；下次打开补充输入时先按它上移，不等输入法窗口出现。 */
-    private var lastImeHeight = 0
+    private var lastImeHeight: Int
+        get() = imeHeightCache
+        set(value) { imeHeightCache = value }
     private var bubbleYAnimator: android.animation.ValueAnimator? = null
     private var bubbleTargetY = 0
 
@@ -1260,15 +1261,24 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun bubbleYAbove(imeHeight: Int): Int =
         maxOf(bubbleBaseY, imeHeight + dpToPx(8) - dpToPx(PANEL_SHADOW_DP))
 
-    /** 打开补充输入：立刻按估计的键盘高度上移（上次实测值，没有则按屏高 42%），读到实际位置后再修正。 */
+    /**
+     * 打开补充输入：实测过键盘高度就立刻按它上移，与键盘同时到位；第一次没有实测值时不猜
+     * （猜高了会先跳上去再掉下来），等读到稳定的输入法位置再移。
+     */
     private fun liftBubbleForTyping() {
-        val estimate = lastImeHeight.takeIf { it > 0 } ?: (screenRealHeight() * 0.42f).toInt()
-        moveBubbleTo(bubbleYAbove(estimate))
+        lastImeReading = null
+        if (lastImeHeight > 0) moveBubbleTo(bubbleYAbove(lastImeHeight))
     }
 
+    private var lastImeReading: Int? = null
+
     private fun placeBubbleAboveIme(imeTop: Int?) {
-        // 输入法窗口还没出现（正在升起）时保持估计位置，不退回原位。
+        // 输入法窗口还没出现时保持当前位置，不退回原位。
         imeTop ?: return
+        // 键盘升起过程中读到的位置在变：连续两次相同才算到位，避免跟着中间值上下晃。
+        val stable = imeTop == lastImeReading
+        lastImeReading = imeTop
+        if (!stable) return
         lastImeHeight = screenRealHeight() - imeTop
         moveBubbleTo(bubbleYAbove(lastImeHeight))
     }
@@ -1689,7 +1699,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun updateStandbyOrbVisibility() {
         val view = orbView ?: return
         val idle = standby.value || activeSession == null
-        view.visibility = if (idle && VoiceSurfaceTracker.appVisible) View.GONE else View.VISIBLE
+        val hide = idle && VoiceSurfaceTracker.appVisible
+        view.visibility = if (hide) View.GONE else View.VISIBLE
+        // 失败时自动弹出的展开卡也一起收起：否则切回 Movo 后它留在键盘上，透明的阴影区还会吃掉点击。
+        if (hide && !collapsed.value) collapseBubble()
     }
 
     private fun onVoiceActiveChanged(active: Boolean) {
@@ -1777,6 +1790,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     internal companion object {
+        /** 进程内缓存的键盘高度（跨运行时服务重建保留）。 */
+        private var imeHeightCache = 0
+
         @Volatile
         var orbDiscRect: android.graphics.Rect? = null
             private set
@@ -1800,7 +1816,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         const val PANEL_SHADOW_DP = 12
         const val BUBBLE_EXIT_MS = 150L
         const val PANEL_AUTO_COLLAPSE_MS = 4_000L
-        const val IME_TRACK_INTERVAL_MS = 120L
+        const val IME_TRACK_INTERVAL_MS = 60L
         const val GLOW_FADE_MS = 300L
         const val ORB_EXIT_MS = 200L
         const val REMOVE_ZONE_DP = 48

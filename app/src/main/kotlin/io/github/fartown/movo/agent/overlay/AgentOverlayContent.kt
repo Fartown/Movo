@@ -684,7 +684,10 @@ private fun PanelHeader(state: AgentOverlayState) {
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        state.elapsedMillis(now)?.let { elapsed ->
+        // 继续后的第一帧 produceState 还没刷新，时钟仍是暂停那一刻，而暂停时长已扣掉，会闪一帧偏小的计时；
+        // 执行中取当前时刻兜底。
+        val clock = if (state.phase == AgentOverlayPhase.RUNNING) maxOf(now, System.currentTimeMillis()) else now
+        state.elapsedMillis(clock)?.let { elapsed ->
             Spacer(Modifier.width(8.dp))
             val seconds = elapsed / 1000
             Text(

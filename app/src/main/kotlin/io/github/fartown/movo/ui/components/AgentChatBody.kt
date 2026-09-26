@@ -933,7 +933,13 @@ internal fun smoothBottomFollowStep(
  * 执行卡所在这一轮没有正常完成的原因与这一轮总共执行的步数（一轮里的回答会把执行卡分成几张，
  * 摘要写整轮的步数）；正常完成的执行卡不在结果里。
  */
-internal data class WorkOutcome(val kind: Kind, val steps: Int) {
+internal data class WorkOutcome(
+    val kind: Kind,
+    val steps: Int,
+    /** 整轮第一步开始 / 最后一步结束的时刻，摘要条用时按整轮算。 */
+    val startedAt: Long? = null,
+    val finishedAt: Long? = null,
+) {
     enum class Kind { Unfinished, Stopped }
 }
 
@@ -945,16 +951,23 @@ internal fun workOutcomes(entries: List<AgentTimelineEntry>): Map<String, WorkOu
     val outcomes = mutableMapOf<String, WorkOutcome>()
     var pending: String? = null
     var turnSteps = 0
+    var turnStart: Long? = null
+    var turnEnd: Long? = null
     for (entry in entries) {
         when (entry) {
             is AgentTimelineEntry.WorkProcess -> {
                 pending = entry.key
-                turnSteps += entry.messages.count { it is ToolActivityMessageUi }
+                val tools = entry.messages.filterIsInstance<ToolActivityMessageUi>()
+                turnSteps += tools.size
+                tools.mapNotNull { it.startedAtMillis }.minOrNull()?.let { turnStart = minOf(turnStart ?: it, it) }
+                tools.mapNotNull { it.finishedAtMillis }.maxOrNull()?.let { turnEnd = maxOf(turnEnd ?: it, it) }
             }
             is AgentTimelineEntry.Message -> when (val message = entry.message) {
                 is UserMessageUi -> if (!message.isRunSupplement()) {
                     pending = null
                     turnSteps = 0
+                    turnStart = null
+                    turnEnd = null
                 }
                 is SystemNoticeMessageUi -> {
                     val kind = when (message.code) {
@@ -963,7 +976,7 @@ internal fun workOutcomes(entries: List<AgentTimelineEntry>): Map<String, WorkOu
                         else -> null
                     }
                     if (kind != null) {
-                        pending?.let { outcomes[it] = WorkOutcome(kind, turnSteps) }
+                        pending?.let { outcomes[it] = WorkOutcome(kind, turnSteps, turnStart, turnEnd) }
                         pending = null
                     }
                 }

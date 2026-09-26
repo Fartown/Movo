@@ -69,7 +69,8 @@ class DiagnosticsFormatTest {
         val chat = format.chatFailure(run)!!
         assertEquals("模型接口限流（HTTP 429）", chat.title)
         assertEquals("连续 2 次请求都失败，自动重试已用完。稍后再试，或换一个模型。", chat.message)
-        assertEquals("用时 3.0 秒", chat.duration)
+        assertEquals("用时 3 秒", chat.duration)
+        assertEquals("5 分 38 秒", format.chatDuration(337_500))
         assertEquals(FailureAction.MODEL_SETTINGS, chat.action)
 
         val markdown = format.exportMarkdown(

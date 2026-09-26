@@ -85,7 +85,7 @@ class WorkSummaryOutcomeTest {
             SystemNoticeMessageUi("n1", SystemNoticeCode.Stopped),
         )
         val entries = messages.toTimelineEntries()
-        assertEquals(WorkOutcome(WorkOutcome.Kind.Stopped, 3), workOutcomes(entries)["work-t2"])
+        assertEquals(WorkOutcome.Kind.Stopped to 3, workOutcomes(entries)["work-t2"]?.let { it.kind to it.steps })
     }
 
     @Test
