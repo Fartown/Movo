@@ -23,7 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -124,21 +124,21 @@ private fun SummaryStatusIcon(status: TraceStatus) {
 @Composable
 private fun MiniOrb(size: Dp, modifier: Modifier = Modifier) {
     val reduced = LocalReducedMotion.current
-    val rotation = if (reduced) {
-        0f
+    // 旋转角只保存 State，在绘制阶段读：转动时不重组。
+    val rotation: androidx.compose.runtime.State<Float>? = if (reduced) {
+        null
     } else {
         val transition = rememberInfiniteTransition(label = "miniOrb")
-        val value by transition.animateFloat(
+        transition.animateFloat(
             initialValue = 0f,
             targetValue = 360f,
             animationSpec = infiniteRepeatable(tween(MovoMotion.MINI_ORB_GRADIENT_PERIOD, easing = MovoMotion.EasingLinear)),
             label = "miniOrbRotation",
         )
-        value
     }
-    val colors = MovoColors.brandGradient + MovoColors.brandGradient.first()
+    val colors = remember { MovoColors.brandGradient + MovoColors.brandGradient.first() }
     Canvas(modifier = modifier.size(size)) {
-        rotate(rotation) { drawCircle(Brush.sweepGradient(colors)) }
+        rotate(rotation?.value ?: 0f) { drawCircle(Brush.sweepGradient(colors)) }
         // 左上高光，让它读作球体而不是色环。
         drawCircle(
             Brush.radialGradient(

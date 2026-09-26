@@ -108,10 +108,11 @@ fun AgentAppShell(
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val backdrop = rememberMovoBackdrop()
-    val detector = remember(currentRoute) { ScrolledDetector() }
     val isHome = currentRoute is AppRoute.Home
     val unnamed = stringResource(R.string.conversation_unnamed)
     val selectedId = conversationPaneState?.selectedConversationId
+    // 滚动态跟着页面与会话走：切换会话、新建对话时重置，不把上一个会话滚过的状态带过来。
+    val detector = remember(currentRoute, selectedId) { ScrolledDetector() }
     val conversationTitle = conversationPaneState?.conversations
         ?.firstOrNull { it.id == selectedId }
         ?.title

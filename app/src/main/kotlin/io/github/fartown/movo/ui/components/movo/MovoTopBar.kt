@@ -16,7 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -148,13 +148,17 @@ internal fun LazyListState.rememberIsScrolled(): State<Boolean> = remember(this)
 
 /**
  * 给不是 LazyList 的自定义内容页用：挂在内容外层，按累计滚动量判断是否离开顶部。
+ * 累计量是普通字段，只有越过阈值时才写一次可观察的布尔值：滚动中读 [scrolled] 的界面不会逐帧重组。
  */
 internal class ScrolledDetector : NestedScrollConnection {
-    private val offset = mutableFloatStateOf(0f)
-    val scrolled: Boolean get() = offset.floatValue < -0.5f
+    private var offset = 0f
+    private val scrolledState = mutableStateOf(false)
+    val scrolled: Boolean get() = scrolledState.value
 
     override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-        offset.floatValue = (offset.floatValue + consumed.y).coerceAtMost(0f)
+        offset = (offset + consumed.y).coerceAtMost(0f)
+        val now = offset < -0.5f
+        if (scrolledState.value != now) scrolledState.value = now
         return Offset.Zero
     }
 }

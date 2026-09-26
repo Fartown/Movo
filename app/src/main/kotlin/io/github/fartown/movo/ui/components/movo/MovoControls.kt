@@ -5,7 +5,6 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -24,14 +23,24 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.dropShadow
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -70,22 +79,23 @@ internal fun MovoSwitch(
     val source = interactionSource ?: remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
     val reduced = LocalReducedMotion.current
-    val thumbWidth by animateDpAsState(
+    // 动画值只保存 State，在放置 / 测量 / 绘制阶段读取：切换与按压期间开关不重组。
+    val thumbWidth = animateDpAsState(
         targetValue = if (pressed && enabled && !reduced) 26.dp else 22.dp,
         animationSpec = MovoMotion.fast(),
         label = "switchThumbWidth",
     )
-    val progress by animateFloatAsState(
+    val progress = animateFloatAsState(
         targetValue = if (checked) 1f else 0f,
         animationSpec = MovoMotion.fast(),
         label = "switchProgress",
     )
-    val trackColor by animateColorAsState(
+    val trackColor = animateColorAsState(
         if (checked) MovoColors.actionPrimaryBg else MovoColors.bgSurfaceMuted,
         MovoMotion.fast(),
         label = "switchTrack",
     )
-    val thumbColor by animateColorAsState(
+    val thumbColor = animateColorAsState(
         if (checked) MovoColors.actionPrimaryFg else MovoColors.bgSurface,
         MovoMotion.fast(),
         label = "switchThumb",
@@ -111,23 +121,50 @@ internal fun MovoSwitch(
             .graphicsLayer { alpha = if (enabled) 1f else 0.4f }
             .then(toggle)
             .clip(CircleShape)
-            .background(trackColor)
-            .border(1.dp, MovoColors.borderStrong.copy(alpha = MovoColors.borderStrong.alpha * (1f - progress)), CircleShape),
+            .drawBehind {
+                drawRoundRect(trackColor.value, cornerRadius = CornerRadius(size.height / 2))
+                // 关态 1 宽 border/strong 描边，开时淡出；与 Modifier.border 一样画在轨道内侧。
+                val borderAlpha = 1f - progress.value
+                if (borderAlpha > 0f) {
+                    val stroke = 1.dp.toPx()
+                    drawRoundRect(
+                        color = MovoColors.borderStrong,
+                        topLeft = Offset(stroke / 2, stroke / 2),
+                        size = Size(size.width - stroke, size.height - stroke),
+                        cornerRadius = CornerRadius((size.height - stroke) / 2),
+                        style = Stroke(stroke),
+                        alpha = borderAlpha,
+                    )
+                }
+            },
     ) {
-        // 滑块左缘在 3 → 23（位移 20）；拉长时朝移动方向伸展，另一侧不动。
-        val travel = 20.dp
-        val extra = thumbWidth - 22.dp
-        val left = 3.dp + travel * progress - extra * progress
+        // 滑块左缘在 3 → 23（位移 20）；拉长时朝移动方向伸展，另一侧不动。位移在放置阶段、宽度在测量阶段读取。
+        val thumb = Modifier
+            .offset {
+                val p = progress.value
+                val left = 3.dp + 20.dp * p - (thumbWidth.value - 22.dp) * p
+                IntOffset(left.roundToPx(), 3.dp.roundToPx())
+            }
+            .layout { measurable, _ ->
+                val placeable = measurable.measure(Constraints.fixed(thumbWidth.value.roundToPx(), 22.dp.roundToPx()))
+                layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+            }
+        // 关态轻阴影：参数固定只光栅化一次，开时只淡出图层透明度（ModulateAlpha 不开离屏缓冲，阴影可画出边界）。
         Box(
-            modifier = Modifier
-                .offset(x = left, y = 3.dp)
-                .size(width = thumbWidth, height = 22.dp)
+            modifier = thumb
+                .graphicsLayer {
+                    alpha = 1f - progress.value
+                    compositingStrategy = CompositingStrategy.ModulateAlpha
+                }
                 .dropShadow(
                     CircleShape,
-                    Shadow(radius = 3.dp, offset = DpOffset(0.dp, 1.dp), color = MovoColors.shadow, alpha = 0.18f * (1f - progress)),
-                )
-                .clip(CircleShape)
-                .background(thumbColor),
+                    Shadow(radius = 3.dp, offset = DpOffset(0.dp, 1.dp), color = MovoColors.shadow, alpha = 0.18f),
+                ),
+        )
+        Box(
+            modifier = thumb.drawBehind {
+                drawRoundRect(thumbColor.value, cornerRadius = CornerRadius(size.height / 2))
+            },
         )
     }
 }
@@ -282,11 +319,12 @@ internal fun MovoSpinner(
     color: Color = MovoColors.indigoFg,
 ) {
     val reduced = LocalReducedMotion.current
-    val rotation = if (reduced) {
-        0f
+    // 旋转角只保存 State，在 graphicsLayer 里读：转动时不重组。
+    val rotation: State<Float>? = if (reduced) {
+        null
     } else {
         val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "movoSpinner")
-        val value by transition.animateFloat(
+        transition.animateFloat(
             initialValue = 0f,
             targetValue = 360f,
             animationSpec = androidx.compose.animation.core.infiniteRepeatable(
@@ -294,13 +332,12 @@ internal fun MovoSpinner(
             ),
             label = "movoSpinnerRotation",
         )
-        value
     }
     val strokeDp = io.github.fartown.movo.ui.theme.MovoIconData.strokeFor(size).dp
     androidx.compose.foundation.Canvas(
         modifier = modifier
             .size(size)
-            .graphicsLayer { rotationZ = rotation },
+            .graphicsLayer { rotationZ = rotation?.value ?: 0f },
     ) {
         val stroke = strokeDp.toPx()
         // 24 网格里圆弧半径 9：按比例换算，与 Lucide 图标同样的视觉大小。

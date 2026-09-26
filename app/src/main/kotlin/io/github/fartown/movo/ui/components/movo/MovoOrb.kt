@@ -15,6 +15,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
@@ -56,6 +57,8 @@ internal fun MovoOrb(
     state: OrbState = OrbState.STANDBY,
     level: Float = 0f,
     speechKey: Int = 0,
+    /** 外圈柔光的不透明度，在绘制阶段读取；飞行层（Q6）按固定尺寸缩放光球时用它模拟小光球「无外圈光」。 */
+    glowAlpha: () -> Float = { 1f },
 ) {
     val reduced = LocalReducedMotion.current
     val mini = size < 24.dp
@@ -74,9 +77,10 @@ internal fun MovoOrb(
             }
         }
     }
-    val breath = if (moving && state == OrbState.STANDBY && !mini) {
+    // 呼吸与音量都逐帧变化：只保存 State，在下方 graphicsLayer 里读，不让光球所在界面每帧重组。
+    val breath: State<Float>? = if (moving && state == OrbState.STANDBY && !mini) {
         val transition = rememberInfiniteTransition(label = "movoOrb")
-        val scale by transition.animateFloat(
+        transition.animateFloat(
             initialValue = 1f,
             targetValue = 1.03f,
             animationSpec = infiniteRepeatable(
@@ -85,15 +89,14 @@ internal fun MovoOrb(
             ),
             label = "movoOrbBreath",
         )
-        scale
     } else {
-        1f
+        null
     }
-    val voiceLevel = rememberSmoothedLevel(if (state == OrbState.LISTENING || state == OrbState.SPEAKING) level else 0f)
-    val voiceScale = when (state) {
-        OrbState.LISTENING -> 1f + 0.12f * voiceLevel
-        OrbState.SPEAKING -> 1f + 0.06f * voiceLevel
-        else -> 1f
+    val voiceLevel = rememberSmoothedLevelState(if (state == OrbState.LISTENING || state == OrbState.SPEAKING) level else 0f)
+    val voiceGain = when (state) {
+        OrbState.LISTENING -> 0.12f
+        OrbState.SPEAKING -> 0.06f
+        else -> 0f
     }
     val lilac by animateFloatAsState(if (state == OrbState.THINKING) 0.28f else 0f, MovoMotion.standard(), label = "orbLilac")
     val desaturate by animateFloatAsState(if (state == OrbState.ERROR) 0.7f else 0f, MovoMotion.standard(), label = "orbDesaturate")
@@ -119,7 +122,7 @@ internal fun MovoOrb(
     ) {
         if (!mini) {
             // 外圈柔光：丁香 34% → 蜜桃 12% → 透明，直径约 2.2 倍。
-            Canvas(modifier = Modifier.requiredSize(size * 2.2f)) {
+            Canvas(modifier = Modifier.requiredSize(size * 2.2f).graphicsLayer { alpha = glowAlpha() }) {
                 drawCircle(
                     brush = Brush.radialGradient(
                         0f to Color(0x57A68CFF),
@@ -143,7 +146,7 @@ internal fun MovoOrb(
             modifier = Modifier
                 .size(size)
                 .graphicsLayer {
-                    val s = breath * voiceScale
+                    val s = (breath?.value ?: 1f) * (1f + voiceGain * voiceLevel.value)
                     scaleX = s
                     scaleY = s
                 }
@@ -158,12 +161,13 @@ internal fun MovoOrb(
             contentAlignment = Alignment.Center,
         ) {
             val blurPx = with(density) { (size * 0.22f).toPx() }
+            val blur = remember(blurPx) { BlurEffect(blurPx, blurPx, TileMode.Decal) }
             Canvas(
                 modifier = Modifier
                     .requiredSize(size * 1.5f)
                     .graphicsLayer {
                         rotationZ = rotation
-                        renderEffect = BlurEffect(blurPx, blurPx, TileMode.Decal)
+                        renderEffect = blur
                     },
             ) {
                 drawCircle(brush = Brush.sweepGradient(*OrbSweep))
