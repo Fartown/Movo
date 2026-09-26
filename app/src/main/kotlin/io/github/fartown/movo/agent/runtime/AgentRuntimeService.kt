@@ -1802,7 +1802,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             state.value = AgentOverlayState.Initial
         } else if (activeSession == null && ensureStandbyOrb()) {
             // 常驻开：纯问答结束后也留下待命悬浮球（原来服务随即停止，离开 App 后没有悬浮球）。
-            Unit
+            // 这一轮没有操作其他 App，结果在对话里：回到待命外观，不带 ✓（真机：沿用了结束态的绿勾）。
+            state.value = AgentOverlayState.Initial
+            standby.value = true
+            updateStandbyOrbVisibility()
         } else {
             dismissAndStop()
         }

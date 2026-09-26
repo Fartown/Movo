@@ -592,7 +592,9 @@ internal fun AgentWorkProcess(
             .padding(horizontal = 20.dp, vertical = 8.dp)
             .completionGlint(glint) { corner.value }
             .workCardSurface { corner.value }
-            .animateContentSize(io.github.fartown.movo.ui.theme.MovoMotion.standard()),
+            // 只在执行中（步骤不断增加）时让卡片高度跟着过渡；收起 / 展开由下面的 AnimatedVisibility 直接驱动高度，
+            // 两个一起用时外层过渡总慢半拍，收起后下面拖着一段空白（真机）。
+            .then(if (running || paused) Modifier.animateContentSize(io.github.fartown.movo.ui.theme.MovoMotion.standard()) else Modifier),
     ) {
         Row(
             modifier = Modifier
@@ -630,7 +632,16 @@ internal fun AgentWorkProcess(
                 }
                 value = System.currentTimeMillis()
             }
-            val elapsed = firstStart?.let { start -> if (running) now - start else lastFinish?.let { it - start } }
+            // 看着它跑完的：结束后的用时不少于执行中最后显示的计时（最后一步之后模型还在想，按最后一步结束算会往回跳）。
+            val shownRunningElapsed = remember(id) { longArrayOf(0L) }
+            val elapsed = firstStart?.let { start ->
+                if (running) {
+                    now - start
+                } else {
+                    lastFinish?.let { maxOf(it - start, shownRunningElapsed[0]) }
+                }
+            }
+            if (running && elapsed != null) SideEffect { shownRunningElapsed[0] = elapsed }
             val timerText = elapsed?.let { if (running) formatClock(it) else formatElapsed(it) }
             // 放不下完整计时时退成「1:06」，状态文字不让位（规范：摘要条状态优先完整显示）。
             val compactTimer = elapsed?.takeIf { !running }?.let(::formatCompactElapsed)
@@ -696,7 +707,8 @@ internal fun AgentWorkProcess(
                     easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard,
                 ),
             ) + expandVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard()),
-            exit = fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) +
+            // 收起：内容淡出与高度收起同时进行、同样时长，卡片不会先空成一块白再缩（真机 fix12）。
+            exit = fadeOut(tween(io.github.fartown.movo.ui.theme.MovoMotion.STANDARD, easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingExit)) +
                 shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard()),
         ) {
             Column {
@@ -710,8 +722,10 @@ internal fun AgentWorkProcess(
                 // 不看是否执行中：自动收起的过程中仍保持折叠，不在收起前把全部步骤铺开。
                 val folded = !showAllSteps && messages.size > WORK_FOLD_THRESHOLD
                 if (folded) {
+                    // 「前面 N 步」只数被折叠的工具步骤，与头部「第 N 步」同一口径（思考不算一步）。
+                    val hidden = messages.dropLast(WORK_FOLD_VISIBLE)
                     WorkEarlierSteps(
-                        count = messages.size - WORK_FOLD_VISIBLE,
+                        count = hidden.count { it is ToolActivityMessageUi }.takeIf { it > 0 } ?: hidden.size,
                         onClick = { showAllSteps = true },
                     )
                 }

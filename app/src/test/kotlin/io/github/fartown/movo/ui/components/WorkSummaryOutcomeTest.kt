@@ -155,7 +155,7 @@ class WorkSummaryOutcomeTest {
             AgentTimelineEntry.WorkProcess("w2", listOf(tool("c", ToolActivityStatusUi.Success), tool("d", ToolActivityStatusUi.Running))),
         )
         assertEquals(mapOf("w1" to 0, "w2" to 2), workStepOffsets(entries))
-        assertEquals(2, currentTurnCompletedSteps(entries))
+        assertEquals(3, currentTurnCompletedSteps(entries))
         assertEquals(setOf("w1"), answeredWorkKeys(entries))
         val next = entries + message(UserMessageUi("u2", "继续")) + work("w3")
         assertEquals(0, workStepOffsets(next)["w3"])

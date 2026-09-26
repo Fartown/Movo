@@ -967,12 +967,16 @@ internal fun workStepOffsets(entries: List<AgentTimelineEntry>): Map<String, Int
     return offsets
 }
 
-/** 最近一轮（最后一条用户消息之后）已成功的工具步骤数：暂停提示条「已完成 N 步」。 */
+/**
+ * 最近一轮（最后一条用户消息之后）已做完的工具步骤数：暂停提示条「已完成 N 步」。成功和失败都算做完，
+ * 进行中 / 被暂停打断（Running、Unknown）的不算，与头部「第 N 步」同一口径（暂停在第 41 步 = 已完成 40 步）。
+ */
 internal fun currentTurnCompletedSteps(entries: List<AgentTimelineEntry>): Int {
     val start = entries.indexOfLast { it is AgentTimelineEntry.Message && it.message is UserMessageUi }
     return entries.drop(start + 1).sumOf { entry ->
-        (entry as? AgentTimelineEntry.WorkProcess)?.messages
-            ?.count { it is ToolActivityMessageUi && it.status == ToolActivityStatusUi.Success } ?: 0
+        (entry as? AgentTimelineEntry.WorkProcess)?.messages?.count {
+            it is ToolActivityMessageUi && (it.status == ToolActivityStatusUi.Success || it.status == ToolActivityStatusUi.Failed)
+        } ?: 0
     }
 }
 
