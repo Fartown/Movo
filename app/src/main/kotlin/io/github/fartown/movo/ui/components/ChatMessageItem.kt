@@ -53,10 +53,6 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Compress
-import androidx.compose.material.icons.rounded.ContentCopy
-import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.Refresh
@@ -74,16 +70,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
@@ -142,6 +144,7 @@ import androidx.compose.foundation.layout.offset
 import io.github.fartown.movo.R
 import io.github.fartown.movo.ui.components.movo.movoClickable
 import io.github.fartown.movo.ui.components.movo.completionGlint
+import io.github.fartown.movo.ui.components.movo.movoSurface
 import io.github.fartown.movo.agent.browser.AgentBrowserSession
 import io.github.fartown.movo.agent.browser.BrowserSessionSnapshot
 import io.github.fartown.movo.agent.model.AgentFileReferencePromptCodec
@@ -172,16 +175,8 @@ import org.intellij.markdown.flavours.gfm.GFMElementTypes.ROW
 import org.intellij.markdown.flavours.gfm.GFMElementTypes.TABLE
 import org.intellij.markdown.flavours.gfm.GFMTokenTypes.CELL
 import org.intellij.markdown.flavours.gfm.GFMTokenTypes.CHECK_BOX
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.RichTooltip
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.basic.TooltipAnchorPosition
-import top.yukonga.miuix.kmp.basic.TooltipBox
-import top.yukonga.miuix.kmp.basic.TooltipDefaults
-import top.yukonga.miuix.kmp.basic.rememberTooltipState
 import top.yukonga.miuix.kmp.squircle.squircleBorder
 import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -208,14 +203,31 @@ private fun decodeDataUrlBitmap(dataUrl: String): ImageBitmap? {
  * 从首页发出第一句时，首页光球由飞行层缩小飞到这里，落地前这里先隐藏。首个事件到达后它随占位一起消失。
  */
 @Composable
-internal fun WaitingOrb() {
+internal fun WaitingOrb(leaving: Boolean = false) {
     val chatFlight = LocalChatFlight.current
     androidx.compose.runtime.DisposableEffect(chatFlight) { onDispose { chatFlight?.reportWaitingOrb(null) } }
-    Box(modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 16.dp)) {
+    // 首个事件到达：自己淡出 120ms（Q6「小光球淡出 120ms」），不依赖列表的退场动画（列表退场项会残留在原位）。
+    // 离场期间不占高度，新出现的执行卡 / 回答就在它原来的位置出现，两者交叠淡入淡出。
+    val fade = remember { androidx.compose.animation.core.Animatable(1f) }
+    LaunchedEffect(leaving) {
+        if (leaving) {
+            chatFlight?.reportWaitingOrb(null)
+            fade.animateTo(0f, io.github.fartown.movo.ui.theme.MovoMotion.fastExit())
+        }
+    }
+    Box(
+        modifier = Modifier
+            .layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints)
+                layout(placeable.width, if (leaving) 0 else placeable.height) { placeable.place(0, 0) }
+            }
+            .graphicsLayer { alpha = fade.value }
+            .padding(start = 16.dp, top = 16.dp, bottom = 16.dp),
+    ) {
         io.github.fartown.movo.ui.components.movo.MovoOrb(
             size = 16.dp,
             modifier = Modifier
-                .onGloballyPositioned { chatFlight?.reportWaitingOrb(it.windowRect()) }
+                .onGloballyPositioned { if (!leaving) chatFlight?.reportWaitingOrb(it.windowRect()) }
                 .graphicsLayer { alpha = if (chatFlight?.hidesWaitingOrb() == true) 0f else 1f },
         )
     }
@@ -231,7 +243,8 @@ fun AITypingIndicator(modifier: Modifier = Modifier) {
     ) {
         repeat(3) { index ->
             val delay = index * 150
-            val alpha by infiniteTransition.animateFloat(
+            // 保存 State，在 graphicsLayer 里读：动画每帧只重画，不重组。
+            val alpha = infiniteTransition.animateFloat(
                 initialValue = 0.3f,
                 targetValue = 1f,
                 animationSpec = infiniteRepeatable(
@@ -243,7 +256,7 @@ fun AITypingIndicator(modifier: Modifier = Modifier) {
             Box(
                 modifier = Modifier
                     .size(6.dp)
-                    .graphicsLayer(alpha = alpha)
+                    .graphicsLayer { this.alpha = alpha.value }
                     .background(MiuixTheme.colorScheme.onSurfaceVariantSummary, CircleShape)
             )
         }
@@ -258,10 +271,11 @@ fun AITypingIndicator(modifier: Modifier = Modifier) {
 private fun rememberActivePulse(
     active: Boolean,
     label: String,
-): Float {
-    if (!active) return 1f
+): androidx.compose.runtime.State<Float> {
+    if (!active) return StaticPulse
     val transition = rememberInfiniteTransition(label = label)
-    val alpha by transition.animateFloat(
+    // 返回 State，由调用方在 graphicsLayer 里读取：脉冲每帧只重画，不重组整行。
+    return transition.animateFloat(
         initialValue = 0.58f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -270,7 +284,10 @@ private fun rememberActivePulse(
         ),
         label = "${label}_alpha",
     )
-    return alpha
+}
+
+private object StaticPulse : androidx.compose.runtime.State<Float> {
+    override val value: Float = 1f
 }
 
 @Composable
@@ -439,12 +456,12 @@ internal fun AgentWorkProcess(
 
     val collapsedSummary = !expanded && !running && !paused
     val openRunDetail = LocalOpenRunDetail.current
-    val corner by androidx.compose.animation.core.animateDpAsState(
+    // 圆角只在绘制阶段读取（graphicsLayer 裁剪 + drawWithContent 画底色与描边）：收成摘要条的圆角过渡期间不重组整张卡。
+    val corner = androidx.compose.animation.core.animateDpAsState(
         targetValue = if (collapsedSummary) io.github.fartown.movo.ui.theme.MovoRadius.pillLg else io.github.fartown.movo.ui.theme.MovoRadius.xl,
         animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.standard(),
         label = "workCorner",
     )
-    val shape = RoundedCornerShape(corner)
     // Q8：本次在屏幕上看着它从执行中变为完成，且任务用时 ≥ 10 秒时播一次。
     var sawRunning by remember(id) { mutableStateOf(running) }
     if (running) sawRunning = true
@@ -458,10 +475,8 @@ internal fun AgentWorkProcess(
             .fillMaxWidth()
             .padding(horizontal = 20.dp, vertical = 8.dp)
             .onGloballyPositioned { io.github.fartown.movo.ui.components.movo.RunDetailMorph.report(id, it.windowRect()) }
-            .completionGlint(glint, corner)
-            .clip(shape)
-            .background(io.github.fartown.movo.ui.theme.MovoColors.bgSurface)
-            .border(io.github.fartown.movo.ui.theme.MovoSize.hairline, io.github.fartown.movo.ui.theme.MovoColors.borderHairline, shape)
+            .completionGlint(glint) { corner.value }
+            .workCardSurface { corner.value }
             .animateContentSize(io.github.fartown.movo.ui.theme.MovoMotion.standard()),
     ) {
         Row(
@@ -481,24 +496,17 @@ internal fun AgentWorkProcess(
                 .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(modifier = Modifier.size(16.dp), contentAlignment = Alignment.Center) {
-                when {
-                    paused -> io.github.fartown.movo.ui.theme.MovoIcon(
-                        io.github.fartown.movo.ui.theme.MovoIcons.Pause, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
-                    )
-                    running -> io.github.fartown.movo.ui.components.movo.MovoOrb(size = 16.dp)
+            // 规范 9.4「执行卡 · 完成 → 摘要条」：小光球 → ✓ 等图标交叉淡化 + 缩放 0.72 ↔ 1（`fast`）。
+            WorkStatusIcon(
+                kind = when {
+                    paused -> WorkStatusIconKind.Paused
+                    running -> WorkStatusIconKind.Running
                     // 用户主动停止不是出错：次要色停止方块。
-                    runStopped -> io.github.fartown.movo.ui.theme.MovoIcon(
-                        io.github.fartown.movo.ui.theme.MovoIcons.Square, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
-                    )
-                    failedIndex >= 0 || runUnfinished -> io.github.fartown.movo.ui.theme.MovoIcon(
-                        io.github.fartown.movo.ui.theme.MovoIcons.X, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.roseFg,
-                    )
-                    else -> io.github.fartown.movo.ui.theme.MovoIcon(
-                        io.github.fartown.movo.ui.theme.MovoIcons.Check, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.greenFg,
-                    )
-                }
-            }
+                    runStopped -> WorkStatusIconKind.Stopped
+                    failedIndex >= 0 || runUnfinished -> WorkStatusIconKind.Failed
+                    else -> WorkStatusIconKind.Done
+                },
+            )
             Spacer(modifier = Modifier.width(8.dp))
             // 计时：执行中「00:18」每秒直接换数字（9.0 规则 5，不滚动不闪）；结束后「用时 18 秒」。
             // 失败 / 停止的一轮可能被回答分成几张卡，用时与步数一样按整轮算。
@@ -515,45 +523,66 @@ internal fun AgentWorkProcess(
             val timerText = elapsed?.let { if (running) formatClock(it) else formatElapsed(it) }
             // 放不下完整计时时退成「1:06」，状态文字不让位（规范：摘要条状态优先完整显示）。
             val compactTimer = elapsed?.takeIf { !running }?.let(::formatCompactElapsed)
+            val phase = when {
+                paused -> WorkPhase.Paused
+                running -> WorkPhase.Running
+                runStopped -> WorkPhase.Stopped
+                failedIndex >= 0 -> WorkPhase.Failed
+                runUnfinished -> WorkPhase.Unfinished
+                else -> WorkPhase.Done
+            }
             StatusWithTimer(
                 status = {
-                    io.github.fartown.movo.ui.components.movo.MovoShimmerText(
-                        text = when {
-                            paused && toolCount > 0 -> stringResource(R.string.movo_work_paused_step, toolCount)
-                            paused -> stringResource(R.string.movo_work_paused)
-                            running && toolCount > 0 -> stringResource(R.string.movo_work_running_step, toolCount)
-                            running -> stringResource(R.string.movo_work_analyzing)
-                            runStopped -> stringResource(R.string.movo_work_stopped_steps, turnSteps)
-                            failedIndex >= 0 -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
-                            runUnfinished -> stringResource(R.string.movo_work_unfinished_steps, turnSteps)
-                            toolCount > 0 -> stringResource(R.string.movo_work_done_steps, toolCount)
-                            else -> stringResource(R.string.movo_work_done)
-                        },
-                        style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
-                        color = if (running || paused) io.github.fartown.movo.ui.theme.MovoColors.textPrimary else io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
-                        active = running,
-                    )
+                    // 状态切换（执行中 → 已完成等）交叉淡化 `fast`；同一状态里的「第 N 步」直接换数字，不做过渡。
+                    WorkPhaseCrossfade(phase) { shownPhase ->
+                        io.github.fartown.movo.ui.components.movo.MovoShimmerText(
+                            text = when (shownPhase) {
+                                WorkPhase.Paused -> if (toolCount > 0) stringResource(R.string.movo_work_paused_step, toolCount) else stringResource(R.string.movo_work_paused)
+                                WorkPhase.Running -> if (toolCount > 0) stringResource(R.string.movo_work_running_step, toolCount) else stringResource(R.string.movo_work_analyzing)
+                                WorkPhase.Stopped -> stringResource(R.string.movo_work_stopped_steps, turnSteps)
+                                WorkPhase.Failed -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
+                                WorkPhase.Unfinished -> stringResource(R.string.movo_work_unfinished_steps, turnSteps)
+                                WorkPhase.Done -> if (toolCount > 0) stringResource(R.string.movo_work_done_steps, toolCount) else stringResource(R.string.movo_work_done)
+                            },
+                            style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
+                            color = if (shownPhase == WorkPhase.Running || shownPhase == WorkPhase.Paused) {
+                                io.github.fartown.movo.ui.theme.MovoColors.textPrimary
+                            } else {
+                                io.github.fartown.movo.ui.theme.MovoColors.textSecondary
+                            },
+                            active = shownPhase == WorkPhase.Running,
+                        )
+                    }
                 },
                 timer = timerText,
                 compactTimer = compactTimer,
                 timerColor = if (running) io.github.fartown.movo.ui.theme.MovoColors.textSecondary else io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
                 modifier = Modifier.weight(1f),
             )
-            val rotation by androidx.compose.animation.core.animateFloatAsState(
+            val rotation = androidx.compose.animation.core.animateFloatAsState(
                 targetValue = if (expanded) 180f else 0f,
                 animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
                 label = "workChevron",
             )
-            io.github.fartown.movo.ui.theme.MovoIcon(
-                if (collapsedSummary && openRunDetail != null) io.github.fartown.movo.ui.theme.MovoIcons.ChevronRight
-                else io.github.fartown.movo.ui.theme.MovoIcons.ChevronDown,
-                contentDescription = stringResource(if (expanded) R.string.movo_collapse else R.string.movo_expand),
-                size = 16.dp,
-                tint = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
-                modifier = Modifier.graphicsLayer {
-                    rotationZ = if (collapsedSummary && openRunDetail != null) 0f else rotation
+            // 展开 / 收起：箭头旋转（`fast`）；收成可跳转的摘要条：↓ 与 › 交叉淡化（`fast`）。
+            val jumps = collapsedSummary && openRunDetail != null
+            AnimatedContent(
+                targetState = jumps,
+                transitionSpec = {
+                    fadeIn(io.github.fartown.movo.ui.theme.MovoMotion.fast())
+                        .togetherWith(fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()))
+                        .using(null)
                 },
-            )
+                label = "workChevronSwap",
+            ) { jump ->
+                io.github.fartown.movo.ui.theme.MovoIcon(
+                    if (jump) io.github.fartown.movo.ui.theme.MovoIcons.ChevronRight else io.github.fartown.movo.ui.theme.MovoIcons.ChevronDown,
+                    contentDescription = stringResource(if (expanded) R.string.movo_collapse else R.string.movo_expand),
+                    size = 16.dp,
+                    tint = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
+                    modifier = if (jump) Modifier else Modifier.graphicsLayer { rotationZ = rotation.value },
+                )
+            }
         }
 
         // 展开：高度 `standard`，内容在高度过渡开始 40ms 后淡入 `fast`（规范 9.3「展开 / 收起」）。
@@ -647,6 +676,112 @@ internal fun AgentWorkProcess(
         onDismissRequest = { confirmEndTask = false },
     )
 }
+
+/** 执行卡 / 执行条 / 执行详情概要卡的状态图标（规范 8.1、8.8）。 */
+internal enum class WorkStatusIconKind { Running, Paused, Stopped, Failed, Done }
+
+/**
+ * 状态图标槽 16：执行中 = 小光球（Q6）/ 暂停 = 次要色 ‖ / 停止 = 次要色方块 / 失败 = Rose ✕ / 完成 = Green ✓。
+ * 切换时交叉淡化 + 缩放 0.72 ↔ 1，`fast`（规范 9.2「交叉淡化」、9.4「执行卡 · 完成 → 摘要条」）；减少动画时只淡入淡出。
+ */
+@Composable
+internal fun WorkStatusIcon(kind: WorkStatusIconKind, modifier: Modifier = Modifier) {
+    val reduced = io.github.fartown.movo.ui.theme.LocalReducedMotion.current
+    AnimatedContent(
+        targetState = kind,
+        modifier = modifier.size(16.dp),
+        contentAlignment = Alignment.Center,
+        transitionSpec = { movoIconSwap(reduced) },
+        label = "workStatusIcon",
+    ) { shown ->
+        Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+            when (shown) {
+                WorkStatusIconKind.Running -> io.github.fartown.movo.ui.components.movo.MovoOrb(size = 16.dp)
+                WorkStatusIconKind.Paused -> io.github.fartown.movo.ui.theme.MovoIcon(
+                    io.github.fartown.movo.ui.theme.MovoIcons.Pause, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                )
+                WorkStatusIconKind.Stopped -> io.github.fartown.movo.ui.theme.MovoIcon(
+                    io.github.fartown.movo.ui.theme.MovoIcons.Square, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                )
+                WorkStatusIconKind.Failed -> io.github.fartown.movo.ui.theme.MovoIcon(
+                    io.github.fartown.movo.ui.theme.MovoIcons.X, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.roseFg,
+                )
+                WorkStatusIconKind.Done -> io.github.fartown.movo.ui.theme.MovoIcon(
+                    io.github.fartown.movo.ui.theme.MovoIcons.Check, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.greenFg,
+                )
+            }
+        }
+    }
+}
+
+/** 图标状态切换（规范 9.3.1）：交叉淡化 + 缩放 0.72 ↔ 1，`fast`；减少动画时只淡入淡出（9.8）。 */
+internal fun <S> androidx.compose.animation.AnimatedContentTransitionScope<S>.movoIconSwap(
+    reduced: Boolean,
+): androidx.compose.animation.ContentTransform {
+    val fast = io.github.fartown.movo.ui.theme.MovoMotion.fast<Float>()
+    val fastExit = io.github.fartown.movo.ui.theme.MovoMotion.fastExit<Float>()
+    return if (reduced) {
+        fadeIn(fast).togetherWith(fadeOut(fastExit)).using(null)
+    } else {
+        (fadeIn(fast) + scaleIn(fast, initialScale = 0.72f))
+            .togetherWith(fadeOut(fastExit) + scaleOut(fastExit, targetScale = 0.72f))
+            .using(null)
+    }
+}
+
+/** 执行卡标题行的状态（不含「第 N 步」这类计数：计数变化直接换数字）。 */
+internal enum class WorkPhase { Running, Paused, Stopped, Failed, Unfinished, Done }
+
+/**
+ * 状态文字交叉淡化（规范 9.3「值变化」、9.4）：新状态淡入 `fast`、旧状态淡出 120ms，宽度变化 `standard`。
+ * 只在 [phase] 变化时过渡；同一状态里文字（步数）变化直接换。
+ */
+@Composable
+internal fun WorkPhaseCrossfade(
+    phase: WorkPhase,
+    modifier: Modifier = Modifier,
+    content: @Composable (WorkPhase) -> Unit,
+) {
+    AnimatedContent(
+        targetState = phase,
+        modifier = modifier,
+        contentAlignment = Alignment.CenterStart,
+        transitionSpec = {
+            fadeIn(io.github.fartown.movo.ui.theme.MovoMotion.fast())
+                .togetherWith(fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()))
+                .using(androidx.compose.animation.SizeTransform(clip = false) { _, _ -> io.github.fartown.movo.ui.theme.MovoMotion.standard() })
+        },
+        label = "workPhase",
+    ) { shown -> content(shown) }
+}
+
+/**
+ * 执行卡外壳：白底 + 0.5 发丝描边，按 [corner] 圆角裁剪。圆角只在绘制阶段读取（graphicsLayer 的 shape、
+ * drawWithContent），圆角动画期间不重组、不重建裁剪与描边的修饰符链。
+ */
+private fun Modifier.workCardSurface(corner: () -> androidx.compose.ui.unit.Dp): Modifier = this
+    .graphicsLayer {
+        shape = RoundedCornerShape(corner())
+        clip = true
+    }
+    .drawWithContent {
+        val radius = corner().toPx()
+        drawRoundRect(
+            color = io.github.fartown.movo.ui.theme.MovoColors.bgSurface,
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius),
+        )
+        drawContent()
+        // 与 Modifier.border 一致：描边画在内容之上，线宽的一半向内。
+        val stroke = io.github.fartown.movo.ui.theme.MovoSize.hairline.toPx()
+        val inset = stroke / 2
+        drawRoundRect(
+            color = io.github.fartown.movo.ui.theme.MovoColors.borderHairline,
+            topLeft = Offset(inset, inset),
+            size = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius((radius - inset).coerceAtLeast(0f)),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(stroke),
+        )
+    }
 
 /**
  * 步骤时间线（`Work/Step` 列表 + 连接线）：执行卡与执行详情页共用同一组件（规范 8.8「行即 Work/Step」）。
@@ -840,11 +975,10 @@ private fun UserMessageBubble(
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    @Suppress("DEPRECATION")
-    val clipboardManager = LocalClipboardManager.current
-    val tooltipState = rememberTooltipState(isPersistent = true)
+    // 长按弹出 `Popover/Menu`（规范 8「弹出菜单」、9.3.1「长按」）：复制 / 编辑 / 删除；被按的气泡保持按压态直到菜单关闭。
+    var showMenu by remember(message.id) { mutableStateOf(false) }
     LaunchedEffect(actionsEnabled) {
-        if (!actionsEnabled) tooltipState.dismiss()
+        if (!actionsEnabled) showMenu = false
     }
     val visiblePrompt = remember(message.content) {
         AgentFileReferencePromptCodec.parse(message.content)
@@ -856,49 +990,12 @@ private fun UserMessageBubble(
             .padding(horizontal = 20.dp, vertical = 7.dp),
         horizontalArrangement = Arrangement.End,
     ) {
-        TooltipBox(
-            positionProvider = TooltipDefaults.rememberTooltipPositionProvider(
-                positioning = TooltipAnchorPosition.Below,
-            ),
-            tooltip = {
-                RichTooltip(insideMargin = PaddingValues(horizontal = 8.dp, vertical = 6.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                        MessageTooltipAction(
-                            icon = Icons.Rounded.ContentCopy,
-                            label = stringResource(R.string.ui_copy_4edd1d),
-                            onClick = {
-                                @Suppress("DEPRECATION")
-                                clipboardManager.setText(AnnotatedString(message.content))
-                                tooltipState.dismiss()
-                            },
-                        )
-                        MessageTooltipAction(
-                            icon = Icons.Rounded.Edit,
-                            label = stringResource(R.string.ui_edit_a7f814),
-                            onClick = {
-                                tooltipState.dismiss()
-                                onEdit()
-                            },
-                        )
-                        MessageTooltipAction(
-                            icon = Icons.Rounded.Delete,
-                            label = stringResource(R.string.ui_delete_3755f5),
-                            onClick = {
-                                tooltipState.dismiss()
-                                onDelete()
-                            },
-                        )
-                    }
-                }
-            },
-            state = tooltipState,
-            focusable = true,
-            enableUserInput = actionsEnabled,
-        ) {
+        Box {
             // `Message/User`（规范 8.1）：右对齐到 392，最大宽 296；bg/surface + 0.5 描边；圆角 20、右下 8；内边距 16 / 11。
             val bubbleShape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 8.dp, bottomStart = 20.dp)
             // Q1：刚发出的这条由飞行层从输入框飞到位，落地前自己先隐藏。
             val chatFlight = LocalChatFlight.current
+            val menuShown = showMenu && actionsEnabled
             Column(
                 modifier = Modifier
                     .widthIn(max = 296.dp)
@@ -913,6 +1010,8 @@ private fun UserMessageBubble(
                         color = if (isEditing) io.github.fartown.movo.ui.theme.MovoColors.indigoFg else io.github.fartown.movo.ui.theme.MovoColors.borderHairline,
                         shape = bubbleShape,
                     )
+                    .pressedWhile(menuShown)
+                    .longPressForMenu(enabled = actionsEnabled) { showMenu = true }
                     .padding(horizontal = 16.dp, vertical = 11.dp),
             ) {
                 if (message.images.isNotEmpty()) {
@@ -961,34 +1060,88 @@ private fun UserMessageBubble(
                     )
                 }
             }
+            io.github.fartown.movo.ui.components.movo.MovoPopoverMenu(
+                show = menuShown,
+                onDismiss = { showMenu = false },
+                alignEnd = true,
+                items = messageMenuItems(copyText = message.content, onEdit = onEdit, onDelete = onDelete),
+            )
         }
     }
 }
 
+/**
+ * 用户消息 / 「你的补充」的长按菜单项：复制（点后原地换成 ✓ 再关闭，不弹提示，规范 9.3「复制」）、编辑、删除（Rose）。
+ */
 @Composable
-private fun MessageTooltipAction(
-    icon: ImageVector,
-    label: String,
-    onClick: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            modifier = Modifier.size(16.dp),
-            tint = MiuixTheme.colorScheme.onSurface,
-        )
-        Text(
-            text = label,
-            style = MiuixTheme.textStyles.body2,
-            color = MiuixTheme.colorScheme.onSurface,
-        )
+private fun messageMenuItems(
+    copyText: String,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+): List<io.github.fartown.movo.ui.components.movo.MovoMenuItem> {
+    @Suppress("DEPRECATION")
+    val clipboardManager = LocalClipboardManager.current
+    return listOf(
+        io.github.fartown.movo.ui.components.movo.MovoMenuItem(
+            icon = io.github.fartown.movo.ui.theme.MovoIcons.Copy,
+            label = stringResource(R.string.ui_copy_4edd1d),
+            confirmIcon = io.github.fartown.movo.ui.theme.MovoIcons.Check,
+        ) {
+            @Suppress("DEPRECATION")
+            clipboardManager.setText(AnnotatedString(copyText))
+        },
+        io.github.fartown.movo.ui.components.movo.MovoMenuItem(
+            icon = io.github.fartown.movo.ui.theme.MovoIcons.PenLine,
+            label = stringResource(R.string.ui_edit_a7f814),
+            onClick = onEdit,
+        ),
+        io.github.fartown.movo.ui.components.movo.MovoMenuItem(
+            icon = io.github.fartown.movo.ui.theme.MovoIcons.Trash2,
+            label = stringResource(R.string.ui_delete_3755f5),
+            destructive = true,
+            onClick = onDelete,
+        ),
+    )
+}
+
+/** 菜单打开期间保持按压态（`overlay/pressed` 叠在内容上，规范 9.3.1「长按」）。 */
+private fun Modifier.pressedWhile(pressed: Boolean): Modifier = drawWithContent {
+    drawContent()
+    if (pressed) drawRect(io.github.fartown.movo.ui.theme.MovoColors.overlayPressed)
+}
+
+/**
+ * 长按 300ms 触发（规范 9.1「长按」、9.3.1）：长按触感后回调。在 Initial 阶段观察、不消费按下与点击，
+ * 气泡里的文字选择、列表滚动照常；移动超过触摸阈值即取消。触发后吃掉这次按住余下的事件，松手不再触发别的手势。
+ */
+private fun Modifier.longPressForMenu(enabled: Boolean, onLongPress: () -> Unit): Modifier = composed {
+    if (!enabled) return@composed Modifier
+    val currentOnLongPress by rememberUpdatedState(onLongPress)
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    Modifier.pointerInput(Unit) {
+        awaitEachGesture {
+            val down = awaitFirstDown(
+                requireUnconsumed = false,
+                pass = PointerEventPass.Initial,
+            )
+            val ended = withTimeoutOrNull(io.github.fartown.movo.ui.theme.MovoMotion.LONG_PRESS.toLong()) {
+                while (true) {
+                    val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id } ?: break
+                    if (!change.pressed || change.isConsumed) break
+                    if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) break
+                }
+                true
+            }
+            if (ended == null) {
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                currentOnLongPress()
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    event.changes.forEach { it.consume() }
+                    if (event.changes.none { it.pressed }) break
+                }
+            }
+        }
     }
 }
 
@@ -1003,7 +1156,7 @@ private fun ContextCompactionMarker(
     message: SystemNoticeMessageUi,
     modifier: Modifier = Modifier,
 ) {
-    val pulseAlpha = rememberActivePulse(active = message.running, label = "compaction_pulse")
+    val pulse = rememberActivePulse(active = message.running, label = "compaction_pulse")
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -1027,7 +1180,7 @@ private fun ContextCompactionMarker(
                 contentDescription = null,
                 modifier = Modifier
                     .size(12.dp)
-                    .graphicsLayer(alpha = if (message.running) pulseAlpha else 1f),
+                    .graphicsLayer { alpha = if (message.running) pulse.value else 1f },
                 tint = if (message.running) {
                     MiuixTheme.colorScheme.primary
                 } else {
@@ -1085,7 +1238,7 @@ private fun AgentMessageBlock(
     }
     LaunchedEffect(copied) {
         if (copied) {
-            kotlinx.coroutines.delay(1_400)
+            kotlinx.coroutines.delay(io.github.fartown.movo.ui.theme.MovoMotion.COPIED_HOLD.toLong())
             copied = false
         }
     }
@@ -1095,12 +1248,10 @@ private fun AgentMessageBlock(
             .fillMaxWidth()
             .padding(horizontal = 20.dp, vertical = 7.dp),
     ) {
-        when {
-            message.content.isBlank() && message.isStreaming -> {
-                AITypingIndicator(
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
+        val typing = message.content.isBlank() && message.isStreaming
+        // 从「…」等待指示换成正文时，正文整体淡入 `fast`（规范 9.3「小元素淡入」），不硬切。
+        val startedTyping = remember(message.id) { typing }
+        val body: @Composable () -> Unit = { when {
             streamingState != null && !revealComplete -> {
                 StreamingMarkdown(
                     state = streamingState,
@@ -1128,6 +1279,15 @@ private fun AgentMessageBlock(
                     )
                 }
             }
+        } }
+        when {
+            typing -> AITypingIndicator(modifier = Modifier.padding(top = 4.dp))
+            startedTyping -> io.github.fartown.movo.ui.components.movo.MovoEntrance(
+                play = true,
+                shift = 0.dp,
+                durationMillis = io.github.fartown.movo.ui.theme.MovoMotion.FAST,
+            ) { body() }
+            else -> body()
         }
 
         if (
@@ -1196,25 +1356,20 @@ private fun AgentMessageBlock(
                     }
                     if (message.characterEditable && message.candidateCount > 1) {
                         Spacer(Modifier.weight(1f))
+                        // 候选切换：视觉 28 不变，点击区扩到 44（规范 2.3）；底色不裁剪子项，扩出的点击区才收得到触摸。
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
-                                .clip(RoundedCornerShape(percent = 50))
-                                .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                                .background(MiuixTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(percent = 50))
                                 .padding(horizontal = 3.dp, vertical = 2.dp),
                         ) {
-                            IconButton(
+                            MessageActionButton(
+                                icon = io.github.fartown.movo.ui.theme.MovoIcons.ChevronLeft,
+                                contentDescription = "上一条候选回复",
                                 onClick = { onSelectCandidate(message.selectedCandidate - 1) },
                                 enabled = messageActionsEnabled && message.selectedCandidate > 0,
-                                minWidth = 28.dp, minHeight = 28.dp,
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.ChevronLeft,
-                                    contentDescription = "上一条候选回复",
-                                    modifier = Modifier.size(16.dp),
-                                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                )
-                            }
+                                visualSize = 28.dp,
+                            )
                             Text(
                                 text = "${message.selectedCandidate + 1}/${message.candidateCount}",
                                 style = MiuixTheme.textStyles.footnote1,
@@ -1222,18 +1377,13 @@ private fun AgentMessageBlock(
                                 textAlign = TextAlign.Center,
                                 modifier = Modifier.widthIn(min = 30.dp),
                             )
-                            IconButton(
+                            MessageActionButton(
+                                icon = io.github.fartown.movo.ui.theme.MovoIcons.ChevronRight,
+                                contentDescription = "下一条候选回复",
                                 onClick = { onSelectCandidate(message.selectedCandidate + 1) },
                                 enabled = messageActionsEnabled && message.selectedCandidate < message.candidateCount - 1,
-                                minWidth = 28.dp, minHeight = 28.dp,
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.ChevronRight,
-                                    contentDescription = "下一条候选回复",
-                                    modifier = Modifier.size(16.dp),
-                                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                )
-                            }
+                                visualSize = 28.dp,
+                            )
                         }
                     }
                 }
@@ -1243,7 +1393,10 @@ private fun AgentMessageBlock(
     }
 }
 
-/** 消息操作按钮：32 热区（视觉），图标 16；复制 ↔ ✓ 交叉淡化并缩放 0.72 ↔ 1（9.3.1「图标状态切换」）。 */
+/**
+ * 消息操作按钮：视觉 [visualSize]（消息操作行 32），图标 16；点击区扩到 44（规范 2.3 最小触控热区），不改变布局与间距。
+ * 复制 ↔ ✓ 交叉淡化并缩放 0.72 ↔ 1（9.3.1「图标状态切换」）。
+ */
 @Composable
 private fun MessageActionButton(
     icon: io.github.fartown.movo.ui.theme.MovoIconData,
@@ -1251,30 +1404,39 @@ private fun MessageActionButton(
     onClick: () -> Unit,
     enabled: Boolean = true,
     tint: Color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+    visualSize: androidx.compose.ui.unit.Dp = 32.dp,
 ) {
+    val reduced = io.github.fartown.movo.ui.theme.LocalReducedMotion.current
     Box(
         modifier = Modifier
-            .size(32.dp)
+            .expandedTouchTarget(visualSize)
             .movoClickable(io.github.fartown.movo.ui.components.movo.PressKind.Icon, enabled = enabled, onClick = onClick)
             .semantics { this.contentDescription = contentDescription },
         contentAlignment = Alignment.Center,
     ) {
         androidx.compose.animation.AnimatedContent(
-            targetState = icon,
-            transitionSpec = {
-                (fadeIn(io.github.fartown.movo.ui.theme.MovoMotion.fast()) +
-                    scaleIn(io.github.fartown.movo.ui.theme.MovoMotion.fast(), initialScale = 0.72f))
-                    .togetherWith(
-                        fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) +
-                            scaleOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit(), targetScale = 0.72f),
-                    )
-            },
+            targetState = icon to tint,
+            transitionSpec = { movoIconSwap(reduced) },
             label = "messageAction",
-        ) { current ->
-            io.github.fartown.movo.ui.theme.MovoIcon(current, null, size = 16.dp, tint = tint)
+        ) { (current, currentTint) ->
+            io.github.fartown.movo.ui.theme.MovoIcon(current, null, size = 16.dp, tint = currentTint)
         }
     }
 }
+
+/**
+ * 视觉小于 44 的控件：布局只占 [visual]（间距、对齐不变），可点区域以它为中心扩到 44（规范 2.3）。
+ * 之后的修饰符（按压反馈、点击、语义）都作用在 44 的区域上；按压圆 40 仍以控件为中心。
+ */
+private fun Modifier.expandedTouchTarget(visual: androidx.compose.ui.unit.Dp): Modifier =
+    this.layout { measurable, _ ->
+        val target = io.github.fartown.movo.ui.theme.MovoSize.touchTarget.roundToPx()
+        val visualPx = visual.roundToPx()
+        val placeable = measurable.measure(androidx.compose.ui.unit.Constraints.fixed(target, target))
+        layout(visualPx, visualPx) {
+            placeable.place((visualPx - target) / 2, (visualPx - target) / 2)
+        }
+    }
 
 @Composable
 private fun StableMarkdown(
@@ -1580,36 +1742,14 @@ private enum class ChatMarkdownTone {
 
 @Composable
 private fun chatMarkdownTypography(tone: ChatMarkdownTone) = markdownTypography(
-    h1 = chatMarkdownBodyStyle(tone).copy(
-        fontSize = if (tone == ChatMarkdownTone.Answer) 21.sp else 17.sp,
-        lineHeight = if (tone == ChatMarkdownTone.Answer) 29.sp else 25.sp,
-        fontWeight = FontWeight.Medium,
-    ),
-    h2 = chatMarkdownBodyStyle(tone).copy(
-        fontSize = if (tone == ChatMarkdownTone.Answer) 19.sp else 16.sp,
-        lineHeight = if (tone == ChatMarkdownTone.Answer) 27.sp else 24.sp,
-        fontWeight = FontWeight.Medium,
-    ),
-    h3 = chatMarkdownBodyStyle(tone).copy(
-        fontSize = if (tone == ChatMarkdownTone.Answer) 18.sp else 15.sp,
-        lineHeight = if (tone == ChatMarkdownTone.Answer) 26.sp else 23.sp,
-        fontWeight = FontWeight.Medium,
-    ),
-    h4 = chatMarkdownBodyStyle(tone).copy(
-        fontSize = if (tone == ChatMarkdownTone.Answer) 17.sp else 14.sp,
-        lineHeight = if (tone == ChatMarkdownTone.Answer) 25.sp else 22.sp,
-        fontWeight = FontWeight.Medium,
-    ),
-    h5 = chatMarkdownBodyStyle(tone).copy(
-        fontSize = if (tone == ChatMarkdownTone.Answer) 16.sp else 14.sp,
-        lineHeight = if (tone == ChatMarkdownTone.Answer) 24.sp else 22.sp,
-        fontWeight = FontWeight.Medium,
-    ),
-    h6 = chatMarkdownBodyStyle(tone).copy(
-        fontSize = if (tone == ChatMarkdownTone.Answer) 15.sp else 14.sp,
-        lineHeight = if (tone == ChatMarkdownTone.Answer) 23.sp else 22.sp,
-        fontWeight = FontWeight.Medium,
-    ),
+    // 标题不另设字号（规范 5 字体表）：回答里 h1–h2 用 `Title/Section`，h3 及以下用正文加 Medium；
+    // 思考内容（Label 13）里各级标题都用思考正文加 Medium，不比正文大。
+    h1 = chatMarkdownHeadingStyle(tone, level = 1),
+    h2 = chatMarkdownHeadingStyle(tone, level = 2),
+    h3 = chatMarkdownHeadingStyle(tone, level = 3),
+    h4 = chatMarkdownHeadingStyle(tone, level = 4),
+    h5 = chatMarkdownHeadingStyle(tone, level = 5),
+    h6 = chatMarkdownHeadingStyle(tone, level = 6),
     text = chatMarkdownBodyStyle(tone),
     paragraph = chatMarkdownBodyStyle(tone),
     ordered = chatMarkdownBodyStyle(tone),
@@ -1643,6 +1783,14 @@ private fun chatMarkdownTypography(tone: ChatMarkdownTone) = markdownTypography(
         ),
     ),
 )
+
+@Composable
+private fun chatMarkdownHeadingStyle(tone: ChatMarkdownTone, level: Int): TextStyle =
+    if (tone == ChatMarkdownTone.Answer && level <= 2) {
+        io.github.fartown.movo.ui.theme.MovoTypography.titleSection.copy(color = chatMarkdownTextColor(tone))
+    } else {
+        chatMarkdownBodyStyle(tone).copy(fontWeight = FontWeight.Medium)
+    }
 
 @Composable
 private fun chatMarkdownBodyStyle(tone: ChatMarkdownTone) =
@@ -1682,7 +1830,7 @@ private fun chatMarkdownColors(tone: ChatMarkdownTone) = markdownColor(
 @Composable
 private fun chatMarkdownDimens() = markdownDimens(
     dividerThickness = 0.5.dp,
-    codeBackgroundCornerSize = 10.dp,
+    codeBackgroundCornerSize = io.github.fartown.movo.ui.theme.MovoRadius.sm,
     blockQuoteThickness = 3.dp,
 )
 
@@ -2091,7 +2239,8 @@ private fun ChatHeadingBlock(
 }
 
 /**
- * 代码块：顶栏显示语言标签并提供一键复制，正文等宽字体、超出横向滚动。
+ * 代码块（按规范 8.8「命令块」）：bg/surface-muted、圆角 12、内边距 12；上方一行语言标签（Label/Regular 次要色）+
+ * 右上角复制（Lucide 16，热区 44，复制后原地交叉淡化为 ✓ 停留 1400ms，规范 9.3「复制」）；正文等宽 13，超出横向滚动。
  */
 @Composable
 private fun ChatCodeBlock(
@@ -2105,70 +2254,49 @@ private fun ChatCodeBlock(
     var copied by remember { mutableStateOf(false) }
     LaunchedEffect(copied) {
         if (copied) {
-            kotlinx.coroutines.delay(1_400)
+            kotlinx.coroutines.delay(io.github.fartown.movo.ui.theme.MovoMotion.COPIED_HOLD.toLong())
             copied = false
         }
     }
+    val shape = RoundedCornerShape(io.github.fartown.movo.ui.theme.MovoRadius.sm)
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 5.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(MiuixTheme.colorScheme.surface)
-            .border(
-                0.5.dp,
-                MiuixTheme.colorScheme.outline.copy(alpha = 0.5f),
-                RoundedCornerShape(10.dp),
-            ),
+            .padding(vertical = 4.dp)
+            .background(io.github.fartown.movo.ui.theme.MovoColors.bgSurfaceMuted, shape)
+            .padding(12.dp),
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 13.dp, end = 6.dp, top = 3.dp, bottom = 3.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 text = language?.takeIf { it.isNotBlank() } ?: "code",
-                style = MiuixTheme.textStyles.footnote2,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular,
+                color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            IconButton(
+            Spacer(Modifier.width(8.dp))
+            // 视觉只占图标 16（字形右缘对齐内边距 12），点击区 44。
+            MessageActionButton(
+                icon = if (copied) io.github.fartown.movo.ui.theme.MovoIcons.Check else io.github.fartown.movo.ui.theme.MovoIcons.Copy,
+                contentDescription = stringResource(if (copied) R.string.copy_copied else R.string.copy_code),
+                tint = if (copied) io.github.fartown.movo.ui.theme.MovoColors.greenFg else io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                visualSize = 16.dp,
                 onClick = {
                     @Suppress("DEPRECATION")
                     clipboardManager.setText(AnnotatedString(code))
                     copied = true
                 },
-                minWidth = 28.dp,
-                minHeight = 28.dp,
-            ) {
-                Icon(
-                    imageVector = if (copied) Icons.Rounded.Check
-                        else Icons.Rounded.ContentCopy,
-                    contentDescription = stringResource(
-                        if (copied) R.string.copy_copied else R.string.copy_code,
-                    ),
-                    modifier = Modifier.size(13.dp),
-                    tint = if (copied) {
-                        MiuixTheme.colorScheme.primary
-                    } else {
-                        MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.8f)
-                    },
-                )
-            }
+            )
         }
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 13.dp)
-                .height(0.5.dp)
-                .background(MiuixTheme.colorScheme.outline.copy(alpha = 0.45f)),
-        )
         val codeModifier = Modifier
             .fillMaxWidth()
+            .padding(top = 8.dp)
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 13.dp, vertical = 11.dp)
             .let { base ->
                 if (revealState != null) base.smoothTextReveal(revealState) else base
             }
@@ -2179,7 +2307,7 @@ private fun ChatCodeBlock(
             } else {
                 style
             },
-            color = MiuixTheme.colorScheme.onSurface,
+            color = io.github.fartown.movo.ui.theme.MovoColors.textPrimary,
             modifier = codeModifier,
             onTextLayout = revealState?.let { state ->
                 { layoutResult -> state.onTextLayout(code, layoutResult) }
@@ -2209,7 +2337,9 @@ private fun ChatMarkdownTable(
     }
     if (headerCells.isEmpty()) return
 
-    val borderColor = MiuixTheme.colorScheme.outline.copy(alpha = 0.5f)
+    // 表格（审查 D2）：`movoSurface`（白底 + 0.5 发丝描边）、圆角 12；表头 Medium，行间 0.5 发丝分隔线。
+    val borderColor = io.github.fartown.movo.ui.theme.MovoColors.borderHairline
+    val tableShape = RoundedCornerShape(io.github.fartown.movo.ui.theme.MovoRadius.sm)
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
@@ -2225,14 +2355,11 @@ private fun ChatMarkdownTable(
             } else {
                 Modifier.fillMaxWidth()
             })
-                .clip(RoundedCornerShape(10.dp))
-                .border(0.5.dp, borderColor, RoundedCornerShape(10.dp))
-                .background(MiuixTheme.colorScheme.surface),
+                .movoSurface(shape = tableShape),
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.45f))
                     .height(IntrinsicSize.Max),
             ) {
                 headerCells.forEach { cell ->
@@ -2256,8 +2383,8 @@ private fun ChatMarkdownTable(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(0.5.dp)
-                        .background(borderColor.copy(alpha = 0.6f)),
+                        .height(io.github.fartown.movo.ui.theme.MovoSize.hairline)
+                        .background(borderColor),
                 )
                 Row(modifier = Modifier.fillMaxWidth()) {
                     rowCells.forEach { cell ->
@@ -2321,7 +2448,7 @@ private fun ChatMarkdownTableCell(
     Text(
         text = text,
         style = style.copy(textMotion = TextMotion.Animated),
-        color = MiuixTheme.colorScheme.onSurface,
+        color = io.github.fartown.movo.ui.theme.MovoColors.textPrimary,
         maxLines = maxLines,
         overflow = overflow,
         modifier = Modifier.smoothTextReveal(revealState),
@@ -2533,7 +2660,7 @@ private fun ThinkingRow(
         return
     }
 
-    val pulseAlpha = rememberActivePulse(
+    val pulse = rememberActivePulse(
         active = message.isStreaming,
         label = "thinking_pulse",
     )
@@ -2575,7 +2702,7 @@ private fun ThinkingRow(
                 contentDescription = null,
                 modifier = Modifier
                     .size(15.dp)
-                    .graphicsLayer(alpha = if (message.isStreaming) pulseAlpha else 1f),
+                    .graphicsLayer { alpha = if (message.isStreaming) pulse.value else 1f },
                 tint = if (message.isStreaming) {
                     MiuixTheme.colorScheme.primary
                 } else {
@@ -2603,18 +2730,29 @@ private fun ThinkingRow(
                 },
                 modifier = Modifier.weight(1f),
             )
+            // 展开 / 收起：箭头向右 → 向下旋转 90°，`fast`（规范 9.3，不用换图标代替旋转）。
+            val chevronRotation = androidx.compose.animation.core.animateFloatAsState(
+                targetValue = if (expanded) 90f else 0f,
+                animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
+                label = "thinkingChevron",
+            )
             Icon(
-                imageVector = if (expanded) Icons.Rounded.ExpandMore
-                    else Icons.Rounded.ChevronRight,
+                imageVector = Icons.Rounded.ChevronRight,
                 contentDescription = stringResource(
                     if (expanded) R.string.reasoning_collapse else R.string.reasoning_expand,
                 ),
-                modifier = Modifier.size(14.dp),
+                modifier = Modifier
+                    .size(14.dp)
+                    .graphicsLayer { rotationZ = chevronRotation.value },
                 tint = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.7f),
             )
         }
 
-        AnimatedVisibility(visible = expanded && message.content.isNotBlank()) {
+        AnimatedVisibility(
+            visible = expanded && message.content.isNotBlank(),
+            enter = expandContentEnter(),
+            exit = expandContentExit(),
+        ) {
             Column {
                 if (!compact) {
                     Box(
@@ -2674,11 +2812,6 @@ private fun ToolActivityInline(
         null
     }
 
-    val pulseAlpha = rememberActivePulse(
-        active = message.status == ToolActivityStatusUi.Running,
-        label = "tool_pulse",
-    )
-
     val title = message.argumentsSummary.ifBlank { toolDisplayName(message.toolName) }
     val browserSubtitle = browserSnapshot?.let { snapshot ->
         when {
@@ -2716,6 +2849,12 @@ private fun ToolActivityInline(
         )
         return
     }
+
+    // 执行卡里的工具步骤（compact）不用脉冲，只在旧样式的独立工具行里持有。
+    val pulse = rememberActivePulse(
+        active = message.status == ToolActivityStatusUi.Running,
+        label = "tool_pulse",
+    )
 
     Column(
         modifier = modifier
@@ -2763,8 +2902,9 @@ private fun ToolActivityInline(
                     Text(
                         text = subtitle,
                         style = MiuixTheme.textStyles.footnote2,
+                        // Rose 只用在左侧失败图标上，原因文字用次要色（规范 4.2 规则 2）。
                         color = if (failureSubtitle != null) {
-                            StatusError
+                            io.github.fartown.movo.ui.theme.MovoColors.textSecondary
                         } else {
                             MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.8f)
                         },
@@ -2800,9 +2940,9 @@ private fun ToolActivityInline(
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(5.dp),
-                            modifier = Modifier.graphicsLayer(
-                                alpha = if (status == ToolActivityStatusUi.Running) pulseAlpha else 1f
-                            ),
+                            modifier = Modifier.graphicsLayer {
+                                alpha = if (status == ToolActivityStatusUi.Running) pulse.value else 1f
+                            },
                         ) {
                             Box(
                                 modifier = Modifier
@@ -2818,17 +2958,23 @@ private fun ToolActivityInline(
                         }
                     }
                 }
+                val chevronRotation = androidx.compose.animation.core.animateFloatAsState(
+                    targetValue = if (isExpanded) 90f else 0f,
+                    animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
+                    label = "toolChevron",
+                )
                 Icon(
-                    imageVector = if (isExpanded) Icons.Rounded.ExpandMore
-                        else Icons.Rounded.ChevronRight,
+                    imageVector = Icons.Rounded.ChevronRight,
                     contentDescription = null,
-                    modifier = Modifier.size(13.dp),
+                    modifier = Modifier
+                        .size(13.dp)
+                        .graphicsLayer { rotationZ = chevronRotation.value },
                     tint = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.5f),
                 )
             }
         }
 
-        AnimatedVisibility(visible = isExpanded) {
+        AnimatedVisibility(visible = isExpanded, enter = expandContentEnter(), exit = expandContentExit()) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -2876,12 +3022,11 @@ private fun ToolActivityInline(
                             .padding(top = 8.dp),
                         horizontalArrangement = Arrangement.End,
                     ) {
-                        TextButton(
-                            text = stringResource(R.string.ui_open_current_browser_58358e),
+                        // 主操作：浅 Indigo 底 + 深 Indigo 字（规范 4.2 规则 1、8「行内按钮」），不用饱和实底白字。
+                        io.github.fartown.movo.ui.components.movo.MovoPillButton(
+                            label = stringResource(R.string.ui_open_current_browser_58358e),
                             onClick = onOpenBrowser,
-                            colors = ButtonDefaults.textButtonColorsPrimary(),
-                            minHeight = 36.dp,
-                            textStyle = MiuixTheme.textStyles.body2,
+                            primary = true,
                         )
                     }
                 }
@@ -2909,35 +3054,18 @@ private fun SupplementStep(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    @Suppress("DEPRECATION")
-    val clipboardManager = LocalClipboardManager.current
-    val tooltipState = rememberTooltipState(isPersistent = true)
-    LaunchedEffect(actionsEnabled) { if (!actionsEnabled) tooltipState.dismiss() }
+    var showMenu by remember(message.id) { mutableStateOf(false) }
+    LaunchedEffect(actionsEnabled) { if (!actionsEnabled) showMenu = false }
+    val menuShown = showMenu && actionsEnabled
     val text = remember(message.content) { AgentFileReferencePromptCodec.parse(message.content).request }
-    TooltipBox(
-        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(positioning = TooltipAnchorPosition.Below),
-        tooltip = {
-            RichTooltip(insideMargin = PaddingValues(horizontal = 8.dp, vertical = 6.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                    MessageTooltipAction(Icons.Rounded.ContentCopy, stringResource(R.string.ui_copy_4edd1d)) {
-                        @Suppress("DEPRECATION")
-                        clipboardManager.setText(AnnotatedString(text))
-                        tooltipState.dismiss()
-                    }
-                    MessageTooltipAction(Icons.Rounded.Edit, stringResource(R.string.ui_edit_a7f814)) {
-                        tooltipState.dismiss(); onEdit()
-                    }
-                    MessageTooltipAction(Icons.Rounded.Delete, stringResource(R.string.ui_delete_3755f5)) {
-                        tooltipState.dismiss(); onDelete()
-                    }
-                }
-            }
-        },
-        state = tooltipState,
-        focusable = true,
-        enableUserInput = actionsEnabled,
-    ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+    Box {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .pressedWhile(menuShown)
+                .longPressForMenu(enabled = actionsEnabled) { showMenu = true }
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
                     io.github.fartown.movo.ui.theme.MovoIcon(
@@ -2975,6 +3103,11 @@ private fun SupplementStep(
                     .padding(horizontal = 10.dp, vertical = 6.dp),
             )
         }
+        io.github.fartown.movo.ui.components.movo.MovoPopoverMenu(
+            show = menuShown,
+            onDismiss = { showMenu = false },
+            items = messageMenuItems(copyText = text, onEdit = onEdit, onDelete = onDelete),
+        )
     }
 }
 
@@ -3019,37 +3152,68 @@ private fun WorkThinkingStep(
             )
         }
         if (message.content.isNotBlank()) {
-            val contentModifier = Modifier.fillMaxWidth().padding(start = 28.dp, top = 2.dp)
-            if (!expanded) {
-                Text(
-                    text = message.content.plainPreview(),
-                    style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular,
-                    color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = contentModifier,
-                )
-            } else if (streamingState != null && (message.isStreaming || completedMarkdownState == null)) {
-                StreamingMarkdown(
-                    state = streamingState,
-                    content = message.content,
-                    isStreaming = message.isStreaming,
-                    onRevealCompleteChange = {},
-                    tone = ChatMarkdownTone.Thinking,
-                    modifier = contentModifier,
-                )
-            } else {
-                StableMarkdown(
-                    content = message.content,
-                    tone = ChatMarkdownTone.Thinking,
-                    markdownState = stableMarkdownState,
-                    parsedState = completedMarkdownState,
-                    modifier = contentModifier,
-                )
+            // 展开 / 收起（规范 9.3）：高度 `standard`；展开内容在高度过渡开始 40ms 后淡入 `fast`，收起时先淡出 120ms。
+            AnimatedContent(
+                targetState = expanded,
+                transitionSpec = {
+                    fadeIn(
+                        tween(
+                            io.github.fartown.movo.ui.theme.MovoMotion.FAST,
+                            delayMillis = io.github.fartown.movo.ui.theme.MovoMotion.STAGGER,
+                            easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard,
+                        ),
+                    ).togetherWith(fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()))
+                        .using(androidx.compose.animation.SizeTransform { _, _ -> io.github.fartown.movo.ui.theme.MovoMotion.standard() })
+                },
+                contentAlignment = Alignment.TopStart,
+                label = "thinkingStepContent",
+            ) { showFull ->
+                val contentModifier = Modifier.fillMaxWidth().padding(start = 28.dp, top = 2.dp)
+                if (!showFull) {
+                    Text(
+                        text = message.content.plainPreview(),
+                        style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular,
+                        color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = contentModifier,
+                    )
+                } else if (streamingState != null && (message.isStreaming || completedMarkdownState == null)) {
+                    StreamingMarkdown(
+                        state = streamingState,
+                        content = message.content,
+                        isStreaming = message.isStreaming,
+                        onRevealCompleteChange = {},
+                        tone = ChatMarkdownTone.Thinking,
+                        modifier = contentModifier,
+                    )
+                } else {
+                    StableMarkdown(
+                        content = message.content,
+                        tone = ChatMarkdownTone.Thinking,
+                        markdownState = stableMarkdownState,
+                        parsedState = completedMarkdownState,
+                        modifier = contentModifier,
+                    )
+                }
             }
         }
     }
 }
+
+/** 展开（规范 9.3「展开 / 收起」）：高度 `standard`，内容在高度过渡开始 40ms 后淡入 `fast`。 */
+private fun expandContentEnter(): androidx.compose.animation.EnterTransition = fadeIn(
+    tween(
+        io.github.fartown.movo.ui.theme.MovoMotion.FAST,
+        delayMillis = io.github.fartown.movo.ui.theme.MovoMotion.STAGGER,
+        easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard,
+    ),
+) + expandVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard())
+
+/** 收起：内容先淡出 120ms，高度同时收起 `standard`。 */
+private fun expandContentExit(): androidx.compose.animation.ExitTransition =
+    fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) +
+        shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard())
 
 /** 思考摘要：去掉常见 Markdown 标记后折叠空白。 */
 private fun String.plainPreview(): String =
@@ -3300,7 +3464,7 @@ private fun ToolCommandBlock(
     var copied by remember(command) { mutableStateOf(false) }
     LaunchedEffect(copied) {
         if (copied) {
-            kotlinx.coroutines.delay(1_400)
+            kotlinx.coroutines.delay(io.github.fartown.movo.ui.theme.MovoMotion.COPIED_HOLD.toLong())
             copied = false
         }
     }
@@ -3332,29 +3496,18 @@ private fun ToolCommandBlock(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            IconButton(
+            // 右上角复制（规范 8.8「命令块」）：Lucide 16、热区 44，复制后原地交叉淡化为 ✓（9.3「复制」）。
+            MessageActionButton(
+                icon = if (copied) io.github.fartown.movo.ui.theme.MovoIcons.Check else io.github.fartown.movo.ui.theme.MovoIcons.Copy,
+                contentDescription = stringResource(if (copied) R.string.copy_copied else R.string.copy_command),
+                tint = if (copied) io.github.fartown.movo.ui.theme.MovoColors.greenFg else io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                visualSize = 28.dp,
                 onClick = {
                     @Suppress("DEPRECATION")
                     clipboardManager.setText(AnnotatedString(command))
                     copied = true
                 },
-                minWidth = 28.dp,
-                minHeight = 28.dp,
-            ) {
-                Icon(
-                    imageVector = if (copied) Icons.Rounded.Check
-                        else Icons.Rounded.ContentCopy,
-                    contentDescription = stringResource(
-                        if (copied) R.string.copy_copied else R.string.copy_command,
-                    ),
-                    modifier = Modifier.size(13.dp),
-                    tint = if (copied) {
-                        MiuixTheme.colorScheme.primary
-                    } else {
-                        MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.8f)
-                    },
-                )
-            }
+            )
         }
         Box(
             modifier = Modifier
