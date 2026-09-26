@@ -81,6 +81,18 @@ internal object AgentRuntimeWire {
     /** service -> client：返回是否成功重新订阅指定 run。 */
     const val MSG_ATTACH_RUN_RESPONSE = 12
 
+    /**
+     * client -> service：把一句补充交给正在执行的 run（规范 8.4「执行中补充要求」，下一步生效）。
+     * 走与悬浮球「补充」相同的 steering 通道；[Message.replyTo] 收到 [MSG_STEER_RESPONSE]。
+     */
+    const val MSG_STEER = 16
+
+    /** service -> client：补充是否被当前 run 接收（未接收时入口层按原来的排队处理）。 */
+    const val MSG_STEER_RESPONSE = 17
+
+    /** client -> service：继续一个已暂停的 run（App 内主按钮 ▶，规范 8.2）。 */
+    const val MSG_RESUME = 18
+
     private const val MODULE_PACKAGE = "io.github.mangi.eta"
     private const val SERVICE_CLASS = "io.github.mangi.eta.agent.runtime.AgentRuntimeService"
 
@@ -588,6 +600,20 @@ internal object AgentRuntimeWire {
     fun runIdFromBundle(bundle: Bundle): String =
         bundle.getString(KEY_RUN_ID).orEmpty()
 
+    fun steerBundle(runId: String, text: String): Bundle = Bundle().apply {
+        putString(KEY_RUN_ID, runId)
+        putString(KEY_PROMPT, text.boundedText(MAX_STEER_CHARS))
+    }
+
+    fun steerTextFromBundle(bundle: Bundle): String = bundle.getString(KEY_PROMPT).orEmpty()
+
+    fun steerResponseBundle(runId: String, accepted: Boolean): Bundle = attachRunResponseBundle(runId, accepted)
+
+    fun steerAccepted(bundle: Bundle): Boolean = bundle.getBoolean(KEY_OK)
+
+    /** 一句补充的上限；与普通输入同一量级，避免补充撑爆 Binder 事务。 */
+    private const val MAX_STEER_CHARS = 8_000
+
     private fun String.boundedText(maxChars: Int): String =
         if (length <= maxChars) this else take((maxChars - TRUNCATED_SUFFIX.length).coerceAtLeast(0)) + TRUNCATED_SUFFIX
 
@@ -699,8 +725,13 @@ internal object AgentRuntimeWire {
                 putString("text", event.text)
             }
 
+            AgentEvent.RunPaused -> putString(KEY_TYPE, "run_paused")
+
+            AgentEvent.RunResumed -> putString(KEY_TYPE, "run_resumed")
+
             is AgentEvent.ToolStarted -> {
                 putString(KEY_TYPE, "tool_started")
+                putLong("at_millis", (event as? AgentEvent.Timed)?.atMillis ?: 0L)
                 putInt("round", event.round)
                 putString("tool_call_id", event.toolCallId)
                 putString("name", event.name)
@@ -710,6 +741,7 @@ internal object AgentRuntimeWire {
 
             is AgentEvent.ToolFinished -> {
                 putString(KEY_TYPE, "tool_finished")
+                putLong("at_millis", (event as? AgentEvent.Timed)?.atMillis ?: 0L)
                 putInt("round", event.round)
                 putString("tool_call_id", event.toolCallId)
                 putString("name", event.name)
@@ -721,6 +753,7 @@ internal object AgentRuntimeWire {
 
             is AgentEvent.HostedToolStarted -> {
                 putString(KEY_TYPE, "hosted_tool_started")
+                putLong("at_millis", (event as? AgentEvent.Timed)?.atMillis ?: 0L)
                 putInt("round", event.round)
                 putString("tool_call_id", event.toolCallId)
                 putString("name", event.name)
@@ -728,6 +761,7 @@ internal object AgentRuntimeWire {
 
             is AgentEvent.HostedToolFinished -> {
                 putString(KEY_TYPE, "hosted_tool_finished")
+                putLong("at_millis", (event as? AgentEvent.Timed)?.atMillis ?: 0L)
                 putInt("round", event.round)
                 putString("tool_call_id", event.toolCallId)
                 putString("name", event.name)
@@ -842,13 +876,17 @@ internal object AgentRuntimeWire {
             text = bundle.getString("text").orEmpty(),
         )
 
+        "run_paused" -> AgentEvent.RunPaused
+
+        "run_resumed" -> AgentEvent.RunResumed
+
         "tool_started" -> AgentEvent.ToolStarted(
             round = bundle.getInt("round"),
             toolCallId = bundle.getString("tool_call_id").orEmpty(),
             name = bundle.getString("name").orEmpty(),
             argsPreview = bundle.getString("args_preview").orEmpty(),
             command = bundle.getString("command"),
-        )
+        ).apply { atMillis = bundle.getLong("at_millis") }
 
         "tool_finished" -> AgentEvent.ToolFinished(
             round = bundle.getInt("round"),
@@ -859,20 +897,20 @@ internal object AgentRuntimeWire {
             imageBytes = bundle.getInt("image_bytes"),
             // 旧版本 Runtime 不发送 success，缺省为 null 由消费端回退判断
             success = if (bundle.containsKey("success")) bundle.getBoolean("success") else null,
-        )
+        ).apply { atMillis = bundle.getLong("at_millis") }
 
         "hosted_tool_started" -> AgentEvent.HostedToolStarted(
             round = bundle.getInt("round"),
             toolCallId = bundle.getString("tool_call_id").orEmpty(),
             name = bundle.getString("name").orEmpty(),
-        )
+        ).apply { atMillis = bundle.getLong("at_millis") }
 
         "hosted_tool_finished" -> AgentEvent.HostedToolFinished(
             round = bundle.getInt("round"),
             toolCallId = bundle.getString("tool_call_id").orEmpty(),
             name = bundle.getString("name").orEmpty(),
             success = bundle.getBoolean("success"),
-        )
+        ).apply { atMillis = bundle.getLong("at_millis") }
 
         "tool_images_attached" -> AgentEvent.ToolImagesAttached(
             round = bundle.getInt("round"),

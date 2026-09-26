@@ -8,11 +8,9 @@ import android.content.Context
 import android.content.Intent
 import androidx.browser.customtabs.CustomTabsClient
 import androidx.browser.customtabs.CustomTabsIntent
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -23,26 +21,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import io.github.mangi.eta.R
 import io.github.mangi.eta.data.auth.ChatGptAuth
 import io.github.mangi.eta.data.auth.ChatGptLoginManager
-import io.github.mangi.eta.ui.components.MiuixDialogActions
+import io.github.mangi.eta.ui.components.movo.MovoConfirmDialog
+import io.github.mangi.eta.ui.components.movo.RowTrailing
+import io.github.mangi.eta.ui.components.movo.SettingsRow
+import io.github.mangi.eta.ui.theme.MovoSpacing
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.HorizontalDivider
-import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * ChatGPT 订阅登录区：替代 API Key 输入框。
+ * ChatGPT 订阅登录区：替代 API Key 输入框；放在「连接配置」卡片里，行样式同 `Settings/Row`（规范 8.7），
+ * 等待浏览器回跳时弹出 `Dialog/Confirm`（8.11），可粘贴回跳地址手动提交。
  *
  * 登录会话由 [ChatGptLoginManager] 持有，本组件只展示状态和转发操作；
  * 界面重组、离开页面或切到浏览器都不会中断正在进行的登录。
@@ -75,15 +71,16 @@ internal fun ChatGptAccountSection(
     if (account.loggedIn) {
         val identity = listOf(account.email, account.planType.uppercase())
             .filter { it.isNotBlank() }
-            .joinToString(" · ")
+            .joinToString("·")
             .ifBlank { "ChatGPT" }
-        BasicComponent(
+        SettingsRow(
             title = stringResource(R.string.chatgpt_account_title),
-            summary = stringResource(R.string.chatgpt_logged_in_summary, identity),
+            subtitle = stringResource(R.string.chatgpt_logged_in_summary, identity),
+            trailing = RowTrailing.None,
         )
-        HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
-        BasicComponent(
+        SettingsRow(
             title = stringResource(R.string.chatgpt_logout),
+            trailing = RowTrailing.None,
             enabled = !working,
             onClick = {
                 scope.launch {
@@ -104,12 +101,13 @@ internal fun ChatGptAccountSection(
     } else {
         val inProgress = login is ChatGptLoginManager.State.WaitingForBrowser ||
             login == ChatGptLoginManager.State.Exchanging
-        BasicComponent(
+        SettingsRow(
             title = stringResource(R.string.chatgpt_login),
-            summary = stringResource(
+            subtitle = stringResource(
                 if (login == ChatGptLoginManager.State.Exchanging) R.string.chatgpt_login_exchanging
                 else R.string.chatgpt_login_summary,
             ),
+            trailing = RowTrailing.External(),
             enabled = !working && !inProgress,
             onClick = {
                 scope.launch {
@@ -133,39 +131,32 @@ internal fun ChatGptAccountSection(
         )
     }
 
-    (login as? ChatGptLoginManager.State.WaitingForBrowser)?.let { waiting ->
-        OverlayDialog(
-            show = true,
-            title = stringResource(R.string.chatgpt_login_dialog_title),
-            onDismissRequest = { ChatGptLoginManager.cancel() },
-        ) {
-            Column {
-                Text(
-                    text = stringResource(
-                        if (waiting.callbackListening) R.string.chatgpt_login_dialog_summary
-                        else R.string.chatgpt_login_port_busy,
-                    ),
-                    style = MiuixTheme.textStyles.body2,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                TextField(
-                    value = manualInput,
-                    onValueChange = { manualInput = it },
-                    label = stringResource(R.string.chatgpt_login_paste_hint),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                MiuixDialogActions(
-                    confirmText = stringResource(R.string.chatgpt_login_submit),
-                    confirmEnabled = manualInput.isNotBlank(),
-                    onCancel = { ChatGptLoginManager.cancel() },
-                    onConfirm = { ChatGptLoginManager.submitManualInput(manualInput) },
-                )
-            }
-        }
-    }
+    val waiting = login as? ChatGptLoginManager.State.WaitingForBrowser
+    // 对话框退场动画期间保留最后一次的端口状态文案。
+    var lastCallbackListening by remember { mutableStateOf(true) }
+    if (waiting != null) lastCallbackListening = waiting.callbackListening
+    MovoConfirmDialog(
+        show = waiting != null,
+        title = stringResource(R.string.chatgpt_login_dialog_title),
+        message = stringResource(
+            if (lastCallbackListening) R.string.chatgpt_login_dialog_summary
+            else R.string.chatgpt_login_port_busy,
+        ),
+        confirmText = stringResource(R.string.chatgpt_login_submit),
+        confirmEnabled = manualInput.isNotBlank(),
+        onConfirm = { ChatGptLoginManager.submitManualInput(manualInput) },
+        onDismissRequest = { ChatGptLoginManager.cancel() },
+        extraContent = {
+            Spacer(modifier = Modifier.height(MovoSpacing.md))
+            TextField(
+                value = manualInput,
+                onValueChange = { manualInput = it },
+                label = stringResource(R.string.chatgpt_login_paste_hint),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+    )
 }
 
 /**

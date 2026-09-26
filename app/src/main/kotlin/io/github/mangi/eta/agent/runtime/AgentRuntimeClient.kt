@@ -123,6 +123,40 @@ internal class AgentRuntimeClient(
         }
     }
 
+    /** 把补充交给正在执行的 [runId]；返回是否被接收（服务不可用、超时或 run 已在收尾时为 false）。 */
+    fun steerRun(runId: String, text: String): Boolean {
+        if (runId.isBlank() || text.isBlank()) return false
+        val responseLatch = CountDownLatch(1)
+        val acceptedRef = AtomicReference(false)
+        val clientMessenger = Messenger(
+            object : Handler(Looper.getMainLooper()) {
+                override fun handleMessage(msg: Message) {
+                    if (msg.what == AgentRuntimeWire.MSG_STEER_RESPONSE) {
+                        acceptedRef.set(msg.data?.let(AgentRuntimeWire::steerAccepted) == true)
+                        responseLatch.countDown()
+                    }
+                }
+            },
+        )
+        return withRuntimeMessenger(false) { serviceMessenger ->
+            val msg = Message.obtain(null, AgentRuntimeWire.MSG_STEER)
+            msg.replyTo = clientMessenger
+            msg.data = AgentRuntimeWire.steerBundle(runId, text)
+            serviceMessenger.send(msg)
+            responseLatch.await(RESPONSE_TIMEOUT_SECONDS, TimeUnit.SECONDS) && acceptedRef.get()
+        }
+    }
+
+    /** 继续一个已暂停的 run（悬浮球里暂停后，在 App 内点 ▶）。 */
+    fun resumeRun(runId: String) {
+        if (runId.isBlank()) return
+        withRuntimeMessenger(Unit) { serviceMessenger ->
+            val msg = Message.obtain(null, AgentRuntimeWire.MSG_RESUME)
+            msg.data = AgentRuntimeWire.ackBundle(runId)
+            serviceMessenger.send(msg)
+        }
+    }
+
     fun ackResult(runId: String): Boolean {
         if (runId.isBlank()) return false
         return withRuntimeMessenger(false) { serviceMessenger ->

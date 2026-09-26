@@ -54,6 +54,7 @@ class EtaDatabaseMigrationTest {
                 EtaDatabase.MIGRATION_18_19,
                 EtaDatabase.MIGRATION_19_20,
                 EtaDatabase.MIGRATION_20_21,
+                EtaDatabase.MIGRATION_21_22,
             )
             .build()
         try {
@@ -93,6 +94,9 @@ class EtaDatabaseMigrationTest {
                 database.mcpServerDao().servers()
             }
 
+            // v22：工具步骤时刻列为空，旧消息照常读出（界面不显示用时）。
+            assertEquals(null, migratedMessage.startedAt)
+            assertEquals(null, migratedMessage.finishedAt)
             assertEquals("保留的结果", result.content)
             assertEquals("[]", result.transcriptJson)
             assertEquals("保留的归档", archive.content)

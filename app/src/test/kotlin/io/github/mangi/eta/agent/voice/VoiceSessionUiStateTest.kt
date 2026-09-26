@@ -44,4 +44,14 @@ class VoiceSessionUiStateTest {
         assertTrue(VoiceSessionUiState(channel = VoiceChannel.Speaking).speaking)
         assertFalse(VoiceSessionUiState(channel = VoiceChannel.Listening).speaking)
     }
+
+    @Test
+    fun autoSendRingArmsOnEndpointAndResetsWhenSpeechResumesOrSends() {
+        // 规范 9.6：检测到停顿后等待自动发送；再开口或已发出即重置。
+        assertTrue(VoiceSessionUiState.autoSendPendingAfter("endpoint", previous = false))
+        assertTrue(VoiceSessionUiState.autoSendPendingAfter("transcript", previous = true))
+        assertFalse(VoiceSessionUiState.autoSendPendingAfter("hearing", previous = true))
+        assertFalse(VoiceSessionUiState.autoSendPendingAfter("dispatch", previous = true))
+        assertFalse(VoiceSessionUiState.autoSendPendingAfter("ended", previous = true))
+    }
 }

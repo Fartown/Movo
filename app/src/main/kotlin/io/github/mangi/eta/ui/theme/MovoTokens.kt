@@ -19,8 +19,29 @@ internal object MovoColors {
     val textPrimary = Color(0xFF151515)
     val textSecondary = Color(0xFF6B6964)
     val textTertiary = Color(0xFF8E8C86)
+    val bgInverse = Color(0xFF151515)
+    val textOnInverse = Color(0xFFFFFFFF)
     val borderHairline = Color(0x1A141414)
     val borderStrong = Color(0x24141414)
+    val overlayPressed = Color(0x0F151515)
+    val overlayPressedInverse = Color(0x24FFFFFF)
+    val overlayScrim = Color(0x52151515)
+    val glassSurface = Color(0xA6FFFFFF)
+    val glassSurfaceFallback = Color(0xE0FFFFFF)
+    val glassFill = Color(0x0F151515)
+    val statusOnline = Color(0xFF1FB768)
+
+    /** 阴影色：暖灰，不用纯黑（规范 7）。 */
+    val shadow = Color(0xFF2B2419)
+
+    /** 品牌渐变：只用于光球、光晕与边缘光晕（规范 4.3）。 */
+    val brandGradient = listOf(
+        Color(0xFFFFC2A6),
+        Color(0xFFFF9EC2),
+        Color(0xFFB39BFF),
+        Color(0xFF8CC6FF),
+        Color(0xFFBFEFE3),
+    )
 
     val indigoBg = Color(0xFFEEF0FF)
     val indigoFg = Color(0xFF4F56E3)
@@ -58,20 +79,39 @@ internal object MovoRadius {
     val sm = 12.dp
     val md = 16.dp
     val lg = 20.dp
+    val pillLg = 24.dp
     val xl = 28.dp
 }
 
 internal object MovoSize {
+    val controlCompact = 24.dp
     val controlSmall = 32.dp
     val controlMedium = 40.dp
+    val controlLarge = 48.dp
+    val touchTarget = 44.dp
+    val topBar = 56.dp
+    val iconTiny = 12.dp
+    val iconLabel = 14.dp
     val iconSmall = 16.dp
     val iconMedium = 20.dp
+    val iconLarge = 24.dp
+    val iconTile = 40.dp
     val hairline = 0.5.dp
+
+    /** 列表行最小高 = 上下 10 + 图标底块 40。 */
+    val listRowMin = 60.dp
 }
 
 internal object MovoTypography {
     private const val TABULAR_NUMBERS = "tnum"
 
+    val displayGreeting = TextStyle(
+        fontSize = 30.sp, lineHeight = 40.sp, fontWeight = FontWeight.Medium, letterSpacing = (-0.5).sp,
+    )
+    val titlePage = TextStyle(fontSize = 22.sp, lineHeight = 30.sp, fontWeight = FontWeight.Medium, letterSpacing = (-0.3).sp)
+    val titleSection = TextStyle(fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.Medium)
+    val bodyReading = TextStyle(fontSize = 16.sp, lineHeight = 26.sp, fontWeight = FontWeight.Normal)
+    val inputPlaceholder = TextStyle(fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Normal)
     val bodyStrong = TextStyle(fontSize = 15.sp, lineHeight = 22.sp, fontWeight = FontWeight.Medium)
     val bodyRegular = TextStyle(fontSize = 15.sp, lineHeight = 22.sp, fontWeight = FontWeight.Normal)
     val labelMedium = TextStyle(fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
@@ -80,7 +120,13 @@ internal object MovoTypography {
     val numericLabel = TextStyle(
         fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium, fontFeatureSettings = TABULAR_NUMBERS,
     )
+    val numericBadge = TextStyle(
+        fontSize = 10.sp, lineHeight = 12.sp, fontWeight = FontWeight.Medium, fontFeatureSettings = TABULAR_NUMBERS,
+    )
     val numericMicro = TextStyle(
         fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Normal, fontFeatureSettings = TABULAR_NUMBERS,
     )
 }
+
+/** 规范 7：所有浮起表面 = 0.5 发丝描边 + 暖灰双层阴影。 */
+internal enum class MovoElevation { E0, Card, Composer, Overlay }

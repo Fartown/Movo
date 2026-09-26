@@ -37,6 +37,12 @@ internal interface VoiceConversationHost {
     )
     fun cancelVoiceRun(runId: String)
     fun stopCurrentRun()
+
+    /**
+     * 执行中说的话作为补充交给当前任务（规范 8.5「执行任务中的语音交互」），结果在主线程回调；
+     * 不支持或未被接收时回调 false，由语音会话按原来的方式记下、等任务结束再发。
+     */
+    fun steerVoiceTurn(conversationId: String, text: String, onResult: (accepted: Boolean) -> Unit) = onResult(false)
 }
 
 /** One process-wide owner in production; injectable boundaries exercise real lifecycle ordering in tests. */
@@ -169,7 +175,10 @@ internal open class VoiceSessionOwner(
     /** [notice] 非空表示这次发布要（重新）展示结束原因；为空时沿用当前提示，直到过期或下一次开始。 */
     private fun publish(event: String, active: Boolean, status: String, transcript: String, notice: String? = null) {
         val previous = state.value
+        val pending = active && VoiceSessionUiState.autoSendPendingAfter(event, previous.autoSendPending)
         mutableState.value = previous.copy(
+            autoSendPending = pending,
+            autoSendGeneration = if (event == "endpoint" && active) previous.autoSendGeneration + 1 else previous.autoSendGeneration,
             channel = VoiceSessionUiState.channelFor(event, active, previous.channel),
             statusText = status, transcript = transcript,
             conversationId = if (active) conversationId else null,
@@ -204,8 +213,18 @@ internal open class VoiceSessionOwner(
         val id = conversationId ?: return
         if (id != conversations.voiceSelectedConversationId) { end("已切换对话，语音已结束"); return }
         if (conversations.voiceRuntimeBusy) {
-            queuedTurn = turn; queuedSessionId = session
-            publish("dispatch", true, "已记下这句话，等当前任务完成后发送", "")
+            conversations.steerVoiceTurn(id, turn.text) { accepted ->
+                if (!valid(generation)) return@steerVoiceTurn
+                if (accepted) {
+                    // 已作为补充交给当前任务：这一句不单独回答，语音立即回到聆听。
+                    controller?.result(turn.id, "", confirmed = true)
+                    mutableState.value = state.value.copy(supplements = state.value.supplements + 1)
+                    publish("listening", true, "已补充到当前任务", "")
+                } else {
+                    queuedTurn = turn; queuedSessionId = session
+                    publish("dispatch", true, "已记下这句话，等当前任务完成后发送", "")
+                }
+            }
             return
         }
         val run = UUID.randomUUID().toString()

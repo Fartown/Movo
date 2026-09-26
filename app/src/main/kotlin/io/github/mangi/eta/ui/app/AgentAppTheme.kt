@@ -1,6 +1,5 @@
 package io.github.mangi.eta.ui.app
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -11,16 +10,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
-import io.github.mangi.eta.data.model.AppearanceAccentColor
-import io.github.mangi.eta.data.model.AppearancePaletteStyle
 import io.github.mangi.eta.data.model.AppearanceSettings
-import io.github.mangi.eta.data.model.AppearanceThemeMode
+import io.github.mangi.eta.ui.theme.MovoColors
+import io.github.mangi.eta.ui.theme.ProvideReducedMotion
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.ThemeColorSpec
 import top.yukonga.miuix.kmp.theme.ThemeController
 import top.yukonga.miuix.kmp.theme.ThemePaletteStyle
-import top.yukonga.miuix.kmp.theme.platformDynamicColors
 
 @Composable
 fun AgentAppTheme(
@@ -29,52 +26,20 @@ fun AgentAppTheme(
     onResolvedDarkModeChange: (Boolean) -> Unit = {},
     content: @Composable () -> Unit,
 ) {
-    val systemDark = isSystemInDarkTheme()
-    val isDark = when (appearance.themeMode) {
-        AppearanceThemeMode.SYSTEM -> systemDark
-        AppearanceThemeMode.LIGHT -> false
-        AppearanceThemeMode.DARK -> true
-    }
-    val colorSchemeMode = when {
-        !appearance.monetEnabled && appearance.themeMode == AppearanceThemeMode.LIGHT -> ColorSchemeMode.Light
-        !appearance.monetEnabled && appearance.themeMode == AppearanceThemeMode.DARK -> ColorSchemeMode.Dark
-        !appearance.monetEnabled -> ColorSchemeMode.System
-        appearance.themeMode == AppearanceThemeMode.LIGHT -> ColorSchemeMode.MonetLight
-        appearance.themeMode == AppearanceThemeMode.DARK -> ColorSchemeMode.MonetDark
-        else -> ColorSchemeMode.MonetSystem
-    }
-    val systemSeedColor = if (
-        appearance.monetEnabled && appearance.accentColor == AppearanceAccentColor.SYSTEM
-    ) {
-        platformDynamicColors(isDark).primary
-    } else {
-        null
-    }
-    val keyColor = when {
-        !appearance.monetEnabled -> null
-        appearance.accentColor == AppearanceAccentColor.SYSTEM -> systemSeedColor
-        else -> appearance.accentColor.seedColor()
-    }
-    val controller = remember(appearance, colorSchemeMode, keyColor, isDark) {
+    // 设计规范 v1 只做浅色（docs/DESIGN_SYSTEM.md 开头「当前只做浅色模式」，2026-09-25 确认）：
+    // 深色、莫奈、调色板、强调色、纯黑的存储值保留不删，但不再参与配色，外观页也不再显示这几项。
+    val isDark = false
+    val controller = remember {
         ThemeController(
-            colorSchemeMode = colorSchemeMode,
-            keyColor = keyColor,
+            colorSchemeMode = ColorSchemeMode.Light,
+            keyColor = null,
             colorSpec = ThemeColorSpec.Spec2025,
-            paletteStyle = appearance.paletteStyle.toMiuixPaletteStyle(),
-            isDark = isDark,
+            paletteStyle = ThemePaletteStyle.TonalSpot,
+            isDark = false,
         )
     }
     val colors = controller.currentColors()
-    val themedColors = remember(colors, isDark, appearance.monetEnabled, appearance.pureBlackEnabled) {
-        if (appearance.monetEnabled && appearance.pureBlackEnabled && isDark) {
-            colors.copy(
-                background = Color.Black,
-                surface = Color.Black,
-            )
-        } else {
-            colors
-        }
-    }
+    val themedColors = remember(colors) { colors.withMovoPalette() }
 
     LaunchedEffect(isDark) { onResolvedDarkModeChange(isDark) }
 
@@ -145,33 +110,46 @@ fun AgentAppTheme(
             LocalDensity provides appDensity,
         ) {
             // MaterialTheme 仅向 markdown-renderer-m3 提供与 Miuix 一致的颜色上下文。
-            MaterialTheme(
-                colorScheme = materialColors,
-                content = content,
-            )
+            MaterialTheme(colorScheme = materialColors) {
+                ProvideReducedMotion(content)
+            }
         }
     }
 }
 
-private fun AppearancePaletteStyle.toMiuixPaletteStyle(): ThemePaletteStyle = when (this) {
-    AppearancePaletteStyle.TONAL_SPOT -> ThemePaletteStyle.TonalSpot
-    AppearancePaletteStyle.NEUTRAL -> ThemePaletteStyle.Neutral
-    AppearancePaletteStyle.VIBRANT -> ThemePaletteStyle.Vibrant
-    AppearancePaletteStyle.EXPRESSIVE -> ThemePaletteStyle.Expressive
-    AppearancePaletteStyle.RAINBOW -> ThemePaletteStyle.Rainbow
-    AppearancePaletteStyle.FRUIT_SALAD -> ThemePaletteStyle.FruitSalad
-    AppearancePaletteStyle.MONOCHROME -> ThemePaletteStyle.Monochrome
-    AppearancePaletteStyle.FIDELITY -> ThemePaletteStyle.Fidelity
-    AppearancePaletteStyle.CONTENT -> ThemePaletteStyle.Content
-}
-
-private fun AppearanceAccentColor.seedColor(): Color = when (this) {
-    AppearanceAccentColor.SYSTEM, AppearanceAccentColor.BLUE -> Color(0xFF3482FF)
-    AppearanceAccentColor.PURPLE -> Color(0xFF6750A4)
-    AppearanceAccentColor.PINK -> Color(0xFFB0006D)
-    AppearanceAccentColor.RED -> Color(0xFFBA1A1A)
-    AppearanceAccentColor.ORANGE -> Color(0xFFB65D00)
-    AppearanceAccentColor.YELLOW -> Color(0xFF7D5700)
-    AppearanceAccentColor.GREEN -> Color(0xFF006D3B)
-    AppearanceAccentColor.TEAL -> Color(0xFF006A6A)
-}
+/**
+ * 把 Miuix 浅色配色映射到 Movo Token，让尚未改版、仍用 Miuix 组件的页面与新页面同一套颜色
+ * （页面底 bg/canvas、卡片白、文字三级灰、选中 Indigo、分隔线发丝线）。
+ */
+private fun top.yukonga.miuix.kmp.theme.Colors.withMovoPalette() = copy(
+    primary = MovoColors.indigoFg,
+    onPrimary = MovoColors.bgSurface,
+    primaryContainer = MovoColors.indigoBg,
+    onPrimaryContainer = MovoColors.indigoFg,
+    error = MovoColors.roseFg,
+    errorContainer = MovoColors.roseBg,
+    onErrorContainer = MovoColors.roseFg,
+    secondary = MovoColors.bgSurfaceMuted,
+    secondaryVariant = MovoColors.bgSurfaceMuted,
+    onSecondary = MovoColors.textPrimary,
+    onSecondaryVariant = MovoColors.textPrimary,
+    secondaryContainer = MovoColors.bgSurfaceMuted,
+    onSecondaryContainer = MovoColors.textPrimary,
+    background = MovoColors.bgCanvas,
+    onBackground = MovoColors.textPrimary,
+    onBackgroundVariant = MovoColors.textSecondary,
+    surface = MovoColors.bgCanvas,
+    onSurface = MovoColors.textPrimary,
+    surfaceVariant = MovoColors.bgSurfaceMuted,
+    onSurfaceSecondary = MovoColors.textSecondary,
+    onSurfaceVariantSummary = MovoColors.textSecondary,
+    onSurfaceVariantActions = MovoColors.textSecondary,
+    surfaceContainer = MovoColors.bgSurface,
+    onSurfaceContainer = MovoColors.textPrimary,
+    onSurfaceContainerVariant = MovoColors.textSecondary,
+    surfaceContainerHigh = MovoColors.bgSurface,
+    onSurfaceContainerHigh = MovoColors.textPrimary,
+    outline = MovoColors.borderStrong,
+    dividerLine = MovoColors.borderHairline,
+    windowDimming = MovoColors.overlayScrim,
+)

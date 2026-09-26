@@ -1,61 +1,75 @@
 package io.github.mangi.eta.ui.screens.permissions
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AccessibilityNew
-import androidx.compose.material.icons.rounded.AccountTree
-import androidx.compose.material.icons.rounded.Dashboard
-import androidx.compose.material.icons.rounded.History
-import androidx.compose.material.icons.rounded.Key
-import androidx.compose.material.icons.rounded.Layers
-import androidx.compose.material.icons.rounded.LocationOn
-import androidx.compose.material.icons.rounded.Memory
-import androidx.compose.material.icons.rounded.Mic
-import androidx.compose.material.icons.rounded.Notifications
-import androidx.compose.material.icons.rounded.NotificationsActive
-import androidx.compose.material.icons.rounded.QueryStats
-import androidx.compose.material.icons.rounded.Shield
-import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.R
-import io.github.mangi.eta.ui.components.MiuixScaffoldPage
-import io.github.mangi.eta.ui.components.PreferenceIcon
-import io.github.mangi.eta.ui.components.color
+import io.github.mangi.eta.agent.accessibility.AccessibilityProtectionClient
 import io.github.mangi.eta.ui.components.label
+import io.github.mangi.eta.ui.components.movo.CardTitle
+import io.github.mangi.eta.ui.components.movo.MovoCard
+import io.github.mangi.eta.ui.components.movo.MovoListPage
+import io.github.mangi.eta.ui.components.movo.RowTrailing
+import io.github.mangi.eta.ui.components.movo.SettingsRow
 import io.github.mangi.eta.ui.model.PermissionHealthAction
 import io.github.mangi.eta.ui.model.PermissionHealthItemUi
 import io.github.mangi.eta.ui.model.PermissionHealthUiState
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.SmallTitle
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.preference.ArrowPreference
-import top.yukonga.miuix.kmp.theme.MiuixTheme
+import io.github.mangi.eta.ui.model.PermissionStatusUi
+import io.github.mangi.eta.ui.screens.settings.FrameworkPrefsState
+import io.github.mangi.eta.ui.screens.settings.OnResumeEffect
+import io.github.mangi.eta.ui.screens.settings.rememberFrameworkPrefsState
 
+/** Movo 核心能力（操作其他 App、后台执行）依赖的权限；其余按需开启。 */
+private val RequiredPermissionIds = listOf("overlay", "accessibility", "background")
+
+/**
+ * 设置 · 权限（规范 8.7「权限」二级页）：全部 10 项权限与「强制保持无障碍」都在这里，
+ * 分「必要权限」「按需开启」两张卡；缺失的必要权限在值前加 Rose 状态点。
+ */
 @Composable
 fun PermissionHealthScreen(
     state: PermissionHealthUiState,
     onAction: (PermissionHealthAction) -> Unit,
     modifier: Modifier = Modifier,
+    onRefresh: () -> Unit = {},
 ) {
-    MiuixScaffoldPage(
-        title = stringResource(R.string.ui_permission_health_3048bb),
+    OnResumeEffect(onRefresh)
+    val framework = rememberFrameworkPrefsState()
+    val required = RequiredPermissionIds.mapNotNull { id -> state.items.firstOrNull { it.id == id } }
+    val optional = state.items.filter { it.id !in RequiredPermissionIds }
+    MovoListPage(
+        title = stringResource(R.string.ui_permissions_560165),
         onBack = { onAction(PermissionHealthAction.NavigateBack) },
         modifier = modifier,
     ) {
-        item(key = "title") {
-            SmallTitle(stringResource(R.string.ui_permissions_and_status_35f368))
+        if (required.isNotEmpty()) {
+            item(key = "required") {
+                MovoCard {
+                    CardTitle(stringResource(R.string.movo_permissions_group_required))
+                    required.forEachIndexed { index, item ->
+                        val divider = index < required.lastIndex || framework.showFrameworkRows
+                        PermissionRow(item, attentionWhenMissing = true, showDivider = divider) {
+                            onAction(PermissionHealthAction.OpenItemAction(item.id))
+                        }
+                    }
+                    AccessibilityProtectionRow(framework, onChanged = onRefresh)
+                }
+            }
         }
-        item(key = "card") {
-            Card(modifier = Modifier.padding(horizontal = 12.dp)) {
-                state.items.forEach { item ->
-                    PermissionItemRow(
-                        item = item,
-                        onActionClick = { onAction(PermissionHealthAction.OpenItemAction(item.id)) },
-                    )
+        if (optional.isNotEmpty()) {
+            item(key = "optional") {
+                MovoCard {
+                    CardTitle(stringResource(R.string.movo_permissions_group_optional))
+                    optional.forEachIndexed { index, item ->
+                        PermissionRow(item, attentionWhenMissing = false, showDivider = index < optional.lastIndex) {
+                            onAction(PermissionHealthAction.OpenItemAction(item.id))
+                        }
+                    }
                 }
             }
         }
@@ -63,42 +77,54 @@ fun PermissionHealthScreen(
 }
 
 @Composable
-private fun PermissionItemRow(
+private fun PermissionRow(
     item: PermissionHealthItemUi,
-    onActionClick: () -> Unit,
+    attentionWhenMissing: Boolean,
+    showDivider: Boolean,
+    onClick: () -> Unit,
 ) {
-    val icon = when (item.id) {
-        "accessibility" -> Icons.Rounded.AccessibilityNew
-        "overlay" -> Icons.Rounded.Layers
-        "model" -> Icons.Rounded.Memory
-        "terminal" -> Icons.Rounded.Terminal
-        "notification" -> Icons.Rounded.Notifications
-        "root" -> Icons.Rounded.Key
-        "shizuku" -> Icons.Rounded.Memory
-        "xposed" -> Icons.Rounded.AccountTree
-        "background" -> Icons.Rounded.History
-        "app_list" -> Icons.Rounded.Dashboard
-        "location" -> Icons.Rounded.LocationOn
-        "microphone" -> Icons.Rounded.Mic
-        "notification_history" -> Icons.Rounded.NotificationsActive
-        "usage_access" -> Icons.Rounded.QueryStats
-        "notifications" -> Icons.Rounded.Notifications
-        else -> Icons.Rounded.Shield
-    }
-
-    ArrowPreference(
+    SettingsRow(
         title = item.title,
-        summary = item.summary.takeIf { it.isNotBlank() },
-        startAction = {
-            PreferenceIcon(icon = icon)
+        subtitle = item.summary.takeIf { it.isNotBlank() },
+        trailing = RowTrailing.Arrow(item.status.label()),
+        attention = attentionWhenMissing && item.status == PermissionStatusUi.Missing,
+        showDivider = showDivider,
+        onClick = onClick,
+    )
+}
+
+/**
+ * 强制保持无障碍（原设置页「权限」组）：框架在线或曾连接时显示，在线且没有进行中的请求时可切换；
+ * 异步结果回写，失败原因就地写在行说明里。
+ */
+@Composable
+private fun AccessibilityProtectionRow(framework: FrameworkPrefsState, onChanged: () -> Unit) {
+    val context = LocalContext.current
+    var enabled by remember { mutableStateOf(AccessibilityProtectionClient.isEnabled(context)) }
+    var pending by remember { mutableStateOf(false) }
+    var failure by remember { mutableStateOf<String?>(null) }
+    OnResumeEffect { enabled = AccessibilityProtectionClient.isEnabled(context) }
+    if (!framework.showFrameworkRows) return
+    SettingsRow(
+        title = stringResource(R.string.ui_enforce_accessibility_55e838),
+        subtitle = failure,
+        enabled = framework.frameworkLive && !pending,
+        showDivider = false,
+        trailing = RowTrailing.Switch(enabled) { value ->
+            if (pending) return@Switch
+            pending = true
+            AccessibilityProtectionClient.setEnabled(context = context, enabled = value) { result ->
+                pending = false
+                enabled = result.enabled
+                failure = when (result.status) {
+                    AccessibilityProtectionClient.ControlStatus.APPLIED -> null
+                    AccessibilityProtectionClient.ControlStatus.UNAVAILABLE ->
+                        context.getString(R.string.accessibility_protection_unavailable)
+                    AccessibilityProtectionClient.ControlStatus.REJECTED ->
+                        context.getString(R.string.accessibility_protection_rejected)
+                }
+                onChanged()
+            }
         },
-        endActions = {
-            Text(
-                text = item.status.label(),
-                fontSize = MiuixTheme.textStyles.body2.fontSize,
-                color = item.status.color(),
-            )
-        },
-        onClick = onActionClick,
     )
 }

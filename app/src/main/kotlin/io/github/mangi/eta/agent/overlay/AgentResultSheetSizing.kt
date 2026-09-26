@@ -46,6 +46,13 @@ internal object AgentResultSheetSizing {
         (currentHeight - deltaY)
             .coerceIn(height(screenHeight, false, keyboardLift).toFloat(), height(screenHeight, true).toFloat())
 
+    /** 下拉关闭：拖过半屏高度的 1/3，或向下快速甩动（规范 8.9）；向上甩回弹。 */
+    fun shouldDismiss(offset: Float, sheetHeight: Int, velocityY: Float, flingThreshold: Float): Boolean = when {
+        velocityY > flingThreshold -> true
+        velocityY < -flingThreshold -> false
+        else -> offset > sheetHeight.coerceAtLeast(1) / 3f
+    }
+
     fun settleExpanded(currentHeight: Int, screenHeight: Int, velocityY: Float, flingThreshold: Float, keyboardLift: Int = 0): Boolean =
         when {
             velocityY < -flingThreshold -> true

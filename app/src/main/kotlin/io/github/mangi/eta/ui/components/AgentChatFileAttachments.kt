@@ -105,18 +105,12 @@ internal fun AgentAttachmentPickerButton(
     }
 
     Box(modifier = modifier) {
-        IconButton(
+        // 附件：40 浅底圆 + 20「+」（规范 8「圆形按钮」）。
+        io.github.mangi.eta.ui.components.movo.MovoCircleButton(
+            icon = io.github.mangi.eta.ui.theme.MovoIcons.Plus,
+            contentDescription = stringResource(R.string.ui_add_attachment_dba9e8),
             onClick = { showPopup = true },
-            minWidth = ChatInputActionSize,
-            minHeight = ChatInputActionSize,
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.Add,
-                contentDescription = stringResource(R.string.ui_add_attachment_dba9e8),
-                modifier = Modifier.size(ChatInputActionIconSize),
-                tint = MiuixTheme.colorScheme.onSurface,
-            )
-        }
+        )
         OverlayListPopup(
             show = showPopup && popupAnchorTopPx > 0,
             popupPositionProvider = remember(popupAnchorTopPx) {

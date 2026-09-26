@@ -11,8 +11,15 @@ internal class AgentConversationDraftStore {
         drafts.getOrPut(conversationId) { TextFieldState(initialText = initialText) }
 
     /** A first voice turn assigns an ID without consuming the unsent editor. */
-    fun assignConversation(id: String, initialText: String = ""): TextFieldState =
-        drafts.getOrPut(id) { drafts.remove(null) ?: TextFieldState(initialText = initialText) }
+    fun assignConversation(id: String, initialText: String = ""): TextFieldState {
+        lastAssignedConversationId = id
+        return drafts.getOrPut(id) { drafts.remove(null) ?: TextFieldState(initialText = initialText) }
+    }
+
+    /** 最近一次由草稿就地变成的会话（发出第一句时新建），聊天舞台据此沿用草稿的组合。 */
+    @Volatile
+    var lastAssignedConversationId: String? = null
+        private set
 
     /** Consume the submitted snapshot, retaining edits/transcription appended during mode switching. */
     fun consume(conversationId: String?, submittedText: String): String {
@@ -43,3 +50,15 @@ internal class AgentConversationDraftStore {
 }
 
 internal val LocalConversationComposer = staticCompositionLocalOf<TextFieldState?> { null }
+
+/**
+ * 当前这一轮的运行级控制（规范 8.2 主按钮状态机、8.1 执行卡底部栏）：是否在悬浮球里被暂停、继续、结束任务。
+ * 由对话页提供；没有提供时（如执行详情页外的宿主）视为未暂停。
+ */
+internal data class RunControls(
+    val isPaused: Boolean = false,
+    val onResume: () -> Unit = {},
+    val onEndTask: () -> Unit = {},
+)
+
+internal val LocalRunControls = staticCompositionLocalOf { RunControls() }

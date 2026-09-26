@@ -32,6 +32,11 @@ internal class VoiceInputActivity {
 
 /** Do not commit a half sentence while locally observed audio is waiting for a cloud ASR round. */
 internal class VoiceCommitGate {
+    companion object {
+        /** 检测到停顿后等待多久自动发送（界面进度环按这个时长走完，规范 9.6）。 */
+        const val AUTO_SEND_WAIT_MS = 650L
+    }
+
     enum class Decision { WAIT, COMMIT, EXPIRE }
     private var endpointAt = 0L
     private var awaitingRecognition = false
@@ -44,7 +49,7 @@ internal class VoiceCommitGate {
         if (latestActivity >= endpointAt - 150) awaitingRecognition = true
         return when {
             awaitingRecognition && now - endpointAt >= 6_000 -> Decision.EXPIRE
-            awaitingRecognition || now - endpointAt < 650 -> Decision.WAIT
+            awaitingRecognition || now - endpointAt < AUTO_SEND_WAIT_MS -> Decision.WAIT
             else -> Decision.COMMIT
         }
     }

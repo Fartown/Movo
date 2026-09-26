@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -30,6 +32,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -49,6 +52,7 @@ internal fun AgentConversationSheet(
     onDragStopped: (Float) -> Unit,
     onOpenConversation: () -> Unit,
     onClose: () -> Unit,
+    expandProgress: () -> Float = { 0f },
     content: @Composable () -> Unit,
 ) {
     val colors = MiuixTheme.colorScheme
@@ -56,11 +60,16 @@ internal fun AgentConversationSheet(
     val velocity = remember { VelocityTracker() }
     val chromeWidth = remember { intArrayOf(0) }
     val density = LocalDensity.current
-    val handleHeight = with(density) { 20.dp.toPx() }
-    val buttonsWidth = with(density) { 100.dp.toPx() }
+    val handleHeight = with(density) { 16.dp.toPx() }
+    val buttonsWidth = with(density) { 92.dp.toPx() }
     val touchSlop = LocalViewConfiguration.current.touchSlop
+    // `Overlay/Sheet`（规范 8.9）：bg/canvas，顶部圆角 28、底部 0；把手区 16（32 × 4）；头部 44，
+    // 标题 Body/Strong 一行省略（最大宽 300），右侧「展开到 App」「关闭」图标 24、热区 44。
+    // Q4 浮层 → App：推满全屏时顶部圆角 28 → 0、把手淡出（规范 9.5）。
+    val topRadius = 28.dp * (1f - expandProgress().coerceIn(0f, 1f))
     Scaffold(
-        modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)),
+        modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(topStart = topRadius, topEnd = topRadius)),
+        containerColor = io.github.mangi.eta.ui.theme.MovoColors.bgCanvas,
         contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
     ) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -104,23 +113,38 @@ internal fun AgentConversationSheet(
                         }
                     },
             ) {
-                Box(Modifier.fillMaxWidth().height(20.dp), contentAlignment = Alignment.Center) {
-                    Box(Modifier.width(32.dp).height(4.dp).clip(CircleShape).background(colors.outline))
+                Box(
+                    Modifier.fillMaxWidth().height(16.dp)
+                        .graphicsLayer { alpha = 1f - expandProgress().coerceIn(0f, 1f) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(Modifier.width(32.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(io.github.mangi.eta.ui.theme.MovoColors.borderStrong))
                 }
-                Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(title, color = colors.onSurface, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    IconButton(onClick = onOpenConversation, minWidth = 48.dp, minHeight = 48.dp) {
-                        Icon(
-                            Icons.Rounded.OpenInFull,
-                            stringResource(R.string.overlay_result_expand),
-                            Modifier.size(20.dp), tint = colors.onSurfaceVariantActions,
-                        )
-                    }
-                    IconButton(onClick = onClose, minWidth = 48.dp, minHeight = 48.dp) {
-                        Icon(Icons.Rounded.Close, stringResource(R.string.action_close), Modifier.size(20.dp), tint = colors.onSurfaceVariantActions)
-                    }
+                Row(
+                    Modifier.fillMaxWidth().height(44.dp).padding(start = 20.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        title,
+                        style = io.github.mangi.eta.ui.theme.MovoTypography.bodyStrong,
+                        color = io.github.mangi.eta.ui.theme.MovoColors.textPrimary,
+                        modifier = Modifier.weight(1f).widthIn(max = 300.dp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    io.github.mangi.eta.ui.components.movo.MovoIconButton(
+                        icon = io.github.mangi.eta.ui.theme.MovoIcons.Maximize2,
+                        contentDescription = stringResource(R.string.overlay_result_expand),
+                        onClick = onOpenConversation,
+                    )
+                    io.github.mangi.eta.ui.components.movo.MovoIconButton(
+                        icon = io.github.mangi.eta.ui.theme.MovoIcons.X,
+                        contentDescription = stringResource(R.string.action_close),
+                        onClick = onClose,
+                    )
                 }
             }
+            Spacer(Modifier.height(8.dp))
             Box(Modifier.weight(1f).fillMaxWidth()) { content() }
         }
     }

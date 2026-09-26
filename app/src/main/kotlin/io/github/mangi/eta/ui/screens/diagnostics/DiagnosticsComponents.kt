@@ -1,61 +1,41 @@
 package io.github.mangi.eta.ui.screens.diagnostics
 
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.ChevronLeft
-import androidx.compose.material.icons.rounded.ChevronRight
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Compress
-import androidx.compose.material.icons.rounded.ErrorOutline
-import androidx.compose.material.icons.rounded.GppMaybe
-import androidx.compose.material.icons.rounded.Language
-import androidx.compose.material.icons.rounded.Memory
-import androidx.compose.material.icons.rounded.PhoneAndroid
-import androidx.compose.material.icons.rounded.PowerSettingsNew
-import androidx.compose.material.icons.rounded.Stop
-import androidx.compose.material.icons.rounded.Wifi
-import androidx.compose.material.icons.rounded.WifiOff
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -64,160 +44,51 @@ import io.github.mangi.eta.diagnostics.EventTone
 import io.github.mangi.eta.diagnostics.SystemEvent
 import io.github.mangi.eta.diagnostics.SystemEventKind
 import io.github.mangi.eta.diagnostics.TraceStatus
+import io.github.mangi.eta.ui.components.movo.CardTitle
+import io.github.mangi.eta.ui.components.movo.MovoCard
+import io.github.mangi.eta.ui.components.movo.MovoDivider
+import io.github.mangi.eta.ui.components.movo.MovoPillButton
+import io.github.mangi.eta.ui.components.movo.MovoSpinner
+import io.github.mangi.eta.ui.components.movo.PressKind
+import io.github.mangi.eta.ui.components.movo.movoClickable
+import io.github.mangi.eta.ui.theme.LocalReducedMotion
 import io.github.mangi.eta.ui.theme.MovoColors
+import io.github.mangi.eta.ui.theme.MovoIcon
+import io.github.mangi.eta.ui.theme.MovoIconData
+import io.github.mangi.eta.ui.theme.MovoIcons
+import io.github.mangi.eta.ui.theme.MovoMotion
 import io.github.mangi.eta.ui.theme.MovoRadius
 import io.github.mangi.eta.ui.theme.MovoSize
 import io.github.mangi.eta.ui.theme.MovoSpacing
 import io.github.mangi.eta.ui.theme.MovoTypography
-import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Text
 
 /*
- * 运行日志页面的组件，对应 Figma「设计规范 v1 → 08 · 组件」：
- * TopBar/Secondary、Settings/Row（Value）、Chip/Filter、Run/Summary、Log/TimeBreakdown、Work/Step、Run/StepDetail。
+ * 运行日志页面的组件，对应 Figma「定稿 · 设计稿」22–27 与「设计规范 v1 → 08 · 组件」：
+ * Chip/Filter、Run/Summary、Log/TimeBreakdown、Work/Step、Run/StepDetail。
+ * 页面骨架、卡片、卡内标题、页脚、设置行、行内按钮直接用 ui/components/movo 的公共组件。
  */
 
-/** 二级页骨架：居中标题的 56 顶栏 + 画布底色上的列表，内容按 20 的页边线排布。 */
-@Composable
-internal fun LogPage(
-    title: String,
-    onBack: () -> Unit,
-    action: (@Composable () -> Unit)? = null,
-    content: LazyListScope.() -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MovoColors.bgCanvas)
-            .statusBarsPadding(),
-    ) {
-        Box(modifier = Modifier.fillMaxWidth().height(56.dp)) {
-            TopBarIcon(Icons.Rounded.ChevronLeft, "返回", onBack, Modifier.align(Alignment.CenterStart).padding(start = 4.dp))
-            Text(
-                text = title,
-                style = MovoTypography.bodyStrong,
-                color = MovoColors.textPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .padding(horizontal = 64.dp)
-                    .semantics { heading() },
-            )
-            if (action != null) Box(modifier = Modifier.align(Alignment.CenterEnd).padding(end = 6.dp)) { action() }
-        }
-        val navigation = WindowInsets.navigationBars.asPaddingValues()
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(
-                start = MovoSpacing.pageEdge,
-                end = MovoSpacing.pageEdge,
-                top = MovoSpacing.sm,
-                bottom = navigation.calculateBottomPadding() + MovoSpacing.section,
-            ),
-            content = content,
-        )
-    }
-}
-
-@Composable
-internal fun TopBarIcon(icon: ImageVector, description: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .size(44.dp)
-            .clip(CircleShape)
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = description },
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(icon, contentDescription = null, modifier = Modifier.size(24.dp), tint = MovoColors.textPrimary)
-    }
-}
-
-/** 页面说明，与卡片左边对齐。 */
-@Composable
-internal fun PageDescription(text: String) {
-    Text(
-        text,
-        style = MovoTypography.labelRegular.copy(fontSize = MovoTypography.bodyRegular.fontSize, lineHeight = MovoTypography.bodyRegular.lineHeight),
-        color = MovoColors.textSecondary,
-        modifier = Modifier.fillMaxWidth(),
-    )
-}
-
-/** 分组标题：上 24、下 8，文字对齐内容线 36。 */
-@Composable
-internal fun SectionLabel(text: String) {
-    Text(
-        text = text,
-        style = MovoTypography.labelMedium,
-        color = MovoColors.textSecondary,
-        modifier = Modifier
-            .padding(start = MovoSpacing.lg, top = MovoSpacing.xxl, bottom = MovoSpacing.sm)
-            .semantics { heading() },
-    )
-}
-
-/** 列表页卡片：白底、28 圆角、0.5 发丝线、无阴影。 */
-@Composable
-internal fun LogCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    val shape = RoundedCornerShape(MovoRadius.xl)
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(MovoColors.bgSurface)
-            .border(MovoSize.hairline, MovoColors.borderHairline, shape),
-        content = content,
-    )
-}
-
-/** 卡片下方的补充说明，对齐内容线。 */
-@Composable
-internal fun CardNote(text: String) {
-    Text(
-        text,
-        style = MovoTypography.labelRegular,
-        color = MovoColors.textTertiary,
-        modifier = Modifier.padding(start = MovoSpacing.lg, end = MovoSpacing.lg, top = MovoSpacing.sm),
-    )
-}
-
-/** Chip/Filter：40 高、全圆角；选中为 Indigo 浅底 + Indigo 字，未选中为描边。 */
+/** Chip/Filter：高 40、圆角 20、左右 16；选中 = Indigo 浅底 + Indigo 字，未选中 = 1 宽 border/strong + 次要色字。 */
 @Composable
 internal fun LogFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(percent = 50)
+    val shape = RoundedCornerShape(MovoRadius.lg)
     Box(
         modifier = Modifier
             .height(MovoSize.controlMedium)
+            .movoClickable(PressKind.Solid, shape = shape, role = Role.RadioButton, onClick = onClick)
+            .semantics { this.selected = selected }
             .clip(shape)
+            // 描边 1（Figma Chip/Filter），与发丝线 0.5 不同。
             .then(if (selected) Modifier.background(MovoColors.indigoBg) else Modifier.border(1.dp, MovoColors.borderStrong, shape))
-            .clickable(role = Role.RadioButton, onClick = onClick)
             .padding(horizontal = MovoSpacing.lg),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, style = MovoTypography.labelMedium, color = if (selected) MovoColors.indigoFg else MovoColors.textSecondary)
+        Text(label, style = MovoTypography.labelMedium, color = if (selected) MovoColors.indigoFg else MovoColors.textSecondary, maxLines = 1)
     }
 }
 
-/** Button/Pill：32 高的次要按钮。 */
-@Composable
-internal fun LogPill(label: String, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .height(MovoSize.controlSmall)
-            .clip(RoundedCornerShape(percent = 50))
-            .background(MovoColors.bgSurfaceMuted)
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = 14.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(label, style = MovoTypography.labelMedium, color = MovoColors.textPrimary, maxLines = 1)
-    }
-}
-
-/** 状态图标：颜色之外同时用形状区分，颜色不是唯一信号。 */
+/** 状态图标：颜色之外同时用形状区分，颜色不是唯一信号。列表行 20、时间线 16。 */
 @Composable
 internal fun StatusIcon(status: TraceStatus, size: Dp = MovoSize.iconMedium) {
     val label = when (status) {
@@ -227,80 +98,80 @@ internal fun StatusIcon(status: TraceStatus, size: Dp = MovoSize.iconMedium) {
         TraceStatus.CANCELLED -> "已停止"
         TraceStatus.INTERRUPTED -> "中断"
     }
-    val modifier = Modifier.size(size).semantics { contentDescription = label }
+    val modifier = Modifier.semantics { contentDescription = label }
     when (status) {
-        TraceStatus.RUNNING -> CircularProgressIndicator(
-            modifier = modifier.padding(size / 10),
-            color = MovoColors.indigoFg,
-            strokeWidth = 1.6.dp,
-        )
-        TraceStatus.SUCCEEDED -> Icon(Icons.Rounded.Check, null, modifier, tint = MovoColors.greenFg)
-        TraceStatus.FAILED -> Icon(Icons.Rounded.Close, null, modifier, tint = MovoColors.roseFg)
-        TraceStatus.CANCELLED -> Icon(Icons.Rounded.Stop, null, modifier, tint = MovoColors.textSecondary)
-        TraceStatus.INTERRUPTED -> Icon(Icons.Rounded.ErrorOutline, null, modifier, tint = MovoColors.amberFg)
+        TraceStatus.RUNNING -> MovoSpinner(modifier = modifier, size = size, color = MovoColors.indigoFg)
+        TraceStatus.SUCCEEDED -> MovoIcon(MovoIcons.Check, null, modifier, size = size, tint = MovoColors.greenFg)
+        TraceStatus.FAILED -> MovoIcon(MovoIcons.X, null, modifier, size = size, tint = MovoColors.roseFg)
+        TraceStatus.CANCELLED -> MovoIcon(MovoIcons.Square, null, modifier, size = size, tint = MovoColors.textSecondary)
+        TraceStatus.INTERRUPTED -> MovoIcon(MovoIcons.CircleAlert, null, modifier, size = size, tint = MovoColors.amberFg)
     }
 }
 
-internal fun SystemEvent.icon(): ImageVector = when (kind) {
-    SystemEventKind.PROCESS, SystemEventKind.POWER -> Icons.Rounded.PowerSettingsNew
-    SystemEventKind.APP, SystemEventKind.SCREEN -> Icons.Rounded.PhoneAndroid
-    SystemEventKind.NETWORK -> if (title == "网络断开") Icons.Rounded.WifiOff else Icons.Rounded.Wifi
-    SystemEventKind.SERVICE -> if (tone == EventTone.ERROR) Icons.Rounded.GppMaybe else Icons.Rounded.Memory
-    SystemEventKind.MODEL -> Icons.Rounded.Language
-    SystemEventKind.OTHER -> Icons.Rounded.ErrorOutline
+/**
+ * 结论卡的状态图标 16：进行中用小光球（规范 8.8 Run/Summary），其余与时间线相同。
+ * 这里只需要 16 的静态品牌渐变 + 缓慢旋转；公共组件里还没有小光球，先在本页私有实现。
+ */
+@Composable
+private fun SummaryStatusIcon(status: TraceStatus) {
+    if (status == TraceStatus.RUNNING) {
+        MiniOrb(MovoSize.iconSmall, Modifier.semantics { contentDescription = "进行中" })
+    } else {
+        StatusIcon(status, MovoSize.iconSmall)
+    }
+}
+
+@Composable
+private fun MiniOrb(size: Dp, modifier: Modifier = Modifier) {
+    val reduced = LocalReducedMotion.current
+    val rotation = if (reduced) {
+        0f
+    } else {
+        val transition = rememberInfiniteTransition(label = "miniOrb")
+        val value by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(tween(MovoMotion.MINI_ORB_GRADIENT_PERIOD, easing = MovoMotion.EasingLinear)),
+            label = "miniOrbRotation",
+        )
+        value
+    }
+    val colors = MovoColors.brandGradient + MovoColors.brandGradient.first()
+    Canvas(modifier = modifier.size(size)) {
+        rotate(rotation) { drawCircle(Brush.sweepGradient(colors)) }
+        // 左上高光，让它读作球体而不是色环。
+        drawCircle(
+            Brush.radialGradient(
+                listOf(MovoColors.bgSurface.copy(alpha = 0.6f), Color.Transparent),
+                center = Offset(this.size.width * 0.35f, this.size.height * 0.3f),
+                radius = this.size.minDimension * 0.5f,
+            ),
+        )
+    }
+}
+
+internal fun SystemEvent.icon(): MovoIconData = when (kind) {
+    SystemEventKind.PROCESS, SystemEventKind.POWER -> MovoIcons.Power
+    SystemEventKind.APP, SystemEventKind.SCREEN -> MovoIcons.Smartphone
+    SystemEventKind.NETWORK -> MovoIcons.Globe
+    SystemEventKind.SERVICE -> if (tone == EventTone.ERROR) MovoIcons.ShieldAlert else MovoIcons.Cpu
+    SystemEventKind.MODEL -> MovoIcons.Globe
+    SystemEventKind.OTHER -> MovoIcons.CircleAlert
 }
 
 internal fun EventTone.color(): Color = when (this) {
-    EventTone.NORMAL -> MovoColors.textTertiary
+    EventTone.NORMAL -> MovoColors.textSecondary
     EventTone.WARNING -> MovoColors.amberFg
     EventTone.ERROR -> MovoColors.roseFg
 }
 
-internal val CompactionIcon: ImageVector get() = Icons.Rounded.Compress
+/** 上下文压缩的图标（Lucide 没有现成的 shrink，暂用 layers）。 */
+internal val CompactionIcon: MovoIconData get() = MovoIcons.Layers
 
-/** Settings/Row（Value）：图标 + 标题 / 副标题 + 右侧数值 + 箭头。 */
-@Composable
-internal fun LogRow(
-    title: String,
-    subtitle: String,
-    value: String,
-    showDivider: Boolean,
-    onClick: () -> Unit,
-    icon: @Composable () -> Unit,
-) {
-    Box(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 64.dp)
-                .padding(horizontal = MovoSpacing.lg, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(modifier = Modifier.size(MovoSize.iconMedium), contentAlignment = Alignment.Center) { icon() }
-            Spacer(Modifier.width(MovoSpacing.md))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(title, style = MovoTypography.bodyRegular, color = MovoColors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(subtitle, style = MovoTypography.labelRegular, color = MovoColors.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Spacer(Modifier.width(MovoSpacing.sm))
-            Text(value, style = MovoTypography.numericLabel.copy(fontWeight = FontWeight.Normal), color = MovoColors.textSecondary)
-            Spacer(Modifier.width(MovoSpacing.xs))
-            Icon(Icons.Rounded.ChevronRight, null, Modifier.size(MovoSize.iconSmall), tint = MovoColors.textTertiary)
-        }
-        if (showDivider) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(start = 48.dp, end = MovoSpacing.lg)
-                    .fillMaxWidth()
-                    .height(MovoSize.hairline)
-                    .background(MovoColors.borderHairline),
-            )
-        }
-    }
-}
-
-/** Run/Summary：结论一行 + 起止时间；需要时底部加一行提示和操作。 */
+/**
+ * Run/Summary：状态图标 16 + 12 + 结论 Body/Strong + 右侧计时 Numeric/Label；第二行对齐卡内 44（开始·结束·R 编号）。
+ * [footer] 只在进行中且 30 秒没有收到数据时传入（规范 8.10）：0.5 分隔线 + 提示 + 「回到对话」。
+ */
 @Composable
 internal fun SummaryCard(
     status: TraceStatus,
@@ -310,11 +181,14 @@ internal fun SummaryCard(
     footer: String? = null,
     footerAction: Pair<String, () -> Unit>? = null,
 ) {
-    LogCard {
-        Column(modifier = Modifier.padding(MovoSpacing.lg)) {
+    MovoCard(bottomPadding = 0.dp) {
+        Column(
+            modifier = Modifier.padding(MovoSpacing.lg),
+            verticalArrangement = Arrangement.spacedBy(MovoSpacing.xs),
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                StatusIcon(status, MovoSize.iconSmall)
-                Spacer(Modifier.width(MovoSpacing.sm))
+                SummaryStatusIcon(status)
+                Spacer(Modifier.width(MovoSpacing.md))
                 Text(
                     statusText,
                     style = MovoTypography.bodyStrong,
@@ -323,56 +197,53 @@ internal fun SummaryCard(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                Spacer(Modifier.width(MovoSpacing.sm))
-                Text(timer, style = MovoTypography.numericLabel.copy(fontWeight = FontWeight.Normal), color = MovoColors.textSecondary)
+                Spacer(Modifier.width(MovoSpacing.md))
+                Text(timer, style = MovoTypography.numericLabel, color = MovoColors.textSecondary, maxLines = 1)
             }
             Text(
                 meta,
                 style = MovoTypography.labelRegular,
                 color = MovoColors.textSecondary,
-                modifier = Modifier.padding(start = MovoSize.iconSmall + MovoSpacing.sm),
+                modifier = Modifier.padding(start = MovoSize.iconSmall + MovoSpacing.md),
             )
         }
         if (footer != null) {
-            Box(
-                Modifier
-                    .padding(horizontal = MovoSpacing.lg)
-                    .fillMaxWidth()
-                    .height(MovoSize.hairline)
-                    .background(MovoColors.borderHairline),
-            )
+            MovoDivider(start = MovoSpacing.lg)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 56.dp)
-                    .padding(horizontal = MovoSpacing.lg, vertical = MovoSpacing.md),
+                    .padding(start = MovoSpacing.lg, end = MovoSpacing.md, top = MovoSpacing.md, bottom = MovoSpacing.md),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(footer, style = MovoTypography.labelRegular, color = MovoColors.textSecondary, modifier = Modifier.weight(1f))
                 footerAction?.let { (label, onClick) ->
                     Spacer(Modifier.width(MovoSpacing.md))
-                    LogPill(label, onClick)
+                    MovoPillButton(label = label, onClick = onClick)
                 }
             }
         }
     }
 }
 
-/** 失败原因卡：原因（人话 + 错误码）、说明、建议与一个操作。 */
+/** 「原因」卡：原因标题 Body/Strong + 说明 13 次要色 → 16 → 建议 Body/Regular + 行内按钮（如「去模型设置」）。 */
 @Composable
 internal fun ReasonCard(explanation: FailureExplanation, onAction: (FailureAction) -> Unit) {
-    LogCard {
+    MovoCard {
+        CardTitle("原因")
         Column(
-            modifier = Modifier.padding(horizontal = MovoSpacing.xl, vertical = MovoSpacing.lg),
+            modifier = Modifier.padding(start = MovoSpacing.lg, end = MovoSpacing.lg, top = MovoSpacing.xs, bottom = MovoSpacing.md),
             verticalArrangement = Arrangement.spacedBy(MovoSpacing.xs),
         ) {
             Text(explanation.title, style = MovoTypography.bodyStrong, color = MovoColors.textPrimary)
             Text(explanation.detail, style = MovoTypography.labelRegular, color = MovoColors.textSecondary)
-            Row(modifier = Modifier.padding(top = MovoSpacing.sm), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.padding(top = MovoSpacing.md).heightIn(min = MovoSize.controlSmall),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(explanation.advice, style = MovoTypography.bodyRegular, color = MovoColors.textPrimary, modifier = Modifier.weight(1f))
                 explanation.action?.let { action ->
                     Spacer(Modifier.width(MovoSpacing.md))
-                    LogPill(action.label) { onAction(action) }
+                    MovoPillButton(label = action.label, onClick = { onAction(action) })
                 }
             }
         }
@@ -384,23 +255,25 @@ private fun BreakdownKind.color(): Color = when (this) {
     BreakdownKind.RETRY -> MovoColors.amberFg
     BreakdownKind.RECEIVING -> MovoColors.indigoFg
     BreakdownKind.TOOL -> MovoColors.graphiteFg
-    BreakdownKind.COMPACTION -> MovoColors.greenFg
+    // Figma Log/TimeBreakdown：上下文压缩同为 Graphite，靠图例文字区分。
+    BreakdownKind.COMPACTION -> MovoColors.graphiteFg
     BreakdownKind.OTHER -> MovoColors.textTertiary
 }
 
-/** Log/TimeBreakdown：分段条 + 每段一行；最久的一段加粗。 */
+/** 「耗时」卡（Log/TimeBreakdown）：8 高分段条 + 每段一行（色点、名称、时长）；最久的一段 Medium 主色。 */
 @Composable
 internal fun BreakdownCard(parts: List<BreakdownPart>, format: DiagnosticsFormat) {
     val longest = parts.maxByOrNull { it.ms }
     val total = parts.sumOf { it.ms }.coerceAtLeast(1L)
-    LogCard {
+    MovoCard {
+        CardTitle("耗时")
         Column(
-            modifier = Modifier.padding(horizontal = MovoSpacing.xl, vertical = MovoSpacing.lg),
+            modifier = Modifier.padding(start = MovoSpacing.xl, end = MovoSpacing.xl, top = MovoSpacing.xs, bottom = MovoSpacing.md),
             verticalArrangement = Arrangement.spacedBy(MovoSpacing.md),
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                modifier = Modifier.fillMaxWidth().height(MovoSpacing.sm).clip(RoundedCornerShape(MovoSpacing.xs)),
+                horizontalArrangement = Arrangement.spacedBy(MovoSpacing.xxs),
             ) {
                 parts.forEach { part ->
                     Box(
@@ -414,7 +287,7 @@ internal fun BreakdownCard(parts: List<BreakdownPart>, format: DiagnosticsFormat
             parts.forEach { part ->
                 val strong = part == longest
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(8.dp).clip(CircleShape).background(part.kind.color()))
+                    Box(Modifier.size(MovoSpacing.sm).clip(CircleShape).background(part.kind.color()))
                     Spacer(Modifier.width(MovoSpacing.sm))
                     Text(
                         part.label,
@@ -424,7 +297,7 @@ internal fun BreakdownCard(parts: List<BreakdownPart>, format: DiagnosticsFormat
                     )
                     Text(
                         format.compact(part.ms),
-                        style = MovoTypography.numericLabel.copy(fontWeight = if (strong) FontWeight.Medium else FontWeight.Normal),
+                        style = MovoTypography.numericLabel,
                         color = if (strong) MovoColors.textPrimary else MovoColors.textSecondary,
                     )
                 }
@@ -434,8 +307,9 @@ internal fun BreakdownCard(parts: List<BreakdownPart>, format: DiagnosticsFormat
 }
 
 /**
- * Work/Step：时间线的一行。左侧 16 的图标，图标之间用 1 宽的连接线串起来；
- * [detail] 不为空时在行内展开 Run/StepDetail。
+ * Work/Step：时间线的一行。行内边距 16 / 10，状态图标 16 → 12 → 标题 13 Medium + 说明 13 次要色（间距 2），
+ * 右侧时长 Numeric/Label 三级色；图标之间用 1 宽 border/strong 连接线串起来（x = 24，图标上下各留约 4）。
+ * [detail] 不为空时在文字列（卡内 44）下方展开 Run/StepDetail。[muted] 用于设备事件：标题也用次要色。
  */
 @Composable
 internal fun StepRow(
@@ -454,37 +328,39 @@ internal fun StepRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.movoClickable(PressKind.Row, onClick = onClick) else Modifier)
             .drawBehind {
-                val x = 24.dp.toPx()
+                val x = (MovoSpacing.lg + MovoSize.iconSmall / 2).toPx()
                 val stroke = 1.dp.toPx()
+                // 图标在行内 11–27：上段画到图标上方 4，下段从图标下方 4 开始（Figma connector）。
                 if (!first) drawLine(lineColor, Offset(x, 0f), Offset(x, 7.dp.toPx()), strokeWidth = stroke)
                 if (!last) drawLine(lineColor, Offset(x, 31.dp.toPx()), Offset(x, size.height), strokeWidth = stroke)
             }
-            .padding(start = MovoSpacing.lg, end = MovoSpacing.lg, top = 10.dp, bottom = 10.dp),
+            .padding(horizontal = MovoSpacing.lg, vertical = 10.dp),
     ) {
         Row {
             Box(modifier = Modifier.padding(top = 1.dp).size(MovoSize.iconSmall), contentAlignment = Alignment.Center) { icon() }
             Spacer(Modifier.width(MovoSpacing.md))
-            Column(modifier = Modifier.weight(1f)) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(MovoSpacing.xxs)) {
                 Text(title, style = MovoTypography.labelMedium, color = if (muted) MovoColors.textSecondary else MovoColors.textPrimary)
                 if (subtitle.isNotEmpty()) Text(subtitle, style = MovoTypography.labelRegular, color = MovoColors.textSecondary)
             }
             if (duration.isNotEmpty()) {
                 Spacer(Modifier.width(MovoSpacing.sm))
-                Text(duration, style = MovoTypography.numericLabel.copy(fontWeight = FontWeight.Normal), color = MovoColors.textSecondary)
+                Text(duration, style = MovoTypography.numericLabel, color = MovoColors.textTertiary, maxLines = 1)
             }
         }
         if (detail != null) {
             Column(
                 modifier = Modifier
-                    .padding(start = MovoSize.iconSmall + MovoSpacing.md, top = MovoSpacing.sm)
+                    .padding(start = MovoSize.iconSmall + MovoSpacing.md, top = MovoSpacing.sm + MovoSpacing.xxs)
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(MovoRadius.md))
+                    .clip(RoundedCornerShape(MovoRadius.sm))
                     .background(MovoColors.bgSurfaceMuted)
                     .padding(MovoSpacing.md),
+                verticalArrangement = Arrangement.spacedBy(MovoSpacing.xs),
             ) {
-                detailLabel?.let { Text(it, style = MovoTypography.labelRegular, color = MovoColors.textSecondary) }
+                detailLabel?.let { Text(it, style = MovoTypography.labelMedium, color = MovoColors.textSecondary) }
                 SelectionContainer {
                     Text(detail, style = MovoTypography.labelRegular, color = MovoColors.textPrimary)
                 }
@@ -494,18 +370,19 @@ internal fun StepRow(
 }
 
 @Composable
-internal fun StepIcon(icon: ImageVector, tint: Color) {
-    Icon(icon, contentDescription = null, modifier = Modifier.size(MovoSize.iconSmall), tint = tint)
+internal fun StepIcon(icon: MovoIconData, tint: Color) {
+    MovoIcon(icon, contentDescription = null, size = MovoSize.iconSmall, tint = tint)
 }
 
-/** 空状态：一句话说明，居中。 */
+/** 空状态：放在卡片里的一两句说明，居中（卡片外不放文字）。 */
 @Composable
-internal fun EmptyHint(text: String) {
-    Text(
-        text,
-        style = MovoTypography.labelRegular,
-        color = MovoColors.textTertiary,
-        textAlign = TextAlign.Center,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
-    )
+internal fun EmptyHint(vararg lines: String) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = MovoSpacing.lg, vertical = MovoSpacing.section),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        lines.forEach { line ->
+            Text(line, style = MovoTypography.labelRegular, color = MovoColors.textSecondary, textAlign = TextAlign.Center)
+        }
+    }
 }

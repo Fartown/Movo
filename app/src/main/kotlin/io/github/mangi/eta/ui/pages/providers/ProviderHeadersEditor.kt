@@ -8,9 +8,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.runtime.Composable
@@ -22,17 +19,27 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.R
-import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
-import top.yukonga.miuix.kmp.basic.HorizontalDivider
+import io.github.mangi.eta.ui.components.movo.CardFooter
+import io.github.mangi.eta.ui.components.movo.MovoDivider
+import io.github.mangi.eta.ui.components.movo.MovoIconButton
+import io.github.mangi.eta.ui.components.movo.RowLeading
+import io.github.mangi.eta.ui.components.movo.RowTrailing
+import io.github.mangi.eta.ui.components.movo.SettingsRow
+import io.github.mangi.eta.ui.theme.MovoColors
+import io.github.mangi.eta.ui.theme.MovoIcon
+import io.github.mangi.eta.ui.theme.MovoIcons
+import io.github.mangi.eta.ui.theme.MovoMotion
+import io.github.mangi.eta.ui.theme.MovoSize
+import io.github.mangi.eta.ui.theme.MovoSpacing
+import io.github.mangi.eta.ui.theme.MovoTypography
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 internal fun LazyListScope.providerHeadersEditor(
     headers: List<ProviderHeaderDraft>,
@@ -42,24 +49,40 @@ internal fun LazyListScope.providerHeadersEditor(
 ) {
     // 请求头数量很少且必须收进同一张卡片，折叠/展开态整组重排，不拆成独立 Lazy 条目。
     item(key = "custom_headers") {
-        ProviderSection(title = "自定义请求头") {
-            val chevronRotation by animateFloatAsState(if (expanded) 180f else 0f)
-            BasicComponent(
-                title = if (headers.isEmpty()) "未设置" else "已设置 ${headers.size} 项",
-                summary = "可覆盖 User-Agent；认证与传输请求头由系统管理。",
-                endActions = {
-                    Icon(
-                        imageVector = Icons.Rounded.ExpandMore,
-                        contentDescription = if (expanded) "收起" else "展开",
-                        tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
-                        modifier = Modifier.rotate(chevronRotation),
-                    )
+        ProviderSection(title = stringResource(R.string.movo_provider_headers_title)) {
+            val chevronRotation by animateFloatAsState(
+                targetValue = if (expanded) 180f else 0f,
+                animationSpec = MovoMotion.fast(),
+                label = "headersChevron",
+            )
+            val expandLabel = stringResource(if (expanded) R.string.movo_provider_headers_collapse else R.string.movo_provider_headers_expand)
+            SettingsRow(
+                title = stringResource(R.string.movo_provider_headers_row),
+                trailing = RowTrailing.Custom {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = if (headers.isEmpty()) {
+                                stringResource(R.string.movo_provider_headers_none)
+                            } else {
+                                stringResource(R.string.movo_provider_headers_count, headers.size)
+                            },
+                            style = MovoTypography.labelRegular,
+                            color = MovoColors.textSecondary,
+                        )
+                        MovoIcon(
+                            MovoIcons.ChevronDown,
+                            contentDescription = expandLabel,
+                            size = MovoSize.iconSmall,
+                            tint = MovoColors.textTertiary,
+                            modifier = Modifier.padding(start = MovoSpacing.xs).rotate(chevronRotation),
+                        )
+                    }
                 },
                 onClick = { onExpandedChange(!expanded) },
+                showDivider = expanded,
             )
             if (expanded) {
                 headers.forEach { row ->
-                    HorizontalDivider()
                     ProviderHeaderRow(
                         row = row,
                         onNameChange = { value ->
@@ -74,21 +97,22 @@ internal fun LazyListScope.providerHeadersEditor(
                         },
                         onRemove = { onHeadersChange(headers.filterNot { it.id == row.id }) },
                     )
+                    MovoDivider(start = MovoSpacing.lg)
                 }
-                HorizontalDivider()
-                BasicComponent(
-                    title = "添加请求头",
-                    titleColor = BasicComponentDefaults.titleColor(color = MiuixTheme.colorScheme.primary),
-                    startAction = {
-                        Icon(
-                            imageVector = Icons.Rounded.Add,
-                            contentDescription = null,
-                            tint = MiuixTheme.colorScheme.primary,
-                        )
-                    },
+                SettingsRow(
+                    title = stringResource(R.string.movo_provider_headers_add),
+                    leading = RowLeading.Icon(MovoIcons.Plus),
+                    trailing = RowTrailing.None,
+                    showDivider = false,
                     onClick = { onHeadersChange(headers + ProviderHeaderDraft()) },
                 )
             }
+            CardFooter(
+                listOf(
+                    stringResource(R.string.movo_provider_headers_footer_1),
+                    stringResource(R.string.movo_provider_headers_footer_2),
+                ),
+            )
         }
     }
 }
@@ -103,27 +127,28 @@ private fun ProviderHeaderRow(
     val context = LocalContext.current
     var visible by remember(row.id) { mutableStateOf(false) }
     Row(
-        modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 6.dp),
+        modifier = Modifier.padding(start = MovoSpacing.lg, top = MovoSpacing.md, bottom = MovoSpacing.md, end = MovoSpacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(MovoSpacing.sm),
         ) {
             TextField(
                 value = row.header.name,
                 onValueChange = onNameChange,
-                label = "名称",
+                label = stringResource(R.string.movo_provider_header_name),
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
             TextField(
                 value = row.header.value,
                 onValueChange = onValueChange,
-                label = "值",
+                label = stringResource(R.string.movo_provider_header_value),
                 singleLine = true,
                 visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
                 trailingIcon = {
+                    // Lucide 没有 eye-off 的生成数据，显隐切换暂用 Material 图标（见 restyle-C.md）。
                     IconButton(onClick = { visible = !visible }) {
                         Icon(
                             imageVector = if (visible) Icons.Rounded.Visibility else Icons.Rounded.VisibilityOff,
@@ -132,18 +157,19 @@ private fun ProviderHeaderRow(
                             } else {
                                 context.getString(R.string.page_show_71b677)
                             },
+                            tint = MovoColors.textSecondary,
                         )
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
         }
-        IconButton(onClick = onRemove) {
-            Icon(
-                imageVector = Icons.Rounded.Delete,
-                contentDescription = context.getString(R.string.ui_delete_3755f5),
-                tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
-            )
-        }
+        MovoIconButton(
+            icon = MovoIcons.Trash2,
+            contentDescription = context.getString(R.string.ui_delete_3755f5),
+            onClick = onRemove,
+            iconSize = MovoSize.iconMedium,
+            tint = MovoColors.textSecondary,
+        )
     }
 }

@@ -93,6 +93,15 @@ internal class AgentRuntimeSession(
             controller.steer(text)
         }
 
+    /** 把运行级状态变化（暂停 / 继续）告诉所有订阅者，并记入重放，重新订阅的入口也能知道当前是否已暂停。 */
+    fun broadcast(event: AgentEvent) {
+        lock.withLock {
+            if (state != State.RUNNING) return
+            recordForReplay(event)
+            subscribers.forEach { it.eventSink(event) }
+        }
+    }
+
     fun <T : AgentEvent> steer(
         text: String,
         eventFactory: () -> T,

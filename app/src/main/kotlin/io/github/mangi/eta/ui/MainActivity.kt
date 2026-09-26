@@ -37,6 +37,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         var contentReady = false
+        // 冷启动：首页进场等启动页开始退场再播。
+        if (savedInstanceState == null) io.github.mangi.eta.ui.app.StartupReveal.hold()
         installStartupSplash { contentReady }
         enableEdgeToEdge()
         updateAssistantHandoff(intent)
@@ -47,8 +49,9 @@ class MainActivity : ComponentActivity() {
                 val appearance by AppearanceSettingsRepository.settingsFlow()
                     .collectAsState(initial = initialAppearance)
 
-                LaunchedEffect(appearance.themeMode) {
-                    updateApplicationNightMode(appearance.themeMode)
+                // 规范 v1 只做浅色：应用级固定为浅色，存储的主题模式保留但不生效。
+                LaunchedEffect(Unit) {
+                    updateApplicationNightMode(AppearanceThemeMode.LIGHT)
                 }
 
                 LaunchedEffect(appearance.predictiveBackEnabled) {

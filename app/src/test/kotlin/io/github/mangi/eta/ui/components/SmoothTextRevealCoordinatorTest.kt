@@ -41,7 +41,7 @@ class SmoothTextRevealCoordinatorTest {
         val earlierKey = RevealBlockKey(0)
         val laterKey = RevealBlockKey(100)
         val earlierNode = attach(coordinator, earlierKey, "早先的思考正文")
-        attach(coordinator, laterKey, "随后到达的工具输出内容")
+        attach(coordinator, laterKey, "随后到达的工具输出内容。")
 
         coordinator.detach(earlierKey, earlierNode)
 
@@ -54,43 +54,65 @@ class SmoothTextRevealCoordinatorTest {
         }
         try {
             clock.send(0L)
-            clock.send(50_000_000L)
+            clock.send(16_000_000L)
             yield()
 
-            assertTrue(coordinator.drawSnapshot(laterKey)!!.progress > 0f)
+            assertEquals(12f, coordinator.drawSnapshot(laterKey)!!.progress, 0f)
         } finally {
             frameJob.cancelAndJoin()
         }
     }
 
     @Test
-    fun oneFrameCarriesAdvanceAcrossBlocksInSourceOrder() = runBlocking {
+    fun blocksCommitWholeSentencesAndAnimateEachChunk() {
+        // 规范 9.4 / Q2：按句追加，每块淡入 + 模糊 160ms；没有句末的尾巴等 300ms 或下一块出现。
         val coordinator = SmoothTextRevealCoordinator()
-        val keys = (0 until 10).map { RevealBlockKey(it * 20) }
-        keys.reversed().forEach { attach(coordinator, it, "abcdefghij") }
-        val clock = TestFrameClock()
-        val frameJob = launch(clock, start = CoroutineStart.UNDISPATCHED) {
-            coordinator.runFrameClock()
-        }
-        try {
-            clock.send(0L)
-            clock.send(50_000_000L)
-            yield()
+        val key = RevealBlockKey(0)
+        val state = SmoothTextRevealState(key, coordinator)
+        state.attach(SmoothTextRevealNode(state))
+        val first = "第一句。第二句还没"
+        state.onTextLayout(first, layout(first))
 
-            assertEquals(10f, coordinator.drawSnapshot(keys[0])!!.progress, 0f)
-            assertEquals(10f, coordinator.drawSnapshot(keys[1])!!.progress, 0f)
-            assertEquals(5f, coordinator.drawSnapshot(keys[2])!!.progress, 0f)
-            keys.drop(3).forEach { assertEquals(0f, coordinator.drawSnapshot(it)!!.progress, 0f) }
-            assertEquals(keys.take(3).toSet(), coordinator.started.value)
-            assertFalse(coordinator.drained.value)
+        coordinator.advanceFrame(0L)
+        val snapshot = coordinator.drawSnapshot(key)!!
+        assertEquals(4f, snapshot.progress, 0f)
+        assertEquals(1, snapshot.chunks.size)
+        assertEquals(0, snapshot.chunks[0].from)
+        assertEquals(4, snapshot.chunks[0].to)
+        assertTrue(key in coordinator.started.value)
 
-            repeat(60) { clock.send((it + 2) * 50_000_000L) }
-            yield()
-            assertTrue(coordinator.drained.value)
-            assertEquals(keys.toSet(), coordinator.started.value)
-        } finally {
-            frameJob.cancelAndJoin()
-        }
+        coordinator.advanceFrame(80_000_000L)
+        assertEquals(0.5f, snapshot.chunks[0].fraction, 0.01f)
+        coordinator.advanceFrame(170_000_000L)
+        assertTrue(snapshot.chunks.isEmpty())
+        assertEquals(4f, snapshot.progress, 0f)
+
+        // 尾巴 300ms 没有新字后整块提交。
+        coordinator.advanceFrame(310_000_000L)
+        assertEquals(9f, snapshot.progress, 0f)
+        assertEquals(4, snapshot.chunks.single().from)
+    }
+
+    @Test
+    fun laterBlockOrStreamEndFlushesTheBufferedTail() {
+        val coordinator = SmoothTextRevealCoordinator()
+        val firstKey = RevealBlockKey(0)
+        val secondKey = RevealBlockKey(50)
+        attach(coordinator, firstKey, "列表第一项没有句号")
+        coordinator.advanceFrame(0L)
+        assertEquals(0f, coordinator.drawSnapshot(firstKey)!!.progress, 0f)
+
+        attach(coordinator, secondKey, "第二项")
+        coordinator.advanceFrame(16_000_000L)
+        assertEquals(9f, coordinator.drawSnapshot(firstKey)!!.progress, 0f)
+        assertEquals(0f, coordinator.drawSnapshot(secondKey)!!.progress, 0f)
+
+        coordinator.setStreaming(false)
+        coordinator.advanceFrame(32_000_000L)
+        assertEquals(3f, coordinator.drawSnapshot(secondKey)!!.progress, 0f)
+        coordinator.advanceFrame(400_000_000L)
+        assertTrue(coordinator.drawSnapshot(secondKey)!!.chunks.isEmpty())
+        assertTrue(coordinator.drawSnapshot(firstKey)!!.chunks.isEmpty())
     }
 
     @Test

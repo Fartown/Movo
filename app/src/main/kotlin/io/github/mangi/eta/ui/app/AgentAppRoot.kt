@@ -49,7 +49,11 @@ import io.github.mangi.eta.agent.runtime.AgentConversationHandoff
 import io.github.mangi.eta.core.AndroidAgentLogger
 import io.github.mangi.eta.data.repository.RuntimeConfigRepository
 import io.github.mangi.eta.ui.AppearanceSettingsScreen
-import io.github.mangi.eta.ui.SettingsScreen
+import io.github.mangi.eta.ui.screens.settings.KimiWebEntry
+import io.github.mangi.eta.ui.screens.settings.attentionLabel
+import io.github.mangi.eta.ui.screens.settings.SettingsScreen
+import io.github.mangi.eta.ui.screens.settings.SystemAssistantScreen
+import io.github.mangi.eta.ui.screens.settings.ToolSettingsScreen
 import io.github.mangi.eta.ui.components.MiuixDialogActions
 import io.github.mangi.eta.ui.model.AgentMemoryAction
 import io.github.mangi.eta.ui.model.AgentSkillsAction
@@ -60,6 +64,7 @@ import io.github.mangi.eta.ui.model.PermissionHealthAction
 import io.github.mangi.eta.ui.navigation.AgentNavigator
 import io.github.mangi.eta.ui.navigation.AppRoute
 import io.github.mangi.eta.ui.screens.diagnostics.LocalRunLogOpener
+import io.github.mangi.eta.ui.components.LocalOpenCapabilities
 import io.github.mangi.eta.ui.pages.providers.ModelProviderDetailScreen
 import io.github.mangi.eta.ui.pages.providers.ModelProviderListScreen
 import io.github.mangi.eta.ui.screens.backup.DataBackupScreen
@@ -146,6 +151,10 @@ internal fun AgentAppRoot(
     }
 
     var conversationPaneOpen by remember { mutableStateOf(false) }
+    // 侧边栏底部「设置」行要同步显示权限缺失（规范 8.6），打开时刷新一次。
+    LaunchedEffect(conversationPaneOpen) {
+        if (conversationPaneOpen) agentState.refreshPermissionHealth()
+    }
     var conversationRenameTarget by remember { mutableStateOf<ConversationSummaryUi?>(null) }
     var conversationDeleteTarget by remember { mutableStateOf<ConversationSummaryUi?>(null) }
     var conversationExportTarget by remember { mutableStateOf<ConversationSummaryUi?>(null) }
@@ -188,6 +197,9 @@ internal fun AgentAppRoot(
 
     LaunchedEffect(resultConversationHandoff) {
         val request = resultConversationHandoff ?: return@LaunchedEffect
+        // 浮层「展开到 App」（Q4）：一开始就收起侧边栏，并在浮层仍盖着时播完，切过来时看到的就是会话页。
+        val paneWasOpen = conversationPaneOpen
+        conversationPaneOpen = false
         val opened = try {
             withTimeoutOrNull(8_000) { agentState.openResultConversation(request.target, request.runId) } == true
         } catch (cancelled: CancellationException) {
@@ -201,6 +213,7 @@ internal fun AgentAppRoot(
             navigator.popToHome()
             // Let the original chat compose before removing the covering result window.
             withFrameNanos { }
+            if (paneWasOpen) kotlinx.coroutines.delay(io.github.mangi.eta.ui.theme.MovoMotion.SLOW_EXIT.toLong())
         }
         onResultConversationOpened(request, opened)
     }
@@ -210,6 +223,8 @@ internal fun AgentAppRoot(
         restoreConversationPaneOnBack: Boolean = conversationPaneOpen,
     ) {
         conversationPaneOpen = restoreConversationPaneOnBack
+        // Q4：刚从设置行起飞的标题认领这一页，返回时飞回原来那一行。
+        io.github.mangi.eta.ui.components.movo.TitleMorph.bindRoute(route)
         navigator.push(route)
     }
 
@@ -228,6 +243,7 @@ internal fun AgentAppRoot(
     }
 
     fun popRoute() {
+        backStack.lastOrNull()?.let(io.github.mangi.eta.ui.components.movo.TitleMorph::onPop)
         if (!navigator.pop()) {
             (context as? Activity)?.finish()
         }
@@ -249,6 +265,23 @@ internal fun AgentAppRoot(
         pushRoute(runId?.let(AppRoute::DiagnosticsRun) ?: AppRoute.Diagnostics)
     }
 
+    val launchKimiWeb: () -> Unit = {
+        requestExecutionNotifications()
+        if (appViewModel.kimiWebState.phase != KimiWebPhase.NOT_INSTALLED) {
+            appViewModel.launchKimiWeb { result ->
+                if (result is KimiWebLaunchResult.Failed) {
+                    Toast.makeText(
+                        context,
+                        result.message(context),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+        } else {
+            pushRoute(AppRoute.LinuxEnvironment)
+        }
+    }
+
     @Composable
     fun RoutedShell(
         route: AppRoute,
@@ -258,34 +291,14 @@ internal fun AgentAppRoot(
             currentRoute = route,
             isCurrentRoute = backStack.lastOrNull() == route,
             conversationPaneState = agentState.conversationPaneState,
-            isConversationPaneOpen = conversationPaneOpen,
+            // 浮层「展开到 App」交接期间：侧边栏在本帧就按关闭绘制（MainActivity 一回到前台就可见，不能等动画）。
+            isConversationPaneOpen = conversationPaneOpen && resultConversationHandoff == null,
+            closeConversationPaneInstantly = resultConversationHandoff != null,
             onBack = { popRoute() },
             onOpenConversationPane = { conversationPaneOpen = true },
             onDismissConversationPane = { conversationPaneOpen = false },
             onSearchConversations = { query -> agentState.updateSearchQuery(query) },
             onNewConversation = { createConversation() },
-            onOpenTerminal = { pushRoute(AppRoute.Terminal) },
-            onLaunchKimiWeb = {
-                requestExecutionNotifications()
-                if (appViewModel.kimiWebState.phase != KimiWebPhase.NOT_INSTALLED) {
-                    appViewModel.launchKimiWeb { result ->
-                        if (result is KimiWebLaunchResult.Failed) {
-                            Toast.makeText(
-                                context,
-                                result.message(context),
-                                Toast.LENGTH_LONG,
-                            ).show()
-                        }
-                    }
-                } else {
-                    pushRoute(AppRoute.LinuxEnvironment)
-                }
-            },
-            kimiWebLabel = appViewModel.kimiWebState.actionLabel(context),
-            canStopKimiWeb = appViewModel.kimiWebState.canStop,
-            onStopKimiWeb = appViewModel::stopKimiWeb,
-            onRefreshKimiWeb = appViewModel::refreshKimiWeb,
-            onOpenBrowser = { pushRoute(AppRoute.Browser) },
             onSelectConversation = { conversationId -> selectConversation(conversationId) },
             onConversationRename = { conversation ->
                 conversationRenameTarget = conversation
@@ -302,12 +315,11 @@ internal fun AgentAppRoot(
             onConversationDelete = { conversation ->
                 conversationDeleteTarget = conversation
             },
-            onOpenTools = { pushRoute(AppRoute.Tools) },
-            onOpenSkills = { pushRoute(AppRoute.Skills) },
-            onOpenCharacters = { pushRoute(AppRoute.Characters) },
-            onOpenPermissions = { pushRoute(AppRoute.Permissions) },
             onOpenSettings = { pushRoute(AppRoute.Settings) },
-            onOpenModelProviders = { pushRoute(AppRoute.ModelProviders) },
+            settingsAttention = agentState.permissionHealthState.attentionLabel(
+                overlayOff = stringResource(R.string.movo_permission_overlay_off),
+                accessibilityOff = stringResource(R.string.movo_permission_accessibility_off),
+            ),
         ) { padding ->
             Box(
                 modifier = Modifier
@@ -315,7 +327,16 @@ internal fun AgentAppRoot(
                     .padding(padding)
             ) {
                 // 对话里失败或卡住的任务可以直达运行日志。
-                CompositionLocalProvider(LocalRunLogOpener provides openRunLog) {
+                CompositionLocalProvider(
+                    LocalRunLogOpener provides openRunLog,
+                    LocalOpenCapabilities provides { pushRoute(AppRoute.Tools) },
+                    io.github.mangi.eta.ui.components.LocalOpenRunDetail provides { key ->
+                        // Q4：详情页从这张执行卡的位置长出来。
+                        io.github.mangi.eta.ui.components.movo.RunDetailMorph.prepare(key)
+                        pushRoute(AppRoute.RunDetail(key))
+                    },
+                    io.github.mangi.eta.ui.components.LocalOpenVoiceSettings provides { pushRoute(AppRoute.VoiceSettings) },
+                ) {
                     content()
                 }
             }
@@ -331,9 +352,19 @@ internal fun AgentAppRoot(
         LocalAppearanceSettings.current.swipeDismissEnabled
     }
     key(navigationResetKey) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        val reducedMotion = io.github.mangi.eta.ui.theme.LocalReducedMotion.current
+        val runDetailTransition = remember(reducedMotion) {
+            io.github.mangi.eta.ui.components.movo.movoMorphTransition(reducedMotion) {
+                io.github.mangi.eta.ui.components.movo.RunDetailMorph.origin
+            }
+        }
         NavDisplay(
             backStack = backStack,
             onBack = { popRoute() },
+            transition = remember(reducedMotion) {
+                io.github.mangi.eta.ui.components.movo.movoNavTransition(reducedMotion)
+            },
             effects = NavDisplayEffects(
                 cornerClipRadius = rememberNavSystemCornerRadius(),
             ),
@@ -347,6 +378,19 @@ internal fun AgentAppRoot(
                         isDrawerOpen = conversationPaneOpen,
                     )
                 }
+            }
+            entry<AppRoute.RunDetail>(transition = runDetailTransition, swipeDismiss = swipeDismiss) { route ->
+                val requestNotifications = rememberExecutionNotificationRequest()
+                RunDetailRoute(
+                    agentState = agentState,
+                    workKey = route.workKey,
+                    onBack = ::popRoute,
+                    onOpenBrowser = { pushRoute(AppRoute.Browser) },
+                    onSendMessage = { text ->
+                        requestNotifications()
+                        agentState.sendCurrentMessage(text)
+                    },
+                )
             }
             entry<AppRoute.Chat>(swipeDismiss = swipeDismiss) {
                 // Restore old saved navigation into the one canonical conversation page.
@@ -448,6 +492,7 @@ internal fun AgentAppRoot(
                 }
                 PermissionHealthScreen(
                     state = agentState.permissionHealthState,
+                    onRefresh = agentState::refreshPermissionHealth,
                     onAction = { action ->
                         when (action) {
                             PermissionHealthAction.NavigateBack -> popRoute()
@@ -567,10 +612,24 @@ internal fun AgentAppRoot(
             }
             entry<AppRoute.Settings>(swipeDismiss = swipeDismiss) {
                 SettingsScreen(
-                    context = context,
                     onNavigate = { route -> pushRoute(route) },
-                    onBack = ::popRoute
+                    onBack = ::popRoute,
+                    permissionHealth = agentState.permissionHealthState,
+                    onRefreshPermissions = agentState::refreshPermissionHealth,
+                    kimiWeb = KimiWebEntry(
+                        label = appViewModel.kimiWebState.actionLabel(context),
+                        canStop = appViewModel.kimiWebState.canStop,
+                        onLaunch = launchKimiWeb,
+                        onStop = appViewModel::stopKimiWeb,
+                        onRefresh = appViewModel::refreshKimiWeb,
+                    ),
                 )
+            }
+            entry<AppRoute.ToolSettings>(swipeDismiss = swipeDismiss) {
+                ToolSettingsScreen(onNavigate = { route -> pushRoute(route) }, onBack = ::popRoute)
+            }
+            entry<AppRoute.SystemAssistant>(swipeDismiss = swipeDismiss) {
+                SystemAssistantScreen(onNavigate = { route -> pushRoute(route) }, onBack = ::popRoute)
             }
             entry<AppRoute.VoiceSettings>(swipeDismiss = swipeDismiss) {
                 io.github.mangi.eta.ui.screens.voice.VoiceSettingsScreen(onBack = ::popRoute)
@@ -676,6 +735,9 @@ internal fun AgentAppRoot(
                 )
             }
         }
+        // Q4 设置行 → 二级页：移动中的行标题画在导航容器之上。
+        io.github.mangi.eta.ui.components.movo.TitleMorphOverlay()
+    }
     }
 
     characterStore.notice?.let { notice ->

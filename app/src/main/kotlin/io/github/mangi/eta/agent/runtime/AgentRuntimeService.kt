@@ -25,12 +25,15 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
@@ -46,8 +49,18 @@ import io.github.mangi.eta.agent.overlay.AgentHapticFeedback
 import io.github.mangi.eta.agent.overlay.AgentOverlayBubble
 import io.github.mangi.eta.agent.overlay.AgentOverlayGlow
 import io.github.mangi.eta.agent.overlay.AgentOverlayOrb
+import io.github.mangi.eta.agent.overlay.AgentOverlayRemoveZone
+import io.github.mangi.eta.agent.overlay.orbMode
+import io.github.mangi.eta.agent.voice.EtaAssistantVoiceService
+import io.github.mangi.eta.agent.voice.session.VoiceChannel
+import io.github.mangi.eta.agent.voice.session.VoiceEntry
+import io.github.mangi.eta.agent.voice.session.VoiceSessionManager
+import io.github.mangi.eta.agent.voice.session.VoiceSurfaceTracker
+import io.github.mangi.eta.ui.theme.MovoMotion
 import io.github.mangi.eta.agent.overlay.AgentOverlayPhase
 import io.github.mangi.eta.agent.overlay.AgentOverlayState
+import io.github.mangi.eta.agent.overlay.markPaused
+import io.github.mangi.eta.agent.overlay.markResumed
 import io.github.mangi.eta.agent.overlay.AgentOverlayStatus
 import io.github.mangi.eta.agent.overlay.AgentOverlayVisibilityPolicy
 import io.github.mangi.eta.agent.overlay.applyEvent
@@ -59,6 +72,9 @@ import io.github.mangi.eta.data.repository.RuntimeConfigRepository
 import io.github.mangi.eta.ui.AgentConversationSheetActivity
 import io.github.mangi.eta.ui.markdown.InAppBrowserUriHandler
 import kotlin.concurrent.thread
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import top.yukonga.miuix.kmp.squircle.LocalSquircleEnabled
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -109,6 +125,38 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     private val state = mutableStateOf(AgentOverlayState.Initial)
     private val collapsed = mutableStateOf(true)
+    /** 展开卡的可见状态：先播退场动画再移除窗口（规范 9.10「浮窗」）。 */
+    private val bubbleVisible = mutableStateOf(true)
+    /** 悬浮球停靠在右边缘（true）还是左边缘；展开卡出现在球朝屏幕中心的一侧。 */
+    private val orbOnEnd = mutableStateOf(true)
+    /**
+     * 待命（规范 8.1）：悬浮球出现后常驻，看过结果后回到待命（只有玻璃圆 + 光球），直到拖入「移除」区。
+     * 待命时 Movo 自己的界面在前台就先藏起来，回到其他 App 再出现。
+     */
+    private val standby = mutableStateOf(false)
+    /** 悬浮球退场（移除）时置 false，播完退场再移除窗口。 */
+    private val orbShown = mutableStateOf(true)
+    private val removeEngaged = mutableStateOf(false)
+    private val removeZoneVisible = mutableStateOf(false)
+    private var removeZoneView: ComposeView? = null
+    /** 拖动中手指对应的悬浮球窗口位置（吸附到移除区时窗口不跟手，松开吸附后回到这里）。 */
+    private var fingerX = 0f
+    private var fingerY = 0f
+    /** App 自己的页面进出前台时刷新待命悬浮球的显隐（前台判断用 [VoiceSurfaceTracker]，它从进程启动起就在计数）。 */
+    private val appActivityCallbacks = object : android.app.Application.ActivityLifecycleCallbacks {
+        override fun onActivityResumed(activity: android.app.Activity) {
+            mainHandler.post(::updateStandbyOrbVisibility)
+        }
+        override fun onActivityPaused(activity: android.app.Activity) {
+            mainHandler.post(::updateStandbyOrbVisibility)
+        }
+        override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: Bundle?) = Unit
+        override fun onActivityStarted(activity: android.app.Activity) = Unit
+        override fun onActivityStopped(activity: android.app.Activity) = Unit
+        override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: Bundle) = Unit
+        override fun onActivityDestroyed(activity: android.app.Activity) = Unit
+    }
+    private val panelIdleToken = Any()
     private var hasExecutedForegroundTool = false
     private val supplementsLock = Any()
     private val activeSupplements = mutableListOf<AgentUiHandoffPayload.Supplement>()
@@ -123,6 +171,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+        application.registerActivityLifecycleCallbacks(appActivityCallbacks)
+        // 语音对话与悬浮窗联动（规范 8.5）：执行中语音开始时展开卡以语音模式弹出；语音结束后展开卡恢复自动收起。
+        lifecycleScope.launch {
+            VoiceSessionManager.state.map { it.active }.distinctUntilChanged().collect(::onVoiceActiveChanged)
+        }
     }
 
     override fun onBind(intent: Intent): IBinder? {
@@ -149,6 +202,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     override fun onDestroy() {
+        application.unregisterActivityLifecycleCallbacks(appActivityCallbacks)
         clearResultHandoff()
         io.github.mangi.eta.diagnostics.MemoryDiagnostics.record("lifecycle", "runtime.destroyed",
             fields = mapOf("run_active" to (activeSession?.isTerminal == false)))
@@ -174,9 +228,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         bubbleView?.let { view -> runCatching { windowManager?.removeView(view) } }
         orbView?.let { view -> runCatching { windowManager?.removeView(view) } }
         glowView?.let { view -> runCatching { windowManager?.removeView(view) } }
+        removeZoneView?.let { view -> runCatching { windowManager?.removeView(view) } }
         bubbleView = null
         orbView = null
         glowView = null
+        removeZoneView = null
         bubbleParams = null
         orbParams = null
         glowParams = null
@@ -253,6 +309,24 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                         runId = AgentRuntimeWire.runIdFromBundle(msg.data ?: return),
                         replyTo = msg.replyTo,
                     )
+                }
+
+                AgentRuntimeWire.MSG_RESUME -> {
+                    val runId = AgentRuntimeWire.runIdFromBundle(msg.data ?: return)
+                    if (activeSession?.takeIf { !it.isTerminal }?.runId == runId) requestResume()
+                }
+
+                AgentRuntimeWire.MSG_STEER -> {
+                    val data = msg.data ?: return
+                    val runId = AgentRuntimeWire.runIdFromBundle(data)
+                    val accepted = steerRun(runId, AgentRuntimeWire.steerTextFromBundle(data))
+                    runCatching {
+                        msg.replyTo?.send(
+                            Message.obtain(null, AgentRuntimeWire.MSG_STEER_RESPONSE).apply {
+                                this.data = AgentRuntimeWire.steerResponseBundle(runId, accepted)
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -346,7 +420,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                                 is AgentRuntimeImageTransfer.ImageTransferException ->
                                     throwable.message ?: "Agent Runtime 无法读取图片"
                                 is RuntimeConfigUnavailableException ->
-                                    "请先在 Eta 中配置可用的模型"
+                                    "请先在 Movo 中配置可用的模型"
                                 else -> "Agent Runtime 无法准备请求"
                             },
                             replyTo,
@@ -383,7 +457,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         if (!executionHeld && !allowBoundFallback) {
             session.complete(AgentRuntimeWire.RunResult(
                 runId = request.runId, ok = false, content = "",
-                error = "无法启动后台执行服务，请返回 Eta 后重试",
+                error = "无法启动后台执行服务，请返回 Movo 后重试",
             )) {}
             return
         }
@@ -482,7 +556,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                             AgentHapticFeedback.Type.RUN_STARTED,
                         )
                     }
+                    // 已常驻（待命）时不重新弹出，状态环与角标原地交叉淡化为执行中（规范 9.5）。
+                    standby.value = false
                     ensureOverlayVisible()
+                    updateStandbyOrbVisibility()
+                    // 语音对话从 App 内延续过来：展开卡直接以语音模式出现（规范 8.2「跨界面不断线」）。
+                    if (VoiceSessionManager.active && collapsed.value) expandBubble()
                 }
             }.onFailure { throwable ->
                 AndroidAgentLogger.warnThrottled("runtime_overlay_event_failed") {
@@ -786,18 +865,14 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     private fun requestPause() {
         activeSession?.controller?.pause()
-        state.value = state.value.copy(
-            phase = AgentOverlayPhase.PAUSED,
-            status = AgentOverlayStatus.Paused,
-        )
+        activeSession?.broadcast(AgentEvent.RunPaused)
+        state.value = state.value.markPaused()
     }
 
     private fun requestResume() {
         activeSession?.controller?.resume()
-        state.value = state.value.copy(
-            phase = AgentOverlayPhase.RUNNING,
-            status = AgentOverlayStatus.Continuing,
-        )
+        activeSession?.broadcast(AgentEvent.RunResumed)
+        state.value = state.value.markResumed()
     }
 
     private fun requestSupplement(text: String) {
@@ -825,6 +900,22 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
 
         continueFromResult(supplementText)
+    }
+
+    /**
+     * App 内输入框的补充：只交给指定的、仍在执行的 run，返回是否被接收。
+     * 与悬浮球「补充」共用 steering 通道与补充序号；这里不做「基于结果续跑」，未接收时由入口层排队。
+     */
+    private fun steerRun(runId: String, text: String): Boolean {
+        val supplementText = text.trim()
+        if (supplementText.isBlank()) return false
+        val session = activeSession?.takeIf { it.runId == runId && !it.isTerminal } ?: return false
+        val event = session.steer(supplementText) { recordSupplementEvent(supplementText) } ?: return false
+        AndroidAgentLogger.info(
+            "Agent runtime supplement received from app: index=${event.index}, chars=${event.text.length}"
+        )
+        state.value = state.value.applyEvent(event)
+        return true
     }
 
     private fun continueFromResult(text: String): Boolean {
@@ -863,30 +954,33 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     private fun showOverlay() {
-        if (orbView != null) return
+        if (orbView != null) {
+            // 悬浮球已常驻：只补上边缘光晕。
+            if (glowView == null) windowManager?.let(::showGlow)
+            return
+        }
         // TYPE_ACCESSIBILITY_OVERLAY 免 SYSTEM_ALERT_WINDOW 权限；仅回退态（无障碍未启用）才需检查
         if (AgentAccessibilityService.current() == null && !Settings.canDrawOverlays(this)) return
         val wm = overlayContext().getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
         windowManager = wm
 
-        // ── 氛围光窗口：全屏触摸穿透，彩虹光圈，截图时被 takeScreenshotOfWindow 过滤 ─
-        val glow = createOverlayComposeView {
-            AgentOverlayGlow(state = state.value)
-        }
-        val glowLp = glowLayoutParams()
-        runCatching { wm.addView(glow, glowLp) }.onFailure { throwable ->
-            AndroidAgentLogger.warnThrottled("runtime_glow_add_view_failed") {
-                "Agent runtime glow addView failed: type=${throwable.safeLogType()}"
-            }
-        }
-        glowView = glow
-        glowParams = glowLp
+        showGlow(wm)
 
         // ── 光球窗口：始终显示，右侧中下 ──────────────────────────────
+        orbShown.value = true
         val orb = createOverlayComposeView {
+            val voice by VoiceSessionManager.state.collectAsState()
             AgentOverlayOrb(
-                state = state.value,
-                onToggleCollapse = ::toggleCollapse,
+                mode = orbMode(state.value.phase, standby.value, voice.active),
+                onTap = ::onOrbTapped,
+                onLongPress = ::onOrbLongPressed,
+                onDragStart = ::onOrbDragStart,
+                onDrag = ::handleDrag,
+                onDragEnd = ::onOrbDragEnd,
+                shown = orbShown.value,
+                engaged = removeEngaged.value,
+                hearing = voice.channel == VoiceChannel.Hearing,
+                longRun = (state.value.elapsedMillis(System.currentTimeMillis()) ?: 0L) >= 10_000L,
             )
         }
         val orbLp = orbLayoutParams()
@@ -899,6 +993,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         orbView = orb
         orbParams = orbLp
         orb.visibility = View.VISIBLE
+        publishOrbRect()
 
         // ── 小气泡窗口：展开态显示，跟随光球，窗口外触摸穿透 ─────────
         if (!collapsed.value) {
@@ -906,29 +1001,138 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
     }
 
-    private fun toggleCollapse() {
-        collapsed.value = !collapsed.value
-        val wm = windowManager ?: return
-        if (collapsed.value) {
-            bubbleView?.let { view -> runCatching { wm.removeView(view) } }
-            bubbleView = null
-            bubbleParams = null
-        } else {
-            if (bubbleView == null) showBubble(wm)
+    /** 氛围光窗口：全屏触摸穿透，彩虹光圈，截图时被 takeScreenshotOfWindow 过滤。 */
+    private fun showGlow(wm: WindowManager) {
+        if (glowView != null) return
+        val glow = createOverlayComposeView {
+            AgentOverlayGlow(state = state.value)
+        }
+        val glowLp = glowLayoutParams()
+        runCatching { wm.addView(glow, glowLp) }.onFailure { throwable ->
+            AndroidAgentLogger.warnThrottled("runtime_glow_add_view_failed") {
+                "Agent runtime glow addView failed: type=${throwable.safeLogType()}"
+            }
+            return
+        }
+        glowView = glow
+        glowParams = glowLp
+    }
+
+    /**
+     * 点悬浮球：待命时打开对话浮层；执行中 / 暂停时展开或收起展开卡；完成 / 失败时打开对话浮层查看结果
+     * （规范 8.1：完成后保持 ✓，点开才看结果，不自动弹出）。
+     */
+    private fun onOrbTapped() {
+        if (standby.value) {
+            markSheetFromOrb()
+            EtaAssistantVoiceService.showAssistant(this, autoListen = false)
+            return
+        }
+        val phase = state.value.phase
+        if ((phase == AgentOverlayPhase.FINISHED || phase == AgentOverlayPhase.FAILED) && activeSession == null) {
+            collapseBubble()
+            markSheetFromOrb()
+            openResultConversation()
+            return
+        }
+        toggleCollapse()
+    }
+
+    /**
+     * 长按悬浮球 300ms（规范 8.1）：执行中 / 暂停 → 展开卡以语音模式弹出；待命 / 完成 → 打开对话浮层并直接进入语音模式。
+     */
+    private fun onOrbLongPressed() {
+        AgentHapticFeedback.perform(this, AgentHapticFeedback.Type.LONG_PRESS)
+        val phase = state.value.phase
+        when {
+            standby.value -> {
+                markSheetFromOrb()
+                EtaAssistantVoiceService.showAssistant(this, autoListen = true)
+            }
+            activeSession == null && (phase == AgentOverlayPhase.FINISHED || phase == AgentOverlayPhase.FAILED) -> {
+                collapseBubble()
+                markSheetFromOrb()
+                openResultConversation(autoListen = true)
+            }
+            else -> {
+                expandBubble()
+                startPanelVoice()
+            }
         }
     }
+
+    /** 展开卡里的声波 / 长按悬浮球：开始语音对话；执行中说的话停顿后作为补充交给当前任务。 */
+    private fun startPanelVoice() {
+        if (VoiceSessionManager.active) return
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(this, R.string.movo_overlay_mic_required, Toast.LENGTH_LONG).show()
+            return
+        }
+        runCatching { VoiceEntry.startInPlace(this) }.onFailure { throwable ->
+            AndroidAgentLogger.warn("Overlay voice start failed: type=${throwable.safeLogType()}")
+            Toast.makeText(this, R.string.movo_overlay_voice_failed, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun toggleCollapse() {
+        if (collapsed.value) expandBubble() else collapseBubble()
+    }
+
+    private fun expandBubble() {
+        collapsed.value = false
+        val wm = windowManager ?: return
+        mainHandler.removeCallbacksAndMessages(bubbleRemovalToken)
+        bubbleVisible.value = true
+        if (bubbleView == null) showBubble(wm)
+        scheduleBubbleAutoCollapse()
+    }
+
+    /** 收起：先让展开卡播退场（120ms），再移除窗口。 */
+    private fun collapseBubble() {
+        collapsed.value = true
+        mainHandler.removeCallbacksAndMessages(panelIdleToken)
+        val view = bubbleView ?: return
+        bubbleVisible.value = false
+        setBubbleInputMode(focusable = false)
+        mainHandler.postDelayed({
+            if (collapsed.value && bubbleView === view) {
+                runCatching { windowManager?.removeView(view) }
+                bubbleView = null
+                bubbleParams = null
+            }
+        }, bubbleRemovalToken, BUBBLE_EXIT_MS)
+    }
+
+    /** 展开卡 4s 无操作自动收回；暂停态、输入补充时不收回（规范 8.1）。 */
+    private fun scheduleBubbleAutoCollapse() {
+        mainHandler.removeCallbacksAndMessages(panelIdleToken)
+        mainHandler.postDelayed({
+            val lp = bubbleParams
+            val typing = lp != null && lp.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE == 0
+            if (!collapsed.value && state.value.phase == AgentOverlayPhase.RUNNING && !typing && !VoiceSessionManager.active) collapseBubble()
+        }, panelIdleToken, PANEL_AUTO_COLLAPSE_MS)
+    }
+
+    private val bubbleRemovalToken = Any()
 
     private fun showBubble(wm: WindowManager) {
         if (bubbleView != null) return
         val bubble = createOverlayComposeView {
             AgentOverlayBubble(
                 state = state.value,
-                onCollapse = ::toggleCollapse,
+                onCollapse = ::collapseBubble,
                 onPause = ::requestPause,
                 onResume = ::requestResume,
                 onStop = ::requestStop,
                 onSupplementModeChange = ::setBubbleInputMode,
                 onSupplement = ::requestSupplement,
+                anchorEnd = orbOnEnd.value,
+                visible = bubbleVisible.value,
+                onInteraction = ::scheduleBubbleAutoCollapse,
+                voice = VoiceSessionManager.state.collectAsState().value,
+                onStartVoice = ::startPanelVoice,
+                onEndVoice = VoiceSessionManager::switchToText,
+                onOpenResult = ::onOrbTapped,
             )
         }
         val lp = bubbleLayoutParams()
@@ -954,20 +1158,140 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                         LocalSquircleEnabled provides false,
                         LocalUriHandler provides InAppBrowserUriHandler(this@AgentRuntimeService),
                     ) {
-                        content()
+                        io.github.mangi.eta.ui.theme.ProvideReducedMotion(content)
                     }
                 }
             }
         }
 
-    @Suppress("unused")
+    /**
+     * 开始拖动：收起展开卡；没有任务在跑时底部中间淡入「移除」区（规范 9.5「悬浮球 · 移除」）。
+     * 执行中不给移除入口——悬浮球是 App 外唯一的暂停入口。
+     */
+    private fun onOrbDragStart() {
+        if (!collapsed.value) collapseBubble()
+        val lp = orbParams ?: return
+        fingerX = lp.x.toFloat()
+        fingerY = lp.y.toFloat()
+        if (activeSession == null && pendingStartRequest == null) showRemoveZone()
+    }
+
+    /** 拖动悬浮球：跟手移动（窗口以右边缘为 x 基准，向右拖 x 变小）；进入移除区时吸附到区域中心。 */
     private fun handleDrag(dx: Float, dy: Float) {
         val lp = orbParams ?: return
         val wm = windowManager ?: return
         val view = orbView ?: return
-        lp.x += dx.toInt()
-        lp.y += dy.toInt()
+        val metrics = resources.displayMetrics
+        val orbSize = dpToPx(ORB_WINDOW_DP)
+        fingerX = (fingerX - dx).coerceIn(0f, (metrics.widthPixels - orbSize).toFloat())
+        fingerY = (fingerY + dy).coerceIn(0f, (metrics.heightPixels - orbSize).toFloat())
+        val engaged = removeZoneView != null && isOverRemoveZone(fingerX, fingerY)
+        if (engaged != removeEngaged.value) {
+            removeEngaged.value = engaged
+            if (engaged) AgentHapticFeedback.perform(this, AgentHapticFeedback.Type.TAP)
+        }
+        if (engaged) {
+            lp.x = metrics.widthPixels / 2 - orbSize / 2
+            lp.y = removeZoneCenterY() - orbSize / 2
+        } else {
+            lp.x = fingerX.toInt()
+            lp.y = fingerY.toInt()
+        }
         runCatching { wm.updateViewLayout(view, lp) }
+    }
+
+    /** 松手：在移除区里 → 缩小淡出后移除；否则吸附到最近的左右边缘。 */
+    private fun onOrbDragEnd() {
+        val remove = removeEngaged.value
+        removeEngaged.value = false
+        hideRemoveZone()
+        if (remove) {
+            orbShown.value = false
+            collapseBubble()
+            mainHandler.postDelayed({ if (activeSession == null) dismissAndStop() else orbShown.value = true }, ORB_EXIT_MS)
+        } else {
+            snapOrbToEdge()
+        }
+    }
+
+    private fun removeZoneCenterY(): Int =
+        resources.displayMetrics.heightPixels - dpToPx(REMOVE_ZONE_BOTTOM_DP) - dpToPx(REMOVE_ZONE_DP) / 2
+
+    private fun isOverRemoveZone(x: Float, y: Float): Boolean {
+        val metrics = resources.displayMetrics
+        val half = dpToPx(ORB_WINDOW_DP) / 2f
+        val cx = metrics.widthPixels - x - half
+        val cy = y + half
+        return kotlin.math.hypot(cx - metrics.widthPixels / 2f, cy - removeZoneCenterY()) < dpToPx(REMOVE_ZONE_DP)
+    }
+
+    private fun showRemoveZone() {
+        val wm = windowManager ?: return
+        mainHandler.removeCallbacksAndMessages(removeZoneToken)
+        removeZoneVisible.value = true
+        if (removeZoneView != null) return
+        val window = dpToPx(REMOVE_ZONE_DP + REMOVE_ZONE_SHADOW_DP * 2)
+        val lp = WindowManager.LayoutParams(
+            window,
+            window,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = (resources.displayMetrics.widthPixels - window) / 2
+            y = removeZoneCenterY() - window / 2
+            windowAnimations = 0
+        }
+        val view = createOverlayComposeView {
+            AgentOverlayRemoveZone(visible = removeZoneVisible.value)
+        }
+        runCatching { wm.addView(view, lp) }.onFailure { return }
+        removeZoneView = view
+    }
+
+    private val removeZoneToken = Any()
+
+    private fun hideRemoveZone() {
+        val view = removeZoneView ?: return
+        removeZoneVisible.value = false
+        mainHandler.postDelayed({
+            if (removeZoneView === view && !removeZoneVisible.value) {
+                runCatching { windowManager?.removeView(view) }
+                removeZoneView = null
+            }
+        }, removeZoneToken, MovoMotion.FAST_EXIT.toLong() + 30)
+    }
+
+    /** 松手吸附到最近的左右边缘（距边 8），`spring/gentle` 近似为 360ms standard 曲线。 */
+    private fun snapOrbToEdge() {
+        val lp = orbParams ?: return
+        val wm = windowManager ?: return
+        val view = orbView ?: return
+        val width = resources.displayMetrics.widthPixels
+        val orbWidth = dpToPx(ORB_WINDOW_DP)
+        val edge = dpToPx(ORB_EDGE_DP)
+        val centerFromRight = lp.x + orbWidth / 2
+        val onEnd = centerFromRight < width / 2
+        orbOnEnd.value = onEnd
+        val target = if (onEnd) edge else width - orbWidth - edge
+        android.animation.ValueAnimator.ofInt(lp.x, target).apply {
+            duration = 360L
+            interpolator = android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f)
+            addUpdateListener { animator ->
+                if (orbView !== view) return@addUpdateListener
+                lp.x = animator.animatedValue as Int
+                runCatching { wm.updateViewLayout(view, lp) }
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) = publishOrbRect()
+            })
+            start()
+        }
     }
 
     private fun orbLayoutParams(): WindowManager.LayoutParams =
@@ -983,8 +1307,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         ).apply {
             // 右侧中下，贴近右边缘
             gravity = Gravity.END or Gravity.TOP
-            x = dpToPx(8)
-            y = (resources.displayMetrics.heightPixels * 0.6f).toInt()
+            // 默认停靠右边缘（距边 8），球心距屏幕底部约 1/4 屏高，处在单手拇指可及区（规范 8.1）。
+            x = dpToPx(ORB_EDGE_DP)
+            y = (resources.displayMetrics.heightPixels * 0.75f).toInt() - dpToPx(ORB_WINDOW_DP) / 2
         }
 
     private fun bubbleLayoutParams(): WindowManager.LayoutParams =
@@ -999,10 +1324,15 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
-            // 跟随光球：右侧中下，窗口外触摸穿透
-            gravity = Gravity.END or Gravity.TOP
-            x = dpToPx(72)
-            y = (resources.displayMetrics.heightPixels * 0.6f).toInt()
+            // 出现在球朝屏幕中心的一侧、距球 8，底边与球对齐（卡片四周留 12 的阴影余量）。
+            val orb = orbParams
+            val orbX = orb?.x ?: dpToPx(ORB_EDGE_DP)
+            val orbBottom = (orb?.y ?: 0) + dpToPx(ORB_WINDOW_DP)
+            gravity = (if (orbOnEnd.value) Gravity.END else Gravity.START) or Gravity.BOTTOM
+            val width = resources.displayMetrics.widthPixels
+            val besideOrb = orbX + dpToPx(ORB_WINDOW_DP) + dpToPx(8) - dpToPx(PANEL_SHADOW_DP)
+            x = if (orbOnEnd.value) besideOrb else (width - orbX - dpToPx(ORB_WINDOW_DP)) + dpToPx(ORB_WINDOW_DP) + dpToPx(8) - dpToPx(PANEL_SHADOW_DP)
+            y = (resources.displayMetrics.heightPixels - orbBottom - dpToPx(PANEL_SHADOW_DP) + dpToPx(6)).coerceAtLeast(0)
             windowAnimations = 0
         }
 
@@ -1063,7 +1393,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
     }
 
-    private fun openResultConversation() {
+    private fun openResultConversation(autoListen: Boolean = false) {
         if (resultConversationOpening.value || activeSession != null || pendingStartRequest != null) return
         val target = resultConversationTarget ?: return
         val runId = resultConversationRunId ?: return
@@ -1074,7 +1404,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
                 if (resultHandoffToken !== token || resultConversationRunId != runId) return
                 if (resultCode == AgentConversationHandoff.RESULT_READY) {
-                    dismissAndStop()
+                    enterStandby()
                 } else {
                     failResultHandoff(token)
                 }
@@ -1089,7 +1419,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             val pendingIntent = PendingIntent.getActivity(
                 this, 0x524553,
                 AgentConversationHandoff.intent(this, target, runId, receiver)
-                    .setClass(this, AgentConversationSheetActivity::class.java),
+                    .setClass(this, AgentConversationSheetActivity::class.java)
+                    .putExtra(EtaAssistantVoiceService.EXTRA_AUTO_LISTEN, autoListen),
                 PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                 creatorOptions.toBundle(),
             )
@@ -1127,17 +1458,75 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         state.value = finalState
 
         if (hasExecutedForegroundTool || isResultConversation) {
-            // Keep a visible runtime surface until the conversation acknowledges readiness.
-            collapsed.value = true
-            if (!AgentConversationSheetActivity.isConversationVisible(resultConversationTarget)) ensureOverlayVisible()
-            openResultConversation()
+            // 规范 8.1 / 9.5：悬浮球不退场，完成保持 ✓（失败保持 !），用户点开才打开对话浮层查看结果；
+            // 不自动弹出，避免打断用户正在看的 App。结果交付仍走原来的 handoff（点球时发起，带回执与失败提示）。
+            // 屏幕边缘光晕随状态淡出后移除窗口。
+            collapseBubble()
+            if (!AgentConversationSheetActivity.isConversationVisible(resultConversationTarget)) {
+                ensureOverlayVisible()
+                // 失败：展开卡自动弹出显示原因，保持失败态直到用户点开（规范 9.5）。
+                if (finalState.phase == AgentOverlayPhase.FAILED && finalState.status != AgentOverlayStatus.Stopped) {
+                    mainHandler.postDelayed({
+                        if (state.value.phase == AgentOverlayPhase.FAILED && activeSession == null) expandBubble()
+                    }, BUBBLE_EXIT_MS)
+                }
+            } else {
+                // 对话浮层已在前台（从浮层发起）：直接交付到浮层，与原来一致。
+                openResultConversation()
+            }
+            glowView?.let { view ->
+                mainHandler.postDelayed({
+                    if (glowView === view && state.value.phase != AgentOverlayPhase.RUNNING && state.value.phase != AgentOverlayPhase.PAUSED) {
+                        runCatching { windowManager?.removeView(view) }
+                        glowView = null
+                        glowParams = null
+                    }
+                }, GLOW_FADE_MS)
+            }
             mainHandler.removeCallbacksAndMessages(hideToken)
+        } else if (standby.value && orbView != null) {
+            // 常驻的待命悬浮球：这次没有操作其他 App，结果就在对话里，悬浮球保持待命。
+            state.value = AgentOverlayState.Initial
         } else {
             dismissAndStop()
         }
     }
 
+    /** 看过结果后回到待命：绿环与角标淡出，悬浮球留在原处（规范 8.1 / 9.5「悬浮球 · 完成」）。 */
+    private fun enterStandby() {
+        clearResultHandoff()
+        if (orbView == null) {
+            dismissAndStop()
+            return
+        }
+        collapseBubble()
+        glowView?.let { view -> runCatching { windowManager?.removeView(view) } }
+        glowView = null
+        glowParams = null
+        isResultConversation = false
+        state.value = AgentOverlayState.Initial
+        standby.value = true
+        updateStandbyOrbVisibility()
+    }
+
+    private fun updateStandbyOrbVisibility() {
+        val view = orbView ?: return
+        view.visibility = if (standby.value && VoiceSurfaceTracker.appVisible) View.GONE else View.VISIBLE
+    }
+
+    private fun onVoiceActiveChanged(active: Boolean) {
+        if (orbView == null || standby.value) return
+        val running = activeSession != null &&
+            (state.value.phase == AgentOverlayPhase.RUNNING || state.value.phase == AgentOverlayPhase.PAUSED)
+        if (active && running && collapsed.value) expandBubble()
+        if (!active && !collapsed.value) scheduleBubbleAutoCollapse()
+    }
+
     private fun removeAmbientWindows() {
+        orbDiscRect = null
+        removeZoneView?.let { view -> runCatching { windowManager?.removeView(view) } }
+        removeZoneView = null
+        standby.value = false
         orbView?.let { view -> runCatching { windowManager?.removeView(view) } }
         bubbleView?.let { view -> runCatching { windowManager?.removeView(view) } }
         glowView?.let { view -> runCatching { windowManager?.removeView(view) } }
@@ -1188,9 +1577,56 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         )
     }
 
-    private companion object {
+    /** 悬浮球玻璃圆（32）在屏幕上的位置，供对话浮层做 Q4「球 ↔ 浮层」变形；没有悬浮球时为 null。 */
+    private fun publishOrbRect() {
+        val lp = orbParams
+        if (lp == null || orbView == null) {
+            orbDiscRect = null
+            return
+        }
+        val window = dpToPx(ORB_WINDOW_DP)
+        val inset = (window - dpToPx(ORB_DISC_DP)) / 2
+        val left = resources.displayMetrics.widthPixels - lp.x - window + inset
+        val top = lp.y + inset
+        orbDiscRect = android.graphics.Rect(left, top, left + dpToPx(ORB_DISC_DP), top + dpToPx(ORB_DISC_DP))
+    }
+
+    /** 从悬浮球打开对话浮层前登记起点：浮层从球的位置长出来（Q4）。 */
+    private fun markSheetFromOrb() {
+        publishOrbRect()
+        orbDiscRect?.let { AgentConversationSheetActivity.expandFromOrb(it) }
+    }
+
+    internal companion object {
+        @Volatile
+        var orbDiscRect: android.graphics.Rect? = null
+            private set
+
+        /** 当前悬浮球位置；没有悬浮球时取默认停靠位置（右边缘距边 8、球心在 75% 屏高）。 */
+        fun orbDiscRectOrDefault(context: Context): android.graphics.Rect {
+            orbDiscRect?.let { return it }
+            val metrics = context.resources.displayMetrics
+            val disc = (ORB_DISC_DP * metrics.density).toInt()
+            val edge = ((ORB_EDGE_DP + (ORB_WINDOW_DP - ORB_DISC_DP) / 2f) * metrics.density).toInt()
+            val centerY = (metrics.heightPixels * 0.75f).toInt()
+            val right = metrics.widthPixels - edge
+            return android.graphics.Rect(right - disc, centerY - disc / 2, right, centerY + disc / 2)
+        }
+
+        const val ORB_DISC_DP = 32
         const val ACTION_KEEP_ALIVE = "io.github.mangi.eta.agent.runtime.KEEP_ALIVE"
         const val HIDE_DELAY_MS = 2_500L
+        const val ORB_WINDOW_DP = 44
+        const val ORB_EDGE_DP = 8
+        const val PANEL_SHADOW_DP = 12
+        const val BUBBLE_EXIT_MS = 150L
+        const val PANEL_AUTO_COLLAPSE_MS = 4_000L
+        const val GLOW_FADE_MS = 300L
+        const val ORB_EXIT_MS = 200L
+        const val REMOVE_ZONE_DP = 48
+        const val REMOVE_ZONE_SHADOW_DP = 12
+        /** 移除区下缘距屏幕底部（避开手势条）。 */
+        const val REMOVE_ZONE_BOTTOM_DP = 64
         const val RESULT_REVIEW_DELAY_MS = 120_000L
         const val MAX_ARCHIVED_USER_IMAGE_PREVIEWS = 4
     }

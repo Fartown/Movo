@@ -1,32 +1,26 @@
 package io.github.mangi.eta.ui.screens.enhance
 
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ManageSearch
-import androidx.compose.material.icons.rounded.AccountTree
-import androidx.compose.material.icons.rounded.AdminPanelSettings
-import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.Key
-import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.Terminal
-import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.R
 import io.github.mangi.eta.ui.app.description
 import io.github.mangi.eta.ui.app.rememberDeviceCapabilities
-import io.github.mangi.eta.ui.components.MiuixScaffoldPage
-import io.github.mangi.eta.ui.components.PreferenceIcon
+import io.github.mangi.eta.ui.components.movo.CardFooter
+import io.github.mangi.eta.ui.components.movo.CardTitle
+import io.github.mangi.eta.ui.components.movo.MovoCard
+import io.github.mangi.eta.ui.components.movo.MovoListPage
+import io.github.mangi.eta.ui.components.movo.MovoPillButton
+import io.github.mangi.eta.ui.components.movo.RowTrailing
+import io.github.mangi.eta.ui.components.movo.SettingsRow
 import io.github.mangi.eta.ui.model.AgentSystemEnhanceAction
-import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.SmallTitle
-import top.yukonga.miuix.kmp.basic.TextButton
 
+/**
+ * 设置 · Root 与系统增强（规范 8.7 二级页）：连接状态卡（Root 状态 + 授权 / 重新检测、框架通信，
+ * 页脚写模块启用与作用域说明）、Root 能力与系统助手与增强两张只读说明卡。
+ * Root 状态随 [rememberDeviceCapabilities] 在回到前台时刷新。
+ */
 @Composable
 fun SystemEnhanceScreen(
     onAction: (AgentSystemEnhanceAction) -> Unit,
@@ -35,23 +29,24 @@ fun SystemEnhanceScreen(
     val context = LocalContext.current
     val capabilities = rememberDeviceCapabilities()
     val canRequestRoot = capabilities.root.suPresent && !capabilities.root.isGranted
-    MiuixScaffoldPage(
+    MovoListPage(
         title = stringResource(R.string.capability_enhancements),
         onBack = { onAction(AgentSystemEnhanceAction.NavigateBack) },
         modifier = modifier,
     ) {
         item(key = "access") {
-            Card(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                BasicComponent(
+            MovoCard {
+                CardTitle(stringResource(R.string.movo_enhance_group_status))
+                SettingsRow(
                     title = "Root",
-                    summary = capabilities.root.description(context),
-                    startAction = { PreferenceIcon(Icons.Rounded.Key) },
-                    endActions = {
-                        TextButton(
-                            text = stringResource(
+                    subtitle = capabilities.root.description(context),
+                    trailing = RowTrailing.Custom {
+                        MovoPillButton(
+                            label = stringResource(
                                 if (canRequestRoot) R.string.capability_root_request
                                 else R.string.capability_root_refresh,
                             ),
+                            primary = canRequestRoot,
                             enabled = !capabilities.root.isChecking,
                             onClick = {
                                 onAction(
@@ -62,64 +57,49 @@ fun SystemEnhanceScreen(
                         )
                     },
                 )
-                BasicComponent(
+                SettingsRow(
                     title = stringResource(R.string.capability_xposed_service),
-                    summary = stringResource(
+                    subtitle = stringResource(
                         if (capabilities.xposedConnected) R.string.capability_xposed_connected
                         else R.string.capability_xposed_disconnected,
                     ),
-                    startAction = { PreferenceIcon(Icons.Rounded.AccountTree) },
+                    trailing = RowTrailing.None,
+                    showDivider = false,
+                )
+                CardFooter(
+                    listOf(
+                        stringResource(R.string.movo_enhance_footer_1),
+                        stringResource(R.string.movo_enhance_footer_2),
+                    ),
                 )
             }
         }
-        item(key = "framework-help") {
-            Card(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                BasicComponent(
-                    title = stringResource(R.string.capability_xposed_help),
-                    summary = stringResource(R.string.capability_xposed_help_summary),
-                    startAction = { PreferenceIcon(Icons.Rounded.Info) },
-                )
-            }
-        }
-        item(key = "root-title") { SmallTitle(stringResource(R.string.capability_root_features)) }
         item(key = "root-features") {
-            Card(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                BasicComponent(
-                    title = stringResource(R.string.capability_root_device),
-                    summary = stringResource(R.string.capability_root_device_summary),
-                    startAction = { PreferenceIcon(Icons.Rounded.AdminPanelSettings) },
-                )
-                BasicComponent(
-                    title = stringResource(R.string.capability_root_data),
-                    summary = stringResource(R.string.capability_root_data_summary),
-                    startAction = { PreferenceIcon(Icons.Rounded.Lock) },
-                )
-                BasicComponent(
-                    title = stringResource(R.string.capability_root_linux),
-                    summary = stringResource(R.string.capability_root_linux_summary),
-                    startAction = { PreferenceIcon(Icons.Rounded.Terminal) },
-                )
+            MovoCard {
+                CardTitle(stringResource(R.string.capability_root_features))
+                InfoRow(R.string.capability_root_device, R.string.capability_root_device_summary)
+                InfoRow(R.string.capability_root_data, R.string.capability_root_data_summary)
+                InfoRow(R.string.capability_root_linux, R.string.capability_root_linux_summary, last = true)
             }
         }
-        item(key = "hook-title") { SmallTitle(stringResource(R.string.capability_system_features)) }
         item(key = "hook-features") {
-            Card(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                BasicComponent(
-                    title = stringResource(R.string.capability_hook_assistants),
-                    summary = stringResource(R.string.capability_hook_assistants_summary),
-                    startAction = { PreferenceIcon(Icons.Rounded.AutoAwesome) },
-                )
-                BasicComponent(
-                    title = stringResource(R.string.capability_hook_google),
-                    summary = stringResource(R.string.capability_hook_google_summary),
-                    startAction = { PreferenceIcon(Icons.AutoMirrored.Rounded.ManageSearch) },
-                )
-                BasicComponent(
-                    title = stringResource(R.string.capability_hook_accessibility),
-                    summary = stringResource(R.string.capability_hook_accessibility_summary),
-                    startAction = { PreferenceIcon(Icons.Rounded.VerifiedUser) },
-                )
+            MovoCard {
+                CardTitle(stringResource(R.string.capability_system_features))
+                InfoRow(R.string.capability_hook_assistants, R.string.capability_hook_assistants_summary)
+                InfoRow(R.string.capability_hook_google, R.string.capability_hook_google_summary)
+                InfoRow(R.string.capability_hook_accessibility, R.string.capability_hook_accessibility_summary, last = true)
             }
         }
     }
+}
+
+/** 只读说明行：标题 + 说明，不可点击。 */
+@Composable
+private fun InfoRow(title: Int, summary: Int, last: Boolean = false) {
+    SettingsRow(
+        title = stringResource(title),
+        subtitle = stringResource(summary),
+        trailing = RowTrailing.None,
+        showDivider = !last,
+    )
 }

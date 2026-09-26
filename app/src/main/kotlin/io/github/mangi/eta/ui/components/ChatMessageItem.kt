@@ -137,7 +137,11 @@ import com.mikepenz.markdown.model.markdownDimens
 import com.mikepenz.markdown.model.markdownPadding
 import com.mikepenz.markdown.model.rememberMarkdownState
 import com.mikepenz.markdown.utils.getUnescapedTextInNode
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.layout.offset
 import io.github.mangi.eta.R
+import io.github.mangi.eta.ui.components.movo.movoClickable
+import io.github.mangi.eta.ui.components.movo.completionGlint
 import io.github.mangi.eta.agent.browser.AgentBrowserSession
 import io.github.mangi.eta.agent.browser.BrowserSessionSnapshot
 import io.github.mangi.eta.agent.model.AgentFileReferencePromptCodec
@@ -199,6 +203,24 @@ private fun decodeDataUrlBitmap(dataUrl: String): ImageBitmap? {
 /**
  * 等待首个文本片段时的轻量反馈。
  */
+/**
+ * 等待首个事件时的「正在处理」指示（规范 9.3.2 Q6）：16 小光球，位置与执行卡标题图标对齐（左 36）；
+ * 从首页发出第一句时，首页光球由飞行层缩小飞到这里，落地前这里先隐藏。首个事件到达后它随占位一起消失。
+ */
+@Composable
+internal fun WaitingOrb() {
+    val chatFlight = LocalChatFlight.current
+    androidx.compose.runtime.DisposableEffect(chatFlight) { onDispose { chatFlight?.reportWaitingOrb(null) } }
+    Box(modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 16.dp)) {
+        io.github.mangi.eta.ui.components.movo.MovoOrb(
+            size = 16.dp,
+            modifier = Modifier
+                .onGloballyPositioned { chatFlight?.reportWaitingOrb(it.windowRect()) }
+                .graphicsLayer { alpha = if (chatFlight?.hidesWaitingOrb() == true) 0f else 1f },
+        )
+    }
+}
+
 @Composable
 fun AITypingIndicator(modifier: Modifier = Modifier) {
     val infiniteTransition = rememberInfiniteTransition(label = "dots")
@@ -293,6 +315,14 @@ internal fun ChatMessageItem(
         )
         is SystemNoticeMessageUi -> if (message.code == SystemNoticeCode.ContextCompaction) {
             ContextCompactionMarker(message = message, modifier = modifier)
+        } else if (message.code == SystemNoticeCode.RuntimeFailed || message.code == SystemNoticeCode.Interrupted) {
+            RunFailureCard(
+                message = message,
+                actionsEnabled = messageActionsEnabled,
+                onRetry = { onRegenerateMessage(message.id) },
+                onDelete = { onDeleteMessage(message.id) },
+                modifier = modifier,
+            )
         } else Column(modifier = modifier) {
             AgentMessageBlock(
                 message = AgentMessageUi(
@@ -347,8 +377,23 @@ internal fun ChatMessageItem(
     }
 }
 
+/** 打开执行详情页（规范 8.8）；参数是执行卡的键。对话浮层等没有详情页的宿主为 null，卡片仍在原地展开。 */
+internal val LocalOpenRunDetail = androidx.compose.runtime.staticCompositionLocalOf<((String) -> Unit)?> { null }
+
+/** 执行中正在操作的 App：取最近一次成功的 launch_app 结果里的 App 名（「已打开 · 美团」）。 */
+internal fun List<AgentChatMessageUi>.operatingAppName(): String? =
+    filterIsInstance<ToolActivityMessageUi>()
+        .lastOrNull { it.toolName == "launch_app" && it.status == ToolActivityStatusUi.Success }
+        ?.resultSummary
+        ?.substringAfter("·", missingDelimiterValue = "")
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+
 /**
- * 把连续的思考与工具调用收束为一个可展开的工作过程，避免 Agent 事件退化为聊天气泡噪音。
+ * 工作过程卡（规范 8.1「工作过程」、Figma「05 · 执行中」）：一次执行的思考与工具调用收束在一张卡里。
+ * 展开：圆角 28、白底 + 发丝描边、无阴影；头部 48（执行中 16 小光球 +「正在执行·第 N 步」Q3 光带 + 收起箭头）
+ * → 0.5 分隔线（左右内缩 16）→ 步骤时间线（上下 6）。执行中自动展开；完成后收成 48 高的摘要条
+ * （✓ +「已完成 N 个步骤」+ 箭头），用户点过头部则不再自动收起。执行详情页上线前，摘要条点开仍在卡内展开步骤。
  */
 @Composable
 internal fun AgentWorkProcess(
@@ -358,143 +403,372 @@ internal fun AgentWorkProcess(
     currentBrowserMessageId: String?,
     retainedStreamingStates: Map<String, StreamingMarkdownState>,
     modifier: Modifier = Modifier,
+    actionsEnabled: Boolean = false,
+    onEditMessage: (String) -> Unit = {},
+    onDeleteMessage: (String) -> Unit = {},
+    runActive: Boolean = false,
 ) {
-    val running = messages.any { message ->
+    val runControls = LocalRunControls.current
+    val paused = runActive && runControls.isPaused
+    val stepRunning = messages.any { message ->
         (message is ThinkingMessageUi && message.isStreaming) ||
             (message is ToolActivityMessageUi && message.status == ToolActivityStatusUi.Running)
     }
-    val toolCount = messages.count { it is ToolActivityMessageUi }
-    val runningTool = messages.lastOrNull { message ->
-        message is ToolActivityMessageUi && message.status == ToolActivityStatusUi.Running
-    } as? ToolActivityMessageUi
-    val runningToolTitle = runningTool?.argumentsSummary?.takeIf { it.isNotBlank() }
-        ?: runningTool?.let { toolDisplayName(it.toolName) }
+    // 执行中 = 有步骤在进行，或本轮仍在进行且未暂停（两步之间模型在思考）。
+    val running = !paused && (stepRunning || runActive)
+    var confirmEndTask by remember(id) { mutableStateOf(false) }
+    val tools = messages.filterIsInstance<ToolActivityMessageUi>()
+    val toolCount = tools.size
+    val failedIndex = tools.indexOfFirst { it.status == ToolActivityStatusUi.Failed }
     var expanded by rememberSaveable(id) { mutableStateOf(running) }
     var manuallyExpanded by rememberSaveable(id) { mutableStateOf(false) }
 
-    LaunchedEffect(running) {
-        if (running && !manuallyExpanded) {
+    // 执行中自动展开；完成后停留 600ms 再收起（9.4「执行卡 · 完成 → 摘要条」），用户手动操作过则不动。
+    LaunchedEffect(running, paused) {
+        if ((running || paused) && !manuallyExpanded) {
             expanded = true
+        } else if (!running && !paused && !manuallyExpanded && expanded) {
+            kotlinx.coroutines.delay(io.github.mangi.eta.ui.theme.MovoMotion.WORK_CARD_COLLAPSE_DELAY.toLong())
+            if (!manuallyExpanded) expanded = false
         }
     }
 
-    val pulseAlpha = rememberActivePulse(active = running, label = "work_pulse")
-
+    val collapsedSummary = !expanded && !running && !paused
+    val openRunDetail = LocalOpenRunDetail.current
+    val corner by androidx.compose.animation.core.animateDpAsState(
+        targetValue = if (collapsedSummary) io.github.mangi.eta.ui.theme.MovoRadius.pillLg else io.github.mangi.eta.ui.theme.MovoRadius.xl,
+        animationSpec = io.github.mangi.eta.ui.theme.MovoMotion.standard(),
+        label = "workCorner",
+    )
+    val shape = RoundedCornerShape(corner)
+    // Q8：本次在屏幕上看着它从执行中变为完成，且任务用时 ≥ 10 秒时播一次。
+    var sawRunning by remember(id) { mutableStateOf(running) }
+    if (running) sawRunning = true
+    val finishedTools = messages.filterIsInstance<ToolActivityMessageUi>()
+    val runMillis = finishedTools.mapNotNull { it.finishedAtMillis }.maxOrNull()?.let { end ->
+        finishedTools.mapNotNull { it.startedAtMillis }.minOrNull()?.let { end - it }
+    } ?: 0L
+    val glint = sawRunning && !running && !paused && failedIndex < 0 && runMillis >= 10_000L
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 4.dp)
-            .squircleSurface(
-                color = MiuixTheme.colorScheme.surface,
-                cornerRadius = 14.dp,
-            )
-            .squircleBorder(
-                width = 0.5.dp,
-                color = MiuixTheme.colorScheme.outline.copy(alpha = 0.50f),
-                cornerRadius = 14.dp,
-            ),
+            .padding(horizontal = 20.dp, vertical = 8.dp)
+            .onGloballyPositioned { io.github.mangi.eta.ui.components.movo.RunDetailMorph.report(id, it.windowRect()) }
+            .completionGlint(glint, corner)
+            .clip(shape)
+            .background(io.github.mangi.eta.ui.theme.MovoColors.bgSurface)
+            .border(io.github.mangi.eta.ui.theme.MovoSize.hairline, io.github.mangi.eta.ui.theme.MovoColors.borderHairline, shape)
+            .animateContentSize(io.github.mangi.eta.ui.theme.MovoMotion.standard()),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable {
-                    manuallyExpanded = true
-                    expanded = !expanded
+                .height(48.dp)
+                .movoClickableRow {
+                    // 摘要条整条可点，打开执行详情页（箭头 › 表示跳转）；没有详情页的宿主退回原地展开。
+                    val openDetail = openRunDetail
+                    if (collapsedSummary && openDetail != null) {
+                        openDetail(id)
+                    } else {
+                        manuallyExpanded = true
+                        expanded = !expanded
+                    }
                 }
-                .padding(horizontal = 13.dp, vertical = 10.dp),
+                .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                imageVector = when {
-                    runningTool != null -> iconForTool(runningTool.toolName)
-                    running -> Icons.Rounded.Lightbulb
-                    else -> Icons.Rounded.Build
-                },
-                contentDescription = null,
-                modifier = Modifier
-                    .size(15.dp)
-                    .graphicsLayer(alpha = if (running) pulseAlpha else 1f),
-                tint = if (running) {
-                    MiuixTheme.colorScheme.primary
-                } else {
-                    MiuixTheme.colorScheme.onSurfaceVariantSummary
-                },
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = when {
-                    running && toolCount > 0 -> pluralStringResource(
-                        R.plurals.work_processing_step,
-                        toolCount,
-                        toolCount,
-                    ) + (runningToolTitle?.let { " · $it" } ?: "")
-                    running -> stringResource(R.string.work_analyzing)
-                    toolCount > 0 -> pluralStringResource(
-                        R.plurals.work_completed_steps,
-                        toolCount,
-                        toolCount,
+            Box(modifier = Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+                when {
+                    paused -> io.github.mangi.eta.ui.theme.MovoIcon(
+                        io.github.mangi.eta.ui.theme.MovoIcons.Pause, null, size = 16.dp, tint = io.github.mangi.eta.ui.theme.MovoColors.textSecondary,
                     )
-                    else -> stringResource(R.string.work_completed)
+                    running -> io.github.mangi.eta.ui.components.movo.MovoOrb(size = 16.dp)
+                    failedIndex >= 0 -> io.github.mangi.eta.ui.theme.MovoIcon(
+                        io.github.mangi.eta.ui.theme.MovoIcons.X, null, size = 16.dp, tint = io.github.mangi.eta.ui.theme.MovoColors.roseFg,
+                    )
+                    else -> io.github.mangi.eta.ui.theme.MovoIcon(
+                        io.github.mangi.eta.ui.theme.MovoIcons.Check, null, size = 16.dp, tint = io.github.mangi.eta.ui.theme.MovoColors.greenFg,
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            io.github.mangi.eta.ui.components.movo.MovoShimmerText(
+                text = when {
+                    paused && toolCount > 0 -> stringResource(R.string.movo_work_paused_step, toolCount)
+                    paused -> stringResource(R.string.movo_work_paused)
+                    running && toolCount > 0 -> stringResource(R.string.movo_work_running_step, toolCount)
+                    running -> stringResource(R.string.movo_work_analyzing)
+                    failedIndex >= 0 -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
+                    toolCount > 0 -> stringResource(R.string.movo_work_done_steps, toolCount)
+                    else -> stringResource(R.string.movo_work_done)
                 },
-                style = MiuixTheme.textStyles.body2,
-                color = if (running) {
-                    MiuixTheme.colorScheme.onSurface
-                } else {
-                    MiuixTheme.colorScheme.onSurfaceVariantSummary
-                },
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                style = io.github.mangi.eta.ui.theme.MovoTypography.labelMedium,
+                color = if (running || paused) io.github.mangi.eta.ui.theme.MovoColors.textPrimary else io.github.mangi.eta.ui.theme.MovoColors.textSecondary,
+                active = running,
                 modifier = Modifier.weight(1f),
             )
-            Icon(
-                imageVector = if (expanded) Icons.Rounded.ExpandMore
-                    else Icons.Rounded.ChevronRight,
-                contentDescription = stringResource(
-                    if (expanded) R.string.work_collapse else R.string.work_expand,
-                ),
-                modifier = Modifier.size(14.dp),
-                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.7f),
+            // 计时：执行中「00:18」每秒直接换数字（9.0 规则 5，不滚动不闪）；结束后「用时 18 秒」。
+            val firstStart = tools.mapNotNull { it.startedAtMillis }.minOrNull()
+            val lastFinish = tools.mapNotNull { it.finishedAtMillis }.maxOrNull()
+            if (firstStart != null) {
+                val now by androidx.compose.runtime.produceState(System.currentTimeMillis(), running) {
+                    while (running) {
+                        value = System.currentTimeMillis()
+                        kotlinx.coroutines.delay(1_000)
+                    }
+                    value = System.currentTimeMillis()
+                }
+                val timerText = if (running) {
+                    formatClock(now - firstStart)
+                } else {
+                    lastFinish?.let { formatElapsed(it - firstStart) }
+                }
+                if (timerText != null) {
+                    Text(
+                        text = timerText,
+                        style = io.github.mangi.eta.ui.theme.MovoTypography.numericLabel,
+                        color = if (running) io.github.mangi.eta.ui.theme.MovoColors.textSecondary else io.github.mangi.eta.ui.theme.MovoColors.textTertiary,
+                        maxLines = 1,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+            }
+            val rotation by androidx.compose.animation.core.animateFloatAsState(
+                targetValue = if (expanded) 180f else 0f,
+                animationSpec = io.github.mangi.eta.ui.theme.MovoMotion.fast(),
+                label = "workChevron",
+            )
+            io.github.mangi.eta.ui.theme.MovoIcon(
+                if (collapsedSummary && openRunDetail != null) io.github.mangi.eta.ui.theme.MovoIcons.ChevronRight
+                else io.github.mangi.eta.ui.theme.MovoIcons.ChevronDown,
+                contentDescription = stringResource(if (expanded) R.string.movo_collapse else R.string.movo_expand),
+                size = 16.dp,
+                tint = io.github.mangi.eta.ui.theme.MovoColors.textTertiary,
+                modifier = Modifier.graphicsLayer {
+                    rotationZ = if (collapsedSummary && openRunDetail != null) 0f else rotation
+                },
             )
         }
 
+        // 展开：高度 `standard`，内容在高度过渡开始 40ms 后淡入 `fast`（规范 9.3「展开 / 收起」）。
         AnimatedVisibility(
             visible = expanded,
-            enter = fadeIn() + expandVertically(
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
-                    stiffness = Spring.StiffnessMediumLow,
-                )
-            ),
-            exit = fadeOut() + shrinkVertically(
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
-                    stiffness = Spring.StiffnessMediumLow,
-                )
-            ),
+            enter = fadeIn(
+                tween(
+                    io.github.mangi.eta.ui.theme.MovoMotion.FAST,
+                    delayMillis = io.github.mangi.eta.ui.theme.MovoMotion.STAGGER,
+                    easing = io.github.mangi.eta.ui.theme.MovoMotion.EasingStandard,
+                ),
+            ) + expandVertically(io.github.mangi.eta.ui.theme.MovoMotion.standard()),
+            exit = fadeOut(io.github.mangi.eta.ui.theme.MovoMotion.fastExit()) +
+                shrinkVertically(io.github.mangi.eta.ui.theme.MovoMotion.standard()),
         ) {
             Column {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 13.dp)
-                        .height(0.5.dp)
-                        .background(MiuixTheme.colorScheme.outline.copy(alpha = 0.45f)),
+                        .padding(horizontal = 16.dp)
+                        .height(io.github.mangi.eta.ui.theme.MovoSize.hairline)
+                        .background(io.github.mangi.eta.ui.theme.MovoColors.borderHairline),
                 )
-                Column(modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)) {
-                    messages.forEach { message ->
-                        ChatMessageItem(
-                            message = message,
-                            onSuggestionClick = {},
-                            onRunTraceClick = {},
-                            onOpenBrowser = onOpenBrowser,
-                            showBrowserShortcut = message.id == currentBrowserMessageId,
-                            retainedStreamingState = retainedStreamingStates[message.id],
-                            compact = true,
+                WorkSteps(
+                    messages = messages,
+                    running = running,
+                    onOpenBrowser = onOpenBrowser,
+                    currentBrowserMessageId = currentBrowserMessageId,
+                    retainedStreamingStates = retainedStreamingStates,
+                    actionsEnabled = actionsEnabled,
+                    onEditMessage = onEditMessage,
+                    onDeleteMessage = onDeleteMessage,
+                    modifier = Modifier.padding(vertical = 6.dp),
+                )
+                // 底部栏（执行中）：说明 +「查看」（打开执行详情页）；不放停止（停止在输入框主按钮 ■）。内边距 12。
+                if ((running || paused) && openRunDetail != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .height(io.github.mangi.eta.ui.theme.MovoSize.hairline)
+                            .background(io.github.mangi.eta.ui.theme.MovoColors.borderHairline),
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp)
+                            .padding(start = 16.dp, end = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val app = messages.operatingAppName()
+                        Text(
+                            text = when {
+                                paused -> stringResource(R.string.movo_work_paused)
+                                app != null -> stringResource(R.string.movo_work_operating_app, app)
+                                else -> stringResource(R.string.movo_work_operating)
+                            },
+                            style = io.github.mangi.eta.ui.theme.MovoTypography.labelRegular,
+                            color = io.github.mangi.eta.ui.theme.MovoColors.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (paused) {
+                            // 已暂停：「结束任务」（二次确认，说明已完成的步骤会保留）+「查看」。
+                            io.github.mangi.eta.ui.components.movo.MovoPillButton(
+                                label = stringResource(R.string.movo_work_end_task),
+                                onClick = { confirmEndTask = true },
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        io.github.mangi.eta.ui.components.movo.MovoPillButton(
+                            label = stringResource(R.string.movo_work_view),
+                            onClick = { openRunDetail(id) },
                         )
                     }
                 }
             }
         }
+    }
+    io.github.mangi.eta.ui.components.movo.MovoConfirmDialog(
+        show = confirmEndTask,
+        title = stringResource(R.string.movo_end_task_title),
+        message = stringResource(R.string.movo_end_task_message),
+        confirmText = stringResource(R.string.movo_work_end_task),
+        destructive = true,
+        onConfirm = {
+            confirmEndTask = false
+            runControls.onEndTask()
+        },
+        onDismissRequest = { confirmEndTask = false },
+    )
+}
+
+/**
+ * 步骤时间线（`Work/Step` 列表 + 连接线）：执行卡与执行详情页共用同一组件（规范 8.8「行即 Work/Step」）。
+ */
+@Composable
+internal fun WorkSteps(
+    messages: List<AgentChatMessageUi>,
+    running: Boolean,
+    onOpenBrowser: () -> Unit,
+    currentBrowserMessageId: String?,
+    retainedStreamingStates: Map<String, StreamingMarkdownState>,
+    modifier: Modifier = Modifier,
+    actionsEnabled: Boolean = false,
+    onEditMessage: (String) -> Unit = {},
+    onDeleteMessage: (String) -> Unit = {},
+) {
+    // 规范 9.4「执行卡 · 新步骤」：执行中新出现的行淡入上移 6（`fast`），连接线从上一个图标向下生长（`fast`）。
+    // 已经出现过的步骤（历史记录、滚出屏幕再回来）不重播。
+    val seenSteps = androidx.compose.runtime.saveable.rememberSaveable(
+        saver = androidx.compose.runtime.saveable.listSaver<MutableSet<String>, String>(
+            save = { it.toList() },
+            restore = { it.toMutableSet() },
+        ),
+    ) { mutableSetOf() }
+    val reduced = io.github.mangi.eta.ui.theme.LocalReducedMotion.current
+    Column(modifier = modifier) {
+        messages.forEachIndexed { index, message ->
+            androidx.compose.runtime.key(message.id) {
+            val playEntrance = remember { running && message.id !in seenSteps }
+            SideEffect { seenSteps += message.id }
+            val hasNext = index < messages.lastIndex
+            val connector = remember { androidx.compose.animation.core.Animatable(if (hasNext || !playEntrance && !running) 1f else 0f) }
+            LaunchedEffect(hasNext) {
+                when {
+                    !hasNext -> connector.snapTo(0f)
+                    reduced -> connector.snapTo(1f)
+                    else -> connector.animateTo(1f, io.github.mangi.eta.ui.theme.MovoMotion.fast())
+                }
+            }
+            io.github.mangi.eta.ui.components.movo.MovoEntrance(
+                play = playEntrance,
+                shift = 6.dp,
+                durationMillis = io.github.mangi.eta.ui.theme.MovoMotion.FAST,
+            ) {
+            Box(
+                modifier = if (hasNext) {
+                    Modifier.workStepConnector { connector.value }
+                } else {
+                    Modifier
+                },
+            ) {
+                if (message is UserMessageUi) {
+                    // 补充在其后出现新的思考 / 工具步骤（下一步已开始）或本轮结束时即已采纳。
+                    val applied = !running || messages.drop(index + 1).any {
+                        it is ThinkingMessageUi || it is ToolActivityMessageUi
+                    }
+                    SupplementStep(
+                        message = message,
+                        applied = applied,
+                        actionsEnabled = actionsEnabled,
+                        onEdit = { onEditMessage(message.id) },
+                        onDelete = { onDeleteMessage(message.id) },
+                    )
+                } else {
+                    ChatMessageItem(
+                        message = message,
+                        onSuggestionClick = {},
+                        onRunTraceClick = {},
+                        onOpenBrowser = onOpenBrowser,
+                        showBrowserShortcut = message.id == currentBrowserMessageId,
+                        retainedStreamingState = retainedStreamingStates[message.id],
+                        compact = true,
+                    )
+                }
+            }
+            }
+            }
+        }
+    }
+}
+
+/** 整行可点的按压反馈（列表行：只叠加、不缩放，规范 9.3.1）。 */
+private fun Modifier.movoClickableRow(onClick: () -> Unit): Modifier =
+    movoClickable(io.github.mangi.eta.ui.components.movo.PressKind.Row, onClick = onClick)
+
+/** 执行中计时：mm:ss（等宽数字）。 */
+private fun formatClock(elapsedMillis: Long): String {
+    val seconds = (elapsedMillis / 1000).coerceAtLeast(0)
+    return String.format(java.util.Locale.ROOT, "%02d:%02d", seconds / 60, seconds % 60)
+}
+
+/** 结束后的总用时：「用时 18 秒」「用时 2 分 5 秒」。 */
+@Composable
+private fun formatElapsed(elapsedMillis: Long): String {
+    val seconds = ((elapsedMillis + 500) / 1000).coerceAtLeast(1).toInt()
+    return if (seconds < 60) {
+        stringResource(R.string.movo_work_elapsed_seconds, seconds)
+    } else {
+        stringResource(R.string.movo_work_elapsed_minutes, seconds / 60, seconds % 60)
+    }
+}
+
+/** 每步用时（Figma「0.8s」「2.1s」）：一位小数的秒，超过一分钟写 m:ss。 */
+private fun formatStepDuration(elapsedMillis: Long): String {
+    val ms = elapsedMillis.coerceAtLeast(0)
+    return if (ms < 60_000) {
+        String.format(java.util.Locale.ROOT, "%.1fs", ms / 1000.0)
+    } else {
+        String.format(java.util.Locale.ROOT, "%d:%02d", ms / 60_000, (ms / 1000) % 60)
+    }
+}
+
+/**
+ * 步骤之间的连接线：1 宽 border/strong，从本步图标下方 4 到下一步图标上方 4（图标中心在卡内 24）。
+ * 步骤行内边距上 10，图标 16 在 18 高的标题行里垂直居中 → 图标上沿在行内 11、下沿 27。
+ */
+private fun Modifier.workStepConnector(progress: () -> Float = { 1f }): Modifier = this.drawBehind {
+    val x = 24.dp.toPx()
+    val top = (27 + 4).dp.toPx()
+    val fullBottom = size.height + (11 - 4).dp.toPx()
+    val bottom = top + (fullBottom - top) * progress().coerceIn(0f, 1f)
+    if (bottom > top) {
+        drawLine(
+            color = io.github.mangi.eta.ui.theme.MovoColors.borderStrong,
+            start = Offset(x, top),
+            end = Offset(x, bottom),
+            strokeWidth = 1.dp.toPx(),
+        )
     }
 }
 
@@ -564,26 +838,23 @@ private fun UserMessageBubble(
             focusable = true,
             enableUserInput = actionsEnabled,
         ) {
+            // `Message/User`（规范 8.1）：右对齐到 392，最大宽 296；bg/surface + 0.5 描边；圆角 20、右下 8；内边距 16 / 11。
+            val bubbleShape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 8.dp, bottomStart = 20.dp)
+            // Q1：刚发出的这条由飞行层从输入框飞到位，落地前自己先隐藏。
+            val chatFlight = LocalChatFlight.current
             Column(
                 modifier = Modifier
-                    .widthIn(max = 320.dp)
-                    .squircleSurface(
-                        color = MiuixTheme.colorScheme.surfaceContainerHigh,
-                        topStart = 20.dp,
-                        topEnd = 20.dp,
-                        bottomEnd = 6.dp,
-                        bottomStart = 20.dp,
-                    )
-                    .then(
-                        if (isEditing) {
-                            Modifier.squircleBorder(
-                                width = 1.dp,
-                                color = MiuixTheme.colorScheme.primary,
-                                cornerRadius = 20.dp,
-                            )
-                        } else {
-                            Modifier
-                        }
+                    .widthIn(max = 296.dp)
+                    .onGloballyPositioned { chatFlight?.reportBubble(message.id, visiblePrompt.request, it.windowRect()) }
+                    .graphicsLayer {
+                        alpha = if (chatFlight?.hidesBubble(message.id, visiblePrompt.request) == true) 0f else 1f
+                    }
+                    .clip(bubbleShape)
+                    .background(io.github.mangi.eta.ui.theme.MovoColors.bgSurface)
+                    .border(
+                        width = if (isEditing) 1.dp else io.github.mangi.eta.ui.theme.MovoSize.hairline,
+                        color = if (isEditing) io.github.mangi.eta.ui.theme.MovoColors.indigoFg else io.github.mangi.eta.ui.theme.MovoColors.borderHairline,
+                        shape = bubbleShape,
                     )
                     .padding(horizontal = 16.dp, vertical = 11.dp),
             ) {
@@ -619,16 +890,16 @@ private fun UserMessageBubble(
                     SelectionContainer {
                         Text(
                             text = visiblePrompt.request,
-                            style = MiuixTheme.textStyles.body1,
-                            color = MiuixTheme.colorScheme.onSurface,
+                            style = io.github.mangi.eta.ui.theme.MovoTypography.bodyReading,
+                            color = io.github.mangi.eta.ui.theme.MovoColors.textPrimary,
                         )
                     }
                 }
                 if (message.isEdited) {
                     Text(
                         text = stringResource(R.string.ui_edited_c36776),
-                        style = MiuixTheme.textStyles.body2,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        style = io.github.mangi.eta.ui.theme.MovoTypography.labelRegular,
+                        color = io.github.mangi.eta.ui.theme.MovoColors.textSecondary,
                         modifier = Modifier.padding(top = 4.dp),
                     )
                 }
@@ -795,8 +1066,8 @@ private fun AgentMessageBlock(
                 SelectionContainer {
                     Text(
                         text = message.content,
-                        style = MiuixTheme.textStyles.body1,
-                        color = MiuixTheme.colorScheme.onSurface,
+                        style = io.github.mangi.eta.ui.theme.MovoTypography.bodyReading,
+                        color = io.github.mangi.eta.ui.theme.MovoColors.textPrimary,
                     )
                 }
             }
@@ -808,75 +1079,63 @@ private fun AgentMessageBlock(
             message.content.isNotBlank() &&
             revealComplete
         ) {
+            // 消息操作（规范 8.1）：复制、重新生成、更多；按钮 32、图标 16 次要色；首个图标字形对齐 20。
+            // 删除与「编辑角色回复」收进「更多」菜单；角色候选切换保留在右侧。
+            // 回答刚输出完时淡入并上移 8（规范 9.4「回答完成」，推荐追问随后 40ms）；历史消息直接显示。
+            io.github.mangi.eta.ui.components.movo.MovoEntrance(play = keepStreamingMarkdown, step = 0) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 2.dp),
+                    .padding(top = 4.dp)
+                    .offset(x = (-8).dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(
+                MessageActionButton(
+                    icon = if (copied) io.github.mangi.eta.ui.theme.MovoIcons.Check else io.github.mangi.eta.ui.theme.MovoIcons.Copy,
+                    contentDescription = stringResource(if (copied) R.string.copy_copied else R.string.copy_answer),
+                    tint = if (copied) io.github.mangi.eta.ui.theme.MovoColors.greenFg else io.github.mangi.eta.ui.theme.MovoColors.textSecondary,
                     onClick = {
                         @Suppress("DEPRECATION")
                         clipboardManager.setText(AnnotatedString(message.content))
                         copied = true
                     },
-                    minWidth = 30.dp,
-                    minHeight = 30.dp,
-                ) {
-                    Icon(
-                        imageVector = if (copied) Icons.Rounded.Check
-                            else Icons.Rounded.ContentCopy,
-                        contentDescription = stringResource(
-                            if (copied) R.string.copy_copied else R.string.copy_answer,
-                        ),
-                        modifier = Modifier.size(15.dp),
-                        tint = if (copied) {
-                            MiuixTheme.colorScheme.primary
-                        } else {
-                            MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.75f)
-                        },
-                    )
-                }
+                )
                 if (showMessageActions) {
-                    if (message.characterEditable) {
-                        IconButton(onClick = onEdit, enabled = messageActionsEnabled, minWidth = 30.dp, minHeight = 30.dp) {
-                            Icon(
-                                imageVector = Icons.Rounded.Edit,
-                                contentDescription = "编辑角色回复",
-                                modifier = Modifier.size(15.dp),
-                                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.75f),
-                            )
-                        }
-                    }
-                    TooltipBox(text = stringResource(R.string.ui_regenerate_2e1905), enabled = messageActionsEnabled) {
-                        IconButton(
-                            onClick = onRegenerate,
+                    MessageActionButton(
+                        icon = io.github.mangi.eta.ui.theme.MovoIcons.RotateCcw,
+                        contentDescription = stringResource(R.string.ui_regenerate_reply_84a7d9),
+                        enabled = messageActionsEnabled,
+                        onClick = onRegenerate,
+                    )
+                    var showMore by remember(message.id) { mutableStateOf(false) }
+                    Box {
+                        MessageActionButton(
+                            icon = io.github.mangi.eta.ui.theme.MovoIcons.Ellipsis,
+                            contentDescription = stringResource(R.string.action_more),
                             enabled = messageActionsEnabled,
-                            minWidth = 30.dp,
-                            minHeight = 30.dp,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Refresh,
-                                contentDescription = stringResource(R.string.ui_regenerate_reply_84a7d9),
-                                modifier = Modifier.size(15.dp),
-                                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.75f),
-                            )
-                        }
-                    }
-                    TooltipBox(text = stringResource(R.string.ui_delete_3755f5), enabled = messageActionsEnabled) {
-                        IconButton(
-                            onClick = onDelete,
-                            enabled = messageActionsEnabled,
-                            minWidth = 30.dp,
-                            minHeight = 30.dp,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Delete,
-                                contentDescription = stringResource(R.string.ui_delete_this_conversation_3f351b),
-                                modifier = Modifier.size(15.dp),
-                                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.75f),
-                            )
-                        }
+                            onClick = { showMore = true },
+                        )
+                        io.github.mangi.eta.ui.components.movo.MovoPopoverMenu(
+                            show = showMore && messageActionsEnabled,
+                            onDismiss = { showMore = false },
+                            items = buildList {
+                                if (message.characterEditable) {
+                                    add(
+                                        io.github.mangi.eta.ui.components.movo.MovoMenuItem(
+                                            io.github.mangi.eta.ui.theme.MovoIcons.PenLine, "编辑角色回复", onClick = onEdit,
+                                        ),
+                                    )
+                                }
+                                add(
+                                    io.github.mangi.eta.ui.components.movo.MovoMenuItem(
+                                        io.github.mangi.eta.ui.theme.MovoIcons.Trash2,
+                                        stringResource(R.string.ui_delete_3755f5),
+                                        destructive = true,
+                                        onClick = onDelete,
+                                    ),
+                                )
+                            },
+                        )
                     }
                     if (message.characterEditable && message.candidateCount > 1) {
                         Spacer(Modifier.weight(1f))
@@ -922,6 +1181,40 @@ private fun AgentMessageBlock(
                     }
                 }
             }
+            }
+        }
+    }
+}
+
+/** 消息操作按钮：32 热区（视觉），图标 16；复制 ↔ ✓ 交叉淡化并缩放 0.72 ↔ 1（9.3.1「图标状态切换」）。 */
+@Composable
+private fun MessageActionButton(
+    icon: io.github.mangi.eta.ui.theme.MovoIconData,
+    contentDescription: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    tint: Color = io.github.mangi.eta.ui.theme.MovoColors.textSecondary,
+) {
+    Box(
+        modifier = Modifier
+            .size(32.dp)
+            .movoClickable(io.github.mangi.eta.ui.components.movo.PressKind.Icon, enabled = enabled, onClick = onClick)
+            .semantics { this.contentDescription = contentDescription },
+        contentAlignment = Alignment.Center,
+    ) {
+        androidx.compose.animation.AnimatedContent(
+            targetState = icon,
+            transitionSpec = {
+                (fadeIn(io.github.mangi.eta.ui.theme.MovoMotion.fast()) +
+                    scaleIn(io.github.mangi.eta.ui.theme.MovoMotion.fast(), initialScale = 0.72f))
+                    .togetherWith(
+                        fadeOut(io.github.mangi.eta.ui.theme.MovoMotion.fastExit()) +
+                            scaleOut(io.github.mangi.eta.ui.theme.MovoMotion.fastExit(), targetScale = 0.72f),
+                    )
+            },
+            label = "messageAction",
+        ) { current ->
+            io.github.mangi.eta.ui.theme.MovoIcon(current, null, size = 16.dp, tint = tint)
         }
     }
 }
@@ -987,8 +1280,9 @@ private fun StreamingMarkdown(
     tone: ChatMarkdownTone = ChatMarkdownTone.Answer,
 ) {
     val revealCoordinator = state.revealCoordinator
-    // 思考紧跟已收到的增量，避免高速思考先排版占位、再受正文逐字速度限制而积压。
-    val animateReveal = tone == ChatMarkdownTone.Answer
+    // 思考紧跟已收到的增量，不按句缓冲。
+    // 规范 9.8：减少动画时回答直接出现，不做按句模糊显现（显现时钟本身不受系统动画缩放影响，需要显式判断）。
+    val animateReveal = tone == ChatMarkdownTone.Answer && !io.github.mangi.eta.ui.theme.LocalReducedMotion.current
     val components = remember(revealCoordinator, isStreaming, animateReveal) {
         chatMarkdownComponents(
             revealCoordinator = revealCoordinator.takeIf { animateReveal },
@@ -1016,6 +1310,8 @@ private fun StreamingMarkdown(
     }
 
     LaunchedEffect(content, isStreaming) {
+        // 回答结束时剩余的缓冲不再等句末或 300ms（规范 9.4「回答流式输出」）。
+        revealCoordinator.setStreaming(isStreaming)
         parseTargets.trySend(
             StreamingMarkdownTarget(
                 content = content,
@@ -1230,32 +1526,32 @@ private fun chatMarkdownTypography(tone: ChatMarkdownTone) = markdownTypography(
     h1 = chatMarkdownBodyStyle(tone).copy(
         fontSize = if (tone == ChatMarkdownTone.Answer) 21.sp else 17.sp,
         lineHeight = if (tone == ChatMarkdownTone.Answer) 29.sp else 25.sp,
-        fontWeight = FontWeight.Bold,
+        fontWeight = FontWeight.Medium,
     ),
     h2 = chatMarkdownBodyStyle(tone).copy(
         fontSize = if (tone == ChatMarkdownTone.Answer) 19.sp else 16.sp,
         lineHeight = if (tone == ChatMarkdownTone.Answer) 27.sp else 24.sp,
-        fontWeight = FontWeight.Bold,
+        fontWeight = FontWeight.Medium,
     ),
     h3 = chatMarkdownBodyStyle(tone).copy(
         fontSize = if (tone == ChatMarkdownTone.Answer) 18.sp else 15.sp,
         lineHeight = if (tone == ChatMarkdownTone.Answer) 26.sp else 23.sp,
-        fontWeight = FontWeight.SemiBold,
+        fontWeight = FontWeight.Medium,
     ),
     h4 = chatMarkdownBodyStyle(tone).copy(
         fontSize = if (tone == ChatMarkdownTone.Answer) 17.sp else 14.sp,
         lineHeight = if (tone == ChatMarkdownTone.Answer) 25.sp else 22.sp,
-        fontWeight = FontWeight.SemiBold,
+        fontWeight = FontWeight.Medium,
     ),
     h5 = chatMarkdownBodyStyle(tone).copy(
         fontSize = if (tone == ChatMarkdownTone.Answer) 16.sp else 14.sp,
         lineHeight = if (tone == ChatMarkdownTone.Answer) 24.sp else 22.sp,
-        fontWeight = FontWeight.SemiBold,
+        fontWeight = FontWeight.Medium,
     ),
     h6 = chatMarkdownBodyStyle(tone).copy(
         fontSize = if (tone == ChatMarkdownTone.Answer) 15.sp else 14.sp,
         lineHeight = if (tone == ChatMarkdownTone.Answer) 23.sp else 22.sp,
-        fontWeight = FontWeight.SemiBold,
+        fontWeight = FontWeight.Medium,
     ),
     text = chatMarkdownBodyStyle(tone),
     paragraph = chatMarkdownBodyStyle(tone),
@@ -1284,7 +1580,7 @@ private fun chatMarkdownTypography(tone: ChatMarkdownTone) = markdownTypography(
     ),
     textLink = TextLinkStyles(
         style = SpanStyle(
-            color = MiuixTheme.colorScheme.primary,
+            color = io.github.mangi.eta.ui.theme.MovoColors.indigoFg,
             fontWeight = FontWeight.Medium,
             textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
         ),
@@ -1300,9 +1596,10 @@ private fun chatMarkdownBodyStyle(tone: ChatMarkdownTone) =
             color = chatMarkdownTextColor(tone),
         )
     } else {
+        // 思考内容：与步骤说明同一字号（Label/Regular 13），行高放宽便于阅读长段落。
         MiuixTheme.textStyles.body2.copy(
-            fontSize = 14.sp,
-            lineHeight = 22.sp,
+            fontSize = 13.sp,
+            lineHeight = 20.sp,
             color = chatMarkdownTextColor(tone),
         )
     }
@@ -1537,7 +1834,7 @@ private fun ChatMarkdownList(
                                 text = "${initialListNumber + index}.",
                                 style = model.typography.ordered.copy(
                                     color = MiuixTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.SemiBold,
+                                    fontWeight = FontWeight.Medium,
                                 ),
                             )
                         } else {
@@ -1890,7 +2187,7 @@ private fun ChatMarkdownTable(
                         ChatMarkdownTableCell(
                             content = content,
                             cell = cell,
-                            style = style.copy(fontWeight = FontWeight.SemiBold),
+                            style = style.copy(fontWeight = FontWeight.Medium),
                             maxLines = 4,
                             overflow = TextOverflow.Ellipsis,
                             revealCoordinator = revealCoordinator,
@@ -2163,6 +2460,22 @@ private fun ThinkingRow(
         null
     }
 
+    if (compact) {
+        WorkThinkingStep(
+            message = message,
+            expanded = expanded,
+            onToggle = {
+                manuallyExpanded = true
+                expanded = !expanded
+            },
+            streamingState = streamingState,
+            completedMarkdownState = completedMarkdownState,
+            stableMarkdownState = stableMarkdownState,
+            modifier = modifier,
+        )
+        return
+    }
+
     val pulseAlpha = rememberActivePulse(
         active = message.isStreaming,
         label = "thinking_pulse",
@@ -2331,6 +2644,22 @@ private fun ToolActivityInline(
         null
     }
 
+    if (compact) {
+        WorkToolStep(
+            message = message,
+            title = title,
+            // 规范 5：并列分隔用不带空格的「·」；运行时摘要沿用旧写法「 · 」，显示时统一。
+            subtitle = (failureSubtitle ?: browserSubtitle ?: message.stepSummary())?.replace(" · ", "·"),
+            expanded = isExpanded,
+            onToggle = { isExpanded = !isExpanded },
+            showBrowserShortcut = showBrowserShortcut,
+            browserSnapshot = browserSnapshot,
+            onOpenBrowser = onOpenBrowser,
+            modifier = modifier,
+        )
+        return
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -2496,6 +2825,310 @@ private fun ToolActivityInline(
                             colors = ButtonDefaults.textButtonColorsPrimary(),
                             minHeight = 36.dp,
                             textStyle = MiuixTheme.textStyles.body2,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 工具步骤第二行：成功时取结果第一行（如包名、门店信息），运行中与没有结果时不显示。 */
+private fun ToolActivityMessageUi.stepSummary(): String? = when (status) {
+    ToolActivityStatusUi.Success -> resultSummary?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim()
+    else -> null
+}
+
+/**
+ * `Work/Step` Supplement（规范 8.1、8.4）：Indigo 转折箭头 16 +「你的补充」+ 浅底引用块（bg/surface-muted，圆角 12，
+ * 内边距 10 / 6）显示原话 + 右侧状态「下一步生效」→「已采纳」（交叉淡化 `fast`）。
+ * 长按保留原用户消息的复制 / 编辑 / 删除（执行中不可用）。
+ */
+@Composable
+private fun SupplementStep(
+    message: UserMessageUi,
+    applied: Boolean,
+    actionsEnabled: Boolean,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    @Suppress("DEPRECATION")
+    val clipboardManager = LocalClipboardManager.current
+    val tooltipState = rememberTooltipState(isPersistent = true)
+    LaunchedEffect(actionsEnabled) { if (!actionsEnabled) tooltipState.dismiss() }
+    val text = remember(message.content) { AgentFileReferencePromptCodec.parse(message.content).request }
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(positioning = TooltipAnchorPosition.Below),
+        tooltip = {
+            RichTooltip(insideMargin = PaddingValues(horizontal = 8.dp, vertical = 6.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    MessageTooltipAction(Icons.Rounded.ContentCopy, stringResource(R.string.ui_copy_4edd1d)) {
+                        @Suppress("DEPRECATION")
+                        clipboardManager.setText(AnnotatedString(text))
+                        tooltipState.dismiss()
+                    }
+                    MessageTooltipAction(Icons.Rounded.Edit, stringResource(R.string.ui_edit_a7f814)) {
+                        tooltipState.dismiss(); onEdit()
+                    }
+                    MessageTooltipAction(Icons.Rounded.Delete, stringResource(R.string.ui_delete_3755f5)) {
+                        tooltipState.dismiss(); onDelete()
+                    }
+                }
+            }
+        },
+        state = tooltipState,
+        focusable = true,
+        enableUserInput = actionsEnabled,
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+                    io.github.mangi.eta.ui.theme.MovoIcon(
+                        io.github.mangi.eta.ui.theme.MovoIcons.CornerDownRight, null, size = 16.dp,
+                        tint = io.github.mangi.eta.ui.theme.MovoColors.indigoFg,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    stringResource(R.string.movo_supplement_title),
+                    style = io.github.mangi.eta.ui.theme.MovoTypography.labelMedium,
+                    color = io.github.mangi.eta.ui.theme.MovoColors.textPrimary,
+                    modifier = Modifier.weight(1f),
+                )
+                androidx.compose.animation.Crossfade(
+                    targetState = applied,
+                    animationSpec = io.github.mangi.eta.ui.theme.MovoMotion.fast(),
+                    label = "supplementStatus",
+                ) { isApplied ->
+                    Text(
+                        stringResource(if (isApplied) R.string.movo_supplement_applied else R.string.movo_supplement_pending),
+                        style = io.github.mangi.eta.ui.theme.MovoTypography.labelRegular,
+                        color = io.github.mangi.eta.ui.theme.MovoColors.textTertiary,
+                    )
+                }
+            }
+            Text(
+                text = text,
+                style = io.github.mangi.eta.ui.theme.MovoTypography.bodyRegular,
+                color = io.github.mangi.eta.ui.theme.MovoColors.textPrimary,
+                modifier = Modifier
+                    .padding(start = 28.dp, top = 6.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(io.github.mangi.eta.ui.theme.MovoColors.bgSurfaceMuted)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            )
+        }
+    }
+}
+
+/**
+ * `Work/Step` 思考行：sparkle 16 次要色 →「思考中」（Q3 光带）/「思考·N 秒」→ 收起时两行摘要；
+ * 整行可点展开完整思考内容（规范 8.1、8.8）。
+ */
+@Composable
+private fun WorkThinkingStep(
+    message: ThinkingMessageUi,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    streamingState: StreamingMarkdownState?,
+    completedMarkdownState: State.Success?,
+    stableMarkdownState: MarkdownState?,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .movoClickableRow(onToggle)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+                io.github.mangi.eta.ui.theme.MovoIcon(
+                    io.github.mangi.eta.ui.theme.MovoIcons.Sparkle, null, size = 16.dp,
+                    tint = io.github.mangi.eta.ui.theme.MovoColors.textSecondary,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            io.github.mangi.eta.ui.components.movo.MovoShimmerText(
+                text = when {
+                    message.isStreaming -> stringResource(R.string.movo_thinking_in_progress)
+                    (message.elapsedSeconds ?: 0) > 0 -> stringResource(R.string.movo_thinking_seconds, message.elapsedSeconds ?: 0)
+                    else -> stringResource(R.string.movo_thinking_done)
+                },
+                style = io.github.mangi.eta.ui.theme.MovoTypography.labelMedium,
+                color = io.github.mangi.eta.ui.theme.MovoColors.textPrimary,
+                active = message.isStreaming,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        if (message.content.isNotBlank()) {
+            val contentModifier = Modifier.fillMaxWidth().padding(start = 28.dp, top = 2.dp)
+            if (!expanded) {
+                Text(
+                    text = message.content.plainPreview(),
+                    style = io.github.mangi.eta.ui.theme.MovoTypography.labelRegular,
+                    color = io.github.mangi.eta.ui.theme.MovoColors.textSecondary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = contentModifier,
+                )
+            } else if (streamingState != null && (message.isStreaming || completedMarkdownState == null)) {
+                StreamingMarkdown(
+                    state = streamingState,
+                    content = message.content,
+                    isStreaming = message.isStreaming,
+                    onRevealCompleteChange = {},
+                    tone = ChatMarkdownTone.Thinking,
+                    modifier = contentModifier,
+                )
+            } else {
+                StableMarkdown(
+                    content = message.content,
+                    tone = ChatMarkdownTone.Thinking,
+                    markdownState = stableMarkdownState,
+                    parsedState = completedMarkdownState,
+                    modifier = contentModifier,
+                )
+            }
+        }
+    }
+}
+
+/** 思考摘要：去掉常见 Markdown 标记后折叠空白。 */
+private fun String.plainPreview(): String =
+    replace(Regex("[*_`#>]+"), "").replace(Regex("\\s+"), " ").trim()
+
+/**
+ * `Work/Step` 工具行：状态图标 16（完成 Green ✓ / 进行中 Indigo 加载圈 / 失败 Rose ✕ / 中断 次要色 !）
+ * → 标题 Label/Medium + 说明 Label/Regular 次要色；整行可点展开 `Run/StepDetail`
+ * （bg/surface-muted 圆角 12 内边距 12：命令块、结果、浏览器预览与「打开当前浏览器」）。
+ */
+@Composable
+private fun WorkToolStep(
+    message: ToolActivityMessageUi,
+    title: String,
+    subtitle: String?,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    showBrowserShortcut: Boolean,
+    browserSnapshot: BrowserSessionSnapshot?,
+    onOpenBrowser: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .movoClickableRow(onToggle)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.Top) {
+            Box(Modifier.height(18.dp).width(16.dp), contentAlignment = Alignment.Center) {
+                androidx.compose.animation.Crossfade(
+                    targetState = message.status,
+                    animationSpec = io.github.mangi.eta.ui.theme.MovoMotion.fast(),
+                    label = "stepStatus",
+                ) { status ->
+                    when (status) {
+                        ToolActivityStatusUi.Running -> io.github.mangi.eta.ui.components.movo.MovoSpinner()
+                        ToolActivityStatusUi.Success -> io.github.mangi.eta.ui.theme.MovoIcon(
+                            io.github.mangi.eta.ui.theme.MovoIcons.Check, stringResource(R.string.tool_status_success),
+                            size = 16.dp, tint = io.github.mangi.eta.ui.theme.MovoColors.greenFg,
+                        )
+                        ToolActivityStatusUi.Failed -> io.github.mangi.eta.ui.theme.MovoIcon(
+                            io.github.mangi.eta.ui.theme.MovoIcons.X, status.statusLabel(),
+                            size = 16.dp, tint = io.github.mangi.eta.ui.theme.MovoColors.roseFg,
+                        )
+                        ToolActivityStatusUi.Unknown -> io.github.mangi.eta.ui.theme.MovoIcon(
+                            io.github.mangi.eta.ui.theme.MovoIcons.CircleAlert, stringResource(R.string.movo_step_interrupted),
+                            size = 16.dp, tint = io.github.mangi.eta.ui.theme.MovoColors.textSecondary,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = io.github.mangi.eta.ui.theme.MovoTypography.labelMedium,
+                    color = io.github.mangi.eta.ui.theme.MovoColors.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (subtitle != null) {
+                    Text(
+                        text = subtitle,
+                        style = io.github.mangi.eta.ui.theme.MovoTypography.labelRegular,
+                        color = io.github.mangi.eta.ui.theme.MovoColors.textSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            val started = message.startedAtMillis
+            val finished = message.finishedAtMillis
+            if (started != null && finished != null) {
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = formatStepDuration(finished - started),
+                    style = io.github.mangi.eta.ui.theme.MovoTypography.numericLabel,
+                    color = io.github.mangi.eta.ui.theme.MovoColors.textTertiary,
+                    maxLines = 1,
+                )
+            }
+        }
+        // 展开：高度 `standard`，内容在高度过渡开始 40ms 后淡入 `fast`（规范 9.3「展开 / 收起」）。
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(
+                tween(
+                    io.github.mangi.eta.ui.theme.MovoMotion.FAST,
+                    delayMillis = io.github.mangi.eta.ui.theme.MovoMotion.STAGGER,
+                    easing = io.github.mangi.eta.ui.theme.MovoMotion.EasingStandard,
+                ),
+            ) + expandVertically(io.github.mangi.eta.ui.theme.MovoMotion.standard()),
+            exit = fadeOut(io.github.mangi.eta.ui.theme.MovoMotion.fastExit()) +
+                shrinkVertically(io.github.mangi.eta.ui.theme.MovoMotion.standard()),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 28.dp, top = 8.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(io.github.mangi.eta.ui.theme.MovoColors.bgSurfaceMuted)
+                    .padding(12.dp),
+            ) {
+                if (!message.command.isNullOrBlank()) {
+                    ToolCommandBlock(
+                        command = message.command,
+                        context = message.argumentsSummary,
+                        modifier = Modifier.padding(bottom = if (message.resultSummary.isNullOrBlank()) 0.dp else 10.dp),
+                    )
+                }
+                if (!message.resultSummary.isNullOrBlank()) {
+                    Text(
+                        text = stringResource(R.string.ui_result_0a2c91),
+                        style = io.github.mangi.eta.ui.theme.MovoTypography.labelMedium,
+                        color = io.github.mangi.eta.ui.theme.MovoColors.textSecondary,
+                    )
+                    Text(
+                        text = message.resultSummary,
+                        style = io.github.mangi.eta.ui.theme.MovoTypography.labelRegular,
+                        color = io.github.mangi.eta.ui.theme.MovoColors.textPrimary,
+                        maxLines = 10,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (showBrowserShortcut) {
+                    browserSnapshot?.takeIf { it.available }?.let { snapshot ->
+                        BrowserPagePreview(snapshot = snapshot, modifier = Modifier.padding(top = 8.dp))
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        io.github.mangi.eta.ui.components.movo.MovoPillButton(
+                            label = stringResource(R.string.ui_open_current_browser_58358e),
+                            onClick = onOpenBrowser,
                         )
                     }
                 }
@@ -2787,39 +3420,44 @@ private fun SuggestionChipsRow(
     onSuggestionClick: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    FlowRow(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        message.prompts.forEach { prompt ->
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MiuixTheme.colorScheme.surface)
-                    .border(
-                        0.5.dp,
-                        MiuixTheme.colorScheme.outline.copy(alpha = 0.55f),
-                        RoundedCornerShape(10.dp),
+    // 推荐追问 `Chip/Suggestion`（规范 8.1）：高 32、圆角 16、bg/surface + 0.5 描边；sparkle 14 Indigo + Label/Medium，
+    // 左 12 / 右 14、间距 6；自动换行，间距 8。随回答完成在操作行之后依次淡入上移 8（规范 9.4「回答完成」）。
+    var played by androidx.compose.runtime.saveable.rememberSaveable(message.id) { mutableStateOf(false) }
+    val play = remember(message.id) { !played }
+    LaunchedEffect(message.id) { played = true }
+    io.github.mangi.eta.ui.components.movo.MovoEntrance(play = play, step = 1, modifier = modifier) {
+        FlowRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            message.prompts.forEach { prompt ->
+                val shape = RoundedCornerShape(16.dp)
+                Row(
+                    modifier = Modifier
+                        .height(32.dp)
+                        .clip(shape)
+                        .background(io.github.mangi.eta.ui.theme.MovoColors.bgSurface)
+                        .border(0.5.dp, io.github.mangi.eta.ui.theme.MovoColors.borderHairline, shape)
+                        .movoClickable(io.github.mangi.eta.ui.components.movo.PressKind.Card, shape = shape) { onSuggestionClick(prompt) }
+                        .padding(start = 12.dp, end = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    io.github.mangi.eta.ui.theme.MovoIcon(
+                        io.github.mangi.eta.ui.theme.MovoIcons.Sparkle, null, size = 14.dp,
+                        tint = io.github.mangi.eta.ui.theme.MovoColors.indigoFg,
                     )
-                    .clickable { onSuggestionClick(prompt) }
-                    .padding(horizontal = 13.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.AutoAwesome,
-                    contentDescription = null,
-                    modifier = Modifier.size(12.dp),
-                    tint = MiuixTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = prompt,
-                    style = MiuixTheme.textStyles.footnote1,
-                    color = MiuixTheme.colorScheme.onSurface,
-                )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = prompt,
+                        style = io.github.mangi.eta.ui.theme.MovoTypography.labelMedium,
+                        color = io.github.mangi.eta.ui.theme.MovoColors.textPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }
@@ -2844,6 +3482,119 @@ private fun ToolActivityStatusUi.statusLabel(): String = when (this) {
 }
 
 /** 任务失败或中断时，直达这次任务的运行日志（运行日志功能定义 D3）；对话浮层里没有入口。 */
+/**
+ * 对话中的失败任务卡（Figma「26 · 对话中 · 任务失败」、规范 8.10）：失败摘要条（Rose ✕ +「任务没有完成」+ 用时 ›，
+ * 点开运行日志任务详情）→ 原因卡（原因标题 + 说明 +「重试」「查看日志」）。原来的复制、删除收进「更多」。
+ */
+@Composable
+private fun RunFailureCard(
+    message: SystemNoticeMessageUi,
+    actionsEnabled: Boolean,
+    onRetry: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val openLog = io.github.mangi.eta.ui.screens.diagnostics.LocalRunLogOpener.current
+    val failure = io.github.mangi.eta.ui.screens.diagnostics.rememberRunFailure(message.id)
+    val noticeText = stringResource(
+        if (message.code == SystemNoticeCode.Interrupted) R.string.system_notice_interrupted else R.string.system_notice_runtime_failed,
+    )
+    val title = failure?.failure?.title ?: noticeText
+    val detail = failure?.failure?.message ?: message.detail?.takeIf(String::isNotBlank)
+    val openRunLog = openLog?.let { open -> { open(failure?.runId ?: io.github.mangi.eta.ui.screens.diagnostics.DiagnosticsLinks.runForMessage(message.id)) } }
+    @Suppress("DEPRECATION")
+    val clipboardManager = LocalClipboardManager.current
+    Column(
+        modifier = modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        val pillShape = RoundedCornerShape(io.github.mangi.eta.ui.theme.MovoRadius.pillLg)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .clip(pillShape)
+                .background(io.github.mangi.eta.ui.theme.MovoColors.bgSurface)
+                .border(io.github.mangi.eta.ui.theme.MovoSize.hairline, io.github.mangi.eta.ui.theme.MovoColors.borderHairline, pillShape)
+                .then(if (openRunLog != null) Modifier.movoClickableRow(openRunLog) else Modifier)
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            io.github.mangi.eta.ui.theme.MovoIcon(io.github.mangi.eta.ui.theme.MovoIcons.X, null, size = 16.dp, tint = io.github.mangi.eta.ui.theme.MovoColors.roseFg)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                stringResource(R.string.movo_run_failed),
+                style = io.github.mangi.eta.ui.theme.MovoTypography.labelMedium,
+                color = io.github.mangi.eta.ui.theme.MovoColors.textSecondary,
+                modifier = Modifier.weight(1f),
+            )
+            failure?.failure?.duration?.let { duration ->
+                Text(duration, style = io.github.mangi.eta.ui.theme.MovoTypography.labelRegular, color = io.github.mangi.eta.ui.theme.MovoColors.textTertiary)
+                Spacer(Modifier.width(8.dp))
+            }
+            if (openRunLog != null) {
+                io.github.mangi.eta.ui.theme.MovoIcon(io.github.mangi.eta.ui.theme.MovoIcons.ChevronRight, null, size = 16.dp, tint = io.github.mangi.eta.ui.theme.MovoColors.textTertiary)
+            }
+        }
+        val cardShape = RoundedCornerShape(io.github.mangi.eta.ui.theme.MovoRadius.xl)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(cardShape)
+                .background(io.github.mangi.eta.ui.theme.MovoColors.bgSurface)
+                .border(io.github.mangi.eta.ui.theme.MovoSize.hairline, io.github.mangi.eta.ui.theme.MovoColors.borderHairline, cardShape)
+                .padding(16.dp),
+        ) {
+            Text(title, style = io.github.mangi.eta.ui.theme.MovoTypography.bodyStrong, color = io.github.mangi.eta.ui.theme.MovoColors.textPrimary)
+            if (detail != null) {
+                Text(detail, style = io.github.mangi.eta.ui.theme.MovoTypography.labelRegular, color = io.github.mangi.eta.ui.theme.MovoColors.textSecondary)
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                io.github.mangi.eta.ui.components.movo.MovoPillButton(
+                    label = stringResource(R.string.movo_run_retry),
+                    onClick = onRetry,
+                    enabled = actionsEnabled,
+                )
+                if (openRunLog != null) {
+                    Spacer(Modifier.width(8.dp))
+                    io.github.mangi.eta.ui.components.movo.MovoPillButton(
+                        label = stringResource(R.string.movo_run_view_log),
+                        onClick = openRunLog,
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                var showMore by remember(message.id) { mutableStateOf(false) }
+                Box {
+                    MessageActionButton(
+                        icon = io.github.mangi.eta.ui.theme.MovoIcons.Ellipsis,
+                        contentDescription = stringResource(R.string.action_more),
+                        enabled = actionsEnabled,
+                        onClick = { showMore = true },
+                    )
+                    io.github.mangi.eta.ui.components.movo.MovoPopoverMenu(
+                        show = showMore && actionsEnabled,
+                        onDismiss = { showMore = false },
+                        alignEnd = true,
+                        items = listOf(
+                            io.github.mangi.eta.ui.components.movo.MovoMenuItem(
+                                io.github.mangi.eta.ui.theme.MovoIcons.Copy, stringResource(R.string.movo_copy),
+                            ) {
+                                @Suppress("DEPRECATION")
+                                clipboardManager.setText(AnnotatedString(listOfNotNull(title, detail).joinToString("\n")))
+                            },
+                            io.github.mangi.eta.ui.components.movo.MovoMenuItem(
+                                io.github.mangi.eta.ui.theme.MovoIcons.Trash2, stringResource(R.string.ui_delete_3755f5),
+                                destructive = true, onClick = onDelete,
+                            ),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun RunLogLink(messageId: String) {
     val open = io.github.mangi.eta.ui.screens.diagnostics.LocalRunLogOpener.current ?: return

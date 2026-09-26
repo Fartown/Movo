@@ -3,6 +3,11 @@ package io.github.mangi.eta.agent.runtime
 import io.github.mangi.eta.core.toSafeLogToken
 
 internal sealed interface AgentEvent {
+    /** 带发生时刻的事件（工具开始 / 结束）。 */
+    interface Timed {
+        var atMillis: Long
+    }
+
     fun toLogLine(): String
 
     enum class AssistantBlockKind {
@@ -155,7 +160,10 @@ internal sealed interface AgentEvent {
         val name: String,
         val argsPreview: String,
         val command: String? = null,
-    ) : AgentEvent {
+    ) : AgentEvent, AgentEvent.Timed {
+        /** 事件发生时刻（毫秒）；0 表示旧版本 Runtime 未记录。不参与相等比较，用于执行卡与执行详情的每步用时。 */
+        override var atMillis: Long = 0L
+
         override fun toLogLine(): String =
             "tool_started round=$round, name=${name.toSafeLogToken()}, " +
                 "args_chars=${argsPreview.length}, command_chars=${command?.length ?: 0}"
@@ -170,7 +178,10 @@ internal sealed interface AgentEvent {
         val imageBytes: Int,
         /** 可选：旧版本 Runtime 不发送，消费端缺省时回退到摘要文本判断。 */
         val success: Boolean? = null,
-    ) : AgentEvent {
+    ) : AgentEvent, AgentEvent.Timed {
+        /** 事件发生时刻（毫秒）；0 表示旧版本 Runtime 未记录。不参与相等比较，用于执行卡与执行详情的每步用时。 */
+        override var atMillis: Long = 0L
+
         override fun toLogLine(): String =
             "tool_finished round=$round, name=${name.toSafeLogToken()}, " +
                 "${resultSummary.toSafeResultLogFields()}, images=$imageCount, image_bytes=$imageBytes"
@@ -180,7 +191,10 @@ internal sealed interface AgentEvent {
         val round: Int,
         val toolCallId: String,
         val name: String,
-    ) : AgentEvent {
+    ) : AgentEvent, AgentEvent.Timed {
+        /** 事件发生时刻（毫秒）；0 表示旧版本 Runtime 未记录。不参与相等比较，用于执行卡与执行详情的每步用时。 */
+        override var atMillis: Long = 0L
+
         override fun toLogLine(): String =
             "hosted_tool_started round=$round, name=${name.toSafeLogToken()}"
     }
@@ -190,7 +204,10 @@ internal sealed interface AgentEvent {
         val toolCallId: String,
         val name: String,
         val success: Boolean,
-    ) : AgentEvent {
+    ) : AgentEvent, AgentEvent.Timed {
+        /** 事件发生时刻（毫秒）；0 表示旧版本 Runtime 未记录。不参与相等比较，用于执行卡与执行详情的每步用时。 */
+        override var atMillis: Long = 0L
+
         override fun toLogLine(): String =
             "hosted_tool_finished round=$round, name=${name.toSafeLogToken()}, success=$success"
     }
@@ -219,6 +236,16 @@ internal sealed interface AgentEvent {
     ) : AgentEvent {
         override fun toLogLine(): String =
             "run_failed reason_chars=${reason.length}"
+    }
+
+    /** 用户在悬浮球展开卡里暂停了这次运行（规范 8.1、8.2「已暂停」）；在下一个检查点生效。 */
+    data object RunPaused : AgentEvent {
+        override fun toLogLine(): String = "run_paused"
+    }
+
+    /** 暂停后继续。 */
+    data object RunResumed : AgentEvent {
+        override fun toLogLine(): String = "run_resumed"
     }
 }
 

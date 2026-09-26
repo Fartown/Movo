@@ -7,13 +7,8 @@ import android.provider.Settings
 import android.text.format.Formatter
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
-import androidx.compose.material.icons.rounded.DriveFolderUpload
-import androidx.compose.material.icons.rounded.Folder
-import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -30,15 +25,21 @@ import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.R
 import io.github.mangi.eta.ui.app.WorkspaceEntry
 import io.github.mangi.eta.ui.app.WorkspaceFileStore
-import io.github.mangi.eta.ui.components.ListEmptyState
-import io.github.mangi.eta.ui.components.MiuixScaffoldPage
-import io.github.mangi.eta.ui.components.PreferenceIcon
+import io.github.mangi.eta.ui.components.movo.CardFooter
+import io.github.mangi.eta.ui.components.movo.CardTitle
+import io.github.mangi.eta.ui.components.movo.MovoCard
+import io.github.mangi.eta.ui.components.movo.MovoDivider
+import io.github.mangi.eta.ui.components.movo.MovoListPage
+import io.github.mangi.eta.ui.components.movo.RowLeading
+import io.github.mangi.eta.ui.components.movo.RowTrailing
+import io.github.mangi.eta.ui.components.movo.SettingsRow
+import io.github.mangi.eta.ui.theme.MovoColors
+import io.github.mangi.eta.ui.theme.MovoIcon
+import io.github.mangi.eta.ui.theme.MovoIcons
+import io.github.mangi.eta.ui.theme.MovoSize
+import io.github.mangi.eta.ui.theme.MovoSpacing
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.SmallTitle
-import top.yukonga.miuix.kmp.preference.ArrowPreference
 
 @Composable
 internal fun WorkspaceScreen(onBack: () -> Unit) {
@@ -101,27 +102,29 @@ internal fun WorkspaceScreen(onBack: () -> Unit) {
             message = context.getString(R.string.capability_workspace_failed)
         }
     }
-    MiuixScaffoldPage(title = stringResource(R.string.capability_workspace), onBack = onBack) {
-        item(key = "workspace-info") {
-            BasicComponent(
-                title = stringResource(R.string.capability_workspace_private),
-                summary = stringResource(R.string.capability_workspace_private_summary),
-                modifier = Modifier.padding(horizontal = 12.dp),
-            )
-        }
+    // 页面卡片：私有工作区（导入、公共目录访问 + 结果就地反馈 + 页脚说明）→ 文件列表分段卡片（长列表保持惰性）。
+    MovoListPage(
+        title = stringResource(R.string.capability_workspace),
+        onBack = onBack,
+        itemSpacing = 0.dp,
+    ) {
         item(key = "actions") {
-            Card(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                ArrowPreference(
+            MovoCard {
+                CardTitle(stringResource(R.string.capability_workspace_private))
+                SettingsRow(
                     title = stringResource(R.string.capability_workspace_import),
                     enabled = !busy,
-                    startAction = { PreferenceIcon(Icons.Rounded.DriveFolderUpload, enabled = !busy) },
                     onClick = { importLauncher.launch(arrayOf("*/*")) },
                 )
-
-                ArrowPreference(
+                SettingsRow(
                     title = stringResource(R.string.capability_workspace_public),
-                    startAction = { PreferenceIcon(Icons.Rounded.FolderOpen) },
-                    summary = if (publicAccess) stringResource(R.string.capability_workspace_public_granted) else stringResource(R.string.capability_workspace_public_summary),
+                    subtitle = if (publicAccess) {
+                        stringResource(R.string.capability_workspace_public_granted)
+                    } else {
+                        stringResource(R.string.capability_workspace_public_summary)
+                    },
+                    trailing = RowTrailing.External(),
+                    showDivider = false,
                     onClick = {
                         try {
                             accessLauncher.launch(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
@@ -131,55 +134,69 @@ internal fun WorkspaceScreen(onBack: () -> Unit) {
                         }
                     },
                 )
-            }
-        }
-        message?.let { text -> item(key = "message") { BasicComponent(title = text) } }
-        item(key = "path") {
-            SmallTitle(if (path.isBlank()) stringResource(R.string.capability_workspace_files) else path)
-        }
-        if (path.isNotBlank()) {
-            item(key = "parent") {
-                Card(modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
-                    ArrowPreference(
-                        title = stringResource(R.string.capability_workspace_parent),
-                        startAction = { PreferenceIcon(Icons.Rounded.FolderOpen) },
-                        onClick = { path = path.substringBeforeLast('/', "") },
-                    )
+                message?.let { text ->
+                    MovoDivider(start = MovoSpacing.lg)
+                    CardNotice(text = text, error = text == context.getString(R.string.capability_workspace_failed))
                 }
+                CardFooter(listOf(stringResource(R.string.movo_workspace_footer)))
             }
         }
-        if (entries.isEmpty()) {
+        item(key = "files-gap") { CardGap() }
+        val hasParent = path.isNotBlank()
+        val empty = entries.isEmpty()
+        item(key = "path") {
+            // 首段只放标题；末段一定是「暂无文件」或最后一个条目。
+            Column(Modifier.movoCardSegment(first = true, last = false)) {
+                CardTitle(if (path.isBlank()) stringResource(R.string.capability_workspace_files) else path)
+            }
+        }
+        if (hasParent) {
+            item(key = "parent") {
+                SettingsRow(
+                    title = stringResource(R.string.capability_workspace_parent),
+                    modifier = Modifier.movoCardSegment(first = false, last = false),
+                    onClick = { path = path.substringBeforeLast('/', "") },
+                )
+            }
+        }
+        if (empty) {
             item(key = "empty") {
-                ListEmptyState(
+                SettingsRow(
                     title = stringResource(R.string.capability_workspace_empty),
-                    summary = stringResource(R.string.capability_workspace_empty_summary),
+                    subtitle = stringResource(R.string.capability_workspace_empty_summary),
+                    modifier = Modifier.movoCardSegment(first = false, last = true),
+                    trailing = RowTrailing.None,
+                    showDivider = false,
                 )
             }
         }
-        items(entries, key = { it.path }) { entry ->
-            Card(modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
-                ArrowPreference(
-                    title = entry.name,
-                    summary = if (entry.directory) stringResource(R.string.capability_workspace_directory)
-                        else stringResource(
-                            R.string.capability_workspace_file_export,
-                            Formatter.formatShortFileSize(context, entry.size),
-                        ),
-                    startAction = {
-                        PreferenceIcon(
-                            icon = if (entry.directory) Icons.Rounded.Folder else Icons.AutoMirrored.Rounded.InsertDriveFile,
-                            enabled = !busy,
-                        )
-                    },
-                    enabled = !busy,
-                    onClick = {
-                        if (entry.directory) path = entry.path else {
-                            pendingExport = entry.path
-                            exportLauncher.launch(entry.name)
-                        }
-                    },
-                )
-            }
+        itemsIndexed(entries, key = { _, entry -> entry.path }) { index, entry ->
+            val last = index == entries.lastIndex
+            SettingsRow(
+                title = entry.name,
+                subtitle = if (entry.directory) stringResource(R.string.capability_workspace_directory)
+                    else stringResource(
+                        R.string.capability_workspace_file_export,
+                        Formatter.formatShortFileSize(context, entry.size),
+                    ),
+                modifier = Modifier.movoCardSegment(first = false, last = last),
+                leading = RowLeading.Icon(if (entry.directory) MovoIcons.Folder else MovoIcons.File),
+                trailing = if (entry.directory) {
+                    RowTrailing.Arrow()
+                } else {
+                    RowTrailing.Custom {
+                        MovoIcon(MovoIcons.Download, null, size = MovoSize.iconSmall, tint = MovoColors.textTertiary)
+                    }
+                },
+                enabled = !busy,
+                showDivider = !last,
+                onClick = {
+                    if (entry.directory) path = entry.path else {
+                        pendingExport = entry.path
+                        exportLauncher.launch(entry.name)
+                    }
+                },
+            )
         }
     }
 }

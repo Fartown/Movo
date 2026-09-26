@@ -33,11 +33,26 @@ internal data class VoiceSessionUiState(
      * 让"网络失败""没听到说话""这句话已存回输入框"之类的结果不至于一闪而过。
      */
     val notice: String? = null,
+    /** 本次会话里已作为补充交给当前任务的句数；每多一句，展开卡的「已补充」停留 1.5s（规范 8.1 / 9.6）。 */
+    val supplements: Int = 0,
+    /** 检测到停顿、正在等待自动发送（主按钮外圈进度环，规范 9.6「停顿后自动发送」）。 */
+    val autoSendPending: Boolean = false,
+    /** 每次检测到停顿加一：进度环据此从头走。 */
+    val autoSendGeneration: Int = 0,
 ) {
     val active: Boolean get() = channel != VoiceChannel.Off
     val speaking: Boolean get() = channel == VoiceChannel.Speaking
 
     internal companion object {
+        /** 这些事件表示不再等待自动发送：又开口了、已经发出、或语音状态变了。 */
+        private val autoSendResetEvents = setOf("hearing", "dispatch", "listening", "speaking", "result", "ended", "cancel.request", "committed")
+
+        fun autoSendPendingAfter(event: String, previous: Boolean): Boolean = when (event) {
+            "endpoint" -> true
+            in autoSendResetEvents -> false
+            else -> previous
+        }
+
         /** 控制器的事件名到通道状态的唯一映射；不在界面里散落 when 分支。 */
         fun channelFor(event: String, active: Boolean, previous: VoiceChannel): VoiceChannel {
             if (!active) return VoiceChannel.Off

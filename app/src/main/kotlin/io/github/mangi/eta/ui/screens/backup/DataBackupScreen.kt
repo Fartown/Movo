@@ -2,30 +2,25 @@ package io.github.mangi.eta.ui.screens.backup
 
 import android.content.Context
 import android.net.Uri
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Description
-import androidx.compose.material.icons.rounded.Download
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.R
 import io.github.mangi.eta.data.repository.EtaBackupSummary
-import io.github.mangi.eta.ui.components.MiuixDialogActions
-import io.github.mangi.eta.ui.components.MiuixScaffoldPage
+import io.github.mangi.eta.ui.components.movo.CardFooter
+import io.github.mangi.eta.ui.components.movo.CardTitle
+import io.github.mangi.eta.ui.components.movo.MovoCard
+import io.github.mangi.eta.ui.components.movo.MovoConfirmDialog
+import io.github.mangi.eta.ui.components.movo.MovoListPage
+import io.github.mangi.eta.ui.components.movo.RowTrailing
+import io.github.mangi.eta.ui.components.movo.SettingsRow
+import io.github.mangi.eta.ui.theme.MovoSize
 import java.io.InputStream
 import java.io.OutputStream
 import java.text.SimpleDateFormat
@@ -33,15 +28,14 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.InfiniteProgressIndicator
-import top.yukonga.miuix.kmp.basic.SmallTitle
-import top.yukonga.miuix.kmp.preference.ArrowPreference
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
 
+private enum class BackupOp { Export, Import }
+
+/**
+ * 设置 · 数据备份（规范 8.7 二级页）：一张「备份」卡（导出、导入），原来的警告卡改为卡片页脚。
+ * 导出 / 导入的结果和失败原因就地写在对应行的说明里（规范 8.11 不用 Toast）。
+ */
 @Composable
 internal fun DataBackupScreen(
     context: Context,
@@ -51,16 +45,15 @@ internal fun DataBackupScreen(
 ) {
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
+    var activeOp by remember { mutableStateOf<BackupOp?>(null) }
     var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
     var showImportDialog by remember { mutableStateOf(false) }
+    var exportMessage by remember { mutableStateOf<String?>(null) }
+    var importMessage by remember { mutableStateOf<String?>(null) }
 
-    fun showFailure(throwable: Throwable) {
+    fun failureMessage(throwable: Throwable): String {
         if (throwable is CancellationException) throw throwable
-        Toast.makeText(
-            context,
-            throwable.message ?: context.getString(R.string.data_backup_failed),
-            Toast.LENGTH_LONG,
-        ).show()
+        return throwable.message ?: context.getString(R.string.data_backup_failed)
     }
 
     val exportLauncher = rememberLauncherForActivityResult(
@@ -69,23 +62,22 @@ internal fun DataBackupScreen(
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             busy = true
+            activeOp = BackupOp.Export
+            exportMessage = null
             try {
                 val output = context.contentResolver.openOutputStream(uri)
                     ?: error(context.getString(R.string.data_backup_file_open_failed))
                 val summary = output.use { onExport(it) }
-                Toast.makeText(
-                    context,
-                    context.getString(
-                        R.string.data_backup_exported,
-                        summary.conversationCount,
-                        summary.providerCount,
-                    ),
-                    Toast.LENGTH_SHORT,
-                ).show()
+                exportMessage = context.getString(
+                    R.string.data_backup_exported,
+                    summary.conversationCount,
+                    summary.providerCount,
+                )
             } catch (throwable: Throwable) {
-                showFailure(throwable)
+                exportMessage = failureMessage(throwable)
             } finally {
                 busy = false
+                activeOp = null
             }
         }
     }
@@ -99,134 +91,102 @@ internal fun DataBackupScreen(
         }
     }
 
-    MiuixScaffoldPage(
+    MovoListPage(
         title = stringResource(R.string.data_backup_title),
         onBack = onBack,
     ) {
-        item(key = "warning") {
-            Card(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                BasicComponent(
-                    title = stringResource(R.string.data_backup_warning_title),
-                    summary = stringResource(R.string.data_backup_warning_summary),
-                )
-            }
-        }
-        item(key = "actions-title") {
-            SmallTitle(stringResource(R.string.data_backup_actions))
-        }
         item(key = "actions-card") {
-            Card(modifier = Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp)) {
-                ArrowPreference(
+            MovoCard {
+                CardTitle(stringResource(R.string.data_backup_actions))
+                SettingsRow(
                     title = stringResource(R.string.data_backup_export),
-                    summary = if (busy) {
-                        stringResource(R.string.data_backup_working)
-                    } else {
-                        stringResource(R.string.data_backup_export_summary)
+                    subtitle = when {
+                        activeOp == BackupOp.Export -> stringResource(R.string.data_backup_working)
+                        exportMessage != null -> exportMessage
+                        else -> stringResource(R.string.data_backup_export_summary)
                     },
                     enabled = !busy,
-                    startAction = {
-                        BackupIcon(
-                            icon = Icons.Rounded.Download,
-                            loading = busy,
-                        )
+                    trailing = if (activeOp == BackupOp.Export) {
+                        RowTrailing.Custom { InfiniteProgressIndicator(size = MovoSize.iconMedium) }
+                    } else {
+                        RowTrailing.Arrow()
                     },
                     onClick = {
                         exportLauncher.launch(defaultBackupFileName())
                     },
                 )
-                ArrowPreference(
+                SettingsRow(
                     title = stringResource(R.string.data_backup_import),
-                    summary = stringResource(R.string.data_backup_import_summary),
-                    enabled = !busy,
-                    startAction = {
-                        BackupIcon(
-                            icon = Icons.Rounded.Description,
-                            loading = false,
-                        )
+                    subtitle = when {
+                        activeOp == BackupOp.Import -> stringResource(R.string.data_backup_working)
+                        importMessage != null -> importMessage
+                        else -> stringResource(R.string.data_backup_import_summary)
                     },
+                    enabled = !busy,
+                    trailing = if (activeOp == BackupOp.Import) {
+                        RowTrailing.Custom { InfiniteProgressIndicator(size = MovoSize.iconMedium) }
+                    } else {
+                        RowTrailing.Arrow()
+                    },
+                    showDivider = false,
                     onClick = {
                         importLauncher.launch(arrayOf("application/json", "text/plain"))
                     },
+                )
+                CardFooter(
+                    listOf(
+                        stringResource(R.string.movo_backup_footer_1),
+                        stringResource(R.string.movo_backup_footer_2),
+                    ),
                 )
             }
         }
     }
 
-    if (showImportDialog) {
-        WindowDialog(
-            show = true,
-            title = stringResource(R.string.data_backup_import_confirm_title),
-            summary = stringResource(R.string.data_backup_import_confirm_summary),
-            onDismissRequest = {
-                if (!busy) {
-                    showImportDialog = false
-                    pendingImportUri = null
-                }
-            },
-        ) {
-            MiuixDialogActions(
-                confirmText = if (busy) {
-                    stringResource(R.string.data_backup_working)
-                } else {
-                    stringResource(R.string.action_import)
-                },
-                destructive = true,
-                cancelEnabled = !busy,
-                confirmEnabled = !busy,
-                onCancel = {
-                    showImportDialog = false
-                    pendingImportUri = null
-                },
-                onConfirm = {
-                    val uri = pendingImportUri ?: return@MiuixDialogActions
-                    showImportDialog = false
-                    scope.launch {
-                        busy = true
-                        try {
-                            val input = context.contentResolver.openInputStream(uri)
-                                ?: error(context.getString(R.string.data_backup_file_open_failed))
-                            val summary = input.use { onImport(it) }
-                            Toast.makeText(
-                                context,
-                                context.getString(
-                                    R.string.data_backup_imported,
-                                    summary.conversationCount,
-                                    summary.providerCount,
-                                ),
-                                Toast.LENGTH_SHORT,
-                            ).show()
-                        } catch (throwable: Throwable) {
-                            showFailure(throwable)
-                        } finally {
-                            pendingImportUri = null
-                            busy = false
-                        }
-                    }
-                },
-            )
-        }
-    }
-}
-
-@Composable
-private fun BackupIcon(icon: ImageVector, loading: Boolean) {
-    Box(
-        modifier = Modifier
-            .padding(end = 6.dp)
-            .size(24.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (loading) {
-            InfiniteProgressIndicator(size = 20.dp)
+    MovoConfirmDialog(
+        show = showImportDialog,
+        title = stringResource(R.string.data_backup_import_confirm_title),
+        message = stringResource(R.string.data_backup_import_confirm_summary),
+        confirmText = if (busy) {
+            stringResource(R.string.data_backup_working)
         } else {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                modifier = Modifier.size(24.dp),
-                tint = MiuixTheme.colorScheme.onBackground,
-            )
-        }
-    }
+            stringResource(R.string.action_import)
+        },
+        destructive = true,
+        cancelEnabled = !busy,
+        confirmEnabled = !busy,
+        onDismissRequest = {
+            if (!busy) {
+                showImportDialog = false
+                pendingImportUri = null
+            }
+        },
+        onConfirm = confirm@{
+            val uri = pendingImportUri ?: return@confirm
+            showImportDialog = false
+            scope.launch {
+                busy = true
+                activeOp = BackupOp.Import
+                importMessage = null
+                try {
+                    val input = context.contentResolver.openInputStream(uri)
+                        ?: error(context.getString(R.string.data_backup_file_open_failed))
+                    val summary = input.use { onImport(it) }
+                    importMessage = context.getString(
+                        R.string.data_backup_imported,
+                        summary.conversationCount,
+                        summary.providerCount,
+                    )
+                } catch (throwable: Throwable) {
+                    importMessage = failureMessage(throwable)
+                } finally {
+                    pendingImportUri = null
+                    busy = false
+                    activeOp = null
+                }
+            }
+        },
+    )
 }
 
 private fun defaultBackupFileName(): String =

@@ -271,7 +271,7 @@ internal class AgentLoop(
                 name = toolCall.name,
                 argsPreview = traceFormatter.summarizeArguments(toolCall),
                 command = traceFormatter.displayCommand(toolCall),
-            )
+            ).stamped()
         )
 
         val result = try {
@@ -307,7 +307,7 @@ internal class AgentLoop(
                 name = toolCall.name,
                 argsPreview = traceFormatter.summarizeArguments(toolCall),
                 command = traceFormatter.displayCommand(toolCall),
-            )
+            ).stamped()
         )
         val result = AgentModelClient.ToolResult(
             content = JSONObject()
@@ -336,7 +336,7 @@ internal class AgentLoop(
                 imageCount = result.images.size,
                 imageBytes = result.images.sumOf { it.bytes },
                 success = traceFormatter.isSuccessResult(result),
-            )
+            ).stamped()
         )
     }
 
@@ -417,13 +417,13 @@ internal class AgentLoop(
                 round = round,
                 toolCallId = id,
                 name = name,
-            )
+            ).stamped()
             is ProviderEvent.HostedToolFinished -> AgentEvent.HostedToolFinished(
                 round = round,
                 toolCallId = id,
                 name = name,
                 success = success,
-            )
+            ).stamped()
             is ProviderEvent.Completed -> null
         }
 
@@ -434,4 +434,16 @@ internal class AgentLoop(
             AssistantBlockKind.TOOL_CALL -> AgentEvent.AssistantBlockKind.TOOL_CALL
         }
 
+}
+
+/** 给工具事件记下发生时刻，供执行卡与执行详情计算每步用时（规范 8.1、8.8）。 */
+private fun <T : AgentEvent> T.stamped(): T = apply {
+    val now = System.currentTimeMillis()
+    when (this) {
+        is AgentEvent.ToolStarted -> atMillis = now
+        is AgentEvent.ToolFinished -> atMillis = now
+        is AgentEvent.HostedToolStarted -> atMillis = now
+        is AgentEvent.HostedToolFinished -> atMillis = now
+        else -> Unit
+    }
 }

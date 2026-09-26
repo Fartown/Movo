@@ -613,4 +613,23 @@ class AgentRuntimeWireTest {
 
         assertEquals(false, handoff.dismissEntrySurfaceOnForegroundOperation)
     }
+
+    @Test
+    fun steerRequestCarriesRunIdAndTextAndResponseCarriesAcceptance() {
+        val request = AgentRuntimeWire.steerBundle("run-1", "改成大杯")
+        assertEquals("run-1", AgentRuntimeWire.runIdFromBundle(request))
+        assertEquals("改成大杯", AgentRuntimeWire.steerTextFromBundle(request))
+        assertEquals(true, AgentRuntimeWire.steerAccepted(AgentRuntimeWire.steerResponseBundle("run-1", true)))
+        assertEquals(false, AgentRuntimeWire.steerAccepted(AgentRuntimeWire.steerResponseBundle("run-1", false)))
+    }
+
+    @Test
+    fun pauseStateAndToolTimesSurviveTheWire() {
+        assertEquals(AgentEvent.RunPaused, AgentRuntimeWire.eventFromBundle(AgentRuntimeWire.eventToBundle(AgentEvent.RunPaused)))
+        assertEquals(AgentEvent.RunResumed, AgentRuntimeWire.eventFromBundle(AgentRuntimeWire.eventToBundle(AgentEvent.RunResumed)))
+        val started = AgentEvent.ToolStarted(1, "call", "tap", "点击").apply { atMillis = 1_700_000_000_000L }
+        val decoded = AgentRuntimeWire.eventFromBundle(AgentRuntimeWire.eventToBundle(started)) as AgentEvent.ToolStarted
+        assertEquals(started, decoded)
+        assertEquals(1_700_000_000_000L, decoded.atMillis)
+    }
 }

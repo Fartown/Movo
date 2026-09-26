@@ -18,11 +18,15 @@ class DiagnosticsFormatTest {
     fun unitsFollowListAndTimelineConventions() {
         assertEquals("645 毫秒", format.duration(645))
         assertEquals("18.4 秒", format.duration(18_400))
-        assertEquals("2 分 5 秒", format.duration(125_000))
+        // 规范 8.10：大于等于 1 秒一律写一位小数的秒，不再换算成「分」。
+        assertEquals("1.0 秒", format.duration(1_000))
+        assertEquals("125.0 秒", format.duration(125_000))
         assertEquals("420ms", format.compact(420))
         assertEquals("3.7s", format.compact(3_700))
+        assertEquals("125.0s", format.compact(125_000))
         assertEquals("+0s", format.offset(10))
         assertEquals("+3.4s", format.offset(3_400))
+        assertEquals("+125.0s", format.offset(125_000))
         assertEquals("00:45", format.timer(45_300))
         assertEquals("1.2K", format.tokens(1_200))
     }
@@ -49,15 +53,24 @@ class DiagnosticsFormatTest {
         assertEquals("模型接口限流（HTTP 429）", explanation.title)
         assertEquals("连续 2 次请求都失败，自动重试已用完。", explanation.detail)
         assertEquals(FailureAction.MODEL_SETTINGS, explanation.action)
-        assertTrue(format.listSubtitle(run, 0).endsWith("模型接口限流（HTTP 429）"))
+        assertEquals("${format.clock(WALL)}·模型接口限流（HTTP 429）", format.listSubtitle(run, 0))
         val first = run.timeline.first() as TimelineItem.Request
-        assertEquals("模型请求 · 第 2 轮", format.requestTitle(first.request))
-        assertEquals("+0s · HTTP 429 · 2s 后重试", format.requestSubtitle(first.request, first.offsetMs - 10))
+        assertEquals("模型请求·第 2 轮", format.requestTitle(first.request))
+        assertEquals("+0s·HTTP 429·2.0s 后重试", format.requestSubtitle(first.request, first.offsetMs - 10))
         val retry = run.timeline.last() as TimelineItem.Request
-        assertEquals("模型请求 · 第 2 轮 · 重试第 1 次", format.requestTitle(retry.request))
-        assertEquals("失败 · 第 2 轮模型请求", format.statusLine(run))
+        assertEquals("第 2 轮·第 2 次尝试", format.requestTitle(retry.request))
+        assertEquals("失败·第 2 轮模型请求", format.statusLine(run))
+        assertEquals("用时 3.0 秒", format.summaryTimer(run, 0))
+        assertEquals("${format.dayClock(WALL)} 开始·${format.clock(WALL + 3_010)} 结束·R1", format.summaryMeta(run))
         val tool = run.timeline.filterIsInstance<TimelineItem.Tool>().single()
-        assertEquals("工具 · 读取当前上下文", format.toolTitle(tool.tool))
+        assertEquals("工具·读取当前上下文", format.toolTitle(tool.tool))
+
+        // 26 对话中失败卡：原因标题 + 说明与建议一句 + 用时。
+        val chat = format.chatFailure(run)!!
+        assertEquals("模型接口限流（HTTP 429）", chat.title)
+        assertEquals("连续 2 次请求都失败，自动重试已用完。稍后再试，或换一个模型。", chat.message)
+        assertEquals("用时 3.0 秒", chat.duration)
+        assertEquals(FailureAction.MODEL_SETTINGS, chat.action)
 
         val markdown = format.exportMarkdown(
             header = ExportHeader("Xiaomi 2312", "Android 15（API 35）", "3.0.9（debug）"),
@@ -69,9 +82,32 @@ class DiagnosticsFormatTest {
         )
         assertTrue(markdown.indexOf("- 原因：模型接口限流") < markdown.indexOf("## 原始事件"))
         assertTrue(markdown.contains("- 建议：稍后再试，或换一个模型"))
-        assertTrue(markdown.contains("工具 · 读取当前上下文（get_current_context）"))
+        assertTrue(markdown.contains("工具·读取当前上下文（get_current_context）"))
+        assertTrue(markdown.contains("## R1·失败·第 2 轮模型请求·3.0 秒"))
+        assertFalse(markdown.contains(" · "))
         assertFalse(markdown.contains("run-abc"))
         assertFalse(markdown.contains("conversation="))
+    }
+
+    @Test
+    fun runningFooterOnlyAfterThirtySecondsOfSilence() {
+        // 规范 8.10：进行中任务详情的底部栏只在 30 秒没有收到数据时出现。
+        assertEquals(null, format.stallHint(null))
+        assertEquals(null, format.stallHint(29_999))
+        assertEquals("已 38 秒没有收到数据，网络可能不稳定", format.stallHint(38_400))
+
+        val buffer = DiagnosticBuffer()
+        buffer.append(WALL, 0, DiagnosticLevel.INFO, "test", "run.started", DiagnosticContext("R2", ""), "")
+        buffer.append(WALL + 10, 10, DiagnosticLevel.INFO, "test", "attempt.started", DiagnosticContext("R2", "Q1"), "purpose=CHAT\nprovider=openai_responses\nround=1\nattempt=1")
+        val run = DiagnosticTraceBuilder.build(buffer.snapshot().entries).runs.single()
+        assertEquals("等待模型回复·第 1 轮", format.statusLine(run))
+        assertEquals("${format.clock(WALL)}·等待模型回复·已 45 秒", format.listSubtitle(run, 45_010))
+        assertEquals("00:45", format.listValue(run, 45_000))
+        // 没卡住时的实时状态写在时间线卡标题右侧；卡住时交给底部栏。
+        assertEquals("3 秒前收到过数据", format.liveNote(run, 45_000, 3_200))
+        assertEquals("正在收到数据", format.liveNote(run, 45_000, 200))
+        assertEquals(null, format.liveNote(run, 45_000, 30_000))
+        assertEquals(null, format.chatFailure(run))
     }
 
     private companion object {

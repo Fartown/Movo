@@ -7,19 +7,27 @@ import android.os.Environment
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,6 +35,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
@@ -42,18 +51,29 @@ import io.github.mangi.eta.agent.terminal.TerminalEnvironment
 import io.github.mangi.eta.agent.terminal.TerminalRuntime
 import io.github.mangi.eta.agent.terminal.runOneShotShell
 import io.github.mangi.eta.agent.terminal.shellQuote
-import io.github.mangi.eta.ui.components.MiuixDialogActions
-import io.github.mangi.eta.ui.components.MiuixScaffoldPage
+import io.github.mangi.eta.ui.components.movo.CardFooter
+import io.github.mangi.eta.ui.components.movo.CardTitle
+import io.github.mangi.eta.ui.components.movo.MovoCard
+import io.github.mangi.eta.ui.components.movo.MovoConfirmDialog
+import io.github.mangi.eta.ui.components.movo.MovoDivider
+import io.github.mangi.eta.ui.components.movo.MovoListPage
+import io.github.mangi.eta.ui.components.movo.MovoPillButton
+import io.github.mangi.eta.ui.components.movo.PressKind
+import io.github.mangi.eta.ui.components.movo.RowTrailing
+import io.github.mangi.eta.ui.components.movo.SettingsRow
+import io.github.mangi.eta.ui.components.movo.movoClickable
+import io.github.mangi.eta.ui.theme.MovoColors
+import io.github.mangi.eta.ui.theme.MovoIcon
+import io.github.mangi.eta.ui.theme.MovoIcons
+import io.github.mangi.eta.ui.theme.MovoRadius
+import io.github.mangi.eta.ui.theme.MovoSize
+import io.github.mangi.eta.ui.theme.MovoSpacing
+import io.github.mangi.eta.ui.theme.MovoTypography
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
 
 /**
  * 共享文件夹管理：把 Android 目录配置为 Linux 环境 /workspace/mounts/ 下的挂载点。
@@ -101,27 +121,25 @@ internal fun SharedFoldersScreen(
 
     LaunchedEffect(Unit) { refreshSources(mounts) }
 
-    MiuixScaffoldPage(
+    MovoListPage(
         title = stringResource(R.string.shared_folders_title),
         onBack = onBack,
     ) {
         item(key = "mounts-card") {
-            Card(
-                modifier = Modifier
-                    .padding(horizontal = 12.dp)
-                    .padding(bottom = 12.dp),
-            ) {
+            MovoCard {
+                CardTitle(stringResource(R.string.movo_shared_folders_group))
                 if (mounts.isEmpty()) {
-                    BasicComponent(
+                    SettingsRow(
                         title = stringResource(R.string.shared_folders_empty),
-                        summary = stringResource(R.string.shared_folders_entry_summary),
+                        subtitle = stringResource(R.string.shared_folders_entry_summary),
+                        trailing = RowTrailing.None,
                     )
                 }
                 mounts.forEach { mount ->
                     val missing = sourceExists[mount.sourcePath] == false
-                    BasicComponent(
+                    SettingsRow(
                         title = mount.name,
-                        summary = buildString {
+                        subtitle = buildString {
                             append(mount.sourcePath)
                             append("\n")
                             append(
@@ -135,16 +153,20 @@ internal fun SharedFoldersScreen(
                                 append(context.getString(R.string.shared_folders_source_missing))
                             }
                         },
-                        endActions = {
-                            TextButton(
-                                text = stringResource(R.string.action_delete),
+                        trailing = RowTrailing.Custom {
+                            MovoPillButton(
+                                label = stringResource(R.string.action_delete),
                                 onClick = { removeTarget = mount },
                             )
                         },
                     )
                 }
-                BasicComponent(
+                SettingsRow(
                     title = stringResource(R.string.shared_folders_add),
+                    trailing = RowTrailing.Custom {
+                        MovoIcon(MovoIcons.Plus, null, size = MovoSize.iconMedium, tint = MovoColors.textPrimary)
+                    },
+                    showDivider = false,
                     onClick = {
                         if (TerminalRuntime.rootAvailable || Environment.isExternalStorageManager()) {
                             showPicker = true
@@ -160,25 +182,16 @@ internal fun SharedFoldersScreen(
                         }
                     },
                 )
-            }
-        }
-        item(key = "footer-note") {
-            Text(
-                text = stringResource(R.string.shared_folders_footer),
-                style = MiuixTheme.textStyles.footnote1,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                modifier = Modifier.padding(horizontal = 24.dp),
-            )
-        }
-        notice?.let { message ->
-            item(key = "notice-card") {
-                Card(
-                    modifier = Modifier
-                        .padding(horizontal = 12.dp)
-                        .padding(top = 12.dp),
-                ) {
-                    BasicComponent(title = message)
+                notice?.let { message ->
+                    MovoDivider(start = MovoSpacing.lg)
+                    CardNotice(text = message, error = true)
                 }
+                CardFooter(
+                    listOf(
+                        stringResource(R.string.movo_shared_folders_footer_1),
+                        stringResource(R.string.movo_shared_folders_footer_2),
+                    ),
+                )
             }
         }
     }
@@ -203,42 +216,43 @@ internal fun SharedFoldersScreen(
         )
     }
 
-    removeTarget?.let { target ->
-        WindowDialog(
-            show = true,
-            title = stringResource(R.string.shared_folders_remove_title),
-            summary = stringResource(R.string.shared_folders_remove_message, target.name, target.sourcePath),
-            onDismissRequest = { removeTarget = null },
-        ) {
-            MiuixDialogActions(
-                confirmText = stringResource(R.string.action_delete),
-                destructive = true,
-                onCancel = { removeTarget = null },
-                onConfirm = {
-                    val updated = mounts.filterNot { it.name == target.name }
-                    if (SharedFolderMounts.save(updated)) {
-                        mounts = updated
-                        removeTarget = null
-                        refreshSources(updated)
-                        coroutineScope.launch(Dispatchers.IO) {
-                            // 清理空的挂载点目录；仍有会话占用时 rmdir 失败，无副作用。
-                            runOneShotShell(
-                                processSupervisor = shellSupervisor,
-                                identity = TerminalRuntime.defaultIdentity(TerminalEnvironment.ANDROID),
-                                command = "rmdir " +
-                                    shellQuote("${SharedFolderMounts.ANDROID_MOUNTS_ROOT}/${target.name}") +
-                                    " 2>/dev/null",
-                                timeoutSeconds = 10,
-                            )
-                        }
-                    } else {
-                        notice = context.getString(R.string.shared_folders_error_save)
-                        removeTarget = null
-                    }
-                },
-            )
-        }
-    }
+    // 退场动画期间 removeTarget 已清空，文案沿用最后一次的目标。
+    var lastRemoveTarget by remember { mutableStateOf<SharedFolderMount?>(null) }
+    SideEffect { removeTarget?.let { lastRemoveTarget = it } }
+    val dialogTarget = removeTarget ?: lastRemoveTarget
+    MovoConfirmDialog(
+        show = removeTarget != null,
+        title = stringResource(R.string.shared_folders_remove_title),
+        message = dialogTarget?.let {
+            stringResource(R.string.shared_folders_remove_message, it.name, it.sourcePath)
+        },
+        confirmText = stringResource(R.string.action_delete),
+        destructive = true,
+        onDismissRequest = { removeTarget = null },
+        onConfirm = confirm@{
+            val target = removeTarget ?: return@confirm
+            val updated = mounts.filterNot { it.name == target.name }
+            if (SharedFolderMounts.save(updated)) {
+                mounts = updated
+                removeTarget = null
+                refreshSources(updated)
+                coroutineScope.launch(Dispatchers.IO) {
+                    // 清理空的挂载点目录；仍有会话占用时 rmdir 失败，无副作用。
+                    runOneShotShell(
+                        processSupervisor = shellSupervisor,
+                        identity = TerminalRuntime.defaultIdentity(TerminalEnvironment.ANDROID),
+                        command = "rmdir " +
+                            shellQuote("${SharedFolderMounts.ANDROID_MOUNTS_ROOT}/${target.name}") +
+                            " 2>/dev/null",
+                        timeoutSeconds = 10,
+                    )
+                }
+            } else {
+                notice = context.getString(R.string.shared_folders_error_save)
+                removeTarget = null
+            }
+        },
+    )
 }
 
 /** 批量探测源目录是否存在；name 只含安全字符，可直接拼进单引号。 */
@@ -267,6 +281,7 @@ private fun probeSources(
  * Root 模式可以访问系统目录。公共存储授权在进入弹层前按需申请。
  * 确认时挂载的是当前已列出内容的目录（path）；路径输入框只用于跳转。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SharedFolderPickerDialog(
     context: Context,
@@ -315,129 +330,135 @@ private fun SharedFolderPickerDialog(
         }
     }
 
-    WindowDialog(
+    MovoConfirmDialog(
         show = true,
         title = stringResource(R.string.shared_folders_picker_title),
+        message = null,
+        confirmText = stringResource(R.string.shared_folders_add),
         onDismissRequest = onDismiss,
-    ) {
-        Column {
-            TextField(
-                value = pathInput,
-                onValueChange = { pathInput = it },
-                label = stringResource(R.string.shared_folders_path_label),
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                keyboardActions = KeyboardActions(onGo = { navigateTo(pathInput) }),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            if (browseError != null) {
-                Text(
-                    text = browseError.orEmpty(),
-                    style = MiuixTheme.textStyles.footnote1,
-                    color = MiuixTheme.colorScheme.error,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
+        onConfirm = {
+            val sourceError = SharedFolderMounts.validateSource(path, existing, extraForbiddenRoots)
+            val errorText = when (sourceError) {
+                SharedFolderMounts.SourceError.INVALID_PATH ->
+                    context.getString(R.string.shared_folders_error_path_invalid)
+                SharedFolderMounts.SourceError.FORBIDDEN_ROOT ->
+                    context.getString(R.string.shared_folders_error_path_forbidden)
+                SharedFolderMounts.SourceError.DUPLICATE ->
+                    context.getString(R.string.shared_folders_error_path_duplicate)
+                null -> when (SharedFolderMounts.validateName(nameInput, existing)) {
+                    SharedFolderMounts.NameError.INVALID ->
+                        context.getString(R.string.shared_folders_error_name_invalid)
+                    SharedFolderMounts.NameError.DUPLICATE ->
+                        context.getString(R.string.shared_folders_error_name_duplicate)
+                    null -> if (existing.size >= SharedFolderMounts.MAX_MOUNTS) {
+                        context.getString(
+                            R.string.shared_folders_error_limit,
+                            SharedFolderMounts.MAX_MOUNTS,
+                        )
+                    } else {
+                        null
+                    }
+                }
             }
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 240.dp)
-                    .padding(top = 8.dp),
-            ) {
-                if (path != "/") {
-                    item(key = "..") {
+            if (errorText != null) {
+                formError = errorText
+            } else {
+                onConfirm(path, nameInput.trim())
+            }
+        },
+        extraContent = {
+            Column(modifier = Modifier.padding(top = MovoSpacing.md)) {
+                TextField(
+                    value = pathInput,
+                    onValueChange = { pathInput = it },
+                    label = stringResource(R.string.shared_folders_path_label),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(onGo = { navigateTo(pathInput) }),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                browseError?.let { FieldError(it) }
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        // Movo 对话框居中不随键盘上移，键盘弹出时压缩目录列表，保证两个输入框与按钮可见。
+                        .heightIn(max = if (WindowInsets.isImeVisible) 96.dp else 240.dp)
+                        .padding(top = MovoSpacing.sm),
+                ) {
+                    if (path != "/") {
+                        item(key = "..") {
+                            PickerRow(
+                                label = "../",
+                                onClick = {
+                                    navigateTo(path.trimEnd('/').substringBeforeLast('/').ifBlank { "/" })
+                                },
+                            )
+                        }
+                    }
+                    items(entries.orEmpty(), key = { it }) { entry ->
                         PickerRow(
-                            label = "../",
-                            onClick = {
-                                navigateTo(path.trimEnd('/').substringBeforeLast('/').ifBlank { "/" })
-                            },
+                            label = entry,
+                            onClick = { navigateTo(path.trimEnd('/') + "/" + entry) },
                         )
                     }
                 }
-                items(entries.orEmpty(), key = { it }) { entry ->
-                    PickerRow(
-                        label = entry,
-                        onClick = { navigateTo(path.trimEnd('/') + "/" + entry) },
-                    )
-                }
-            }
-            Text(
-                text = stringResource(R.string.shared_folders_selected_source, path),
-                style = MiuixTheme.textStyles.footnote1.copy(fontFamily = FontFamily.Monospace),
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                modifier = Modifier.padding(top = 8.dp),
-            )
-            TextField(
-                value = nameInput,
-                onValueChange = {
-                    nameInput = it
-                    nameTouched = true
-                },
-                label = stringResource(R.string.shared_folders_name_label),
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
-            )
-            formError?.let { error ->
                 Text(
-                    text = error,
-                    style = MiuixTheme.textStyles.footnote1,
-                    color = MiuixTheme.colorScheme.error,
-                    modifier = Modifier.padding(top = 4.dp),
+                    text = stringResource(R.string.shared_folders_selected_source, path),
+                    style = MovoTypography.labelRegular.copy(fontFamily = FontFamily.Monospace),
+                    color = MovoColors.textSecondary,
+                    modifier = Modifier.padding(top = MovoSpacing.sm),
                 )
+                TextField(
+                    value = nameInput,
+                    onValueChange = {
+                        nameInput = it
+                        nameTouched = true
+                    },
+                    label = stringResource(R.string.shared_folders_name_label),
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = MovoSpacing.sm),
+                )
+                formError?.let { FieldError(it) }
             }
-            MiuixDialogActions(
-                confirmText = stringResource(R.string.shared_folders_add),
-                onCancel = onDismiss,
-                onConfirm = {
-                    val sourceError = SharedFolderMounts.validateSource(path, existing, extraForbiddenRoots)
-                    val errorText = when (sourceError) {
-                        SharedFolderMounts.SourceError.INVALID_PATH ->
-                            context.getString(R.string.shared_folders_error_path_invalid)
-                        SharedFolderMounts.SourceError.FORBIDDEN_ROOT ->
-                            context.getString(R.string.shared_folders_error_path_forbidden)
-                        SharedFolderMounts.SourceError.DUPLICATE ->
-                            context.getString(R.string.shared_folders_error_path_duplicate)
-                        null -> when (SharedFolderMounts.validateName(nameInput, existing)) {
-                            SharedFolderMounts.NameError.INVALID ->
-                                context.getString(R.string.shared_folders_error_name_invalid)
-                            SharedFolderMounts.NameError.DUPLICATE ->
-                                context.getString(R.string.shared_folders_error_name_duplicate)
-                            null -> if (existing.size >= SharedFolderMounts.MAX_MOUNTS) {
-                                context.getString(
-                                    R.string.shared_folders_error_limit,
-                                    SharedFolderMounts.MAX_MOUNTS,
-                                )
-                            } else {
-                                null
-                            }
-                        }
-                    }
-                    if (errorText != null) {
-                        formError = errorText
-                    } else {
-                        onConfirm(path, nameInput.trim())
-                    }
-                },
-                modifier = Modifier.padding(top = 12.dp),
-            )
+        },
+    )
+}
+
+/** 表单错误：Rose 警示图标 + 主色文字（颜色不是唯一信号）。 */
+@Composable
+private fun FieldError(text: String) {
+    Row(
+        modifier = Modifier.padding(top = MovoSpacing.xs),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(modifier = Modifier.height(18.dp), contentAlignment = Alignment.Center) {
+            MovoIcon(MovoIcons.CircleAlert, null, size = MovoSize.iconLabel, tint = MovoColors.roseFg)
         }
+        Spacer(Modifier.width(6.dp))
+        Text(text = text, style = MovoTypography.labelRegular, color = MovoColors.textPrimary)
     }
 }
 
 @Composable
 private fun PickerRow(label: String, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(MovoRadius.sm)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp, horizontal = 4.dp),
+            .heightIn(min = MovoSize.touchTarget)
+            .clip(shape)
+            .movoClickable(PressKind.Row, shape = shape, onClick = onClick)
+            .padding(horizontal = MovoSpacing.xs),
     ) {
+        MovoIcon(MovoIcons.Folder, null, size = MovoSize.iconSmall, tint = MovoColors.textSecondary)
+        Spacer(Modifier.width(MovoSpacing.sm))
         Text(
             text = label,
-            style = MiuixTheme.textStyles.body2.copy(fontFamily = FontFamily.Monospace),
+            style = MovoTypography.bodyRegular.copy(fontFamily = FontFamily.Monospace),
+            color = MovoColors.textPrimary,
         )
     }
 }

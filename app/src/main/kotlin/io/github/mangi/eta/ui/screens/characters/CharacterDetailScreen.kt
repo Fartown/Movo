@@ -2,16 +2,12 @@ package io.github.mangi.eta.ui.screens.characters
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -19,31 +15,42 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
+import io.github.mangi.eta.R
 import io.github.mangi.eta.agent.roleplay.CharacterCardFormat
 import io.github.mangi.eta.agent.roleplay.RoleplayBinding
 import io.github.mangi.eta.ui.app.CharacterLibraryStore
-import io.github.mangi.eta.ui.components.MiuixDialogActions
-import io.github.mangi.eta.ui.components.MiuixScaffoldPage
+import io.github.mangi.eta.ui.components.movo.BlockTone
+import io.github.mangi.eta.ui.components.movo.CardTitle
+import io.github.mangi.eta.ui.components.movo.MovoBlockButton
+import io.github.mangi.eta.ui.components.movo.MovoCard
+import io.github.mangi.eta.ui.components.movo.MovoConfirmDialog
+import io.github.mangi.eta.ui.components.movo.MovoListPage
+import io.github.mangi.eta.ui.components.movo.RowTrailing
+import io.github.mangi.eta.ui.components.movo.SettingsRow
 import io.github.mangi.eta.ui.navigation.AppRoute
-import top.yukonga.miuix.kmp.basic.BasicComponentColors
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.SmallTitle
+import io.github.mangi.eta.ui.theme.MovoColors
+import io.github.mangi.eta.ui.theme.MovoIcon
+import io.github.mangi.eta.ui.theme.MovoIcons
+import io.github.mangi.eta.ui.theme.MovoSize
+import io.github.mangi.eta.ui.theme.MovoSpacing
+import io.github.mangi.eta.ui.theme.MovoTypography
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.preference.ArrowPreference
-import top.yukonga.miuix.kmp.preference.RadioButtonPreference
-import top.yukonga.miuix.kmp.preference.SwitchPreference
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
 
 private const val DescriptionPreviewChars = 220
 private const val GreetingPreviewChars = 240
 
 private data class CharacterTextPreview(val title: String, val text: String)
 
+/**
+ * 角色详情（规范 8.7 二级页）：资料卡（名称、标签、设定摘要 + 阅读全文）→「开始新对话」整行主按钮 →
+ * 人设卡（使用我的人设开关、编辑我的人设）→ 开场白卡（单选，✓ 标记当前）→ 管理卡（编辑、剧情记忆、复制、导出 PNG / JSON）→
+ * 删除角色单独一张卡（删除前确认）→ 兼容说明（可展开）。
+ */
 @Composable
 internal fun CharacterDetailScreen(
     id: String,
@@ -62,173 +69,175 @@ internal fun CharacterDetailScreen(
         if (it != null) store.export(id, CharacterCardFormat.JSON, it)
     }
     val profile = store.selected?.takeIf { it.id == id }
-    MiuixScaffoldPage(title = profile?.card?.name ?: "角色详情", onBack = onBack) {
+    MovoListPage(title = profile?.card?.name ?: "角色详情", onBack = onBack) {
         if (profile == null) {
             item { CharacterPageMessage(if (store.busy) "正在读取角色…" else "无法读取角色，请返回后重试") }
-            return@MiuixScaffoldPage
+            return@MovoListPage
         }
         item(key = "profile") {
-            Card(
-                modifier = Modifier.padding(horizontal = CharacterCardPadding, vertical = 6.dp),
-                insideMargin = PaddingValues(16.dp),
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(profile.card.name, style = MiuixTheme.textStyles.title2)
+            MovoCard {
+                Column(modifier = Modifier.fillMaxWidth().padding(MovoSpacing.lg)) {
+                    Text(profile.card.name, style = MovoTypography.titleSection, color = MovoColors.textPrimary)
                     if (profile.card.tags.isNotEmpty()) {
                         Text(
                             text = profile.card.tags.joinToString(" · "),
-                            style = MiuixTheme.textStyles.body2,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            style = MovoTypography.labelRegular,
+                            color = MovoColors.textSecondary,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                }
-                if (profile.card.description.isNotBlank()) {
-                    Text(
-                        text = profile.card.description,
-                        style = MiuixTheme.textStyles.body2,
-                        modifier = Modifier.padding(top = 14.dp),
-                        maxLines = 6,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (profile.card.description.length > DescriptionPreviewChars) {
+                    if (profile.card.description.isNotBlank()) {
+                        Spacer(Modifier.height(MovoSpacing.md))
                         Text(
-                            text = "阅读全文",
-                            style = MiuixTheme.textStyles.footnote1,
-                            color = MiuixTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .padding(top = 6.dp)
-                                .clickable {
-                                    preview = CharacterTextPreview("角色设定", profile.card.description)
-                                },
+                            text = profile.card.description,
+                            style = MovoTypography.bodyRegular,
+                            color = MovoColors.textPrimary,
+                            maxLines = 6,
+                            overflow = TextOverflow.Ellipsis,
                         )
+                        if (profile.card.description.length > DescriptionPreviewChars) {
+                            Spacer(Modifier.height(MovoSpacing.sm))
+                            CharacterReadMoreLink(onClick = {
+                                preview = CharacterTextPreview("角色设定", profile.card.description)
+                            })
+                        }
                     }
                 }
             }
         }
         item(key = "start") {
-            TextButton(
-                text = "开始新对话",
+            MovoBlockButton(
+                label = "开始新对话",
                 enabled = !store.busy,
                 onClick = { store.startConversation(id, onStart) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = CharacterCardPadding, vertical = 6.dp),
-                colors = ButtonDefaults.textButtonColorsPrimary(),
+                tone = BlockTone.Primary,
+                modifier = Modifier.fillMaxWidth(),
             )
         }
         item(key = "persona") {
-            Card(
-                modifier = Modifier.padding(horizontal = CharacterCardPadding, vertical = 6.dp),
-            ) {
-                SwitchPreference(
+            MovoCard {
+                CardTitle(stringResource(R.string.movo_character_group_persona))
+                SettingsRow(
                     title = "使用我的人设",
-                    summary = store.persona.name.ifBlank { "未设置称呼" },
-                    checked = store.usePersona,
-                    onCheckedChange = { store.usePersona = it },
+                    subtitle = store.persona.name.ifBlank { "未设置称呼" },
+                    trailing = RowTrailing.Switch(store.usePersona) { store.usePersona = it },
                 )
-                ArrowPreference(title = "编辑我的人设", onClick = { onNavigate(AppRoute.CharacterPersona) })
+                SettingsRow(
+                    title = "编辑我的人设",
+                    trailing = RowTrailing.Arrow(),
+                    showDivider = false,
+                    onClick = { onNavigate(AppRoute.CharacterPersona) },
+                )
             }
         }
-        item(key = "greetings-title") { SmallTitle("开场白") }
         item(key = "greetings") {
-            Card(modifier = Modifier.padding(horizontal = CharacterCardPadding)) {
+            MovoCard {
+                CardTitle("开场白")
                 val greetings = listOf(profile.card.firstMessage) + profile.card.alternateGreetings
                 greetings.forEachIndexed { index, greeting ->
-                    RadioButtonPreference(
-                        title = if (index == 0) "默认开场白" else "开场白 ${index + 1}",
-                        summary = greeting.take(GreetingPreviewChars)
+                    val title = if (index == 0) "默认开场白" else "开场白 ${index + 1}"
+                    val selected = store.greetingIndex == index
+                    CharacterRow(
+                        title = title,
+                        subtitle = greeting.take(GreetingPreviewChars)
                             .let { if (greeting.length > GreetingPreviewChars) "$it…" else it }
                             .ifBlank { "没有预设开场白，由你先开口" },
-                        selected = store.greetingIndex == index,
+                        subtitleMaxLines = Int.MAX_VALUE,
+                        role = Role.RadioButton,
+                        showDivider = index != greetings.lastIndex,
+                        modifier = Modifier.semantics { this.selected = selected },
                         onClick = { store.greetingIndex = index },
-                        bottomAction = if (greeting.length > GreetingPreviewChars) {
+                        below = if (greeting.length > GreetingPreviewChars) {
                             {
-                                Text(
-                                    text = "阅读全文",
-                                    style = MiuixTheme.textStyles.footnote1,
-                                    color = MiuixTheme.colorScheme.primary,
-                                    modifier = Modifier
-                                        .padding(start = 16.dp, bottom = 10.dp)
-                                        .clickable {
-                                            preview = CharacterTextPreview(
-                                                if (index == 0) "默认开场白" else "开场白 ${index + 1}",
-                                                greeting,
-                                            )
-                                        },
-                                )
+                                Spacer(Modifier.height(MovoSpacing.xs))
+                                CharacterReadMoreLink(onClick = { preview = CharacterTextPreview(title, greeting) })
                             }
                         } else {
                             null
                         },
-                    )
+                    ) {
+                        if (selected) {
+                            MovoIcon(MovoIcons.Check, null, size = MovoSize.iconMedium, tint = MovoColors.indigoFg)
+                        } else {
+                            Spacer(Modifier.size(MovoSize.iconMedium))
+                        }
+                    }
                 }
             }
         }
-        item(key = "management-title") { SmallTitle("管理") }
         item(key = "management") {
-            Card(modifier = Modifier.padding(horizontal = CharacterCardPadding)) {
-                ArrowPreference(title = "编辑角色", enabled = !store.busy, onClick = {
-                    store.discardEditor()
-                    onNavigate(AppRoute.CharacterEditor(id))
-                })
-                ArrowPreference(title = "剧情记忆", summary = "此角色各次对话共享的故事与关系记录", onClick = {
-                    onNavigate(AppRoute.CharacterMemory(id))
-                })
-                ArrowPreference(title = "复制角色", enabled = !store.busy, onClick = {
-                    store.duplicate(id) { onNavigate(AppRoute.CharacterDetail(it)) }
-                })
-                ArrowPreference(
-                    title = "删除角色",
-                    titleColor = BasicComponentColors(
-                        color = MiuixTheme.colorScheme.error,
-                        disabledColor = MiuixTheme.colorScheme.disabledOnSurface,
-                    ),
+            MovoCard {
+                CardTitle("管理")
+                SettingsRow(
+                    title = "编辑角色",
                     enabled = !store.busy,
+                    onClick = {
+                        store.discardEditor()
+                        onNavigate(AppRoute.CharacterEditor(id))
+                    },
+                )
+                SettingsRow(
+                    title = "剧情记忆",
+                    subtitle = "此角色各次对话共享的故事与关系记录",
+                    onClick = { onNavigate(AppRoute.CharacterMemory(id)) },
+                )
+                SettingsRow(
+                    title = "复制角色",
+                    enabled = !store.busy,
+                    onClick = { store.duplicate(id) { onNavigate(AppRoute.CharacterDetail(it)) } },
+                )
+                SettingsRow(
+                    title = "导出 PNG",
+                    enabled = !store.busy,
+                    onClick = { pngExporter.launch(characterExportName(profile.card.name, "png")) },
+                )
+                SettingsRow(
+                    title = "导出 JSON",
+                    enabled = !store.busy,
+                    showDivider = false,
+                    onClick = { jsonExporter.launch(characterExportName(profile.card.name, "json")) },
+                )
+            }
+        }
+        item(key = "delete") {
+            MovoCard {
+                CharacterRow(
+                    title = "删除角色",
+                    subtitle = null,
+                    titleColor = MovoColors.roseFg,
+                    enabled = !store.busy,
+                    showDivider = false,
                     onClick = { showDeleteConfirm = true },
                 )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    TextButton(
-                        text = "导出 PNG",
-                        onClick = { pngExporter.launch(characterExportName(profile.card.name, "png")) },
-                        enabled = !store.busy,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(
-                        text = "导出 JSON",
-                        onClick = { jsonExporter.launch(characterExportName(profile.card.name, "json")) },
-                        enabled = !store.busy,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
             }
         }
         if (store.compatibilityWarnings.isNotEmpty()) {
             item(key = "compatibility") {
-                Card(
-                    modifier = Modifier
-                        .padding(horizontal = CharacterCardPadding)
-                        .padding(top = 12.dp),
-                ) {
-                    ArrowPreference(
+                MovoCard {
+                    CharacterRow(
                         title = "兼容说明",
-                        summary = "${store.compatibilityWarnings.size} 项内容按兼容范围处理",
+                        subtitle = "${store.compatibilityWarnings.size} 项内容按兼容范围处理",
+                        showDivider = showCompatibility,
                         onClick = { showCompatibility = !showCompatibility },
-                    )
+                    ) {
+                        MovoIcon(
+                            if (showCompatibility) MovoIcons.ChevronUp else MovoIcons.ChevronDown,
+                            null,
+                            size = MovoSize.iconSmall,
+                            tint = MovoColors.textTertiary,
+                        )
+                    }
                     if (showCompatibility) {
-                        store.compatibilityWarnings.forEach { warning ->
-                            Text(
-                                text = warning,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                                style = MiuixTheme.textStyles.body2,
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                            )
+                        Column(modifier = Modifier.padding(horizontal = MovoSpacing.lg, vertical = MovoSpacing.md)) {
+                            store.compatibilityWarnings.forEach { warning ->
+                                Text(
+                                    text = warning,
+                                    modifier = Modifier.padding(vertical = MovoSpacing.xs),
+                                    style = MovoTypography.labelRegular,
+                                    color = MovoColors.textSecondary,
+                                )
+                            }
                         }
                     }
                 }
@@ -236,49 +245,28 @@ internal fun CharacterDetailScreen(
         }
     }
 
-    if (showDeleteConfirm && profile != null) {
-        WindowDialog(
-            show = true,
-            title = "删除角色",
-            summary = "「${profile.card.name}」将从角色库移除，角色图片与剧情记忆一并删除；已有对话保留。此操作无法撤销。",
-            onDismissRequest = { showDeleteConfirm = false },
-        ) {
-            MiuixDialogActions(
-                confirmText = "删除",
-                destructive = true,
-                confirmEnabled = !store.busy,
-                onCancel = { showDeleteConfirm = false },
-                onConfirm = {
-                    showDeleteConfirm = false
-                    store.delete(id) { onBack() }
-                },
-            )
-        }
-    }
+    val deletingName = rememberCharacterLastNonNull(profile?.card?.name)
+    MovoConfirmDialog(
+        show = showDeleteConfirm && profile != null,
+        title = "删除角色",
+        message = "「${deletingName.orEmpty()}」将从角色库移除，角色图片与剧情记忆一并删除；已有对话保留。此操作无法撤销。",
+        confirmText = "删除",
+        destructive = true,
+        confirmEnabled = !store.busy,
+        onDismissRequest = { showDeleteConfirm = false },
+        onConfirm = {
+            showDeleteConfirm = false
+            store.delete(id) { onBack() }
+        },
+    )
 
-    preview?.let { current ->
-        WindowDialog(
-            show = true,
-            title = current.title,
-            onDismissRequest = { preview = null },
-        ) {
-            Column(
-                modifier = Modifier
-                    .heightIn(max = 420.dp)
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                Text(current.text, style = MiuixTheme.textStyles.body2)
-            }
-            TextButton(
-                text = "关闭",
-                onClick = { preview = null },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp),
-                colors = ButtonDefaults.textButtonColorsPrimary(),
-            )
-        }
-    }
+    val shownPreview = rememberCharacterLastNonNull(preview)
+    CharacterTextDialog(
+        show = preview != null,
+        title = shownPreview?.title.orEmpty(),
+        text = shownPreview?.text.orEmpty(),
+        onDismiss = { preview = null },
+    )
 }
 
 private fun characterExportName(name: String, extension: String): String {

@@ -47,6 +47,18 @@ sealed interface AppRoute : NavKey {
     @Serializable
     data object Settings : AppRoute
 
+    /** 设置 · 工具：工具开关与环境（[Tools] 是只读的工具能力目录）。 */
+    @Serializable
+    data object ToolSettings : AppRoute
+
+    /** 设置 · 系统助手：数字助理、电源键、厂商助手、Gemini、一圈即搜。 */
+    @Serializable
+    data object SystemAssistant : AppRoute
+
+    /** 执行详情（规范 8.8）：当前会话里 [workKey] 对应的那张执行卡的完整记录。 */
+    @Serializable
+    data class RunDetail(val workKey: String) : AppRoute
+
     @Serializable
     data object VoiceSettings : AppRoute
 

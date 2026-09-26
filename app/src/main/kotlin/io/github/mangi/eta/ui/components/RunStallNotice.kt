@@ -14,6 +14,7 @@ import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.diagnostics.MemoryDiagnostics
 import io.github.mangi.eta.ui.screens.diagnostics.DiagnosticsFormat
 import io.github.mangi.eta.ui.screens.diagnostics.LocalRunLogOpener
+import io.github.mangi.eta.ui.components.movo.movoClickable
 import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -37,13 +38,23 @@ internal fun RunStallNotice(messageIds: List<String>, modifier: Modifier = Modif
         }
     }
     val (run, silence) = stall ?: return
-    Text(
-        text = "已 ${silence / 1_000} 秒没有收到数据，网络可能不稳定 · 查看日志",
-        style = MiuixTheme.textStyles.footnote1,
-        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable { open(run) }
-            .padding(horizontal = 20.dp, vertical = 8.dp),
-    )
+    // 说明 Label/Regular 次要色 +「查看日志」文字链接（按压不透明度 60%），对齐边距线 20。
+    androidx.compose.foundation.layout.Row(
+        modifier = modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "已 ${silence / 1_000} 秒没有收到数据，网络可能不稳定",
+            style = io.github.mangi.eta.ui.theme.MovoTypography.labelRegular,
+            color = io.github.mangi.eta.ui.theme.MovoColors.textSecondary,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        androidx.compose.foundation.layout.Spacer(Modifier.padding(start = 8.dp))
+        Text(
+            text = "查看日志",
+            style = io.github.mangi.eta.ui.theme.MovoTypography.labelMedium,
+            color = io.github.mangi.eta.ui.theme.MovoColors.indigoFg,
+            modifier = Modifier.movoClickable(io.github.mangi.eta.ui.components.movo.PressKind.Link) { open(run) },
+        )
+    }
 }

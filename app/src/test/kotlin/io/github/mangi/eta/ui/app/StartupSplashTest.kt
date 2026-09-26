@@ -1,7 +1,6 @@
 package io.github.mangi.eta.ui.app
 
 import android.app.Application
-import android.graphics.drawable.AnimatedVectorDrawable
 import android.view.View
 import androidx.activity.ComponentActivity
 import io.github.mangi.eta.R
@@ -64,9 +63,12 @@ class StartupSplashTest {
     }
 
     @Test
-    fun `系统可解析启动动画与渐变资源`() {
+    fun `系统可解析启动页图标与启动器图标`() {
         val context = RuntimeEnvironment.getApplication()
-        assertTrue(context.getDrawable(R.drawable.ic_splash_animated) is AnimatedVectorDrawable)
+        // 规范 6.1：启动页沿用启动器图标前景（B7），不再是动画矢量。
+        assertTrue(context.getDrawable(R.drawable.ic_splash_icon) is android.graphics.drawable.LayerDrawable)
+        assertTrue(context.getDrawable(R.mipmap.ic_launcher) != null)
+        assertTrue(context.getDrawable(R.drawable.ic_launcher_monochrome) != null)
     }
 
     @Test

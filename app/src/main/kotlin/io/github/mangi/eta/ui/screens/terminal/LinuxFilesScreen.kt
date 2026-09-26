@@ -2,13 +2,12 @@ package io.github.mangi.eta.ui.screens.terminal
 
 import android.content.Context
 import android.text.format.Formatter
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
-import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -16,6 +15,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -28,13 +28,19 @@ import io.github.mangi.eta.agent.terminal.LinuxDistribution
 import io.github.mangi.eta.agent.terminal.LinuxEnvironmentPaths
 import io.github.mangi.eta.agent.terminal.LinuxFileExplorer
 import io.github.mangi.eta.agent.terminal.ShellProcessSupervisor
-import io.github.mangi.eta.ui.components.MiuixScaffoldPage
+import io.github.mangi.eta.ui.components.movo.CardFooter
+import io.github.mangi.eta.ui.components.movo.MovoCard
+import io.github.mangi.eta.ui.components.movo.MovoListPage
+import io.github.mangi.eta.ui.components.movo.RowLeading
+import io.github.mangi.eta.ui.components.movo.RowTrailing
+import io.github.mangi.eta.ui.components.movo.SettingsRow
+import io.github.mangi.eta.ui.theme.MovoColors
+import io.github.mangi.eta.ui.theme.MovoIcons
+import io.github.mangi.eta.ui.theme.MovoSpacing
+import io.github.mangi.eta.ui.theme.MovoTypography
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
  * Linux rootfs 只读文件浏览：目录列举与文件读取都经一次性 root Shell 完成，
@@ -107,73 +113,90 @@ internal fun LinuxFilesScreen(
         onBackCompleted = { closeFile() },
     )
 
-    MiuixScaffoldPage(
+    // 列表用分段卡片（目录可能有上千项，保持惰性加载），卡片之间用 CardGap。
+    MovoListPage(
         title = stringResource(R.string.linux_files_title),
         onBack = { if (openFilePath != null) closeFile() else onBack() },
+        itemSpacing = 0.dp,
     ) {
         when {
             linuxDistribution == null -> {
                 item(key = "invalid-distribution") {
-                    StateMessage(stringResource(R.string.linux_files_invalid_distribution))
+                    MovoCard(bottomPadding = 0.dp) {
+                        CardStateText(stringResource(R.string.linux_files_invalid_distribution))
+                    }
                 }
             }
             !installed -> {
                 item(key = "not-installed") {
-                    StateMessage(stringResource(R.string.linux_files_not_installed))
+                    MovoCard(bottomPadding = 0.dp) {
+                        CardStateText(stringResource(R.string.linux_files_not_installed))
+                    }
                 }
             }
             openFilePath != null -> {
-                item(key = "viewer-path") {
-                    PathBar(openFilePath.orEmpty())
-                }
-                when (val result = fileResult) {
-                    is LinuxFileExplorer.ReadResult.Text -> {
-                        if (result.truncated) {
-                            item(key = "viewer-truncated") {
-                                HintText(stringResource(R.string.linux_files_truncated_hint))
+                item(key = "viewer") {
+                    MovoCard {
+                        PathHeader(openFilePath.orEmpty())
+                        when (val result = fileResult) {
+                            is LinuxFileExplorer.ReadResult.Text -> {
+                                SelectionContainer {
+                                    Text(
+                                        text = result.content,
+                                        style = MovoTypography.labelRegular.copy(fontFamily = FontFamily.Monospace),
+                                        color = MovoColors.textPrimary,
+                                        modifier = Modifier
+                                            .padding(horizontal = MovoSpacing.lg)
+                                            .padding(top = MovoSpacing.sm, bottom = MovoSpacing.md),
+                                    )
+                                }
+                                if (result.truncated) {
+                                    CardFooter(listOf(stringResource(R.string.linux_files_truncated_hint)))
+                                }
                             }
-                        }
-                        item(key = "viewer-content") {
-                            SelectionContainer {
-                                Text(
-                                    text = result.content,
-                                    style = MiuixTheme.textStyles.footnote1
-                                        .copy(fontFamily = FontFamily.Monospace),
-                                    modifier = Modifier.padding(horizontal = 24.dp),
-                                )
-                            }
-                        }
-                    }
-                    LinuxFileExplorer.ReadResult.Binary -> {
-                        item(key = "viewer-binary") {
-                            StateMessage(stringResource(R.string.linux_files_binary_hint))
-                        }
-                    }
-                    LinuxFileExplorer.ReadResult.NotFile -> {
-                        item(key = "viewer-not-file") {
-                            StateMessage(stringResource(R.string.linux_files_error_not_file))
+                            LinuxFileExplorer.ReadResult.Binary ->
+                                CardStateText(stringResource(R.string.linux_files_binary_hint))
+                            LinuxFileExplorer.ReadResult.NotFile ->
+                                CardStateText(stringResource(R.string.linux_files_error_not_file))
+                            LinuxFileExplorer.ReadResult.Unreadable,
+                            LinuxFileExplorer.ReadResult.CommandFailed,
+                            LinuxFileExplorer.ReadResult.NotInstalled ->
+                                CardStateText(stringResource(R.string.linux_files_error_unreadable))
+                            null -> Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(MovoSpacing.lg),
+                                contentAlignment = Alignment.CenterStart,
+                            ) { TerminalSpinner() }
                         }
                     }
-                    LinuxFileExplorer.ReadResult.Unreadable,
-                    LinuxFileExplorer.ReadResult.CommandFailed,
-                    LinuxFileExplorer.ReadResult.NotInstalled -> {
-                        item(key = "viewer-error") {
-                            StateMessage(stringResource(R.string.linux_files_error_unreadable))
-                        }
-                    }
-                    null -> Unit
                 }
             }
             else -> {
+                val currentEntries = entries
+                val hasParent = currentPath != "/"
+                val listed = listError == null && !currentEntries.isNullOrEmpty()
+                val hasTail = listError != null || currentEntries != null
                 item(key = "path-bar") {
-                    PathBar(currentPath)
+                    Column(Modifier.movoCardSegment(first = true, last = !hasParent && !hasTail)) {
+                        PathHeader(currentPath)
+                        if (currentEntries == null && listError == null) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = MovoSpacing.lg, vertical = MovoSpacing.md),
+                                contentAlignment = Alignment.CenterStart,
+                            ) { TerminalSpinner() }
+                        }
+                    }
                 }
-                if (currentPath != "/") {
+                if (hasParent) {
                     item(key = "..") {
                         FileRow(
                             name = "../",
                             isDir = true,
                             summary = null,
+                            last = !hasTail,
                             onClick = {
                                 currentPath = currentPath.trimEnd('/')
                                     .substringBeforeLast('/')
@@ -182,20 +205,25 @@ internal fun LinuxFilesScreen(
                         )
                     }
                 }
-                val currentEntries = entries
                 when {
                     listError != null -> {
                         item(key = "list-error") {
-                            StateMessage(stringResource(listError ?: R.string.linux_files_error_unreadable))
+                            CardStateText(
+                                stringResource(listError ?: R.string.linux_files_error_unreadable),
+                                modifier = Modifier.movoCardSegment(first = false, last = true),
+                            )
                         }
                     }
                     currentEntries != null && currentEntries.isEmpty() -> {
                         item(key = "list-empty") {
-                            StateMessage(stringResource(R.string.linux_files_empty))
+                            CardStateText(
+                                stringResource(R.string.linux_files_empty),
+                                modifier = Modifier.movoCardSegment(first = false, last = true),
+                            )
                         }
                     }
-                    currentEntries != null -> {
-                        items(currentEntries, key = { it.name }) { entry ->
+                    listed && currentEntries != null -> {
+                        itemsIndexed(currentEntries, key = { _, entry -> entry.name }) { index, entry ->
                             FileRow(
                                 name = entry.name,
                                 isDir = entry.isDir,
@@ -204,6 +232,7 @@ internal fun LinuxFilesScreen(
                                 } else {
                                     Formatter.formatShortFileSize(appContext, entry.sizeBytes)
                                 },
+                                last = index == currentEntries.lastIndex,
                                 onClick = {
                                     val target = currentPath.trimEnd('/') + "/" + entry.name
                                     if (entry.isDir) {
@@ -221,37 +250,16 @@ internal fun LinuxFilesScreen(
     }
 }
 
+/** 卡内路径标题：位置同 `Card/Title`（左右 16，上 16、下 4），等宽字体、可换行。 */
 @Composable
-private fun PathBar(path: String) {
+private fun PathHeader(path: String) {
     Text(
         text = path,
-        style = MiuixTheme.textStyles.body2.copy(fontFamily = FontFamily.Monospace),
-        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        style = MovoTypography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+        color = MovoColors.textSecondary,
         modifier = Modifier
-            .padding(horizontal = 24.dp)
-            .padding(bottom = 8.dp),
-    )
-}
-
-@Composable
-private fun StateMessage(message: String) {
-    Text(
-        text = message,
-        style = MiuixTheme.textStyles.body2,
-        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-        modifier = Modifier.padding(horizontal = 24.dp),
-    )
-}
-
-@Composable
-private fun HintText(message: String) {
-    Text(
-        text = message,
-        style = MiuixTheme.textStyles.footnote1,
-        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-        modifier = Modifier
-            .padding(horizontal = 24.dp)
-            .padding(bottom = 8.dp),
+            .fillMaxWidth()
+            .padding(start = MovoSpacing.lg, end = MovoSpacing.lg, top = MovoSpacing.lg, bottom = MovoSpacing.xs),
     )
 }
 
@@ -260,21 +268,16 @@ private fun FileRow(
     name: String,
     isDir: Boolean,
     summary: String?,
+    last: Boolean,
     onClick: () -> Unit,
 ) {
-    BasicComponent(
+    SettingsRow(
         title = name,
-        summary = summary,
-        startAction = {
-            Icon(
-                imageVector = if (isDir) Icons.Rounded.Folder else Icons.AutoMirrored.Rounded.InsertDriveFile,
-                contentDescription = null,
-                modifier = Modifier
-                    .padding(end = 12.dp)
-                    .size(20.dp),
-                tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
-            )
-        },
+        subtitle = summary,
+        modifier = Modifier.movoCardSegment(first = false, last = last),
+        leading = RowLeading.Icon(if (isDir) MovoIcons.Folder else MovoIcons.File),
+        trailing = if (isDir) RowTrailing.Arrow() else RowTrailing.None,
+        showDivider = !last,
         onClick = onClick,
     )
 }

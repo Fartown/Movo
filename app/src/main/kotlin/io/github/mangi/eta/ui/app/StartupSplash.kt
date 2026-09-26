@@ -1,5 +1,8 @@
 package io.github.mangi.eta.ui.app
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.flow.first
 import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
@@ -15,6 +18,32 @@ import io.github.mangi.eta.R
 import java.time.Duration
 import java.time.Instant
 import kotlin.math.roundToInt
+
+/**
+ * 首页进场（规范 9.4）要在用户真正看得到首页时才播：冷启动时系统启动页会一直盖到内容就绪、
+ * 再按剩余图标动画延迟退场，期间播放的进场会被整段挡住。启动页开始退场时放行；
+ * 没有系统启动页（从其他入口拉起）时不会收到退场回调，由调用方的等待超时兜底。
+ */
+internal object StartupReveal {
+    var revealed by androidx.compose.runtime.mutableStateOf(true)
+        private set
+
+    fun hold() {
+        revealed = false
+    }
+
+    fun release() {
+        revealed = true
+    }
+
+    /** 等到启动页开始退场（最多 [timeoutMillis]）。 */
+    suspend fun await(timeoutMillis: Long = 2_000L) {
+        if (revealed) return
+        kotlinx.coroutines.withTimeoutOrNull(timeoutMillis) {
+            androidx.compose.runtime.snapshotFlow { revealed }.first { it }
+        }
+    }
+}
 
 internal fun ComponentActivity.installStartupSplash(
     isContentReady: () -> Boolean,
@@ -80,6 +109,11 @@ private class StartupSplash(
                 icon?.alpha = iconAlpha * opacity
             }
             addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationStart(animation: Animator) {
+                    // 启动页开始淡出：首页进场与它重叠播放。
+                    StartupReveal.release()
+                }
+
                 override fun onAnimationEnd(animation: Animator) {
                     dismiss()
                 }
@@ -99,6 +133,7 @@ private class StartupSplash(
         val view = splashView
         splashView = null
         view?.remove()
+        StartupReveal.release()
     }
 
     override fun onStop(owner: LifecycleOwner) {

@@ -59,8 +59,19 @@ class VoiceSessionLifecycleTest {
     private fun app(): AgentAppState {
         // Admission and UI state are real. No model request escapes the test.
         val stopped = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined).apply { cancel() }
-        return AgentAppState(context, stopped, voiceSession = owner).also { owner.attach(service, it) }
+        return AgentAppState(
+            context,
+            stopped,
+            voiceSession = owner,
+            // 运行时 steering 通道：默认模拟「不可用」，执行中的文字退回排队（旧行为的兜底）。
+            runtimeSteerer = { runId, text, onResult ->
+                steered += runId to text
+                onResult(steerAccepted)
+            },
+        ).also { owner.attach(service, it) }
     }
+    private val steered = mutableListOf<Pair<String, String>>()
+    private var steerAccepted = false
     private fun begin(host: VoiceConversationHost) { owner.attach(service, host); assertTrue(owner.beginSession(context)) }
     private fun submit(text: String = "第二句话") = audio.host.submit(VoiceTurnCoordinator.Turn(1, text), "session")
 
@@ -220,6 +231,34 @@ class VoiceSessionLifecycleTest {
         assertTrue(state.voiceRuntimeBusy)
     }
 
+    @Test fun busyTextBecomesASupplementWhenTheRuntimeAcceptsIt() {
+        // 规范 8.4：执行中再发的话作为补充交给当前任务，不排队、不开新一轮。
+        steerAccepted = true
+        val state = app(); val id = state.voiceConversationId()
+        state.sendCurrentMessage("正在执行")
+        val runId = state.homeState.messages.filterIsInstance<UserMessageUi>().single().id.removePrefix("user-")
+        val draft = AgentConversationDraftStore.shared.get(id)
+        draft.edit { replace(0, length, "改成大杯") }
+        state.sendCurrentMessage("改成大杯")
+        assertEquals(listOf(runId to "改成大杯"), steered)
+        assertNull(state.queuedTextSubmission)
+        assertEquals("", draft.text.toString())
+        assertEquals(1, state.homeState.messages.filterIsInstance<UserMessageUi>().size)
+        assertTrue(state.voiceRuntimeBusy)
+    }
+
+    @Test fun voiceTurnDuringARunBecomesASupplementWhenAccepted() {
+        // 规范 8.5：执行中说的话作为补充交给当前任务，语音立即回到聆听，不排队、不开新一轮。
+        val host = FakeConversations().apply { running = true; steerAccepts = true }
+        begin(host)
+        submit("改成大杯")
+        assertEquals(listOf("改成大杯"), host.steered)
+        assertTrue(host.sent.isEmpty())
+        assertEquals("已补充到当前任务", owner.state.value.statusText)
+        assertEquals(1, owner.state.value.supplements)
+        assertTrue(owner.state.value.active)
+    }
+
     @Test fun withdrawingQueuedTextDoesNotCancelTheRunningTask() {
         val state = app(); state.sendCurrentMessage("正在执行")
         state.sendCurrentMessage("排队消息")
@@ -342,5 +381,11 @@ class VoiceSessionLifecycleTest {
         override fun sendVoiceMessage(conversationId: String, runId: String, prompt: String, images: List<PendingImageUi>, voiceSessionId: String, onEvent: (AgentEvent) -> Unit, onResult: (AgentRuntimeWire.RunResult) -> Unit) { sent += Request(images, onResult) }
         override fun cancelVoiceRun(runId: String) = Unit
         override fun stopCurrentRun() { stops++ }
+        var steerAccepts = false
+        val steered = mutableListOf<String>()
+        override fun steerVoiceTurn(conversationId: String, text: String, onResult: (Boolean) -> Unit) {
+            steered += text
+            onResult(steerAccepts)
+        }
     }
 }

@@ -1,61 +1,88 @@
 package io.github.mangi.eta.ui.app
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AddComment
-import androidx.compose.material.icons.rounded.Language
-import androidx.compose.material.icons.rounded.Menu
-import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.R
-import io.github.mangi.eta.ui.components.AdaptiveTopAppBar
 import io.github.mangi.eta.ui.components.ConversationSidePaneScaffold
-import io.github.mangi.eta.ui.components.MiuixBackButton
-import io.github.mangi.eta.ui.components.TopBarBackdrop
-import io.github.mangi.eta.ui.components.captureForTopBar
-import io.github.mangi.eta.ui.components.rememberTopBarBackdrop
-import io.github.mangi.eta.ui.components.topBarContainerColor
+import io.github.mangi.eta.ui.components.MovoAtmosphere
+import io.github.mangi.eta.ui.components.movo.MovoIconButton
+import io.github.mangi.eta.ui.components.movo.MovoTopBar
+import io.github.mangi.eta.ui.components.movo.PressKind
+import io.github.mangi.eta.ui.components.movo.ScrolledDetector
+import io.github.mangi.eta.ui.components.movo.captureMovoBackdrop
+import io.github.mangi.eta.ui.components.movo.movoClickable
+import io.github.mangi.eta.ui.components.movo.movoElevation
+import io.github.mangi.eta.ui.components.movo.movoTopBarHeight
+import io.github.mangi.eta.ui.components.movo.rememberMovoBackdrop
 import io.github.mangi.eta.ui.model.ConversationPaneUiState
 import io.github.mangi.eta.ui.model.ConversationSummaryUi
 import io.github.mangi.eta.ui.navigation.AppRoute
-import top.yukonga.miuix.kmp.basic.DropdownImpl
-import top.yukonga.miuix.kmp.basic.DropdownItem
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.ListPopupColumn
-import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
-import top.yukonga.miuix.kmp.basic.PopupPositionProvider
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.ScrollBehavior
-import top.yukonga.miuix.kmp.basic.SmallTopAppBar
-import top.yukonga.miuix.kmp.window.WindowListPopup
+import io.github.mangi.eta.ui.theme.LocalReducedMotion
+import io.github.mangi.eta.ui.theme.MovoColors
+import io.github.mangi.eta.ui.theme.MovoElevation
+import io.github.mangi.eta.ui.theme.MovoIcons
+import io.github.mangi.eta.ui.theme.MovoMotion
+import io.github.mangi.eta.ui.theme.MovoRadius
+import io.github.mangi.eta.ui.theme.MovoSize
+import io.github.mangi.eta.ui.theme.MovoSpacing
+import io.github.mangi.eta.ui.theme.MovoTypography
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.blur.BlendColorEntry
+import top.yukonga.miuix.kmp.blur.BlurColors
+import top.yukonga.miuix.kmp.blur.LayerBackdrop
+import top.yukonga.miuix.kmp.blur.ProgressiveBlur
+import top.yukonga.miuix.kmp.blur.progressiveTextureBlur
 
 /**
- * Agent App 统一壳层。
+ * Agent App 统一壳层（首页 / 会话页、浏览器、终端）。
  *
- * - 负责全局 Scaffold、状态栏/横向安全边距、顶层工具栏。
- * - 首页工具栏只保留历史入口与溢出菜单（新建对话、终端、浏览器），保持聊天舞台干净。
- * - 非首页子路由统一提供返回按钮与标题，避免每个页面各自像独立设置页。
- * - Settings 由标准二级页骨架自己提供 TopAppBar，壳层在此路由不重复绘制。
+ * - 首页顶栏（规范 8「顶栏」、8.0、8.1）：左菜单、右新建对话「+」；中间是会话标题，没有标题时在有后台任务时显示状态胶囊。
+ *   原 ⋮ 菜单里的终端、浏览器、Kimi Web 已移到设置 ·「能力与扩展」（2026-09-25）。
+ * - 其他路由：二级页顶栏（返回 + 居中标题）。
+ * - Q7 顶栏滚动态：内容滚到顶栏下方时出现底色与分隔线。
  */
 @Composable
 fun AgentAppShell(
@@ -63,78 +90,80 @@ fun AgentAppShell(
     isCurrentRoute: Boolean,
     conversationPaneState: ConversationPaneUiState?,
     isConversationPaneOpen: Boolean,
+    closeConversationPaneInstantly: Boolean = false,
     onBack: () -> Unit,
     onOpenConversationPane: () -> Unit,
     onDismissConversationPane: () -> Unit,
     onSearchConversations: (String) -> Unit,
     onNewConversation: () -> Unit,
-    onOpenTerminal: () -> Unit,
-    onLaunchKimiWeb: () -> Unit,
-    kimiWebLabel: String,
-    canStopKimiWeb: Boolean,
-    onStopKimiWeb: () -> Unit,
-    onRefreshKimiWeb: () -> Unit,
-    onOpenBrowser: () -> Unit,
     onSelectConversation: (String) -> Unit,
     onConversationRename: (ConversationSummaryUi) -> Unit,
     onConversationExport: (ConversationSummaryUi) -> Unit,
     onConversationDelete: (ConversationSummaryUi) -> Unit,
-    onOpenTools: () -> Unit,
-    onOpenSkills: () -> Unit,
-    onOpenCharacters: () -> Unit,
-    onOpenPermissions: () -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenModelProviders: () -> Unit,
     modifier: Modifier = Modifier,
+    settingsAttention: String? = null,
     content: @Composable (PaddingValues) -> Unit,
 ) {
-    val scrollBehavior = MiuixScrollBehavior()
-    val backdrop = rememberTopBarBackdrop()
-    val topBarColor = topBarContainerColor(backdrop)
+    val backdrop = rememberMovoBackdrop()
+    val detector = remember(currentRoute) { ScrolledDetector() }
+    val isHome = currentRoute is AppRoute.Home
+    val unnamed = stringResource(R.string.conversation_unnamed)
+    val selectedId = conversationPaneState?.selectedConversationId
+    val conversationTitle = conversationPaneState?.conversations
+        ?.firstOrNull { it.id == selectedId }
+        ?.title
+        ?.takeIf { it.isNotBlank() && it != unnamed }
+    // 后台任务：其他会话里正在运行的任务（规范 8.0 顶栏状态胶囊）。
+    val backgroundRuns = conversationPaneState?.conversations
+        ?.filter { it.isActiveRun && it.id != selectedId }
+        .orEmpty()
+    val barHeight = movoTopBarHeight()
+
     val pageContent: @Composable () -> Unit = {
-        Scaffold(
-            modifier = Modifier.fillMaxSize(),
-            contentWindowInsets = WindowInsets.safeDrawing.only(
-                WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
-            ),
-            topBar = {
-                if (currentRoute !is AppRoute.Settings) {
-                    TopBarBackdrop(backdrop) {
-                        AgentTopBar(
-                            route = currentRoute,
-                            scrollBehavior = scrollBehavior,
-                            color = topBarColor,
-                            onBack = onBack,
-                            onOpenConversationPane = onOpenConversationPane,
-                            onNewConversation = onNewConversation,
-                            onOpenTerminal = onOpenTerminal,
-                            onLaunchKimiWeb = onLaunchKimiWeb,
-                            kimiWebLabel = kimiWebLabel,
-                            canStopKimiWeb = canStopKimiWeb,
-                            onStopKimiWeb = onStopKimiWeb,
-                            onRefreshKimiWeb = onRefreshKimiWeb,
-                            onOpenBrowser = onOpenBrowser,
-                        )
-                    }
-                }
-            },
-        ) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MovoColors.bgCanvas)
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
+        ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .captureForTopBar(backdrop)
-                    .nestedScroll(scrollBehavior.nestedScrollConnection),
+                    .captureMovoBackdrop(backdrop)
+                    .nestedScroll(detector),
             ) {
-                content(padding)
+                // 首页与会话页的背景光晕（规范 9.4：首页 → 对话时保留不动）。
+                if (isHome) MovoAtmosphere()
+                content(PaddingValues(top = barHeight))
+            }
+            if (isHome) {
+                HomeTopBar(
+                    scrolled = detector.scrolled,
+                    backdrop = backdrop,
+                    title = conversationTitle,
+                    backgroundRuns = backgroundRuns,
+                    onOpenConversationPane = onOpenConversationPane,
+                    onNewConversation = onNewConversation,
+                    onOpenBackgroundRun = onSelectConversation,
+                )
+            } else {
+                MovoTopBar(
+                    title = titleForRoute(currentRoute),
+                    onBack = onBack,
+                    scrolled = detector.scrolled,
+                    backdrop = backdrop,
+                )
             }
         }
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        if (conversationPaneState != null && currentRoute is AppRoute.Home) {
+        if (conversationPaneState != null && isHome) {
             ConversationSidePaneScaffold(
                 state = conversationPaneState,
                 visible = isConversationPaneOpen,
+                closeInstantly = closeConversationPaneInstantly,
                 backHandlerEnabled = isCurrentRoute,
                 onOpen = onOpenConversationPane,
                 onDismiss = onDismissConversationPane,
@@ -143,12 +172,9 @@ fun AgentAppShell(
                 onConversationRename = onConversationRename,
                 onConversationExport = onConversationExport,
                 onConversationDelete = onConversationDelete,
+                onNewConversation = onNewConversation,
                 onOpenSettings = onOpenSettings,
-                onOpenModelProviders = onOpenModelProviders,
-                onOpenTools = onOpenTools,
-                onOpenSkills = onOpenSkills,
-                onOpenCharacters = onOpenCharacters,
-                onOpenPermissions = onOpenPermissions,
+                settingsAttention = settingsAttention,
             ) {
                 pageContent()
             }
@@ -158,177 +184,150 @@ fun AgentAppShell(
     }
 }
 
+/**
+ * 首页 / 会话页顶栏：高 56，左内边距 7、右内边距 6（菜单与「+」字形分别落在 20 / 392）；
+ * 中间会话标题 Body/Strong 最大宽 220 一行省略，生成后淡入 `fast`；没有标题时，有后台任务显示状态胶囊。
+ */
 @Composable
-private fun AgentTopBar(
-    route: AppRoute?,
-    scrollBehavior: ScrollBehavior,
-    color: Color,
-    onBack: () -> Unit,
+private fun HomeTopBar(
+    scrolled: Boolean,
+    backdrop: LayerBackdrop?,
+    title: String?,
+    backgroundRuns: List<ConversationSummaryUi>,
     onOpenConversationPane: () -> Unit,
     onNewConversation: () -> Unit,
-    onOpenTerminal: () -> Unit,
-    onLaunchKimiWeb: () -> Unit,
-    kimiWebLabel: String,
-    canStopKimiWeb: Boolean,
-    onStopKimiWeb: () -> Unit,
-    onRefreshKimiWeb: () -> Unit,
-    onOpenBrowser: () -> Unit,
+    onOpenBackgroundRun: (String) -> Unit,
 ) {
-    val isHome = route is AppRoute.Home
-    val navigationIcon: @Composable () -> Unit = {
-        if (isHome) {
-            IconButton(onClick = onOpenConversationPane) {
-                Icon(
-                    imageVector = Icons.Rounded.Menu,
-                    contentDescription = stringResource(R.string.action_conversation_history),
+    val reduced = LocalReducedMotion.current
+    val chrome by animateFloatAsState(
+        targetValue = if (scrolled) 1f else 0f,
+        animationSpec = when {
+            reduced -> snap()
+            scrolled -> MovoMotion.fast()
+            else -> MovoMotion.fastExit()
+        },
+        label = "homeTopBarChrome",
+    )
+    Box(modifier = Modifier.fillMaxWidth()) {
+        Box(modifier = Modifier.matchParentSize().graphicsLayer { alpha = chrome }) {
+            if (backdrop != null) {
+                Box(
+                    Modifier.matchParentSize().progressiveTextureBlur(
+                        backdrop = backdrop,
+                        shape = RectangleShape,
+                        gradient = ProgressiveBlur.Top,
+                        blurRadius = 16f,
+                        colors = BlurColors(blendColors = listOf(BlendColorEntry(MovoColors.bgCanvas.copy(alpha = 0.9f)))),
+                    ),
                 )
+            } else {
+                Box(Modifier.matchParentSize().background(MovoColors.bgCanvas.copy(alpha = 0.9f)))
             }
-        } else {
-            MiuixBackButton(onClick = onBack)
         }
-    }
-    val actions: @Composable RowScope.() -> Unit = {
-        if (isHome) {
-            TopBarOverflowMenu(
-                onNewConversation = onNewConversation,
-                onOpenTerminal = onOpenTerminal,
-                onLaunchKimiWeb = onLaunchKimiWeb,
-                kimiWebLabel = kimiWebLabel,
-                canStopKimiWeb = canStopKimiWeb,
-                onStopKimiWeb = onStopKimiWeb,
-                onRefreshKimiWeb = onRefreshKimiWeb,
-                onOpenBrowser = onOpenBrowser,
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .height(MovoSize.topBar)
+                .padding(start = 7.dp, end = 6.dp),
+        ) {
+            MovoIconButton(
+                icon = MovoIcons.Menu,
+                contentDescription = stringResource(R.string.action_conversation_history),
+                onClick = onOpenConversationPane,
+                modifier = Modifier.align(Alignment.CenterStart),
+            )
+            AnimatedContent(
+                targetState = title,
+                transitionSpec = { fadeIn(MovoMotion.fast()) togetherWith fadeOut(MovoMotion.fastExit()) },
+                // 居中对齐 + 两侧让出菜单与「+」（热区 44 + 边距）：长标题只省略、不贴图标（真机验收）。
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.align(Alignment.Center).padding(horizontal = 52.dp),
+                label = "homeTopBarTitle",
+            ) { currentTitle ->
+                when {
+                    currentTitle != null -> Text(
+                        text = currentTitle,
+                        style = MovoTypography.bodyStrong,
+                        color = MovoColors.textPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 220.dp).semantics { heading() },
+                    )
+                    backgroundRuns.isNotEmpty() -> BackgroundTaskPill(
+                        count = backgroundRuns.size,
+                        onClick = { onOpenBackgroundRun(backgroundRuns.first().id) },
+                    )
+                    else -> Spacer(Modifier.size(0.dp))
+                }
+            }
+            MovoIconButton(
+                icon = MovoIcons.Plus,
+                contentDescription = stringResource(R.string.action_new_conversation),
+                onClick = onNewConversation,
+                modifier = Modifier.align(Alignment.CenterEnd),
             )
         }
-    }
-
-    if (isHome) {
-        // 首页聊天舞台保持紧凑；二级内容页统一使用可折叠大标题。
-        SmallTopAppBar(
-            title = titleForRoute(route),
-            color = color,
-            scrollBehavior = scrollBehavior,
-            navigationIcon = navigationIcon,
-            actions = actions,
-        )
-    } else {
-        AdaptiveTopAppBar(
-            title = titleForRoute(route),
-            color = color,
-            scrollBehavior = scrollBehavior,
-            navigationIcon = navigationIcon,
-            actions = actions,
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .height(MovoSize.hairline)
+                .graphicsLayer { alpha = chrome }
+                .background(MovoColors.borderHairline),
         )
     }
 }
 
-private val TopBarMenuIconSize = 20.dp
-
 /**
- * 首页顶栏溢出菜单。WindowListPopup 以父布局为锚点，因此与触发按钮包在同一个 Box 中，
- * 弹层从按钮下方右对齐展开。
+ * 状态胶囊（规范 8 组件表）：高 32、圆角 16、bg/surface + 描边 + E1；状态点 7 绿色，外圈光晕 14 在
+ * 1 → 1.8、35% → 0 间 1600ms 循环（9.3），减少动画时不显示光晕。点击进入对应会话。
  */
 @Composable
-private fun TopBarOverflowMenu(
-    onNewConversation: () -> Unit,
-    onOpenTerminal: () -> Unit,
-    onLaunchKimiWeb: () -> Unit,
-    kimiWebLabel: String,
-    canStopKimiWeb: Boolean,
-    onStopKimiWeb: () -> Unit,
-    onRefreshKimiWeb: () -> Unit,
-    onOpenBrowser: () -> Unit,
-) {
-    var showMenu by remember { mutableStateOf(false) }
-    Box {
-        IconButton(onClick = { onRefreshKimiWeb(); showMenu = true }) {
-            Icon(
-                imageVector = Icons.Rounded.MoreVert,
-                contentDescription = stringResource(R.string.action_more),
-            )
-        }
-        WindowListPopup(
-            show = showMenu,
-            alignment = PopupPositionProvider.Align.End,
-            onDismissRequest = { showMenu = false },
-        ) {
-            val newConversationText = stringResource(R.string.action_new_conversation)
-            val openTerminalText = stringResource(R.string.action_open_terminal)
-            val launchKimiWebText = kimiWebLabel
-            val stopKimiWebText = stringResource(R.string.capability_kimi_stop)
-            val openBrowserText = stringResource(R.string.action_open_browser)
-            val menuItems = remember(
-                newConversationText,
-                openTerminalText,
-                launchKimiWebText,
-                openBrowserText,
-                stopKimiWebText,
-                canStopKimiWeb,
-            ) {
-                listOf(
-                    DropdownItem(
-                        text = newConversationText,
-                        icon = { modifier ->
-                            Icon(
-                                imageVector = Icons.Rounded.AddComment,
-                                contentDescription = null,
-                                modifier = modifier.size(TopBarMenuIconSize),
-                            )
-                        },
-                    ),
-                    DropdownItem(
-                        text = openTerminalText,
-                        icon = { modifier ->
-                            Icon(
-                                imageVector = Icons.Rounded.Terminal,
-                                contentDescription = null,
-                                modifier = modifier.size(TopBarMenuIconSize),
-                            )
-                        },
-                    ),
-                    DropdownItem(
-                        text = launchKimiWebText,
-                        icon = { modifier ->
-                            Icon(
-                                painter = painterResource(R.drawable.ic_kimi_code),
-                                contentDescription = null,
-                                modifier = modifier.size(TopBarMenuIconSize),
-                            )
-                        },
-                    ),
-                    DropdownItem(
-                        text = openBrowserText,
-                        icon = { modifier ->
-                            Icon(
-                                imageVector = Icons.Rounded.Language,
-                                contentDescription = null,
-                                modifier = modifier.size(TopBarMenuIconSize),
-                            )
-                        },
-                    ),
-                ) + if (canStopKimiWeb) listOf(DropdownItem(text = stopKimiWebText)) else emptyList()
+private fun BackgroundTaskPill(count: Int, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(MovoRadius.md)
+    val reduced = LocalReducedMotion.current
+    Row(
+        modifier = Modifier
+            .height(MovoSize.controlSmall)
+            .movoElevation(MovoElevation.Card, shape)
+            .movoClickable(PressKind.Solid, shape = shape, onClick = onClick)
+            .clip(shape)
+            .background(MovoColors.bgSurface)
+            .padding(horizontal = MovoSpacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(modifier = Modifier.size(14.dp), contentAlignment = Alignment.Center) {
+            if (!reduced) {
+                val transition = rememberInfiniteTransition(label = "statusHalo")
+                val halo by transition.animateFloat(
+                    initialValue = 0f,
+                    targetValue = 1f,
+                    animationSpec = infiniteRepeatable(tween(MovoMotion.STATUS_HALO_PERIOD, easing = MovoMotion.EasingLinear)),
+                    label = "statusHaloProgress",
+                )
+                Box(
+                    Modifier
+                        .size(7.dp)
+                        .graphicsLayer {
+                            val scale = 1f + 0.8f * halo
+                            scaleX = scale
+                            scaleY = scale
+                            alpha = 0.35f * (1f - halo)
+                        }
+                        .clip(CircleShape)
+                        .background(MovoColors.statusOnline),
+                )
             }
-            ListPopupColumn {
-                menuItems.forEachIndexed { index, item ->
-                    DropdownImpl(
-                        item = item,
-                        optionSize = menuItems.size,
-                        isSelected = false,
-                        index = index,
-                        onSelectedIndexChange = {
-                            showMenu = false
-                            when (index) {
-                                0 -> onNewConversation()
-                                1 -> onOpenTerminal()
-                                2 -> onLaunchKimiWeb()
-                                3 -> onOpenBrowser()
-                                4 -> onStopKimiWeb()
-                            }
-                        },
-                    )
-                }
-            }
+            Box(Modifier.size(7.dp).clip(CircleShape).background(MovoColors.statusOnline))
         }
+        Spacer(Modifier.width(6.dp))
+        Text(
+            pluralStringResource(R.plurals.movo_background_tasks, count, count),
+            style = MovoTypography.labelMedium,
+            color = MovoColors.textPrimary,
+            maxLines = 1,
+        )
     }
 }
 
@@ -348,6 +347,9 @@ private fun titleForRoute(route: AppRoute?): String = when (route) {
     is AppRoute.Permissions -> stringResource(R.string.route_permissions)
     is AppRoute.SystemEnhance -> stringResource(R.string.route_system_enhancements)
     is AppRoute.Settings -> stringResource(R.string.route_settings)
+    is AppRoute.ToolSettings -> stringResource(R.string.movo_settings_tools)
+    is AppRoute.SystemAssistant -> stringResource(R.string.movo_settings_system_assistant)
+    is AppRoute.RunDetail -> stringResource(R.string.movo_run_detail_title)
     is AppRoute.VoiceSettings -> stringResource(R.string.voice_settings_title)
     is AppRoute.Diagnostics -> "运行日志"
     is AppRoute.DiagnosticsRun -> "任务详情"

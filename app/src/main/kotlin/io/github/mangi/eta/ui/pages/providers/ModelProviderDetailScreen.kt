@@ -2,15 +2,19 @@
 
 package io.github.mangi.eta.ui.pages.providers
 
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.snap
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
@@ -28,13 +32,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.EtaApp
@@ -49,36 +50,41 @@ import io.github.mangi.eta.data.provider.ProviderSourceRegistry
 import io.github.mangi.eta.data.repository.ProviderRepository
 import io.github.mangi.eta.data.repository.RemoteModelFetcher
 import io.github.mangi.eta.data.repository.RuntimeConfigRepository
-import io.github.mangi.eta.ui.components.MiuixDialogActions
-import io.github.mangi.eta.ui.components.MiuixPageBottomSpacer
-import io.github.mangi.eta.ui.components.MiuixScaffold
-import io.github.mangi.eta.ui.components.MiuixScaffoldPage
-import io.github.mangi.eta.ui.components.StatusError
-import io.github.mangi.eta.ui.components.StatusSuccess
+import io.github.mangi.eta.ui.components.movo.CardFooter
+import io.github.mangi.eta.ui.components.movo.MovoBlockButton
+import io.github.mangi.eta.ui.components.movo.MovoCard
+import io.github.mangi.eta.ui.components.movo.MovoChoiceDialog
+import io.github.mangi.eta.ui.components.movo.MovoConfirmDialog
+import io.github.mangi.eta.ui.components.movo.MovoDivider
+import io.github.mangi.eta.ui.components.movo.MovoPage
+import io.github.mangi.eta.ui.components.movo.MovoPillButton
+import io.github.mangi.eta.ui.components.movo.RowLeading
+import io.github.mangi.eta.ui.components.movo.RowTrailing
+import io.github.mangi.eta.ui.components.movo.SettingsRow
 import io.github.mangi.eta.ui.layout.horizontalCutoutPadding
 import io.github.mangi.eta.ui.navigation.NewProviderType
+import io.github.mangi.eta.ui.theme.LocalReducedMotion
+import io.github.mangi.eta.ui.theme.MovoColors
+import io.github.mangi.eta.ui.theme.MovoIcon
+import io.github.mangi.eta.ui.theme.MovoIcons
+import io.github.mangi.eta.ui.theme.MovoMotion
+import io.github.mangi.eta.ui.theme.MovoSize
+import io.github.mangi.eta.ui.theme.MovoSpacing
+import io.github.mangi.eta.ui.theme.MovoTypography
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.DropdownItem
-import top.yukonga.miuix.kmp.basic.HorizontalDivider
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.ScrollBehavior
-import top.yukonga.miuix.kmp.basic.TabRow
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
-import top.yukonga.miuix.kmp.preference.SwitchPreference
-import top.yukonga.miuix.kmp.preference.WindowSpinnerPreference
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 
+/**
+ * 提供商详情 / 新建（规范 8.7 二级页）：居中顶栏标题为提供商名称；已有提供商在顶栏下方用分段切换「配置 / 模型」
+ * （9.3.1「分段 / 标签」，下方内容交叉淡化 `fast`）；新建时只有配置。
+ */
 @Composable
 internal fun ModelProviderDetailScreen(
     providerId: String? = null,
@@ -115,20 +121,25 @@ internal fun ModelProviderDetailScreen(
     }
 
     if (provider == null && draft == null) {
-        MiuixScaffoldPage(
+        MovoPage(
             title = stringResource(R.string.route_provider_details),
             onBack = onBack,
-        ) {
-            item(key = "missing_provider") {
-                Column(
-                    modifier = Modifier.fillParentMaxSize().padding(24.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(stringResource(R.string.ui_provider_does_not_exist_83cee6))
-                    Spacer(modifier = Modifier.height(12.dp))
-                    TextButton(text = stringResource(R.string.ui_return_11d024), onClick = onBack)
-                }
+        ) { contentPadding, sidePadding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(contentPadding)
+                    .padding(horizontal = sidePadding + MovoSpacing.pageEdge, vertical = MovoSpacing.xxl),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = stringResource(R.string.ui_provider_does_not_exist_83cee6),
+                    style = MovoTypography.bodyRegular,
+                    color = MovoColors.textSecondary,
+                )
+                Spacer(modifier = Modifier.height(MovoSpacing.md))
+                MovoPillButton(label = stringResource(R.string.ui_return_11d024), onClick = onBack)
             }
         }
         return
@@ -144,34 +155,40 @@ internal fun ModelProviderDetailScreen(
         mutableStateOf(ProviderConfigDraft.from(initial))
     }
     val title = if (isNew) context.getString(R.string.page_create_new_provider_36cab9) else initial.name
+    val reduced = LocalReducedMotion.current
 
-    MiuixScaffold(title = title, onBack = onBack) { paddingValues, scrollBehavior, sidePadding ->
+    MovoPage(title = title, onBack = onBack) { contentPadding, sidePadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .horizontalCutoutPadding()
-                .padding(top = paddingValues.calculateTopPadding()),
+                .padding(top = contentPadding.calculateTopPadding()),
         ) {
             if (!isNew) {
-                TabRow(
+                MovoSegmentedTabs(
                     tabs = listOf(context.getString(R.string.page_configuration_d7d7ce), context.getString(R.string.page_model_98fd0c)),
-                    selectedTabIndex = currentTab,
-                    onTabSelected = { currentTab = it },
+                    selectedIndex = currentTab,
+                    onSelect = { currentTab = it },
                     modifier = Modifier.padding(
-                        horizontal = sidePadding + 12.dp,
-                        vertical = 8.dp,
+                        start = sidePadding + MovoSpacing.pageEdge,
+                        end = sidePadding + MovoSpacing.pageEdge,
+                        top = MovoSpacing.md,
                     ),
                 )
             }
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                when (currentTab) {
+            Crossfade(
+                targetState = currentTab,
+                animationSpec = if (reduced) snap() else MovoMotion.fast(),
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                label = "providerTab",
+            ) { tab ->
+                when (tab) {
                     0 -> ProviderConfigTab(
                         provider = initial,
                         draft = configDraft,
                         onDraftChange = { configDraft = it },
                         scope = scope,
                         isNew = isNew,
-                        scrollBehavior = scrollBehavior,
                         contentSidePadding = sidePadding,
                         onCreated = { id -> createdId = id },
                         onDeleted = onBack,
@@ -180,7 +197,6 @@ internal fun ModelProviderDetailScreen(
                         ProviderModelsTab(
                             provider = initial,
                             scope = scope,
-                            scrollBehavior = scrollBehavior,
                             contentSidePadding = sidePadding,
                         )
                     }
@@ -197,7 +213,6 @@ private fun ProviderConfigTab(
     onDraftChange: (ProviderConfigDraft) -> Unit,
     scope: CoroutineScope,
     isNew: Boolean,
-    scrollBehavior: ScrollBehavior,
     contentSidePadding: Dp,
     onCreated: (String) -> Unit,
     onDeleted: () -> Unit,
@@ -209,44 +224,52 @@ private fun ProviderConfigTab(
     var testStatus by remember { mutableStateOf<String?>(null) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showResetDialog by remember { mutableStateOf(false) }
+    var showEndpointDialog by remember { mutableStateOf(false) }
     var isWorking by remember { mutableStateOf(false) }
     var creationCommitted by remember { mutableStateOf(false) }
     val isChatGpt = ProviderSourceRegistry.resolve(provider) == ProviderSourceTypes.CHATGPT
+    val failPrefix = stringResource(R.string.page_fail_3e3c80)
+    val navigation = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val endpointOptions = listOf("Chat Completions API", "Responses API")
+    val endpointIndex = if (draft.endpointMode == OpenAiEndpointMode.RESPONSES) 1 else 0
 
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            // 低层 MiuixScaffold 只负责把顶栏 Insets 传给调用方，输入法 Insets 由列表自行消费。
+            // MovoPage 只负责把顶栏 Insets 传给调用方，输入法 Insets 由列表自行消费。
             .imePadding()
             .scrollEndHaptic()
-            .overScrollVertical()
-            .nestedScroll(scrollBehavior.nestedScrollConnection),
+            .overScrollVertical(),
         contentPadding = PaddingValues(
-            start = contentSidePadding,
-            end = contentSidePadding,
+            start = contentSidePadding + MovoSpacing.pageEdge,
+            end = contentSidePadding + MovoSpacing.pageEdge,
+            top = MovoSpacing.md,
+            bottom = navigation + MovoSpacing.section,
         ),
+        verticalArrangement = Arrangement.spacedBy(MovoSpacing.lg),
         overscrollEffect = null,
     ) {
         item(key = "connection") {
             ProviderSection(title = stringResource(R.string.ui_connection_configuration_7d057b)) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column(
+                    modifier = Modifier.padding(horizontal = MovoSpacing.lg, vertical = MovoSpacing.sm),
+                    verticalArrangement = Arrangement.spacedBy(MovoSpacing.md),
+                ) {
                     TextField(
                         value = draft.name,
                         onValueChange = { onDraftChange(draft.copy(name = it)) },
                         label = stringResource(R.string.ui_name_1be7ae),
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
                     TextField(
                         value = draft.baseUrl,
                         onValueChange = { onDraftChange(draft.copy(baseUrl = it)) },
                         label = "Base URL",
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
                     )
                     if (!isChatGpt) {
-                        Spacer(modifier = Modifier.height(12.dp))
                         TextField(
                             value = draft.apiKey,
                             onValueChange = { onDraftChange(draft.copy(apiKey = it)) },
@@ -254,81 +277,65 @@ private fun ProviderConfigTab(
                             singleLine = true,
                             visualTransformation = if (apiKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
                             trailingIcon = {
+                                // Lucide 没有 eye-off 的生成数据，显隐切换暂用 Material 图标（见 restyle-C.md）。
                                 IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
                                     Icon(
                                         imageVector = if (apiKeyVisible) Icons.Rounded.Visibility else Icons.Rounded.VisibilityOff,
                                         contentDescription = if (apiKeyVisible) context.getString(R.string.page_hide_bb0e7e) else context.getString(R.string.page_show_71b677),
+                                        tint = MovoColors.textSecondary,
                                     )
                                 }
                             },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
                         )
                     }
                     if (provider is AnthropicProviderSetting) {
-                        Spacer(modifier = Modifier.height(12.dp))
                         TextField(
                             value = draft.anthropicVersion,
                             onValueChange = { onDraftChange(draft.copy(anthropicVersion = it)) },
                             label = "anthropic-version",
                             singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
                         )
                     }
                 }
+                MovoDivider(start = MovoSpacing.lg)
                 if (isChatGpt) {
-                    HorizontalDivider()
                     ChatGptAccountSection(scope = scope, onStatus = { testStatus = it })
                 }
                 if (provider !is AnthropicProviderSetting) {
                     if (!isChatGpt) {
-                        HorizontalDivider()
-                        WindowSpinnerPreference(
-                            items = listOf(
-                                DropdownItem(text = "Chat Completions API"),
-                                DropdownItem(text = "Responses API"),
-                            ),
-                            selectedIndex = if (draft.endpointMode == OpenAiEndpointMode.RESPONSES) 1 else 0,
+                        SettingsRow(
                             title = stringResource(R.string.ui_endpoint_mode_3c8546),
-                            summary = if (draft.endpointMode == OpenAiEndpointMode.RESPONSES) {
+                            subtitle = if (draft.endpointMode == OpenAiEndpointMode.RESPONSES) {
                                 context.getString(R.string.page_using_typed_items_with_semantic_streaming_events_f9c906)
                             } else {
                                 context.getString(R.string.page_use_standard_chat_completions_ee4b1a)
                             },
-                            onSelectedIndexChange = { selectedIndex ->
-                                onDraftChange(
-                                    draft.copy(
-                                        endpointMode = if (selectedIndex == 1) {
-                                            OpenAiEndpointMode.RESPONSES
-                                        } else {
-                                            OpenAiEndpointMode.CHAT_COMPLETIONS
-                                        },
-                                    ),
-                                )
-                            },
+                            trailing = RowTrailing.Arrow(endpointOptions[endpointIndex].removeSuffix(" API")),
+                            onClick = { showEndpointDialog = true },
                         )
                     }
                     if (draft.endpointMode == OpenAiEndpointMode.RESPONSES) {
-                        HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
-                        SwitchPreference(
+                        SettingsRow(
                             title = stringResource(R.string.ui_server_side_web_search_ddb8e0),
-                            summary = stringResource(R.string.ui_allows_the_model_to_call_web_searches_provided_by_th_2f752f),
-                            checked = draft.hostedWebSearchEnabled,
-                            onCheckedChange = {
+                            subtitle = stringResource(R.string.ui_allows_the_model_to_call_web_searches_provided_by_th_2f752f),
+                            trailing = RowTrailing.Switch(draft.hostedWebSearchEnabled) {
                                 onDraftChange(draft.copy(hostedWebSearchEnabled = it))
                             },
                         )
                     }
                 }
-                HorizontalDivider()
-                BasicComponent(
+                SettingsRow(
                     title = stringResource(R.string.ui_test_connection_10b7d8),
-                    summary = testStatus,
+                    trailing = RowTrailing.None,
                     enabled = !isWorking,
+                    showDivider = testStatus != null,
                     onClick = {
                         val validationError = validateProviderDraft(context, draft)
                         if (validationError != null) {
                             testStatus = context.getString(R.string.provider_error, validationError)
-                            return@BasicComponent
+                            return@SettingsRow
                         }
                         scope.launch {
                             isWorking = true
@@ -355,6 +362,13 @@ private fun ProviderConfigTab(
                         }
                     },
                 )
+                testStatus?.let { message ->
+                    ProviderStatusLine(
+                        message = message,
+                        isError = message.startsWith(failPrefix),
+                        modifier = Modifier.padding(horizontal = MovoSpacing.lg, vertical = MovoSpacing.md),
+                    )
+                }
             }
         }
 
@@ -367,43 +381,31 @@ private fun ProviderConfigTab(
 
         item(key = "preferences_and_prompt") {
             ProviderSection(title = stringResource(R.string.ui_preferences_and_strategies_2abd3c)) {
-                SwitchPreference(
+                SettingsRow(
                     title = stringResource(R.string.ui_enable_this_provider_683a76),
-                    checked = draft.isEnabled,
-                    onCheckedChange = { onDraftChange(draft.copy(isEnabled = it)) }
+                    trailing = RowTrailing.Switch(draft.isEnabled) { onDraftChange(draft.copy(isEnabled = it)) },
                 )
-                HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
-                Column(modifier = Modifier.padding(16.dp)) {
-                    TextField(
-                        value = draft.systemPrompt,
-                        onValueChange = { onDraftChange(draft.copy(systemPrompt = it)) },
-                        label = stringResource(R.string.ui_system_prompt_word_193981),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(120.dp),
-                        singleLine = false,
-                    )
-                    Text(
-                        text = stringResource(R.string.ui_leave_blank_to_use_the_default_mobile_agent_prompt_w_21e7c8),
-                        style = MiuixTheme.textStyles.footnote2,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
-                }
+                TextField(
+                    value = draft.systemPrompt,
+                    onValueChange = { onDraftChange(draft.copy(systemPrompt = it)) },
+                    label = stringResource(R.string.ui_system_prompt_word_193981),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = MovoSpacing.lg, vertical = MovoSpacing.md)
+                        .height(120.dp),
+                    singleLine = false,
+                )
+                CardFooter(listOf(stringResource(R.string.ui_leave_blank_to_use_the_default_mobile_agent_prompt_w_21e7c8)))
             }
         }
 
         item(key = "actions") {
-            // 操作分层：主按钮实心独占，次要操作降级为文字按钮，与弹窗按钮语言一致
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp)
-                    .padding(top = 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(MovoSpacing.md),
             ) {
-                TextButton(
-                    text = when {
+                MovoBlockButton(
+                    label = when {
                         isWorking -> context.getString(R.string.page_saving_d70d42)
                         creationCommitted -> context.getString(R.string.page_created_62cfc5)
                         isNew -> context.getString(R.string.page_create_fcbd09)
@@ -411,12 +413,11 @@ private fun ProviderConfigTab(
                     },
                     enabled = !isWorking && !creationCommitted,
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.textButtonColorsPrimary(),
                     onClick = {
                         val validationError = validateProviderDraft(context, draft)
                         if (validationError != null) {
                             status = context.getString(R.string.provider_error, validationError)
-                            return@TextButton
+                            return@MovoBlockButton
                         }
                         scope.launch {
                             isWorking = true
@@ -473,12 +474,10 @@ private fun ProviderConfigTab(
                     },
                 )
                 status?.let { message ->
-                    Text(
-                        text = message,
-                        style = MiuixTheme.textStyles.footnote2,
-                        color = if (message.startsWith(context.getString(R.string.page_fail_3e3c80))) StatusError else StatusSuccess,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(top = 8.dp),
+                    ProviderStatusLine(
+                        message = message,
+                        isError = message.startsWith(failPrefix),
+                        modifier = Modifier.padding(horizontal = MovoSpacing.lg),
                     )
                 }
             }
@@ -486,116 +485,114 @@ private fun ProviderConfigTab(
 
         if (!isNew) {
             item(key = "danger_zone") {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp)
-                        .padding(top = 12.dp),
-                    showIndication = true,
-                    onClick = if (isWorking) {
-                        null
-                    } else {
-                        {
+                MovoCard {
+                    SettingsRow(
+                        title = if (provider.isBuiltIn) {
+                            context.getString(R.string.page_reset_built_in_configuration_35b6ec)
+                        } else {
+                            context.getString(R.string.page_remove_provider_9f848f)
+                        },
+                        leading = RowLeading.Custom {
+                            MovoIcon(
+                                if (provider.isBuiltIn) MovoIcons.RotateCcw else MovoIcons.Trash2,
+                                contentDescription = null,
+                                size = MovoSize.iconMedium,
+                                tint = MovoColors.roseFg,
+                            )
+                        },
+                        trailing = RowTrailing.None,
+                        enabled = !isWorking,
+                        showDivider = false,
+                        onClick = {
                             if (provider.isBuiltIn) showResetDialog = true else showDeleteDialog = true
-                        }
-                    },
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 14.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = if (provider.isBuiltIn) context.getString(R.string.page_reset_built_in_configuration_35b6ec) else context.getString(R.string.page_remove_provider_9f848f),
-                            fontSize = MiuixTheme.textStyles.headline1.fontSize,
-                            fontWeight = FontWeight.Medium,
-                            color = MiuixTheme.colorScheme.error,
-                        )
-                    }
+                        },
+                    )
                 }
             }
         }
-
-        item(key = "bottom_spacer") {
-            MiuixPageBottomSpacer()
-        }
     }
 
-    if (showDeleteDialog) {
-        OverlayDialog(
-            show = true,
-            title = stringResource(R.string.ui_remove_provider_9f848f),
-            summary = stringResource(R.string.provider_delete_summary, provider.name),
-            onDismissRequest = { if (!isWorking) showDeleteDialog = false },
-        ) {
-            MiuixDialogActions(
-                confirmText = if (isWorking) context.getString(R.string.page_deleting_6f941d) else context.getString(R.string.page_delete_3755f5),
-                cancelEnabled = !isWorking,
-                confirmEnabled = !isWorking,
-                destructive = true,
-                onCancel = { showDeleteDialog = false },
-                onConfirm = {
-                    scope.launch {
-                        isWorking = true
-                        try {
-                            ProviderRepository.deleteProvider(provider.id)
-                            RuntimeConfigRepository.syncToRemotePreferences(EtaApp.serviceInstance)
-                            showDeleteDialog = false
-                            onDeleted()
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (throwable: Throwable) {
-                            status = context.getString(
-                                R.string.provider_error,
-                                throwable.message ?: context.getString(R.string.provider_delete_failed),
-                            )
-                            showDeleteDialog = false
-                        } finally {
-                            isWorking = false
-                        }
-                    }
-                },
+    MovoChoiceDialog(
+        show = showEndpointDialog,
+        title = stringResource(R.string.ui_endpoint_mode_3c8546),
+        options = endpointOptions,
+        selectedIndex = endpointIndex,
+        onSelect = { selectedIndex ->
+            onDraftChange(
+                draft.copy(
+                    endpointMode = if (selectedIndex == 1) {
+                        OpenAiEndpointMode.RESPONSES
+                    } else {
+                        OpenAiEndpointMode.CHAT_COMPLETIONS
+                    },
+                ),
             )
-        }
-    }
+        },
+        onDismissRequest = { showEndpointDialog = false },
+    )
 
-    if (showResetDialog) {
-        OverlayDialog(
-            show = true,
-            title = stringResource(R.string.ui_reset_built_in_configuration_35b6ec),
-            summary = stringResource(R.string.provider_reset_summary, provider.name),
-            onDismissRequest = { if (!isWorking) showResetDialog = false },
-        ) {
-            MiuixDialogActions(
-                confirmText = if (isWorking) context.getString(R.string.page_resetting_616090) else context.getString(R.string.page_reset_3d8134),
-                cancelEnabled = !isWorking,
-                confirmEnabled = !isWorking,
-                onCancel = { showResetDialog = false },
-                onConfirm = {
-                    scope.launch {
-                        isWorking = true
-                        try {
-                            ProviderRepository.resetBuiltIn(provider.id)
-                            RuntimeConfigRepository.syncToRemotePreferences(EtaApp.serviceInstance)
-                            status = context.getString(R.string.page_reset_a0cc65)
-                            showResetDialog = false
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (throwable: Throwable) {
-                            status = context.getString(
-                                R.string.provider_error,
-                                throwable.message ?: context.getString(R.string.provider_reset_failed),
-                            )
-                            showResetDialog = false
-                        } finally {
-                            isWorking = false
-                        }
-                    }
-                },
-            )
-        }
-    }
+    MovoConfirmDialog(
+        show = showDeleteDialog,
+        title = stringResource(R.string.ui_remove_provider_9f848f),
+        message = stringResource(R.string.provider_delete_summary, provider.name),
+        confirmText = if (isWorking) context.getString(R.string.page_deleting_6f941d) else context.getString(R.string.page_delete_3755f5),
+        cancelEnabled = !isWorking,
+        confirmEnabled = !isWorking,
+        destructive = true,
+        onDismissRequest = { if (!isWorking) showDeleteDialog = false },
+        onConfirm = {
+            scope.launch {
+                isWorking = true
+                try {
+                    ProviderRepository.deleteProvider(provider.id)
+                    RuntimeConfigRepository.syncToRemotePreferences(EtaApp.serviceInstance)
+                    showDeleteDialog = false
+                    onDeleted()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (throwable: Throwable) {
+                    status = context.getString(
+                        R.string.provider_error,
+                        throwable.message ?: context.getString(R.string.provider_delete_failed),
+                    )
+                    showDeleteDialog = false
+                } finally {
+                    isWorking = false
+                }
+            }
+        },
+    )
+
+    MovoConfirmDialog(
+        show = showResetDialog,
+        title = stringResource(R.string.ui_reset_built_in_configuration_35b6ec),
+        message = stringResource(R.string.provider_reset_summary, provider.name),
+        confirmText = if (isWorking) context.getString(R.string.page_resetting_616090) else context.getString(R.string.page_reset_3d8134),
+        cancelEnabled = !isWorking,
+        confirmEnabled = !isWorking,
+        onDismissRequest = { if (!isWorking) showResetDialog = false },
+        onConfirm = {
+            scope.launch {
+                isWorking = true
+                try {
+                    ProviderRepository.resetBuiltIn(provider.id)
+                    RuntimeConfigRepository.syncToRemotePreferences(EtaApp.serviceInstance)
+                    status = context.getString(R.string.page_reset_a0cc65)
+                    showResetDialog = false
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (throwable: Throwable) {
+                    status = context.getString(
+                        R.string.provider_error,
+                        throwable.message ?: context.getString(R.string.provider_reset_failed),
+                    )
+                    showResetDialog = false
+                } finally {
+                    isWorking = false
+                }
+            }
+        },
+    )
 }
 
 private suspend fun testConnection(

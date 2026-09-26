@@ -1,32 +1,29 @@
 package io.github.mangi.eta.ui.components
 
-import androidx.compose.foundation.layout.Box
+import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.DecayAnimationSpec
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import io.github.mangi.eta.ui.layout.WidePageContent
-import io.github.mangi.eta.ui.layout.horizontalCutoutPadding
-import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
-import top.yukonga.miuix.kmp.basic.Scaffold
+import io.github.mangi.eta.ui.components.movo.MovoListPage
+import io.github.mangi.eta.ui.components.movo.MovoPage
 import top.yukonga.miuix.kmp.basic.ScrollBehavior
-import top.yukonga.miuix.kmp.utils.overScrollVertical
-import top.yukonga.miuix.kmp.utils.scrollEndHaptic
+import top.yukonga.miuix.kmp.basic.TopAppBarState
 
 /**
- * Eta 二级列表页的统一骨架：手机折叠大标题、宽屏固定小标题、顶栏毛玻璃、横屏安全区、
- * 宽屏内容居中、滚动边界触感与越界回弹均由此处统一提供。
+ * 二级列表页的统一骨架，已切到设计规范 v1 的 `TopBar/Secondary`（56 高、标题居中、Q7 滚动态）与 bg/canvas 底色；
+ * 宽屏居中、横屏安全区、滚动边界触感与越界回弹沿用。尚未改版的页面内容自带左右边距，这里不再额外加边距。
  */
 @Composable
 fun MiuixScaffoldPage(
@@ -37,53 +34,22 @@ fun MiuixScaffoldPage(
     listState: LazyListState = rememberLazyListState(),
     content: LazyListScope.() -> Unit,
 ) {
-    val scrollBehavior = MiuixScrollBehavior()
-    val backdrop = rememberTopBarBackdrop()
-    val topBarColor = topBarContainerColor(backdrop)
-
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        topBar = {
-            TopBarBackdrop(backdrop) {
-                AdaptiveTopAppBar(
-                    title = title,
-                    color = topBarColor,
-                    navigationIcon = { MiuixBackButton(onClick = onBack) },
-                    actions = actions,
-                    scrollBehavior = scrollBehavior,
-                )
-            }
-        },
-    ) { innerPadding ->
-        WidePageContent { sidePadding ->
-            // 保留 MiuixTheme 注入的默认越界工厂，让短内容页也能回弹到顶栏采样区。
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .horizontalCutoutPadding()
-                    .captureForTopBar(backdrop)
-                    .scrollEndHaptic()
-                    .overScrollVertical()
-                    .nestedScroll(scrollBehavior.nestedScrollConnection),
-                contentPadding = PaddingValues(
-                    start = sidePadding,
-                    top = innerPadding.calculateTopPadding(),
-                    end = sidePadding,
-                ),
-            ) {
-                content()
-                item(key = "bottom_spacer") {
-                    MiuixPageBottomSpacer()
-                }
-            }
-        }
-    }
+    MovoListPage(
+        title = title,
+        onBack = onBack,
+        modifier = modifier,
+        actions = actions,
+        listState = listState,
+        horizontalPadding = 0.dp,
+        itemSpacing = 0.dp,
+        topGap = 0.dp,
+        content = content,
+    )
 }
 
 /**
- * 自定义内容二级页的低层骨架。调用方负责把顶部 padding、横向安全区与 nested scroll
- * 接入自己的内容；[sidePadding] 用于在宽屏限制实际内容宽度，滚动容器本身仍应保持全宽。
+ * 自定义内容二级页的低层骨架。调用方负责把顶部 padding、横向安全区接入自己的内容；
+ * [sidePadding] 用于在宽屏限制实际内容宽度。顶栏固定不折叠，[ScrollBehavior] 只为兼容旧调用保留，不消费滚动。
  */
 @Composable
 fun MiuixScaffold(
@@ -97,30 +63,19 @@ fun MiuixScaffold(
         sidePadding: Dp,
     ) -> Unit,
 ) {
-    val scrollBehavior = MiuixScrollBehavior()
-    val backdrop = rememberTopBarBackdrop()
-    val topBarColor = topBarContainerColor(backdrop)
-
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        topBar = {
-            TopBarBackdrop(backdrop) {
-                AdaptiveTopAppBar(
-                    title = title,
-                    color = topBarColor,
-                    navigationIcon = { MiuixBackButton(onClick = onBack) },
-                    actions = actions,
-                    scrollBehavior = scrollBehavior,
-                )
-            }
-        },
-    ) { paddingValues ->
-        Box(modifier = Modifier.fillMaxSize().captureForTopBar(backdrop)) {
-            WidePageContent { sidePadding ->
-                content(paddingValues, scrollBehavior, sidePadding)
-            }
-        }
+    val scrollBehavior = remember { PinnedScrollBehavior() }
+    MovoPage(title = title, onBack = onBack, modifier = modifier, actions = actions) { padding, sidePadding ->
+        content(padding, scrollBehavior, sidePadding)
     }
+}
+
+/** 固定顶栏：不折叠、不消费嵌套滚动。 */
+private class PinnedScrollBehavior : ScrollBehavior {
+    override val state: TopAppBarState = TopAppBarState(0f, 0f, 0f)
+    override val isPinned: Boolean = true
+    override val snapAnimationSpec: AnimationSpec<Float>? = null
+    override val flingAnimationSpec: DecayAnimationSpec<Float>? = null
+    override val nestedScrollConnection: NestedScrollConnection = object : NestedScrollConnection {}
 }
 
 @Composable

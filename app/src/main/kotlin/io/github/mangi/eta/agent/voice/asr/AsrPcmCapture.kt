@@ -10,11 +10,15 @@ import androidx.core.content.ContextCompat
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
-/** Captures 16 kHz mono 16-bit PCM in ~200 ms packets for Doubao ASR. */
+/**
+ * Captures 16 kHz mono 16-bit PCM in ~200 ms packets for Doubao ASR.
+ * [onLevel] receives a 0–1 microphone level for every ~50 ms read (spec 9.6), on the recording thread.
+ */
 internal class AsrPcmCapture(
     private val context: Context,
     private val onPacket: (ByteArray) -> Unit,
     private val onError: (String) -> Unit,
+    private val onLevel: (Float) -> Unit = {},
 ) {
     private val running = AtomicBoolean(false)
     private var recordThread: Thread? = null
@@ -71,16 +75,26 @@ internal class AsrPcmCapture(
         }
         recordThread = thread(name = "eta-asr-pcm", isDaemon = true) {
             val packet = ByteArray(DoubaoSaucProtocol.PACKET_BYTES)
+            // Read in ~50 ms slices so the level meter follows speech; packets sent to the server stay ~200 ms.
+            val slice = (packet.size / LEVEL_SLICES).coerceAtLeast(2) and 1.inv()
+            var filled = 0
             try {
                 while (running.get()) {
-                    val read = recorder.read(packet, 0, packet.size)
+                    val read = recorder.read(packet, filled, minOf(slice, packet.size - filled))
                     if (read > 0) {
-                        onPacket(packet.copyOf(read))
+                        onLevel(pcmLevel(packet, filled, read))
+                        filled += read
+                        if (filled >= packet.size) {
+                            onPacket(packet.copyOf(filled))
+                            filled = 0
+                        }
                     } else if (read < 0) {
                         if (running.get()) onError("麦克风读取失败 ($read)")
                         break
                     }
                 }
+                // Flush the tail so a stop never drops the last partial packet of speech.
+                if (filled > 0) onPacket(packet.copyOf(filled))
             } catch (error: RuntimeException) {
                 if (running.get()) onError("麦克风读取失败")
             } finally {
@@ -98,5 +112,26 @@ internal class AsrPcmCapture(
         if (recordThread !== Thread.currentThread()) recordThread?.join(1_000)
         recordThread = null
         audioRecord = null
+    }
+
+    internal companion object {
+        private const val LEVEL_SLICES = 4
+
+        /** RMS of 16-bit little-endian PCM mapped linearly from −50 dBFS → 0 to −10 dBFS → 1. */
+        fun pcmLevel(buffer: ByteArray, offset: Int, length: Int): Float {
+            val samples = length / 2
+            if (samples == 0) return 0f
+            var sum = 0.0
+            var i = offset
+            repeat(samples) {
+                val sample = ((buffer[i + 1].toInt() shl 8) or (buffer[i].toInt() and 0xFF)).toShort().toInt()
+                sum += sample.toDouble() * sample
+                i += 2
+            }
+            val rms = kotlin.math.sqrt(sum / samples) / Short.MAX_VALUE
+            if (rms <= 0.0) return 0f
+            val db = 20 * kotlin.math.log10(rms)
+            return ((db + 50) / 40).toFloat().coerceIn(0f, 1f)
+        }
     }
 }

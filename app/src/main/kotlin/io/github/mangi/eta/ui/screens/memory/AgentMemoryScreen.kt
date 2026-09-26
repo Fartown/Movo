@@ -1,6 +1,4 @@
 package io.github.mangi.eta.ui.screens.memory
-import io.github.mangi.eta.R
-import androidx.compose.ui.res.stringResource
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -8,6 +6,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
@@ -21,28 +21,36 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.unit.dp
-import io.github.mangi.eta.ui.components.MiuixDialogActions
-import io.github.mangi.eta.ui.components.MiuixScaffold
+import io.github.mangi.eta.R
+import io.github.mangi.eta.ui.components.movo.BlockTone
+import io.github.mangi.eta.ui.components.movo.CardFooter
+import io.github.mangi.eta.ui.components.movo.CardTitle
+import io.github.mangi.eta.ui.components.movo.MovoBlockButton
+import io.github.mangi.eta.ui.components.movo.MovoButtonRow
+import io.github.mangi.eta.ui.components.movo.MovoCard
+import io.github.mangi.eta.ui.components.movo.MovoConfirmDialog
+import io.github.mangi.eta.ui.components.movo.MovoDialogHost
+import io.github.mangi.eta.ui.components.movo.MovoPage
+import io.github.mangi.eta.ui.components.movo.RowTrailing
+import io.github.mangi.eta.ui.components.movo.SettingsRow
 import io.github.mangi.eta.ui.layout.horizontalCutoutPadding
 import io.github.mangi.eta.ui.model.AgentMemoryAction
 import io.github.mangi.eta.ui.model.AgentMemoryUiState
-import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.SmallTitle
+import io.github.mangi.eta.ui.theme.MovoColors
+import io.github.mangi.eta.ui.theme.MovoSpacing
+import io.github.mangi.eta.ui.theme.MovoTypography
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.preference.SwitchPreference
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.utils.scrollEndHaptic
-import top.yukonga.miuix.kmp.window.WindowDialog
 import java.text.NumberFormat
 
+/**
+ * 设置 · 记忆（规范 8.7 二级页）：上方状态卡（记忆开关、注入预算，页脚写关闭后的后果）可滚动，
+ * 下方 MEMORY.md 编辑卡固定在底部并随键盘上移，保证编辑器完整可见。
+ */
 @Composable
 internal fun AgentMemoryScreen(
     state: AgentMemoryUiState,
@@ -50,47 +58,43 @@ internal fun AgentMemoryScreen(
 ) {
     var showClearDialog by remember { mutableStateOf(false) }
 
-    MiuixScaffold(
+    MovoPage(
         title = stringResource(R.string.ui_memory_b55ff5),
         onBack = { onAction(AgentMemoryAction.NavigateBack) },
-    ) { paddingValues, scrollBehavior, sidePadding ->
+    ) { contentPadding, sidePadding ->
+        val edge = sidePadding + MovoSpacing.pageEdge
+        // 整页一起滚动（真机验收：窄屏 / 大字号时，上半部分单独滚动的状态卡被编辑器压成半张，像被盖住）。
+        // 键盘弹出时编辑器随页面滚到可见位置。
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .horizontalCutoutPadding()
-                .padding(top = paddingValues.calculateTopPadding()),
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .scrollEndHaptic()
+                .padding(top = contentPadding.calculateTopPadding()),
         ) {
-            // 状态区与编辑器滚动分离。weight fill=false：内容少时只占自身高度，避免中部空档；
-            // 空间不足（键盘弹出、横屏）时压缩为可滚动区域，编辑器保持完整可见
-            LazyColumn(
-                modifier = Modifier
-                    .weight(1f, fill = false)
-                    .scrollEndHaptic()
-                    .overScrollVertical()
-                    .nestedScroll(scrollBehavior.nestedScrollConnection),
-                contentPadding = PaddingValues(
-                    start = sidePadding,
-                    end = sidePadding,
-                ),
-                overscrollEffect = null,
-            ) {
-                item(key = "status-title") { SmallTitle(stringResource(R.string.ui_memory_b55ff5)) }
-                item(key = "status-card") {
-                    Card(
-                        modifier = Modifier
-                            .padding(horizontal = 12.dp)
-                            .padding(bottom = 12.dp),
-                    ) {
-                        SwitchPreference(
-                            title = stringResource(R.string.ui_enable_memory_4b69b7),
-                            summary = stringResource(R.string.ui_after_closing_no_memory_will_be_injected_and_the_mod_db3d23),
-                            checked = state.enabled,
+            Column(modifier = Modifier.padding(start = edge, end = edge, top = MovoSpacing.md, bottom = MovoSpacing.lg)) {
+                run {
+                    MovoCard {
+                        CardTitle(stringResource(R.string.ui_memory_b55ff5))
+                        SettingsRow(
+                            title = stringResource(R.string.movo_memory_switch),
+                            subtitle = stringResource(R.string.movo_memory_switch_desc),
                             enabled = !state.isLoading,
-                            onCheckedChange = { onAction(AgentMemoryAction.ToggleEnabled(it)) },
+                            trailing = RowTrailing.Switch(state.enabled) { onAction(AgentMemoryAction.ToggleEnabled(it)) },
                         )
-                        BasicComponent(
+                        SettingsRow(
                             title = stringResource(R.string.ui_core_memory_injection_budget_48b5d5),
-                            summary = stringResource(R.string.memory_budget_summary, formatNumber(state.coreBudgetChars)),
+                            subtitle = stringResource(R.string.memory_budget_summary, formatNumber(state.coreBudgetChars)),
+                            trailing = RowTrailing.None,
+                            showDivider = false,
+                        )
+                        CardFooter(
+                            listOf(
+                                stringResource(R.string.movo_memory_footer_1),
+                                stringResource(R.string.movo_memory_footer_2),
+                            ),
                         )
                     }
                 }
@@ -98,17 +102,20 @@ internal fun AgentMemoryScreen(
 
             Column(
                 modifier = Modifier
-                    .padding(horizontal = sidePadding)
-                    .imePadding()
-                    .navigationBarsPadding(),
+                    .padding(horizontal = edge)
+                    .navigationBarsPadding()
+                    .padding(bottom = MovoSpacing.md),
             ) {
-                SmallTitle("MEMORY.md")
-                Card(
-                    modifier = Modifier
-                        .padding(horizontal = 12.dp)
-                        .padding(bottom = 12.dp),
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                MovoCard {
+                    CardTitle("MEMORY.md")
+                    Column(
+                        modifier = Modifier.padding(
+                            start = MovoSpacing.lg,
+                            end = MovoSpacing.lg,
+                            top = MovoSpacing.sm,
+                            bottom = MovoSpacing.md,
+                        ),
+                    ) {
                         TextField(
                             value = state.draft,
                             onValueChange = { onAction(AgentMemoryAction.DraftChanged(it)) },
@@ -117,56 +124,50 @@ internal fun AgentMemoryScreen(
                             enabled = !state.isLoading && !state.isSaving,
                             minLines = 6,
                             maxLines = 12,
-                            textStyle = MiuixTheme.textStyles.body2.copy(fontFamily = FontFamily.Monospace),
+                            textStyle = MovoTypography.labelRegular.copy(
+                                fontFamily = FontFamily.Monospace,
+                                color = MovoColors.textPrimary,
+                            ),
                             modifier = Modifier.fillMaxWidth(),
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(MovoSpacing.sm))
+                        val overLimit = state.draftBytes > state.maxBytes
+                        val statusColor = if (overLimit) MovoColors.roseFg else MovoColors.textSecondary
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            val overLimit = state.draftBytes > state.maxBytes
                             Text(
                                 text = when {
                                     overLimit -> stringResource(R.string.memory_over_limit)
                                     state.hasUnsavedChanges -> stringResource(R.string.memory_unsaved_changes)
                                     else -> ""
                                 },
-                                color = if (overLimit) {
-                                    MiuixTheme.colorScheme.error
-                                } else {
-                                    MiuixTheme.colorScheme.onSurfaceVariantSummary
-                                },
-                                style = MiuixTheme.textStyles.footnote1,
+                                color = statusColor,
+                                style = MovoTypography.labelRegular,
                             )
                             Text(
                                 text = "${formatBytes(state.draftBytes)} / 1 MiB",
-                                color = if (overLimit) {
-                                    MiuixTheme.colorScheme.error
-                                } else {
-                                    MiuixTheme.colorScheme.onSurfaceVariantSummary
-                                },
-                                style = MiuixTheme.textStyles.footnote1,
+                                color = statusColor,
+                                style = MovoTypography.numericLabel,
                             )
                         }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            TextButton(
-                                text = stringResource(R.string.ui_clear_84fcd7),
+                        Spacer(modifier = Modifier.height(MovoSpacing.md))
+                        MovoButtonRow {
+                            MovoBlockButton(
+                                label = stringResource(R.string.ui_clear_84fcd7),
                                 enabled = !state.isLoading && !state.isSaving && state.draft.isNotEmpty(),
                                 onClick = { showClearDialog = true },
+                                tone = BlockTone.Secondary,
                                 modifier = Modifier.weight(1f),
                             )
-                            TextButton(
-                                text = if (state.isSaving) stringResource(R.string.memory_saving) else stringResource(R.string.memory_save),
+                            MovoBlockButton(
+                                label = if (state.isSaving) stringResource(R.string.memory_saving) else stringResource(R.string.memory_save),
                                 enabled = state.canSave,
                                 onClick = { onAction(AgentMemoryAction.Save) },
+                                tone = BlockTone.Primary,
                                 modifier = Modifier.weight(1f),
-                                colors = ButtonDefaults.textButtonColorsPrimary(),
                             )
                         }
                     }
@@ -175,37 +176,47 @@ internal fun AgentMemoryScreen(
         }
     }
 
-    if (showClearDialog) {
-        WindowDialog(
-            show = true,
-            title = stringResource(R.string.ui_clear_all_memory_a43bd3),
-            summary = stringResource(R.string.ui_the_entire_contents_of_memory_md_will_be_deleted_and_83a8ac),
-            onDismissRequest = { showClearDialog = false },
-        ) {
-            MiuixDialogActions(
-                confirmText = stringResource(R.string.memory_clear),
-                destructive = true,
-                confirmEnabled = !state.isSaving,
-                onCancel = { showClearDialog = false },
-                onConfirm = {
-                    showClearDialog = false
-                    onAction(AgentMemoryAction.Clear)
-                },
-            )
-        }
-    }
+    MovoConfirmDialog(
+        show = showClearDialog,
+        title = stringResource(R.string.ui_clear_all_memory_a43bd3),
+        message = stringResource(R.string.ui_the_entire_contents_of_memory_md_will_be_deleted_and_83a8ac),
+        confirmText = stringResource(R.string.memory_clear),
+        destructive = true,
+        confirmEnabled = !state.isSaving,
+        onDismissRequest = { showClearDialog = false },
+        onConfirm = {
+            showClearDialog = false
+            onAction(AgentMemoryAction.Clear)
+        },
+    )
 
-    state.notice?.let { notice ->
-        WindowDialog(
-            show = true,
-            title = stringResource(R.string.ui_memory_b55ff5),
-            summary = notice,
-            onDismissRequest = { onAction(AgentMemoryAction.DismissNotice) },
-        ) {
-            TextButton(
-                text = stringResource(R.string.ui_knew_cb63c6),
-                onClick = { onAction(AgentMemoryAction.DismissNotice) },
-                modifier = Modifier.fillMaxWidth(),
+    MemoryNoticeDialog(
+        notice = state.notice,
+        onDismiss = { onAction(AgentMemoryAction.DismissNotice) },
+    )
+}
+
+/** 结果通知：单按钮「知道了」。退场动画期间保留上一条内容。 */
+@Composable
+private fun MemoryNoticeDialog(notice: String?, onDismiss: () -> Unit) {
+    var lastNotice by remember { mutableStateOf(notice.orEmpty()) }
+    if (notice != null) lastNotice = notice
+    MovoDialogHost(show = notice != null, onDismissRequest = onDismiss) {
+        Column(modifier = Modifier.padding(MovoSpacing.xxl)) {
+            Text(
+                stringResource(R.string.ui_memory_b55ff5),
+                style = MovoTypography.titleSection,
+                color = MovoColors.textPrimary,
+            )
+            Spacer(Modifier.height(MovoSpacing.sm))
+            Text(lastNotice, style = MovoTypography.bodyRegular, color = MovoColors.textSecondary)
+        }
+        MovoButtonRow(modifier = Modifier.padding(MovoSpacing.xs)) {
+            MovoBlockButton(
+                label = stringResource(R.string.ui_knew_cb63c6),
+                onClick = onDismiss,
+                tone = BlockTone.Secondary,
+                modifier = Modifier.weight(1f),
             )
         }
     }

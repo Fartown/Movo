@@ -5,29 +5,33 @@ import android.net.Uri
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Description
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import io.github.mangi.eta.diagnostics.DiagnosticStore
 import io.github.mangi.eta.diagnostics.RunTrace
 import io.github.mangi.eta.diagnostics.SystemEvent
 import io.github.mangi.eta.diagnostics.TimelineItem
 import io.github.mangi.eta.diagnostics.TraceStatus
+import io.github.mangi.eta.ui.components.movo.CardFooter
+import io.github.mangi.eta.ui.components.movo.CardTitle
+import io.github.mangi.eta.ui.components.movo.MovoCard
+import io.github.mangi.eta.ui.components.movo.MovoListPage
+import io.github.mangi.eta.ui.components.movo.RowLeading
+import io.github.mangi.eta.ui.components.movo.RowTrailing
+import io.github.mangi.eta.ui.components.movo.SettingsRow
 import io.github.mangi.eta.ui.theme.MovoColors
+import io.github.mangi.eta.ui.theme.MovoIcons
 import io.github.mangi.eta.ui.theme.MovoSize
 import io.github.mangi.eta.ui.theme.MovoSpacing
 
 /*
- * 运行日志：先定义功能再做界面，见 docs/research/log-page/运行日志功能定义.md，
- * 界面对应 Figma「Movo 首页」22–27。
+ * 运行日志：先定义功能再做界面，见 docs/research/log-page/运行日志功能定义.md；
+ * 界面按规范 8.10 与 Figma「定稿 · 设计稿」22–27：列表页骨架 MovoListPage，分组标题在卡内，说明写在卡片页脚。
  */
 
 private enum class LogFilter { ALL, FAILED, RUNNING }
@@ -63,10 +67,10 @@ internal fun DiagnosticsScreen(
         }
     }
 
-    LogPage(
+    MovoListPage(
         title = "运行日志",
         onBack = onBack,
-        action = {
+        actions = {
             ExportAction(fileName = "movo-log-${System.currentTimeMillis() / 1000}.md") {
                 val current = live ?: return@ExportAction ""
                 format.exportMarkdown(
@@ -80,16 +84,11 @@ internal fun DiagnosticsScreen(
             }
         },
     ) {
-        item(key = "description") {
-            PageDescription("每次任务的模型请求、工具调用和当时的设备状态。保存最近 20 个任务，不含对话内容。")
-        }
-        if (live == null) return@LogPage
+        if (live == null) return@MovoListPage
+        // 顶栏下 12 为筛选芯片（单选）；计数为 0 的芯片不显示，只剩「全部」时整行不显示。
         if (failedCount > 0 || runningCount > 0) {
             item(key = "filters") {
-                Row(
-                    modifier = Modifier.padding(top = MovoSpacing.xxl),
-                    horizontalArrangement = Arrangement.spacedBy(MovoSpacing.sm),
-                ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(MovoSpacing.sm)) {
                     LogFilterChip("全部", effective == LogFilter.ALL) { filter = LogFilter.ALL }
                     if (failedCount > 0) LogFilterChip("失败 $failedCount", effective == LogFilter.FAILED) { filter = LogFilter.FAILED }
                     if (runningCount > 0) LogFilterChip("进行中 $runningCount", effective == LogFilter.RUNNING) { filter = LogFilter.RUNNING }
@@ -97,34 +96,41 @@ internal fun DiagnosticsScreen(
             }
         }
         if (visible.isEmpty()) {
-            item(key = "empty") { EmptyHint("还没有任务记录。发送一条消息后，这里会记下它的请求和耗时。") }
+            item(key = "empty") {
+                MovoCard { EmptyHint("还没有任务记录。", "发送一条消息后，这里会记下它的请求和耗时。") }
+            }
         }
+        // 按天一张卡片，卡内标题「今天」「昨天」或日期。
         visible.groupBy { format.day(it.startedAt) }.forEach { (day, dayRuns) ->
-            item(key = "day-$day") { SectionLabel(format.dayTitle(day)) }
             item(key = "card-$day") {
-                LogCard {
+                MovoCard {
+                    CardTitle(format.dayTitle(day))
                     dayRuns.forEachIndexed { index, run ->
-                        LogRow(
+                        SettingsRow(
                             title = format.runTitle(run, titles.of(run)),
                             subtitle = format.listSubtitle(run, live.nowElapsed),
-                            value = format.listValue(run, live.nowElapsed),
+                            leading = RowLeading.Custom { StatusIcon(run.status) },
+                            trailing = RowTrailing.Arrow(format.listValue(run, live.nowElapsed)),
                             showDivider = index < dayRuns.lastIndex,
                             onClick = { onOpenRun(run.id) },
-                        ) { StatusIcon(run.status) }
+                        )
                     }
                 }
             }
         }
-        item(key = "system-label") { SectionLabel("任务之外") }
+        // 最后一张「任务之外」：系统事件入口 + 保存策略页脚。
         item(key = "system") {
-            LogCard {
-                LogRow(
+            MovoCard {
+                CardTitle("任务之外")
+                SettingsRow(
                     title = "系统事件",
                     subtitle = "进程启动、网络变化、后台服务",
-                    value = "${live.trace.system.size} 条",
+                    leading = RowLeading.Icon(MovoIcons.FileText),
+                    trailing = RowTrailing.Arrow("${live.trace.system.size} 条"),
                     showDivider = false,
                     onClick = onOpenSystem,
-                ) { StepIcon(Icons.Rounded.Description, MovoColors.textSecondary) }
+                )
+                CardFooter(listOf("保存最近 20 个任务，不含对话内容。"))
             }
         }
     }
@@ -156,43 +162,47 @@ internal fun DiagnosticsRunScreen(
         }
     }
 
-    LogPage(
+    MovoListPage(
         title = run?.let { format.runTitle(it, titles.of(it)) } ?: "任务详情",
         onBack = onBack,
-        action = run?.let { current ->
-            {
-                ExportAction(fileName = "movo-log-${current.id}.md") {
+        actions = {
+            if (run != null) {
+                ExportAction(fileName = "movo-log-${run.id}.md") {
                     format.exportMarkdown(
                         header = exportHeader(),
-                        runs = listOf(current),
+                        runs = listOf(run),
                         system = emptyList(),
-                        raw = current.entries,
+                        raw = run.entries,
                         generatedAt = System.currentTimeMillis(),
-                        scope = "单个任务 ${current.id}",
+                        scope = "单个任务 ${run.id}",
                     )
                 }
             }
         },
     ) {
-        if (live == null) return@LogPage
+        if (live == null) return@MovoListPage
         if (run == null) {
-            item(key = "missing") { EmptyHint("这个任务的记录已经不在了。运行日志只保存最近 20 个任务。") }
-            return@LogPage
+            item(key = "missing") {
+                MovoCard { EmptyHint("这个任务的记录已经不在了。", "运行日志只保存最近 20 个任务。") }
+            }
+            return@MovoListPage
         }
         val now = live.nowElapsed
+        val running = run.status == TraceStatus.RUNNING
+        val silence = live.silenceByRun[run.id]
+        // 结论卡：进行中只有 30 秒没收到数据时才出底部栏（提示 +「回到对话」），规范 8.10。
         item(key = "summary") {
-            val running = run.status == TraceStatus.RUNNING
+            val stall = if (running) format.stallHint(silence) else null
             SummaryCard(
                 status = run.status,
                 statusText = format.statusLine(run),
                 timer = format.summaryTimer(run, now),
                 meta = format.summaryMeta(run),
-                footer = if (running) format.runningHint(run, now, live.silenceByRun[run.id]) else null,
-                footerAction = run.conversationId?.takeIf { running }?.let { id -> "回到对话" to { onOpenConversation(id) } },
+                footer = stall,
+                footerAction = run.conversationId?.takeIf { stall != null }?.let { id -> "回到对话" to { onOpenConversation(id) } },
             )
         }
         format.explain(run)?.let { explanation ->
-            item(key = "reason-label") { SectionLabel("原因") }
             item(key = "reason") {
                 ReasonCard(explanation) { action ->
                     when (action) {
@@ -208,12 +218,12 @@ internal fun DiagnosticsRunScreen(
             }
         }
         run.breakdown()?.let(format::breakdownParts)?.takeIf { it.isNotEmpty() }?.let { parts ->
-            item(key = "breakdown-label") { SectionLabel("耗时") }
             item(key = "breakdown") { BreakdownCard(parts, format) }
         }
-        item(key = "timeline-label") { SectionLabel("时间线") }
         item(key = "timeline") {
-            LogCard {
+            MovoCard {
+                // 进行中且没卡住时，标题右侧写实时状态（多久前收到数据 / 正在执行的步骤与已等时长）。
+                CardTitle("时间线", trailing = if (running) format.liveNote(run, now, silence) else null)
                 if (run.timeline.isEmpty()) EmptyHint("还没有记录到请求")
                 run.timeline.forEachIndexed { index, item ->
                     TimelineRow(
@@ -227,13 +237,14 @@ internal fun DiagnosticsRunScreen(
                         format = format,
                     )
                 }
+                CardFooter(
+                    if (running) {
+                        listOf("进行中的任务每秒刷新。", "结束后这里会写明结果和耗时构成。")
+                    } else {
+                        listOf("只记录请求阶段、工具名和设备状态。", "不含对话内容、工具结果和 API Key。")
+                    },
+                )
             }
-        }
-        item(key = "note") {
-            CardNote(
-                if (run.status == TraceStatus.RUNNING) "进行中的任务每秒刷新；结束后这里会写明结果和耗时构成。"
-                else "日志只记录请求阶段、工具名和设备状态，不含对话内容、工具结果和 API Key。",
-            )
         }
     }
 }
@@ -285,7 +296,7 @@ private fun TimelineRow(
             first = first,
             last = last,
             muted = true,
-        ) { StepIcon(CompactionIcon, MovoColors.textTertiary) }
+        ) { StepIcon(CompactionIcon, MovoColors.textSecondary) }
         is TimelineItem.System -> StepRow(
             title = item.event.title,
             subtitle = format.systemSubtitle(item.event, item.offsetMs),
@@ -297,22 +308,28 @@ private fun TimelineRow(
     }
 }
 
-/** 25 · 系统事件：任务之外的设备事件，最新在前，按天分组。 */
+/** 25 · 系统事件：任务之外的设备事件，最新在前，按天一张卡片；说明写在最后一张卡片的页脚。 */
 @Composable
 internal fun DiagnosticsSystemScreen(onBack: () -> Unit) {
     val live = rememberDiagnosticsLive()
     val format = rememberDiagnosticsFormat()
-    LogPage(title = "系统事件", onBack = onBack) {
-        item(key = "description") {
-            PageDescription("设备和 App 状态的变化。任务进行中发生的，也会记在那个任务的时间线里。")
-        }
-        if (live == null) return@LogPage
+    val footer = listOf("任务中发生的事件，也记在该任务的时间线里。", "系统事件保留最近 7 天。")
+    MovoListPage(title = "系统事件", onBack = onBack) {
+        if (live == null) return@MovoListPage
         val events: List<SystemEvent> = live.trace.system
-        if (events.isEmpty()) item(key = "empty") { EmptyHint("还没有系统事件") }
-        events.groupBy { format.day(it.timeMillis) }.forEach { (day, dayEvents) ->
-            item(key = "day-$day") { SectionLabel(format.dayTitle(day)) }
+        if (events.isEmpty()) {
+            item(key = "empty") {
+                MovoCard {
+                    EmptyHint("还没有系统事件")
+                    CardFooter(footer)
+                }
+            }
+        }
+        val days = events.groupBy { format.day(it.timeMillis) }.toList()
+        days.forEachIndexed { dayIndex, (day, dayEvents) ->
             item(key = "card-$day") {
-                LogCard {
+                MovoCard {
+                    CardTitle(format.dayTitle(day))
                     dayEvents.forEach { event ->
                         StepRow(
                             title = event.title,
@@ -322,9 +339,9 @@ internal fun DiagnosticsSystemScreen(onBack: () -> Unit) {
                             last = true,
                         ) { StepIcon(event.icon(), event.tone.color()) }
                     }
+                    if (dayIndex == days.lastIndex) CardFooter(footer)
                 }
             }
         }
-        item(key = "note") { CardNote("系统事件保留最近 7 天。") }
     }
 }

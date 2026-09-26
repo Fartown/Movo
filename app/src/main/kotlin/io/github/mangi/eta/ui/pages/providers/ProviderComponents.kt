@@ -3,17 +3,20 @@ package io.github.mangi.eta.ui.pages.providers
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Dns
-import androidx.compose.material.icons.rounded.Language
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -22,31 +25,36 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.data.model.CustomProviderSetting
 import io.github.mangi.eta.data.model.ProviderSetting
-import io.github.mangi.eta.ui.components.PreferenceIcon
+import io.github.mangi.eta.ui.components.movo.CardTitle
+import io.github.mangi.eta.ui.components.movo.MovoCard
 import io.github.mangi.eta.ui.components.providerBrandLogoRes as sharedProviderBrandLogoRes
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.SmallTitle
+import io.github.mangi.eta.ui.theme.MovoColors
+import io.github.mangi.eta.ui.theme.MovoIcon
+import io.github.mangi.eta.ui.theme.MovoIcons
+import io.github.mangi.eta.ui.theme.MovoRadius
+import io.github.mangi.eta.ui.theme.MovoSize
+import io.github.mangi.eta.ui.theme.MovoSpacing
+import io.github.mangi.eta.ui.theme.MovoTypography
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 
-/** 分组标题 + 卡片的标准组合，Provider 相关页面统一使用。 */
+/**
+ * Provider 相关页面的分组卡片（规范 8.7）：一组 = 一张 [MovoCard]，分组标题在卡内（`Card/Title`），卡片外不放文字。
+ */
 @Composable
 internal fun ProviderSection(
     title: String?,
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Column(modifier = modifier) {
+    MovoCard(modifier = modifier) {
         if (title != null) {
-            SmallTitle(title)
+            CardTitle(title)
         }
-        Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
-            content()
-        }
+        content()
     }
 }
 
-/** 厂商品牌原色图标；资源已经包含适合圆形裁剪的背景与安全区。 */
+/** 厂商品牌原色图标：20、圆形裁切 + 0.5 描边（规范 6「品牌 Logo」、8.7「模型行」）。 */
 @Composable
 internal fun ProviderBrandIcon(
     sourceType: String,
@@ -66,9 +74,9 @@ private fun ProviderBrandImage(
         contentDescription = null,
         contentScale = ContentScale.Fit,
         modifier = modifier
-            .padding(end = 6.dp)
-            .size(24.dp)
-            .clip(CircleShape),
+            .size(MovoSize.iconMedium)
+            .clip(CircleShape)
+            .border(MovoSize.hairline, MovoColors.borderHairline, CircleShape),
     )
 }
 
@@ -80,7 +88,7 @@ internal fun providerBrandLogoRes(provider: ProviderSetting): Int? =
 internal fun providerBrandLogoRes(sourceType: String): Int? =
     sharedProviderBrandLogoRes(sourceType)
 
-/** 已知厂商使用品牌图标，未知来源继续按协议类型使用通用图标。 */
+/** 已知厂商使用品牌图标，未知来源继续按协议类型使用通用线条图标。 */
 @Composable
 internal fun ProviderIcon(
     provider: ProviderSetting,
@@ -91,22 +99,18 @@ internal fun ProviderIcon(
         ProviderBrandImage(logo = logo, modifier = modifier)
         return
     }
-
-    when (provider) {
-        is CustomProviderSetting -> PreferenceIcon(
-            icon = Icons.Rounded.Dns,
-            modifier = modifier,
-        )
-        else -> PreferenceIcon(
-            icon = Icons.Rounded.Language,
-            modifier = modifier,
-        )
-    }
+    MovoIcon(
+        icon = if (provider is CustomProviderSetting) MovoIcons.Database else MovoIcons.Globe,
+        contentDescription = null,
+        size = MovoSize.iconMedium,
+        tint = MovoColors.textPrimary,
+        modifier = modifier,
+    )
 }
 
 internal enum class TagChipTone { Normal, Emphasized }
 
-/** 小胶囊标签，用于能力标签与状态标记。 */
+/** 小标签（圆角 8，Micro 12 Medium）：普通为浅底次要色，强调（「当前」）为 Indigo 浅底 + Indigo 文字。 */
 @Composable
 internal fun TagChip(
     text: String,
@@ -116,20 +120,49 @@ internal fun TagChip(
     val foreground: Color
     when (tone) {
         TagChipTone.Normal -> {
-            background = MiuixTheme.colorScheme.secondaryContainer
-            foreground = MiuixTheme.colorScheme.onSecondaryContainer
+            background = MovoColors.bgSurfaceMuted
+            foreground = MovoColors.textSecondary
         }
         TagChipTone.Emphasized -> {
-            background = MiuixTheme.colorScheme.primaryContainer
-            foreground = MiuixTheme.colorScheme.onPrimaryContainer
+            background = MovoColors.indigoBg
+            foreground = MovoColors.indigoFg
         }
     }
     Text(
         text = text,
-        style = MiuixTheme.textStyles.footnote2,
+        style = MovoTypography.microMedium,
         color = foreground,
+        maxLines = 1,
         modifier = Modifier
-            .background(background, RoundedCornerShape(6.dp))
-            .padding(horizontal = 6.dp, vertical = 2.dp),
+            .background(background, RoundedCornerShape(MovoRadius.xs))
+            .padding(horizontal = MovoSpacing.sm, vertical = MovoSpacing.xxs),
     )
+}
+
+/**
+ * 就地结果（规范 8.11「轻提示」「失败」）：失败 = Rose 警示图标 + 主色文字；成功 = Green ✓ + 次要色文字。
+ * 颜色不是唯一信号，图标同时区分。
+ */
+@Composable
+internal fun ProviderStatusLine(
+    message: String,
+    isError: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Row(modifier = modifier.fillMaxWidth()) {
+        Box(modifier = Modifier.height(18.dp), contentAlignment = Alignment.Center) {
+            MovoIcon(
+                icon = if (isError) MovoIcons.CircleAlert else MovoIcons.CircleCheck,
+                contentDescription = null,
+                size = MovoSize.iconLabel,
+                tint = if (isError) MovoColors.roseFg else MovoColors.greenFg,
+            )
+        }
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = message,
+            style = MovoTypography.labelRegular,
+            color = if (isError) MovoColors.textPrimary else MovoColors.textSecondary,
+        )
+    }
 }

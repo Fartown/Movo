@@ -90,7 +90,9 @@ import io.github.mangi.eta.ui.model.ToolGroupUi
 import io.github.mangi.eta.ui.model.ToolItemUi
 import io.github.mangi.eta.ui.model.UserMessageUi
 import io.github.mangi.eta.ui.model.canDeleteUserSkill
+import io.github.mangi.eta.ui.model.contentMatchSnippet
 import io.github.mangi.eta.ui.model.contentMatches
+import io.github.mangi.eta.ui.model.matchExcerpt
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.UUID
@@ -112,13 +114,25 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
+/** 把一句补充交给正在执行的 run，结果在主线程回调（规范 8.4）。测试可注入。 */
+internal fun interface RuntimeSteerer {
+    fun steer(runId: String, text: String, onResult: (accepted: Boolean) -> Unit)
+}
+
 internal class AgentAppState(
     context: Context,
     private val scope: CoroutineScope,
     skillZipImportGateway: SkillZipImportGateway? = null,
     private val voiceSession: VoiceSessionOwner = VoiceSessionManager,
+    runtimeSteerer: RuntimeSteerer? = null,
 ) : VoiceConversationHost {
     private val appContext = context.applicationContext
+    private val runtimeSteerer = runtimeSteerer ?: RuntimeSteerer { runId, text, onResult ->
+        scope.launch(Dispatchers.IO) {
+            val accepted = AgentRuntimeClient(appContext, AndroidAgentLogger).steerRun(runId, text)
+            withContext(Dispatchers.Main) { onResult(accepted) }
+        }
+    }
     private val skillZipImportGateway = skillZipImportGateway ?: CoreSkillZipImportGateway(appContext)
     private val runConversationIds = mutableMapOf<String, String>()
     private val runMessageProjector = AgentRunMessageProjector()
@@ -1064,6 +1078,51 @@ internal class AgentAppState(
         )
     }
 
+    override fun steerVoiceTurn(conversationId: String, text: String, onResult: (accepted: Boolean) -> Unit) {
+        val runId = currentRunId?.takeIf { runId ->
+            runConversationIds[runId] == conversationId && conversationsById[conversationId]?.isStreaming == true
+        }
+        if (runId == null || text.isBlank()) {
+            onResult(false)
+            return
+        }
+        runtimeSteerer.steer(runId, text.trim(), onResult)
+    }
+
+    /**
+     * 把输入框里的文字作为补充交给正在执行的 [runId]；接收后运行时会发回 `UserSupplementReceived`，
+     * 由事件投影插入「你的补充」。未被接收（本轮正在收尾或服务不可用）时退回排队，文字不会丢。
+     */
+    private fun steerCurrentRun(runId: String, prompt: String, submittedText: String?) {
+        val conversationId = selectedConversationId ?: return
+        val remainder = AgentConversationDraftStore.shared.consume(conversationId, submittedText ?: homeState.input)
+        updateConversation(conversationId, homeState.copy(input = remainder))
+        runtimeSteerer.steer(runId, prompt) { accepted ->
+            if (accepted) return@steer
+            run {
+                val state = conversationsById[conversationId] ?: return@run
+                if (queuedTextSubmission == null && voiceRuntimeBusy) {
+                    queuedTextSubmission = QueuedTextSubmission(conversationId, prompt, emptyList(), emptyList())
+                    persistConversations()
+                } else {
+                    // 这一轮已经结束，或已有一条排队：放回输入框（与撤回排队同一写法），文字不丢。
+                    val draft = AgentConversationDraftStore.shared.get(conversationId, state.input)
+                    draft.edit { replace(0, 0, prompt + if (length > 0) "\n" else "") }
+                    updateConversation(conversationId, state.copy(input = draft.text.toString()))
+                    if (voiceRuntimeBusy) {
+                        Toast.makeText(appContext, "已有一条待发送消息，请先编辑或撤回；新内容保留在输入框", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+    }
+
+    /** 继续在悬浮球里暂停的这一轮（App 内主按钮 ▶）。 */
+    fun resumeCurrentRun() {
+        val runId = currentRunId ?: return
+        scope.launch(Dispatchers.IO) { AgentRuntimeClient(appContext, AndroidAgentLogger).resumeRun(runId) }
+    }
+
     fun sendCurrentMessage(submittedText: String? = null) {
         if (homeState.isCompacting || modelPickerState.isChanging) return
         val prompt = (submittedText ?: homeState.input).trim()
@@ -1098,6 +1157,20 @@ internal class AgentAppState(
                 appContext.getString(R.string.state_ui_file_path_reference_requires_opening_the_termina_deca4c),
                 Toast.LENGTH_SHORT,
             ).show()
+            return
+        }
+        // 规范 8.4：执行中再发的话不排队、不开新任务，作为补充交给当前任务（下一步生效）。
+        // 只适用于当前会话自己的这一轮、纯文字、不在编辑；带附件或补充未被接收时按原来的排队处理。
+        val steerRunId = currentRunId?.takeIf { runId ->
+            homeState.isStreaming &&
+                runConversationIds[runId] == selectedConversationId &&
+                pendingImages.isEmpty() &&
+                pendingFileReferences.isEmpty() &&
+                homeState.messageEdit == null &&
+                prompt.isNotBlank()
+        }
+        if (steerRunId != null) {
+            steerCurrentRun(steerRunId, prompt, submittedText)
             return
         }
         if (voiceRuntimeBusy) {
@@ -2261,6 +2334,15 @@ internal class AgentAppState(
                 insertSupplementMessage(runId, event.index, event.text, persist = persistSupplement)
             }
 
+            AgentEvent.RunPaused, AgentEvent.RunResumed -> {
+                val paused = event == AgentEvent.RunPaused
+                conversationIdForRun(runId)?.let { id ->
+                    conversationsById[id]?.let { state ->
+                        if (state.isPaused != paused) updateConversation(id, state.copy(isPaused = paused))
+                    }
+                }
+            }
+
             is AgentEvent.ToolStarted -> {
                 updateRunTrace(runId) { messages ->
                     val finalizedThinking =
@@ -2630,7 +2712,7 @@ internal class AgentAppState(
     private fun setConversationStreaming(runId: String, isStreaming: Boolean) {
         val conversationId = conversationIdForRun(runId) ?: return
         val state = conversationsById[conversationId] ?: return
-        updateConversation(conversationId, state.copy(isStreaming = isStreaming, isCompacting = state.isCompacting && isStreaming))
+        updateConversation(conversationId, state.copy(isStreaming = isStreaming, isCompacting = state.isCompacting && isStreaming, isPaused = state.isPaused && isStreaming))
     }
 
     private fun conversationIdForRun(runId: String): String? = runConversationIds[runId]
@@ -2698,10 +2780,16 @@ internal class AgentAppState(
                 summaries
             } else {
                 contentMatchCache.keys.retainAll(conversationsById.keys)
-                summaries.filter { summary ->
-                    summary.title.contains(query, ignoreCase = true) ||
-                        summary.preview.contains(query, ignoreCase = true) ||
-                        conversationContentMatches(summary.id, query)
+                summaries.mapNotNull { summary ->
+                    val titleHit = summary.title.contains(query, ignoreCase = true)
+                    val previewHit = summary.preview.contains(query, ignoreCase = true)
+                    val content = conversationContentMatch(summary.id, query)
+                    if (!titleHit && !previewHit && !content.matches) return@mapNotNull null
+                    // 命中片段：优先内容里的命中处，其次预览（规范 8.6「搜索」）。
+                    summary.copy(
+                        matchSnippet = content.snippet
+                            ?: if (previewHit) matchExcerpt(summary.preview, query) else summary.preview,
+                    )
                 }
             },
         )
@@ -2710,15 +2798,16 @@ internal class AgentAppState(
     // 内容匹配按（查询词, 会话状态引用）缓存：刷新摘要时未变化的会话不重复全文扫描。
     private val contentMatchCache = mutableMapOf<String, ContentMatchCacheEntry>()
 
-    private fun conversationContentMatches(conversationId: String, query: String): Boolean {
-        val state = conversationsById[conversationId] ?: return false
+    private fun conversationContentMatch(conversationId: String, query: String): ContentMatchCacheEntry {
+        val state = conversationsById[conversationId]
+            ?: return ContentMatchCacheEntry(query, null, matches = false, snippet = null)
         val cached = contentMatchCache[conversationId]
         if (cached != null && cached.query == query && cached.state === state) {
-            return cached.matches
+            return cached
         }
         val matches = state.contentMatches(query) { code -> noticeText(code) }
-        contentMatchCache[conversationId] = ContentMatchCacheEntry(query, state, matches)
-        return matches
+        val snippet = if (matches) state.contentMatchSnippet(query) { code -> noticeText(code) } else null
+        return ContentMatchCacheEntry(query, state, matches, snippet).also { contentMatchCache[conversationId] = it }
     }
 
     private fun persistConversations(onSaved: (() -> Unit)? = null): Deferred<Boolean> {
@@ -2788,8 +2877,9 @@ private data class PickerInputs(
 
 private data class ContentMatchCacheEntry(
     val query: String,
-    val state: AgentChatHomeUiState,
+    val state: AgentChatHomeUiState?,
     val matches: Boolean,
+    val snippet: String?,
 )
 
 private const val EXTERNAL_ARCHIVE_CONVERSATION_PREFIX = "archive-"

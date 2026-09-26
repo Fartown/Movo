@@ -14,34 +14,55 @@ internal fun AgentChatHomeUiState.contentMatches(
     return messages.any { message -> message.matches(query, noticeText) }
 }
 
+/**
+ * 侧边栏搜索结果的命中片段：取第一处命中的文字，命中词前保留少量上下文（规范 8.6「搜索」）。
+ * 没有内容命中时返回 null（调用方回退到预览）。
+ */
+internal fun AgentChatHomeUiState.contentMatchSnippet(
+    query: String,
+    noticeText: (SystemNoticeCode) -> String,
+): String? {
+    if (query.isBlank()) return null
+    for (message in messages) {
+        val text = message.searchableTexts(noticeText).firstOrNull { it.contains(query, ignoreCase = true) }
+        if (text != null) return matchExcerpt(text, query)
+    }
+    return null
+}
+
+/** 命中词前留 [lead] 个字，超出部分用「…」；空白折叠为单个空格。 */
+internal fun matchExcerpt(text: String, query: String, lead: Int = 10): String {
+    val flat = text.replace(Regex("\\s+"), " ").trim()
+    val index = flat.indexOf(query, ignoreCase = true)
+    if (index <= lead) return flat
+    return "…" + flat.substring(index - lead)
+}
+
 private fun AgentChatMessageUi.matches(
     query: String,
     noticeText: (SystemNoticeCode) -> String,
-): Boolean = when (this) {
+): Boolean = searchableTexts(noticeText).any { it.contains(query, ignoreCase = true) }
+
+/** 参与搜索的文字；[contentMatches] 与 [contentMatchSnippet] 共用，保证两者口径一致。 */
+private fun AgentChatMessageUi.searchableTexts(
+    noticeText: (SystemNoticeCode) -> String,
+): List<String> = when (this) {
     is UserMessageUi -> {
         val prompt = AgentFileReferencePromptCodec.parse(content)
-        prompt.request.contains(query, ignoreCase = true) ||
-            prompt.references.any { reference ->
-                reference.displayName.contains(query, ignoreCase = true) ||
-                    reference.absolutePath.contains(query, ignoreCase = true)
-            }
+        listOf(prompt.request) + prompt.references.flatMap { reference ->
+            listOf(reference.displayName, reference.absolutePath)
+        }
     }
 
-    is AgentMessageUi -> content.contains(query, ignoreCase = true)
+    is AgentMessageUi -> listOf(content)
 
-    is ThinkingMessageUi -> content.contains(query, ignoreCase = true)
+    is ThinkingMessageUi -> listOf(content)
 
-    is ToolActivityMessageUi ->
-        toolName.contains(query, ignoreCase = true) ||
-            command?.contains(query, ignoreCase = true) == true ||
-            argumentsSummary.contains(query, ignoreCase = true) ||
-            resultSummary?.contains(query, ignoreCase = true) == true
+    is ToolActivityMessageUi -> listOfNotNull(toolName, command, argumentsSummary, resultSummary)
 
-    is ToolSummaryMessageUi -> tools.any { it.contains(query, ignoreCase = true) }
+    is ToolSummaryMessageUi -> tools
 
-    is SystemNoticeMessageUi ->
-        noticeText(code).contains(query, ignoreCase = true) ||
-            detail?.contains(query, ignoreCase = true) == true
+    is SystemNoticeMessageUi -> listOfNotNull(noticeText(code), detail)
 
-    else -> false
+    else -> emptyList()
 }

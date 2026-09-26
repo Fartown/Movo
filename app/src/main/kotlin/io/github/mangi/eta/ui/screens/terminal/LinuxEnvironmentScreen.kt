@@ -3,11 +3,8 @@ package io.github.mangi.eta.ui.screens.terminal
 import android.content.Context
 import android.text.format.Formatter
 import androidx.annotation.StringRes
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Description
-import androidx.compose.material.icons.rounded.Folder
-import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -16,9 +13,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.R
 import io.github.mangi.eta.agent.terminal.AlpineEnvironmentInstaller
 import io.github.mangi.eta.agent.terminal.AlpineEnvironmentState
@@ -54,18 +49,17 @@ import io.github.mangi.eta.ui.app.launchForegroundExecution
 import io.github.mangi.eta.ui.app.message
 import io.github.mangi.eta.ui.app.rememberDeviceCapabilities
 import io.github.mangi.eta.ui.app.rememberExecutionNotificationRequest
-import io.github.mangi.eta.ui.components.MiuixScaffoldPage
-import io.github.mangi.eta.ui.components.PreferenceIcon
+import io.github.mangi.eta.ui.components.movo.CardTitle
+import io.github.mangi.eta.ui.components.movo.MovoCard
+import io.github.mangi.eta.ui.components.movo.MovoListPage
+import io.github.mangi.eta.ui.components.movo.MovoPillButton
+import io.github.mangi.eta.ui.components.movo.RowTrailing
+import io.github.mangi.eta.ui.components.movo.SettingsRow
 import io.github.mangi.eta.ui.navigation.AppRoute
+import io.github.mangi.eta.ui.theme.MovoSpacing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.HorizontalDivider
-import top.yukonga.miuix.kmp.basic.SmallTitle
-import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.preference.ArrowPreference
 
 private enum class InstallTarget {
     BASE,
@@ -290,7 +284,7 @@ internal fun LinuxEnvironmentScreen(
         }
     }
 
-    MiuixScaffoldPage(
+    MovoListPage(
         title = stringResource(R.string.ui_linux_tool_environment_314d22),
         onBack = onBack,
     ) {
@@ -341,7 +335,6 @@ internal fun LinuxEnvironmentScreen(
                 },
             )
         }
-        item(key = "configuration-title") { SmallTitle(stringResource(R.string.linux_environment_configuration)) }
         item(key = "configuration-card") {
             LinuxEnvironmentConfiguration(
                 distribution = selectedDistribution,
@@ -366,26 +359,25 @@ internal fun LinuxEnvironmentScreen(
                 },
             )
         }
-        item(key = "files-title") { SmallTitle(stringResource(R.string.linux_environment_files)) }
         item(key = "files-card") {
-            Card(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                ArrowPreference(
+            MovoCard {
+                CardTitle(stringResource(R.string.linux_environment_files))
+                SettingsRow(
                     title = stringResource(R.string.capability_workspace),
-                    summary = stringResource(R.string.capability_workspace_summary),
-                    startAction = { PreferenceIcon(Icons.Rounded.Folder) },
+                    subtitle = stringResource(R.string.capability_workspace_summary),
+                    showDivider = selectedBaseReady,
                     onClick = { onNavigate(AppRoute.Workspace) },
                 )
                 if (selectedBaseReady) {
-                    ArrowPreference(
+                    SettingsRow(
                         title = stringResource(R.string.shared_folders_entry_title),
-                        summary = stringResource(R.string.linux_environment_shared_folders_summary),
-                        startAction = { PreferenceIcon(Icons.Rounded.FolderOpen) },
+                        subtitle = stringResource(R.string.linux_environment_shared_folders_summary),
                         onClick = { onNavigate(AppRoute.SharedFolders) },
                     )
-                    ArrowPreference(
+                    SettingsRow(
                         title = stringResource(R.string.linux_files_entry_title),
-                        summary = stringResource(R.string.linux_files_entry_summary),
-                        startAction = { PreferenceIcon(Icons.Rounded.Description) },
+                        subtitle = stringResource(R.string.linux_files_entry_summary),
+                        showDivider = false,
                         onClick = { onNavigate(AppRoute.LinuxFiles(selectedDistribution.wireName)) },
                     )
                 }
@@ -393,14 +385,10 @@ internal fun LinuxEnvironmentScreen(
         }
 
         if (selectedToolsReady) {
-            item(key = "optional-tools-title") { SmallTitle(stringResource(R.string.ui_optional_tools_3097d6)) }
             item(key = "optional-tools-card") {
-                Card(
-                    modifier = Modifier
-                        .padding(horizontal = 12.dp)
-                        .padding(bottom = 12.dp),
-                ) {
-                    packageProfileUis.forEachIndexed { index, profileUi ->
+                MovoCard {
+                    CardTitle(stringResource(R.string.ui_optional_tools_3097d6))
+                    packageProfileUis.forEach { profileUi ->
                         val ready = profileReady[profileUi.target] == true
                         val isKimi = profileUi.target == InstallTarget.KIMI
                         val summaryRes = if (selectedDistribution == LinuxDistribution.DEBIAN) {
@@ -413,109 +401,115 @@ internal fun LinuxEnvironmentScreen(
                         } else {
                             profileUi.readyRes
                         }
-                        if (index > 0) HorizontalDivider()
-                        BasicComponent(
+                        val installProfile: () -> Unit = install@{
+                            if (busyTarget != null || ready) return@install
+                            busyTarget = profileUi.target
+                            resultMessage = null
+                            val profileTitle = context.getString(profileUi.titleRes)
+                            launchInstallation {
+                                val profileInstaller = profileInstallers.getValue(profileUi.target)
+                                val result = profileInstaller.install { update ->
+                                    withContext(Dispatchers.Main.immediate) {
+                                        profileProgressSummary = update.summary(context, profileTitle)
+                                    }
+                                }
+                                profileReady = profileReady +
+                                    (profileUi.target to profileInstaller.isReady())
+                                profileProgressSummary = null
+                                busyTarget = null
+                                resultMessage = result.toMessage(context, profileTitle)
+                            }
+                        }
+                        SettingsRow(
                             title = stringResource(profileUi.titleRes),
-                            summary = if (busyTarget == profileUi.target) {
+                            subtitle = if (busyTarget == profileUi.target) {
                                 profileProgressSummary ?: stringResource(summaryRes)
                             } else if (ready) {
                                 stringResource(readyRes)
                             } else {
                                 stringResource(summaryRes)
                             },
-                            endActions = {
-                                if (isKimi && kimiWebRunning) {
-                                    TextButton(
-                                        text = stringResource(R.string.action_stop),
-                                        enabled = !kimiWebLaunching && !requiresRoot,
-                                        onClick = {
-                                            coroutineScope.launch {
-                                                val stopped = kimiWebLauncher.stop(selectedDistribution.terminalEnvironment)
-                                                kimiWebRunning = !stopped
-                                            }
-                                        },
+                            trailing = when {
+                                isKimi && ready -> RowTrailing.Custom {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(MovoSpacing.sm)) {
+                                        if (kimiWebRunning) {
+                                            MovoPillButton(
+                                                label = stringResource(R.string.action_stop),
+                                                enabled = !kimiWebLaunching && !requiresRoot,
+                                                onClick = {
+                                                    coroutineScope.launch {
+                                                        val stopped = kimiWebLauncher.stop(selectedDistribution.terminalEnvironment)
+                                                        kimiWebRunning = !stopped
+                                                    }
+                                                },
+                                            )
+                                        }
+                                        MovoPillButton(
+                                            label = stringResource(
+                                                if (kimiWebLaunching) {
+                                                    R.string.linux_kimi_web_starting
+                                                } else if (kimiWebRunning) {
+                                                    R.string.action_open
+                                                } else {
+                                                    R.string.linux_kimi_web_launch
+                                                },
+                                            ),
+                                            enabled = !requiresRoot && !kimiWebLaunching && busyTarget == null,
+                                            primary = true,
+                                            onClick = { launchKimiWeb() },
+                                        )
+                                    }
+                                }
+                                ready -> RowTrailing.Value(stringResource(R.string.linux_installed))
+                                else -> RowTrailing.Custom {
+                                    MovoPillButton(
+                                        label = stringResource(
+                                            if (busyTarget == profileUi.target) R.string.linux_installing else R.string.linux_install,
+                                        ),
+                                        enabled = !requiresRoot && busyTarget == null,
+                                        onClick = installProfile,
                                     )
                                 }
-                                TextButton(
-                                    text = when {
-                                        isKimi && ready -> stringResource(
-                                            if (kimiWebLaunching) {
-                                                R.string.linux_kimi_web_starting
-                                            } else if (kimiWebRunning) {
-                                                R.string.action_open
-                                            } else {
-                                                R.string.linux_kimi_web_launch
-                                            },
-                                        )
-                                        ready -> stringResource(R.string.linux_installed)
-                                        busyTarget == profileUi.target -> stringResource(R.string.linux_installing)
-                                        else -> stringResource(R.string.linux_install)
-                                    },
-                                    enabled = !requiresRoot && if (isKimi && ready) {
-                                        !kimiWebLaunching && busyTarget == null
-                                    } else {
-                                        busyTarget == null && !ready
-                                    },
-                                    onClick = {
-                                        if (isKimi && ready) {
-                                            launchKimiWeb()
-                                            return@TextButton
-                                        }
-                                        if (busyTarget != null || ready) return@TextButton
-                                        busyTarget = profileUi.target
-                                        resultMessage = null
-                                        val profileTitle = context.getString(profileUi.titleRes)
-                                        launchInstallation {
-                                            val profileInstaller = profileInstallers.getValue(profileUi.target)
-                                            val result = profileInstaller.install { update ->
-                                                withContext(Dispatchers.Main.immediate) {
-                                                    profileProgressSummary = update.summary(context, profileTitle)
-                                                }
-                                            }
-                                            profileReady = profileReady +
-                                                (profileUi.target to profileInstaller.isReady())
-                                            profileProgressSummary = null
-                                            busyTarget = null
-                                            resultMessage = result.toMessage(context, profileTitle)
-                                        }
-                                    },
-                                )
                             },
                         )
                     }
-                    HorizontalDivider()
-                    BasicComponent(
+                    SettingsRow(
                         title = stringResource(R.string.ui_apk_analysis_95ad17),
-                        summary = apkAnalysisProgress?.summary(context) ?: if (apkAnalysisReady) {
+                        subtitle = apkAnalysisProgress?.summary(context) ?: if (apkAnalysisReady) {
                             context.getString(R.string.linux_apk_tools_ready)
                         } else {
                             context.getString(R.string.linux_apk_tools_summary)
                         },
-                        endActions = {
-                            TextButton(
-                                text = when {
-                                    apkAnalysisReady -> context.getString(R.string.linux_installed)
-                                    busyTarget == InstallTarget.APK_ANALYSIS -> context.getString(R.string.linux_installing)
-                                    else -> context.getString(R.string.linux_install)
-                                },
-                                enabled = busyTarget == null && !requiresRoot && !apkAnalysisReady,
-                                onClick = {
-                                    if (busyTarget != null || apkAnalysisReady) return@TextButton
-                                    busyTarget = InstallTarget.APK_ANALYSIS
-                                    resultMessage = null
-                                    launchInstallation {
-                                        val result = apkAnalysisInstaller.install { update ->
-                                            withContext(Dispatchers.Main.immediate) {
-                                                apkAnalysisProgress = update
+                        showDivider = false,
+                        trailing = if (apkAnalysisReady) {
+                            RowTrailing.Value(context.getString(R.string.linux_installed))
+                        } else {
+                            RowTrailing.Custom {
+                                MovoPillButton(
+                                    label = if (busyTarget == InstallTarget.APK_ANALYSIS) {
+                                        context.getString(R.string.linux_installing)
+                                    } else {
+                                        context.getString(R.string.linux_install)
+                                    },
+                                    enabled = busyTarget == null && !requiresRoot,
+                                    onClick = {
+                                        if (busyTarget != null || apkAnalysisReady) return@MovoPillButton
+                                        busyTarget = InstallTarget.APK_ANALYSIS
+                                        resultMessage = null
+                                        launchInstallation {
+                                            val result = apkAnalysisInstaller.install { update ->
+                                                withContext(Dispatchers.Main.immediate) {
+                                                    apkAnalysisProgress = update
+                                                }
                                             }
+                                            apkAnalysisReady = apkAnalysisInstaller.isReady()
+                                            apkAnalysisProgress = null
+                                            busyTarget = null
+                                            resultMessage = result.toMessage(context)
                                         }
-                                        apkAnalysisReady = apkAnalysisInstaller.isReady()
-                                        apkAnalysisProgress = null
-                                        busyTarget = null
-                                        resultMessage = result.toMessage(context)
-                                    }
-                                },
-                            )
+                                    },
+                                )
+                            }
                         },
                     )
                 }

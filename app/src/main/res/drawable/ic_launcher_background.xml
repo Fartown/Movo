@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Movo 启动器图标背景（B7）：bg/canvas → 浅丁香，自上而下。 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <solid android:color="#FFFFFFFF" />
+    <gradient
+        android:angle="270"
+        android:startColor="#FFF4F3EF"
+        android:endColor="#FFE6DDFF" />
 </shape>

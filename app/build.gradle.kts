@@ -161,6 +161,14 @@ android {
 
     testOptions {
         unitTests.isIncludeAndroidResources = true
+        // 设计还原截图：./gradlew :app:testDebugUnitTest -PmovoShots=true --tests '*DesignShotsTest*'
+        unitTests.all { test ->
+            val shots = (project.findProperty("movoShots") ?: "false").toString()
+            // 截图测试依赖 Robolectric 原生图形，只在显式生成截图时运行，不进普通单测。
+            if (shots != "true") test.exclude("**/DesignShotsTest*")
+            test.systemProperty("movo.shots", shots)
+            test.systemProperty("movo.shots.dir", rootProject.file(".docs/design-restore/shots/local").absolutePath)
+        }
     }
 }
 
@@ -210,4 +218,7 @@ dependencies {
     testImplementation(libs.json)
     testImplementation(libs.room.testing)
     testImplementation(libs.robolectric)
+    // 设计还原的界面截图（Robolectric 原生图形渲染，截图写到 .docs/design-restore/shots/）。
+    testImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
 }

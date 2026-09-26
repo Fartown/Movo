@@ -184,12 +184,12 @@ internal class AgentLocalTools(
                 "swipe" -> textResult(swipe(args))
                 "scroll" -> textResult(deviceController.scroll(args.optString("direction")))
                 "scroll_element" -> textResult(scrollElement(args))
-                "input_text" -> textResult(inputText(args))
-                "replace_text" -> textResult(replaceText(args))
-                "clear_text" -> textResult(clearText(args))
+                "input_text" -> textResult(inputText(args)).also { showInputTarget() }
+                "replace_text" -> textResult(replaceText(args)).also { showInputTarget() }
+                "clear_text" -> textResult(clearText(args)).also { showInputTarget() }
                 "set_clipboard" -> textResult(setClipboard(args))
                 "get_clipboard" -> textResult(getClipboard())
-                "paste_text" -> textResult(pasteText(args))
+                "paste_text" -> textResult(pasteText(args)).also { showInputTarget() }
                 "press_key" -> textResult(deviceController.pressKey(args.optString("button")))
                 "wait" -> textResult(deviceController.waitMs(args.optInt("duration_ms", 1_000)))
                 "wait_for_text" -> textResult(waitForText(args))
@@ -1311,6 +1311,19 @@ internal class AgentLocalTools(
 
     private fun showSwipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int) {
         GestureIndicator.showSwipe(context, x1, y1, x2, y2, durationMs)
+    }
+
+    /** 输入文字后给目标控件描边（规范 9.5「输入文字指示」）；取不到输入焦点控件时不显示。 */
+    private fun showInputTarget() {
+        runCatching {
+            val focused = io.github.mangi.eta.agent.accessibility.AgentAccessibilityService.current()
+                ?.rootInActiveWindow
+                ?.findFocus(android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT)
+                ?: return
+            val bounds = android.graphics.Rect()
+            focused.getBoundsInScreen(bounds)
+            GestureIndicator.showInput(context, bounds)
+        }
     }
 
     private data class AppInfo(

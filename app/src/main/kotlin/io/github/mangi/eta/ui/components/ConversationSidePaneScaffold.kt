@@ -1,21 +1,23 @@
 package io.github.mangi.eta.ui.components
 
+import android.text.format.DateFormat
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.AnchoredDraggableDefaults
 import androidx.compose.foundation.gestures.AnchoredDraggableState
 import androidx.compose.foundation.gestures.DraggableAnchors
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.anchoredDraggable
 import androidx.compose.foundation.gestures.animateTo
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -28,13 +30,15 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -42,17 +46,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.AbsoluteRoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Extension
-import androidx.compose.material.icons.outlined.Inventory2
-import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.Memory
-import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.TheaterComedy
-import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -69,21 +63,31 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.dropShadow
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.shadow.Shadow
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -91,64 +95,55 @@ import androidx.navigationevent.NavigationEventInfo
 import androidx.navigationevent.compose.NavigationBackHandler
 import androidx.navigationevent.compose.rememberNavigationEventState
 import io.github.mangi.eta.R
+import io.github.mangi.eta.ui.components.movo.MovoIconButton
+import io.github.mangi.eta.ui.components.movo.MovoSpinner
+import io.github.mangi.eta.ui.components.movo.PressKind
+import io.github.mangi.eta.ui.components.movo.captureMovoBackdrop
+import io.github.mangi.eta.ui.components.movo.movoClickable
+import io.github.mangi.eta.ui.components.movo.movoElevation
+import io.github.mangi.eta.ui.components.movo.rememberMovoBackdrop
 import io.github.mangi.eta.ui.model.ConversationPaneUiState
 import io.github.mangi.eta.ui.model.ConversationSummaryUi
+import io.github.mangi.eta.ui.theme.LocalReducedMotion
+import io.github.mangi.eta.ui.theme.MovoColors
+import io.github.mangi.eta.ui.theme.MovoElevation
+import io.github.mangi.eta.ui.theme.MovoIcon
+import io.github.mangi.eta.ui.theme.MovoIcons
+import io.github.mangi.eta.ui.theme.MovoMotion
+import io.github.mangi.eta.ui.theme.MovoRadius
+import io.github.mangi.eta.ui.theme.MovoSize
+import io.github.mangi.eta.ui.theme.MovoSpacing
+import io.github.mangi.eta.ui.theme.MovoTypography
+import java.util.Calendar
+import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.collectLatest
-import top.yukonga.miuix.kmp.basic.DropdownDefaults
-import top.yukonga.miuix.kmp.basic.DropdownImpl
-import top.yukonga.miuix.kmp.basic.DropdownItem
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.InputField
-import top.yukonga.miuix.kmp.basic.ListPopupColumn
-import top.yukonga.miuix.kmp.basic.ListPopupDefaults
-import top.yukonga.miuix.kmp.basic.PopupPositionProvider
-import top.yukonga.miuix.kmp.basic.SearchBar
-import top.yukonga.miuix.kmp.basic.Surface
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.blur.BlendColorEntry
-import top.yukonga.miuix.kmp.blur.BlurDefaults
+import top.yukonga.miuix.kmp.blur.BlurColors
 import top.yukonga.miuix.kmp.blur.LayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
 import top.yukonga.miuix.kmp.nav.core.rememberNavSystemCornerRadius
 import top.yukonga.miuix.kmp.squircle.absoluteSquircleClip
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.utils.scrollEndHaptic
-import top.yukonga.miuix.kmp.window.WindowListPopup
 
+/** 侧边栏 `Drawer`（规范 8.6，Figma「16 · 侧边栏」「17 · 侧边栏 · 状态」）。 */
 private object DrawerMetrics {
     val PaneMaxWidth = 340.dp
-    val PaneWidthFraction = 0.84f
-    val ForegroundCornerRadiusFallback = 24.dp
-    val ForegroundShadowRadius = 12.dp
-    const val ForegroundShadowAlpha = 0.12f
-    const val SettleDampingRatio = 1f
-    const val SettleStiffness = 146f
-    const val SettleVisibilityThresholdPx = 0.5f
+    const val PaneWidthFraction = 0.84f
+
+    /** 露出部分左侧圆角 = 屏幕圆角；取不到系统圆角时用稿中的 36。 */
+    val ForegroundCornerRadiusFallback = 36.dp
     const val SettlePositionThresholdFraction = 0.5f
-    val PaneHorizontalPadding = 16.dp
-    val TopInset = 16.dp
-    val AfterActionBar = 18.dp
-    val BottomInset = 12.dp
-    val ActionIconSize = 20.dp
-    val SectionTopPadding = 8.dp
-    val SectionBottomPadding = 10.dp
-    val SectionIconSize = 14.dp
-    val SectionIconGap = 8.dp
-    val SectionCountGap = 12.dp
-    val RowMinHeight = 48.dp
-    val RowGap = 4.dp
-    val RowCornerRadius = 12.dp
-    val RowHorizontalPadding = 12.dp
-    val RowVerticalPadding = 12.dp
-    val ActiveDotSize = 6.dp
-    val ActiveDotGap = 10.dp
-    val EmptyVerticalPadding = 28.dp
-    val DockTopGap = 10.dp
-    val DockEntryCornerRadius = 12.dp
-    val DockEntryIconSize = 18.dp
-    val DockEntryLabelGap = 6.dp
+    val Edge = 20.dp
+    val HeaderHeight = 56.dp
+    val SearchHeight = 40.dp
+    val RowHeight = 44.dp
+    val RowTwoLineHeight = 60.dp
+    val RowPadding = 16.dp
+    val FooterHeight = 60.dp
+    val MenuWidth = 220.dp
 }
 
 private enum class ConversationPaneAnchor {
@@ -160,6 +155,8 @@ private enum class ConversationPaneAnchor {
 fun ConversationSidePaneScaffold(
     state: ConversationPaneUiState,
     visible: Boolean,
+    /** 为 true 时侧边栏在本帧即按关闭绘制并直接落到关闭位（不播动画）。 */
+    closeInstantly: Boolean = false,
     backHandlerEnabled: Boolean,
     onOpen: () -> Unit,
     onDismiss: () -> Unit,
@@ -168,17 +165,15 @@ fun ConversationSidePaneScaffold(
     onConversationRename: (ConversationSummaryUi) -> Unit,
     onConversationExport: (ConversationSummaryUi) -> Unit,
     onConversationDelete: (ConversationSummaryUi) -> Unit,
+    onNewConversation: () -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenModelProviders: () -> Unit,
-    onOpenTools: () -> Unit,
-    onOpenSkills: () -> Unit,
-    onOpenCharacters: () -> Unit,
-    onOpenPermissions: () -> Unit,
     modifier: Modifier = Modifier,
+    settingsAttention: String? = null,
     content: @Composable () -> Unit,
 ) {
     val sceneLifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     val navigationEventState = rememberNavigationEventState(NavigationEventInfo.None)
+    val reduced = LocalReducedMotion.current
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -196,27 +191,19 @@ fun ConversationSidePaneScaffold(
                 anchors = anchors,
             )
         }
-        val settleAnimation = remember {
-            spring<Float>(
-                dampingRatio = DrawerMetrics.SettleDampingRatio,
-                stiffness = DrawerMetrics.SettleStiffness,
-                visibilityThreshold = DrawerMetrics.SettleVisibilityThresholdPx,
-            )
-        }
+        // 9.3「侧边栏开合」：拖动跟手，松手按速度与是否过半吸附 spring/gentle。
         val flingBehavior = AnchoredDraggableDefaults.flingBehavior(
             state = paneDragState,
-            positionalThreshold = { distance ->
-                distance * DrawerMetrics.SettlePositionThresholdFraction
-            },
-            animationSpec = settleAnimation,
+            positionalThreshold = { distance -> distance * DrawerMetrics.SettlePositionThresholdFraction },
+            animationSpec = MovoMotion.gentle(),
         )
         val currentVisible by rememberUpdatedState(visible)
         val currentOnOpen by rememberUpdatedState(onOpen)
         val currentOnDismiss by rememberUpdatedState(onDismiss)
-        val shouldClipForeground by remember(paneDragState) {
+        val openProgress by remember(paneDragState, paneWidthPx, closeInstantly) {
             derivedStateOf {
-                val offset = paneDragState.offset
-                !offset.isNaN() && offset > 0.5f
+                val offset = paneDragState.offset.takeUnless(Float::isNaN) ?: 0f
+                if (closeInstantly || paneWidthPx <= 0f) 0f else (offset / paneWidthPx).coerceIn(0f, 1f)
             }
         }
         val systemCornerRadius = rememberNavSystemCornerRadius()
@@ -227,18 +214,51 @@ fun ConversationSidePaneScaffold(
             paneDragState.updateAnchors(anchors)
         }
 
-        LaunchedEffect(visible, paneWidthPx) {
+        // 点菜单：主页面右移到位 slow + standard；关闭 250ms + exit；减少动画时直接到位。
+        LaunchedEffect(visible, paneWidthPx, closeInstantly) {
             val target = if (visible) ConversationPaneAnchor.Open else ConversationPaneAnchor.Closed
             if (paneDragState.targetValue != target || paneDragState.settledValue != target) {
-                paneDragState.animateTo(target, settleAnimation)
+                paneDragState.animateTo(
+                    target,
+                    when {
+                        reduced || (closeInstantly && !visible) -> snap<Float>()
+                        visible -> tween<Float>(MovoMotion.SLOW, easing = MovoMotion.EasingStandard)
+                        else -> tween<Float>(MovoMotion.SLOW_EXIT, easing = MovoMotion.EasingExit)
+                    },
+                )
             }
         }
 
+        // 返回手势进行中：侧边栏跟手收到接近关闭，但关闭只由手势完成（onBackCompleted）决定。
+        // 若在手势中途就因为「已落到关闭位」而关掉，返回处理器会被禁用，松手时这次返回会交给系统、直接退出 App。
+        var backGestureActive by remember { mutableStateOf(false) }
         LaunchedEffect(paneDragState) {
             snapshotFlow { paneDragState.settledValue }.collectLatest { settledValue ->
                 val settledOpen = settledValue == ConversationPaneAnchor.Open
+                if (backGestureActive) return@collectLatest
                 if (settledOpen != currentVisible) {
                     if (settledOpen) currentOnOpen() else currentOnDismiss()
+                }
+            }
+        }
+
+        // 9.3「侧边栏开合」：返回手势按进度收回侧边栏（跟手），手势取消时 spring/gentle 弹回；完成由 onBackCompleted 关闭。
+        LaunchedEffect(navigationEventState, paneDragState, paneWidthPx) {
+            snapshotFlow { navigationEventState.transitionState }.collectLatest { transition ->
+                if (!currentVisible || paneWidthPx <= 0f || reduced) return@collectLatest
+                if (transition is androidx.navigationevent.NavigationEventTransitionState.InProgress) {
+                    backGestureActive = true
+                    val progress = transition.latestEvent.progress.coerceIn(0f, 1f)
+                    // 不拖到关闭锚点本身（留 1px），避免手势中途被判定为已关闭。
+                    paneDragState.anchoredDrag { dragTo((paneWidthPx * (1f - progress)).coerceAtLeast(1f)) }
+                } else {
+                    backGestureActive = false
+                    // 等一帧：手势完成时 visible 会随之变为 false，交给关闭动画；仍可见说明手势被取消。
+                    kotlinx.coroutines.delay(MovoMotion.INSTANT.toLong() / 4)
+                    val offset = paneDragState.offset.takeUnless(Float::isNaN) ?: return@collectLatest
+                    if (currentVisible && offset < paneWidthPx) {
+                        paneDragState.animateTo(ConversationPaneAnchor.Open, MovoMotion.gentle())
+                    }
                 }
             }
         }
@@ -256,66 +276,62 @@ fun ConversationSidePaneScaffold(
         ConversationPanePanel(
             state = state,
             width = paneWidth,
+            settingsAttention = settingsAttention,
             onSearchChange = onSearchChange,
             onConversationSelected = onConversationSelected,
             onConversationRename = onConversationRename,
             onConversationExport = onConversationExport,
             onConversationDelete = onConversationDelete,
+            onNewConversation = onNewConversation,
             onOpenSettings = onOpenSettings,
-            onOpenModelProviders = onOpenModelProviders,
-            onOpenTools = onOpenTools,
-            onOpenSkills = onOpenSkills,
-            onOpenCharacters = onOpenCharacters,
-            onOpenPermissions = onOpenPermissions,
             modifier = Modifier.zIndex(0f),
         )
 
-        Box(
-            modifier = Modifier
-                .width(paneWidth)
-                .fillMaxHeight()
-                .graphicsLayer {
-                    val offset = paneDragState.offset.takeUnless(Float::isNaN) ?: 0f
-                    val progress = if (paneWidthPx > 0f) {
-                        (offset / paneWidthPx).coerceIn(0f, 1f)
-                    } else {
-                        0f
-                    }
-                    alpha = 1f - progress
-                }
-                .background(MiuixTheme.colorScheme.windowDimming)
-                .zIndex(0.5f),
+        val foregroundShape = AbsoluteRoundedCornerShape(
+            topLeft = foregroundCornerRadius,
+            topRight = 0.dp,
+            bottomRight = 0.dp,
+            bottomLeft = foregroundCornerRadius,
         )
-
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .offset {
-                    val offset = paneDragState.offset.takeUnless(Float::isNaN)
-                        ?: if (visible) paneWidthPx else 0f
+                    val offset = if (closeInstantly) {
+                        0f
+                    } else {
+                        paneDragState.offset.takeUnless(Float::isNaN) ?: if (visible) paneWidthPx else 0f
+                    }
                     IntOffset(offset.roundToInt(), 0)
                 }
                 .then(
-                    if (shouldClipForeground) {
+                    if (openProgress > 0f) {
+                        // 主页面左侧圆角与阴影随打开进度出现（E3，暖灰阴影）。
                         Modifier
                             .dropShadow(
-                                shape = AbsoluteRoundedCornerShape(
-                                    topLeft = foregroundCornerRadius,
-                                    topRight = 0.dp,
-                                    bottomRight = 0.dp,
-                                    bottomLeft = foregroundCornerRadius,
-                                ),
+                                shape = foregroundShape,
                                 shadow = Shadow(
-                                    radius = DrawerMetrics.ForegroundShadowRadius,
-                                    color = Color.Black,
-                                    alpha = DrawerMetrics.ForegroundShadowAlpha,
+                                    radius = 64.dp,
+                                    spread = (-12).dp,
+                                    offset = DpOffset(0.dp, 24.dp),
+                                    color = MovoColors.shadow,
+                                    alpha = 0.18f * openProgress,
+                                ),
+                            )
+                            .dropShadow(
+                                shape = foregroundShape,
+                                shadow = Shadow(
+                                    radius = 6.dp,
+                                    offset = DpOffset(0.dp, 2.dp),
+                                    color = MovoColors.shadow,
+                                    alpha = 0.06f * openProgress,
                                 ),
                             )
                             .absoluteSquircleClip(
-                                topLeft = foregroundCornerRadius,
+                                topLeft = foregroundCornerRadius * openProgress,
                                 topRight = 0.dp,
                                 bottomRight = 0.dp,
-                                bottomLeft = foregroundCornerRadius,
+                                bottomLeft = foregroundCornerRadius * openProgress,
                             )
                     } else {
                         Modifier
@@ -333,10 +349,15 @@ fun ConversationSidePaneScaffold(
         ) {
             content()
             if (visible) {
+                // 点露出部分关闭；不加遮罩（规范 8.6）。
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .clickable(onClick = onDismiss),
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = onDismiss,
+                        ),
                 )
             }
         }
@@ -346,144 +367,147 @@ fun ConversationSidePaneScaffold(
 @Composable
 private fun ConversationPanePanel(
     state: ConversationPaneUiState,
-    width: androidx.compose.ui.unit.Dp,
+    width: Dp,
+    settingsAttention: String?,
     onSearchChange: (String) -> Unit,
     onConversationSelected: (String) -> Unit,
     onConversationRename: (ConversationSummaryUi) -> Unit,
     onConversationExport: (ConversationSummaryUi) -> Unit,
     onConversationDelete: (ConversationSummaryUi) -> Unit,
+    onNewConversation: () -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenModelProviders: () -> Unit,
-    onOpenTools: () -> Unit,
-    onOpenSkills: () -> Unit,
-    onOpenCharacters: () -> Unit,
-    onOpenPermissions: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // state.conversations 已由 AgentAppState 按标题、预览与消息内容过滤。
     val query = state.searchQuery.trim()
+    val searching = query.isNotBlank()
     val groups = remember(state.conversations) { state.conversations.groupForDrawer() }
     val density = LocalDensity.current
 
-    Surface(
+    Box(
         modifier = modifier
             .width(width)
-            .fillMaxHeight(),
-        color = MiuixTheme.colorScheme.surface,
-        contentColor = MiuixTheme.colorScheme.onSurface,
+            .fillMaxHeight()
+            .background(MovoColors.bgSurface),
     ) {
-        // 列表全高滚动，搜索区与 Dock 作为浮层盖在内容上；两个浮层用与顶栏相同的
-        // textureBlur 采样列表 backdrop，内容滚入边缘时呈现毛玻璃而不是硬裁切。
-        // 有内容滚到浮层下方时浮层边缘出现分隔线，静止在顶部/底部时保持无边界。
-        val backdrop = rememberTopBarBackdrop()
+        // 列表全高滚动，顶部与底部区域是 bg/surface 90% + 背景模糊的浮层；
+        // 内容滚入时出现 0.5 分隔线，静止在顶 / 底时无线（规范 8.6「滚动」）。
+        val backdrop = rememberMovoBackdrop()
         var headerHeightPx by remember { mutableIntStateOf(0) }
-        var dockHeightPx by remember { mutableIntStateOf(0) }
+        var footerHeightPx by remember { mutableIntStateOf(0) }
         val listState = rememberLazyListState()
         val showHeaderDivider by remember { derivedStateOf { listState.canScrollBackward } }
-        val showDockDivider by remember { derivedStateOf { listState.canScrollForward } }
-        Box(modifier = Modifier.fillMaxSize()) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .captureForTopBar(backdrop)
-                    .windowInsetsPadding(
-                        WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
+        val showFooterDivider by remember { derivedStateOf { listState.canScrollForward } }
+        // 列表增删（规范 9.3）：新增淡入 `fast`；删除淡出 120ms，其余行跟随移位 `standard`。
+        val rowFadeIn = io.github.mangi.eta.ui.theme.MovoMotion.fast<Float>()
+        val rowFadeOut = io.github.mangi.eta.ui.theme.MovoMotion.fastExit<Float>()
+        val rowPlacement = io.github.mangi.eta.ui.theme.MovoMotion.standard<androidx.compose.ui.unit.IntOffset>()
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+                .captureMovoBackdrop(backdrop)
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                .padding(horizontal = DrawerMetrics.Edge)
+                .scrollEndHaptic()
+                .overScrollVertical(),
+            contentPadding = PaddingValues(
+                top = with(density) { headerHeightPx.toDp() },
+                bottom = with(density) { footerHeightPx.toDp() },
+            ),
+            overscrollEffect = null,
+        ) {
+            when {
+                state.conversations.isEmpty() -> item { EmptyConversations(isSearching = searching) }
+                searching -> items(items = state.conversations, key = { it.id }) { conversation ->
+                    Box(Modifier.animateItem(fadeInSpec = rowFadeIn, placementSpec = rowPlacement, fadeOutSpec = rowFadeOut)) {
+                    ConversationRow(
+                        conversation = conversation,
+                        selected = conversation.id == state.selectedConversationId,
+                        query = query,
+                        onClick = { onConversationSelected(conversation.id) },
+                        onRename = { onConversationRename(conversation) },
+                        onExport = { onConversationExport(conversation) },
+                        onDelete = { onConversationDelete(conversation) },
                     )
-                    .padding(horizontal = DrawerMetrics.PaneHorizontalPadding)
-                    .scrollEndHaptic()
-                    .overScrollVertical(),
-                contentPadding = PaddingValues(
-                    top = with(density) { headerHeightPx.toDp() },
-                    bottom = with(density) { dockHeightPx.toDp() },
-                ),
-                verticalArrangement = Arrangement.spacedBy(DrawerMetrics.RowGap),
-                overscrollEffect = null,
-            ) {
-                if (state.conversations.isEmpty()) {
-                    item {
-                        EmptyConversations(isSearching = query.isNotBlank())
                     }
-                } else {
-                    groups.forEach { group ->
-                        item(key = "section-${group.section}") {
-                            ConversationSectionHeader(group = group)
+                }
+                else -> groups.forEachIndexed { index, group ->
+                    item(key = "section-${group.section}") {
+                        Box(Modifier.animateItem(fadeInSpec = rowFadeIn, placementSpec = rowPlacement, fadeOutSpec = rowFadeOut)) {
+                            ConversationSectionHeader(group = group, first = index == 0)
                         }
-                        items(
-                            items = group.items,
-                            key = { it.id },
-                        ) { conversation ->
-                            ConversationTextRow(
-                                conversation = conversation,
-                                selected = conversation.id == state.selectedConversationId,
-                                onClick = { onConversationSelected(conversation.id) },
-                                onRename = { onConversationRename(conversation) },
-                                onExport = { onConversationExport(conversation) },
-                                onDelete = { onConversationDelete(conversation) },
-                            )
+                    }
+                    items(items = group.items, key = { it.id }) { conversation ->
+                        Box(Modifier.animateItem(fadeInSpec = rowFadeIn, placementSpec = rowPlacement, fadeOutSpec = rowFadeOut)) {
+                        ConversationRow(
+                            conversation = conversation,
+                            selected = conversation.id == state.selectedConversationId,
+                            query = null,
+                            onClick = { onConversationSelected(conversation.id) },
+                            onRename = { onConversationRename(conversation) },
+                            onExport = { onConversationExport(conversation) },
+                            onDelete = { onConversationDelete(conversation) },
+                        )
                         }
                     }
                 }
             }
-            PaneFrostRegion(
-                backdrop = backdrop,
-                showDivider = showHeaderDivider,
+        }
+        PaneFrostRegion(
+            backdrop = backdrop,
+            showDivider = showHeaderDivider,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .onSizeChanged { headerHeightPx = it.height },
+        ) {
+            // Drawer/Header：搜索框从边距线 20 开始，「+」字形右缘对齐 320（右内边距 5）。
+            Row(
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
                     .fillMaxWidth()
-                    .onSizeChanged { headerHeightPx = it.height },
+                    .height(DrawerMetrics.HeaderHeight)
+                    .padding(start = DrawerMetrics.Edge, end = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(
-                    modifier = Modifier
-                        .windowInsetsPadding(
-                            WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
-                        )
-                        .padding(horizontal = DrawerMetrics.PaneHorizontalPadding),
-                ) {
-                    Spacer(modifier = Modifier.height(DrawerMetrics.TopInset))
-                    PaneActionBar(
-                        query = state.searchQuery,
-                        onSearchChange = onSearchChange,
-                    )
-                    Spacer(modifier = Modifier.height(DrawerMetrics.AfterActionBar))
-                }
+                DrawerSearchField(
+                    query = state.searchQuery,
+                    onQueryChange = onSearchChange,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(MovoSpacing.sm))
+                MovoIconButton(
+                    icon = MovoIcons.Plus,
+                    contentDescription = stringResource(R.string.action_new_conversation),
+                    onClick = onNewConversation,
+                )
             }
-            PaneFrostRegion(
-                backdrop = backdrop,
-                showDivider = showDockDivider,
-                dividerAtTop = true,
+        }
+        PaneFrostRegion(
+            backdrop = backdrop,
+            showDivider = showFooterDivider,
+            dividerAtTop = true,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .onSizeChanged { footerHeightPx = it.height },
+        ) {
+            Column(
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .onSizeChanged { dockHeightPx = it.height },
+                    .navigationBarsPadding()
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                    .padding(horizontal = DrawerMetrics.Edge)
+                    .padding(bottom = MovoSpacing.sm),
             ) {
-                Column(
-                    modifier = Modifier
-                        .windowInsetsPadding(
-                            WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal),
-                        )
-                        .padding(horizontal = DrawerMetrics.PaneHorizontalPadding),
-                ) {
-                    Spacer(modifier = Modifier.height(DrawerMetrics.DockTopGap))
-                    PaneDock(
-                        onOpenSettings = onOpenSettings,
-                        onOpenModelProviders = onOpenModelProviders,
-                        onOpenTools = onOpenTools,
-                        onOpenSkills = onOpenSkills,
-                        onOpenCharacters = onOpenCharacters,
-                        onOpenPermissions = onOpenPermissions,
-                    )
-                    Spacer(modifier = Modifier.height(DrawerMetrics.BottomInset))
-                }
+                DrawerSettingsRow(attention = settingsAttention, onClick = onOpenSettings)
             }
         }
     }
 }
 
-/**
- * 侧栏边缘的毛玻璃区域。毛玻璃不可用时（关闭模糊或设备不支持 RuntimeShader）
- * 退回不透明底色，行为与之前一致。
- */
+/** 侧边栏顶 / 底浮层：bg/surface 90% + 背景模糊；模糊不可用时用不透明底色。 */
 @Composable
 private fun PaneFrostRegion(
     backdrop: LayerBackdrop?,
@@ -492,19 +516,14 @@ private fun PaneFrostRegion(
     dividerAtTop: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    val surfaceColor = MiuixTheme.colorScheme.surface
     val frostModifier = if (backdrop == null) {
-        modifier.background(surfaceColor)
+        modifier.background(MovoColors.bgSurface)
     } else {
         modifier.textureBlur(
             backdrop = backdrop,
             shape = RectangleShape,
-            blurRadius = PaneFrostBlurRadius,
-            colors = BlurDefaults.blurColors(
-                blendColors = listOf(
-                    BlendColorEntry(surfaceColor.copy(alpha = PaneFrostSurfaceAlpha)),
-                ),
-            ),
+            blurRadius = 25f,
+            colors = BlurColors(blendColors = listOf(BlendColorEntry(MovoColors.bgSurface.copy(alpha = 0.9f)))),
         )
     }
     Box(modifier = frostModifier) {
@@ -514,93 +533,98 @@ private fun PaneFrostRegion(
             modifier = Modifier
                 .align(if (dividerAtTop) Alignment.TopCenter else Alignment.BottomCenter)
                 .fillMaxWidth(),
-            enter = fadeIn(animationSpec = tween(durationMillis = 140)),
-            exit = fadeOut(animationSpec = tween(durationMillis = 140)),
+            enter = fadeIn(MovoMotion.fast()),
+            exit = fadeOut(MovoMotion.fastExit()),
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(PaneDividerThickness)
-                    .background(MiuixTheme.colorScheme.outline.copy(alpha = PaneDividerAlpha)),
+                    .height(MovoSize.hairline)
+                    .background(MovoColors.borderHairline),
             )
         }
     }
 }
 
-private val PaneDividerThickness = 0.5.dp
-private const val PaneDividerAlpha = 0.5f
-private const val PaneFrostBlurRadius = 25f
-private const val PaneFrostSurfaceAlpha = 0.78f
-
+/**
+ * 搜索框：高 40、圆角 20、bg/surface-muted；16 搜索图标次要色，字形对齐内容线 36；
+ * 占位「搜索对话」Body/Regular 三级色；有文字时右端出现 ✕ 清空。
+ */
 @Composable
-private fun PaneActionBar(
+private fun DrawerSearchField(
     query: String,
-    onSearchChange: (String) -> Unit,
+    onQueryChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        SearchBar(
-            modifier = Modifier.weight(1f),
-            expanded = false,
-            onExpandedChange = {},
-            inputField = {
-                InputField(
-                    query = query,
-                    onQueryChange = onSearchChange,
-                    onSearch = onSearchChange,
-                    expanded = false,
-                    onExpandedChange = {},
-                    label = stringResource(R.string.conversation_search_hint),
-                )
-            },
-            content = {},
-        )
-    }
+    BasicTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        singleLine = true,
+        textStyle = MovoTypography.bodyRegular.copy(color = MovoColors.textPrimary),
+        cursorBrush = SolidColor(MovoColors.indigoFg),
+        modifier = modifier.height(DrawerMetrics.SearchHeight),
+        decorationBox = { innerTextField ->
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(MovoRadius.lg))
+                    .background(MovoColors.bgSurfaceMuted)
+                    .padding(start = 14.dp, end = MovoSpacing.xs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                MovoIcon(MovoIcons.Search, null, size = MovoSize.iconSmall, tint = MovoColors.textSecondary)
+                Spacer(Modifier.width(MovoSpacing.sm))
+                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    if (query.isEmpty()) {
+                        Text(
+                            stringResource(R.string.conversation_search_hint),
+                            style = MovoTypography.bodyRegular,
+                            color = MovoColors.textTertiary,
+                            maxLines = 1,
+                        )
+                    }
+                    innerTextField()
+                }
+                if (query.isNotEmpty()) {
+                    MovoIconButton(
+                        icon = MovoIcons.X,
+                        contentDescription = stringResource(R.string.movo_drawer_clear_search),
+                        onClick = { onQueryChange("") },
+                        iconSize = MovoSize.iconSmall,
+                        tint = MovoColors.textSecondary,
+                        modifier = Modifier.size(MovoSize.controlSmall),
+                    )
+                }
+            }
+        },
+    )
 }
 
+/** 分组标题：Label/Medium 三级色，对齐 36；上 16、下 4（第一组上 8）；不放图标和数量。 */
 @Composable
-private fun ConversationSectionHeader(
-    group: ConversationDrawerGroup,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(
-                top = DrawerMetrics.SectionTopPadding,
-                bottom = DrawerMetrics.SectionBottomPadding,
-            ),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            imageVector = Icons.Rounded.Schedule,
-            contentDescription = null,
-            modifier = Modifier.size(DrawerMetrics.SectionIconSize),
-            tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
-        )
-        Spacer(modifier = Modifier.width(DrawerMetrics.SectionIconGap))
-        Text(
-            text = group.localizedLabel(),
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            style = MiuixTheme.textStyles.footnote1,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Spacer(modifier = Modifier.width(DrawerMetrics.SectionCountGap))
-        Text(
-            text = group.items.size.toString(),
-            color = MiuixTheme.colorScheme.onSurfaceVariantActions,
-            style = MiuixTheme.textStyles.footnote1,
-            fontWeight = FontWeight.Medium,
-        )
-    }
+private fun ConversationSectionHeader(group: ConversationDrawerGroup, first: Boolean) {
+    Text(
+        text = group.localizedLabel(),
+        style = MovoTypography.labelMedium,
+        color = MovoColors.textTertiary,
+        modifier = Modifier.padding(
+            start = DrawerMetrics.RowPadding,
+            top = if (first) MovoSpacing.sm else MovoSpacing.lg,
+            bottom = MovoSpacing.xs,
+        ),
+    )
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+/**
+ * `Drawer/Row` 会话行：宽 300、高 44、圆角 12、左右 16；当前会话 bg/surface-muted + Medium（不用 Indigo）；
+ * 运行中右侧 16 Indigo 加载圈；角色扮演两行高 60；搜索结果两行（标题 + 命中片段，右上时间）。
+ * 长按：触感 + 行保持按压态 + 行下方 4 弹出菜单（重命名、导出、删除）。
+ */
 @Composable
-private fun ConversationTextRow(
+private fun ConversationRow(
     conversation: ConversationSummaryUi,
     selected: Boolean,
+    query: String?,
     onClick: () -> Unit,
     onRename: () -> Unit,
     onExport: () -> Unit,
@@ -608,222 +632,243 @@ private fun ConversationTextRow(
 ) {
     var showActionMenu by remember { mutableStateOf(false) }
     val hapticFeedback = LocalHapticFeedback.current
-
+    val title = conversation.title.ifBlank { conversation.preview }
+    val roleplay = conversation.characterName
+    val secondLine: AnnotatedString? = when {
+        query != null -> conversation.matchSnippet?.let { highlight(it, query) }
+        roleplay != null -> AnnotatedString(stringResource(R.string.movo_drawer_roleplay, roleplay))
+        else -> null
+    }
+    val shape = RoundedCornerShape(MovoRadius.sm)
     Box(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = DrawerMetrics.RowMinHeight)
-                .clip(RoundedCornerShape(DrawerMetrics.RowCornerRadius))
+                .height(if (secondLine != null) DrawerMetrics.RowTwoLineHeight else DrawerMetrics.RowHeight)
+                .clip(shape)
                 .background(
-                    if (selected) {
-                        MiuixTheme.colorScheme.surfaceContainerHigh
-                    } else {
-                        Color.Transparent
+                    when {
+                        showActionMenu -> MovoColors.overlayPressed
+                        selected -> MovoColors.bgSurfaceMuted
+                        else -> androidx.compose.ui.graphics.Color.Transparent
                     },
                 )
-                .combinedClickable(
-                    onClick = onClick,
+                .movoClickable(
+                    kind = PressKind.Row,
+                    shape = shape,
                     onLongClick = {
                         hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                         showActionMenu = true
                     },
+                    onClick = onClick,
                 )
-                .padding(
-                    horizontal = DrawerMetrics.RowHorizontalPadding,
-                    vertical = DrawerMetrics.RowVerticalPadding,
-                ),
+                .padding(horizontal = DrawerMetrics.RowPadding),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-            val title = conversation.title.ifBlank { conversation.preview }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (query != null) highlight(title, query) else AnnotatedString(title),
+                        style = if (selected) MovoTypography.bodyStrong else MovoTypography.bodyRegular,
+                        color = MovoColors.textPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (query != null) {
+                        Spacer(Modifier.weight(1f))
+                        Spacer(Modifier.width(MovoSpacing.sm))
+                        Text(conversation.timeLabel, style = MovoTypography.labelRegular, color = MovoColors.textTertiary, maxLines = 1)
+                    }
+                }
+                if (secondLine != null) {
+                    Text(
+                        text = secondLine,
+                        style = MovoTypography.labelRegular,
+                        color = MovoColors.textSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            if (conversation.isActiveRun) {
+                Spacer(Modifier.width(MovoSpacing.sm))
+                MovoSpinner()
+            }
+        }
+        ConversationActionMenu(
+            show = showActionMenu,
+            onDismiss = { showActionMenu = false },
+            onRename = onRename,
+            onExport = onExport,
+            onDelete = onDelete,
+        )
+    }
+}
+
+/** 命中词：text/primary Medium，其余沿用所在文字的颜色。 */
+private fun highlight(text: String, query: String): AnnotatedString = buildAnnotatedString {
+    append(text)
+    if (query.isBlank()) return@buildAnnotatedString
+    var index = text.indexOf(query, ignoreCase = true)
+    while (index >= 0) {
+        addStyle(SpanStyle(color = MovoColors.textPrimary, fontWeight = FontWeight.Medium), index, index + query.length)
+        index = text.indexOf(query, startIndex = index + query.length, ignoreCase = true)
+    }
+}
+
+/**
+ * `Popover/Menu`：圆角 20、内边距 8、项高 44 圆角 12、E3；出现在行下方 4、左缘对齐行（下方放不下时放到行上方）。
+ * 从锚点缩放 0.96 → 1 并淡入 `fast` + `enter`，退场淡出 120ms。删除为 Rose。
+ */
+@Composable
+private fun ConversationActionMenu(
+    show: Boolean,
+    onDismiss: () -> Unit,
+    onRename: () -> Unit,
+    onExport: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val visibleState = remember { MutableTransitionState(false) }
+    visibleState.targetState = show
+    if (!visibleState.currentState && !visibleState.targetState) return
+    val density = LocalDensity.current
+    val gapPx = with(density) { MovoSpacing.xs.roundToPx() }
+    val shadowPadPx = with(density) { MovoSpacing.xxl.roundToPx() }
+    val positionProvider = remember(gapPx, shadowPadPx) { BelowAnchorPositionProvider(gapPx, shadowPadPx) }
+    Popup(
+        popupPositionProvider = positionProvider,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = true),
+    ) {
+        AnimatedVisibility(
+            visibleState = visibleState,
+            enter = fadeIn(MovoMotion.fast(MovoMotion.EasingEnter)) +
+                scaleIn(MovoMotion.fast(MovoMotion.EasingEnter), initialScale = 0.96f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)),
+            exit = fadeOut(MovoMotion.fastExit()),
+        ) {
+            val shape = RoundedCornerShape(MovoRadius.lg)
+            Column(
+                modifier = Modifier
+                    .padding(MovoSpacing.xxl)
+                    .widthIn(min = DrawerMetrics.MenuWidth)
+                    .movoElevation(MovoElevation.Overlay, shape)
+                    .clip(shape)
+                    .background(MovoColors.bgSurface)
+                    .padding(MovoSpacing.sm),
+            ) {
+                MenuItem(MovoIcons.PenLine, stringResource(R.string.action_rename)) { onDismiss(); onRename() }
+                MenuItem(MovoIcons.Download, stringResource(R.string.action_export)) { onDismiss(); onExport() }
+                MenuItem(MovoIcons.Trash2, stringResource(R.string.action_delete), destructive = true) { onDismiss(); onDelete() }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MenuItem(
+    icon: io.github.mangi.eta.ui.theme.MovoIconData,
+    label: String,
+    destructive: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(MovoRadius.sm)
+    val tint = if (destructive) MovoColors.roseFg else MovoColors.textPrimary
+    Row(
+        modifier = Modifier
+            .widthIn(min = DrawerMetrics.MenuWidth - MovoSpacing.lg)
+            .height(MovoSize.touchTarget)
+            .clip(shape)
+            .movoClickable(PressKind.Row, shape = shape, onClick = onClick)
+            .padding(horizontal = MovoSpacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        MovoIcon(icon, null, size = MovoSize.iconMedium, tint = tint)
+        Spacer(Modifier.width(MovoSpacing.md))
+        Text(label, style = MovoTypography.bodyRegular, color = tint)
+    }
+}
+
+/**
+ * 菜单放在锚点下方 [gapPx]、左缘对齐；弹层四周有 [shadowPadPx] 的阴影留白，这里抵消掉。
+ * 下方放不下时放到锚点上方。
+ */
+private class BelowAnchorPositionProvider(
+    private val gapPx: Int,
+    private val shadowPadPx: Int,
+) : PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: LayoutDirection,
+        popupContentSize: IntSize,
+    ): IntOffset {
+        val x = (anchorBounds.left - shadowPadPx)
+            .coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
+        val below = anchorBounds.bottom + gapPx - shadowPadPx
+        val y = if (below + popupContentSize.height <= windowSize.height) {
+            below
+        } else {
+            (anchorBounds.top - gapPx - popupContentSize.height + shadowPadPx).coerceAtLeast(0)
+        }
+        return IntOffset(x, y)
+    }
+}
+
+/** 空状态：「还没有对话」Body/Strong + 一句说明；无结果：「没有匹配的对话」Body/Regular 次要色；对齐 36。 */
+@Composable
+private fun EmptyConversations(isSearching: Boolean) {
+    Column(modifier = Modifier.padding(start = DrawerMetrics.RowPadding, top = MovoSpacing.md)) {
+        if (isSearching) {
+            Text(stringResource(R.string.conversation_no_results), style = MovoTypography.bodyRegular, color = MovoColors.textSecondary)
+        } else {
+            Text(stringResource(R.string.conversation_empty), style = MovoTypography.bodyStrong, color = MovoColors.textPrimary)
+            Text(stringResource(R.string.movo_drawer_empty_hint), style = MovoTypography.labelRegular, color = MovoColors.textSecondary)
+        }
+    }
+}
+
+/**
+ * `Drawer/Footer`：一行「设置」，高 60、内边距 16；图标底块 40（bg/surface-muted，设置图标 20）→ 12 →
+ * 「设置」+ 说明 → 16 箭头三级色。有权限缺失时说明改为具体问题，箭头前加 8 的 Rose 状态点。
+ */
+@Composable
+private fun DrawerSettingsRow(attention: String?, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(MovoRadius.sm)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(DrawerMetrics.FooterHeight)
+            .clip(shape)
+            .movoClickable(PressKind.Row, shape = shape, onClick = onClick)
+            .padding(horizontal = DrawerMetrics.RowPadding),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(MovoSize.iconTile)
+                .clip(RoundedCornerShape(MovoRadius.sm))
+                .background(MovoColors.bgSurfaceMuted),
+            contentAlignment = Alignment.Center,
+        ) {
+            MovoIcon(MovoIcons.Settings, null, size = MovoSize.iconMedium)
+        }
+        Spacer(Modifier.width(MovoSpacing.md))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(stringResource(R.string.drawer_settings), style = MovoTypography.bodyStrong, color = MovoColors.textPrimary)
             Text(
-                text = title,
-                color = if (selected) {
-                    MiuixTheme.colorScheme.primary
-                } else {
-                    MiuixTheme.colorScheme.onSurface
-                },
-                style = MiuixTheme.textStyles.body1,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                attention ?: stringResource(R.string.movo_drawer_settings_summary),
+                style = MovoTypography.labelRegular,
+                color = MovoColors.textSecondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            // 标题与角色名相同（如未改名的角色会话）时不再重复第二行。
-            conversation.characterName?.takeIf { it != title }?.let { name ->
-                Text(name, style = MiuixTheme.textStyles.footnote1, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            }
-            if (conversation.isActiveRun) {
-                Box(
-                    modifier = Modifier
-                        .padding(start = DrawerMetrics.ActiveDotGap)
-                        .size(DrawerMetrics.ActiveDotSize)
-                        .clip(CircleShape)
-                        .background(MiuixTheme.colorScheme.primary),
-                )
-            }
         }
-
-        WindowListPopup(
-            show = showActionMenu,
-            popupPositionProvider = ListPopupDefaults.ContextMenuPositionProvider,
-            alignment = PopupPositionProvider.Align.BottomEnd,
-            onDismissRequest = { showActionMenu = false },
-        ) {
-            val renameText = stringResource(R.string.action_rename)
-            val exportText = stringResource(R.string.action_export)
-            val deleteText = stringResource(R.string.action_delete)
-            val renameItem = remember(renameText) {
-                DropdownItem(
-                    text = renameText,
-                    icon = { modifier ->
-                        Icon(
-                            imageVector = Icons.Rounded.Edit,
-                            contentDescription = null,
-                            modifier = modifier.size(DrawerMetrics.ActionIconSize),
-                        )
-                    },
-                )
-            }
-            val exportItem = remember(exportText) {
-                DropdownItem(
-                    text = exportText,
-                    icon = { modifier ->
-                        Icon(
-                            imageVector = Icons.Rounded.Download,
-                            contentDescription = null,
-                            modifier = modifier.size(DrawerMetrics.ActionIconSize),
-                        )
-                    },
-                )
-            }
-            val deleteItem = remember(deleteText) {
-                DropdownItem(
-                    text = deleteText,
-                    icon = { modifier ->
-                        Icon(
-                            imageVector = Icons.Rounded.Delete,
-                            contentDescription = null,
-                            modifier = modifier.size(DrawerMetrics.ActionIconSize),
-                            tint = MiuixTheme.colorScheme.error,
-                        )
-                    },
-                )
-            }
-            val deleteColors = DropdownDefaults.dropdownColors(
-                contentColor = MiuixTheme.colorScheme.error,
-                selectedContentColor = MiuixTheme.colorScheme.error,
-                selectedIndicatorColor = MiuixTheme.colorScheme.error,
-            )
-            ListPopupColumn {
-                DropdownImpl(
-                    item = renameItem,
-                    optionSize = 3,
-                    isSelected = false,
-                    index = 0,
-                    onSelectedIndexChange = {
-                        showActionMenu = false
-                        onRename()
-                    },
-                )
-                DropdownImpl(
-                    item = exportItem,
-                    optionSize = 3,
-                    isSelected = false,
-                    index = 1,
-                    onSelectedIndexChange = {
-                        showActionMenu = false
-                        onExport()
-                    },
-                )
-                DropdownImpl(
-                    item = deleteItem,
-                    optionSize = 3,
-                    isSelected = false,
-                    index = 2,
-                    dropdownColors = deleteColors,
-                    onSelectedIndexChange = {
-                        showActionMenu = false
-                        onDelete()
-                    },
-                )
-            }
+        if (attention != null) {
+            Box(Modifier.size(MovoSpacing.sm).clip(CircleShape).background(MovoColors.roseFg))
+            Spacer(Modifier.width(MovoSpacing.sm))
         }
-    }
-}
-
-@Composable
-private fun EmptyConversations(isSearching: Boolean) {
-    Text(
-        text = stringResource(
-            if (isSearching) R.string.conversation_no_results else R.string.conversation_empty,
-        ),
-        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-        style = MiuixTheme.textStyles.body2,
-        fontWeight = FontWeight.Medium,
-        modifier = Modifier.padding(
-            horizontal = DrawerMetrics.RowHorizontalPadding,
-            vertical = DrawerMetrics.EmptyVerticalPadding,
-        ),
-    )
-}
-
-@Composable
-private fun PaneDock(
-    onOpenSettings: () -> Unit,
-    onOpenModelProviders: () -> Unit,
-    onOpenTools: () -> Unit,
-    onOpenSkills: () -> Unit,
-    onOpenCharacters: () -> Unit,
-    onOpenPermissions: () -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            DockEntry(Icons.Outlined.Settings, stringResource(R.string.drawer_settings), onOpenSettings, Modifier.weight(1f))
-            DockEntry(Icons.Outlined.Memory, stringResource(R.string.drawer_models), onOpenModelProviders, Modifier.weight(1f))
-            DockEntry(Icons.Outlined.Inventory2, stringResource(R.string.drawer_tools), onOpenTools, Modifier.weight(1f))
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            DockEntry(Icons.Outlined.Extension, "Skills", onOpenSkills, Modifier.weight(1f))
-            DockEntry(Icons.Outlined.Lock, stringResource(R.string.drawer_permissions), onOpenPermissions, Modifier.weight(1f))
-            DockEntry(Icons.Outlined.TheaterComedy, stringResource(R.string.drawer_characters), onOpenCharacters, Modifier.weight(1f))
-        }
-    }
-}
-
-@Composable
-private fun DockEntry(
-    icon: ImageVector,
-    label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(DrawerMetrics.DockEntryCornerRadius))
-            .background(MiuixTheme.colorScheme.surfaceContainer)
-            .clickable(onClickLabel = label, onClick = onClick)
-            .heightIn(min = 48.dp)
-            .padding(horizontal = 6.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(DrawerMetrics.DockEntryIconSize),
-            tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
-        )
-        Spacer(modifier = Modifier.width(DrawerMetrics.DockEntryLabelGap))
-        Text(
-            text = label,
-            style = MiuixTheme.textStyles.footnote1,
-            fontSize = 12.sp,
-            color = MiuixTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        MovoIcon(MovoIcons.ChevronRight, null, size = MovoSize.iconSmall, tint = MovoColors.textTertiary)
     }
 }
 
@@ -835,21 +880,33 @@ private data class ConversationDrawerGroup(
 private sealed interface ConversationDrawerSection {
     data object Pinned : ConversationDrawerSection
     data object Today : ConversationDrawerSection
-    data class Dated(val label: String) : ConversationDrawerSection
+    data object Yesterday : ConversationDrawerSection
+
+    /** 更早：按天分组，[dayStartMillis] 为当天 0 点。 */
+    data class Day(val dayStartMillis: Long, val sameYear: Boolean) : ConversationDrawerSection
 }
 
+/** 分组标题：今天 / 昨天 / 具体日期（「9月20日」，跨年带年份），按系统语言格式化。 */
 @Composable
-private fun ConversationDrawerGroup.localizedLabel(): String = when (val value = section) {
-    ConversationDrawerSection.Pinned -> stringResource(R.string.conversation_section_pinned)
-    ConversationDrawerSection.Today -> stringResource(R.string.conversation_section_today)
-    is ConversationDrawerSection.Dated -> value.label
+private fun ConversationDrawerGroup.localizedLabel(): String {
+    val locale: Locale = LocalConfiguration.current.locales[0]
+    return when (val value = section) {
+        ConversationDrawerSection.Pinned -> stringResource(R.string.conversation_section_pinned)
+        ConversationDrawerSection.Today -> stringResource(R.string.conversation_section_today)
+        ConversationDrawerSection.Yesterday -> stringResource(R.string.time_yesterday)
+        is ConversationDrawerSection.Day -> {
+            val pattern = DateFormat.getBestDateTimePattern(locale, if (value.sameYear) "MMMd" else "yMMMd")
+            java.text.SimpleDateFormat(pattern, locale).format(java.util.Date(value.dayStartMillis))
+        }
+    }
 }
 
 private fun List<ConversationSummaryUi>.groupForDrawer(): List<ConversationDrawerGroup> {
     if (isEmpty()) return emptyList()
+    val now = Calendar.getInstance()
     val groups = mutableListOf<ConversationDrawerGroup>()
     for (conversation in this) {
-        val section = conversation.drawerSection()
+        val section = conversation.drawerSection(now)
         val last = groups.lastOrNull()
         if (last?.section == section) {
             groups[groups.lastIndex] = last.copy(items = last.items + conversation)
@@ -860,17 +917,29 @@ private fun List<ConversationSummaryUi>.groupForDrawer(): List<ConversationDrawe
     return groups
 }
 
-private fun ConversationSummaryUi.drawerSection(): ConversationDrawerSection = when {
-    isPinned -> ConversationDrawerSection.Pinned
-    isActiveRun || isUpdatedToday(updatedAtMillis) -> ConversationDrawerSection.Today
-    else -> ConversationDrawerSection.Dated(timeLabel)
-}
-
-private fun isUpdatedToday(timestampMillis: Long): Boolean {
-    if (timestampMillis <= 0L) return true
-    val now = java.util.Calendar.getInstance()
-    val target = java.util.Calendar.getInstance().apply { timeInMillis = timestampMillis }
-    return now.get(java.util.Calendar.ERA) == target.get(java.util.Calendar.ERA) &&
-        now.get(java.util.Calendar.YEAR) == target.get(java.util.Calendar.YEAR) &&
-        now.get(java.util.Calendar.DAY_OF_YEAR) == target.get(java.util.Calendar.DAY_OF_YEAR)
+private fun ConversationSummaryUi.drawerSection(now: Calendar): ConversationDrawerSection {
+    if (isPinned) return ConversationDrawerSection.Pinned
+    if (isActiveRun || updatedAtMillis <= 0L) return ConversationDrawerSection.Today
+    val target = Calendar.getInstance().apply { timeInMillis = updatedAtMillis }
+    val dayStart = (target.clone() as Calendar).apply {
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }
+    val todayStart = (now.clone() as Calendar).apply {
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }
+    val yesterdayStart = (todayStart.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, -1) }
+    return when {
+        !dayStart.before(todayStart) -> ConversationDrawerSection.Today
+        !dayStart.before(yesterdayStart) -> ConversationDrawerSection.Yesterday
+        else -> ConversationDrawerSection.Day(
+            dayStartMillis = dayStart.timeInMillis,
+            sameYear = target.get(Calendar.YEAR) == now.get(Calendar.YEAR) && target.get(Calendar.ERA) == now.get(Calendar.ERA),
+        )
+    }
 }

@@ -156,6 +156,9 @@ internal class DoubaoBidirectionalAsrEngine(
                 }
             },
             onError = { message -> mainHandler.post { failAndStop(message) } },
+            onLevel = { level ->
+                mainHandler.post { if (running.get() && !stopping) listener?.onLevel(level) }
+            },
         )
         pcmCapture = capture
         capture.start()
@@ -173,14 +176,14 @@ internal class DoubaoBidirectionalAsrEngine(
             }
             is SaucServerFrame.Response -> {
                 val text = frame.result.text.trim()
-                if (text.isNotEmpty()) {
-                    latestText = text
-                    listener?.onPartial(text)
-                }
                 val definite = frame.result.utterances
                     .filter { it.definite }
                     .joinToString("") { it.text }
                     .trim()
+                if (text.isNotEmpty()) {
+                    latestText = text
+                    listener?.onPartial(text, text.commonPrefixWith(definite).length)
+                }
                 if (definite.isNotEmpty()) {
                     definiteText = definite
                 }

@@ -102,4 +102,13 @@ class AgentResultSheetSizingTest {
         assertFalse(AgentResultSheetSizing.settleExpanded(900, 1000, 0f, 600f, lift))
         assertTrue(AgentResultSheetSizing.settleExpanded(950, 1000, 0f, 600f, lift))
     }
+
+    @Test
+    fun dragDownDismissesPastAThirdOrOnAFling() {
+        // 规范 8.9：向下拖过 1/3 关闭；快速下甩也关闭；上甩回弹。
+        assertFalse(AgentResultSheetSizing.shouldDismiss(300f, 1200, 0f, 1500f))
+        assertTrue(AgentResultSheetSizing.shouldDismiss(401f, 1200, 0f, 1500f))
+        assertTrue(AgentResultSheetSizing.shouldDismiss(60f, 1200, 1600f, 1500f))
+        assertFalse(AgentResultSheetSizing.shouldDismiss(500f, 1200, -1600f, 1500f))
+    }
 }

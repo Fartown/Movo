@@ -67,6 +67,7 @@ import top.yukonga.miuix.kmp.basic.rememberTooltipState
 import top.yukonga.miuix.kmp.overlay.OverlayListPopup
 import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import io.github.mangi.eta.ui.components.movo.movoClickable
 
 @Composable
 internal fun AgentModelPickerButton(
@@ -95,22 +96,28 @@ internal fun AgentModelPickerButton(
     val currentModel = selected?.displayName ?: stringResource(R.string.model_not_selected)
     val switchModelDescription = stringResource(R.string.model_switch_current, currentModel)
     Box(modifier = modifier) {
-        IconButton(
-            onClick = {
-                expandedProviderIds = defaultExpandedModelProviderIds(state.selectedModel)
-                showPopup = true
-            },
-            enabled = enabled,
-            minWidth = ChatInputActionSize,
-            minHeight = ChatInputActionSize,
-            modifier = Modifier.semantics {
-                contentDescription = switchModelDescription
-            },
+        // 模型按钮：40 浅底圆，内放 22 品牌 Logo（圆形裁切 + 0.5 描边），不显示模型名（规范 8）。
+        Box(
+            modifier = Modifier
+                .size(ChatInputActionSize)
+                .movoClickable(
+                    io.github.mangi.eta.ui.components.movo.PressKind.Solid,
+                    shape = CircleShape,
+                    enabled = enabled,
+                    onClick = {
+                        expandedProviderIds = defaultExpandedModelProviderIds(state.selectedModel)
+                        showPopup = true
+                    },
+                )
+                .clip(CircleShape)
+                .background(io.github.mangi.eta.ui.theme.MovoColors.bgSurfaceMuted)
+                .semantics { contentDescription = switchModelDescription },
+            contentAlignment = Alignment.Center,
         ) {
             ModelBrandMark(
                 modelId = selected?.modelId,
                 sourceType = selected?.providerSourceType,
-                size = ChatInputActionIconSize,
+                size = 22.dp,
             )
         }
 
@@ -343,24 +350,45 @@ internal fun AgentContextUsageButton(
         focusable = true,
         modifier = modifier,
     ) {
-        IconButton(
-            onClick = { scope.launch { tooltipState.show() } },
-            minWidth = ChatInputActionSize,
-            minHeight = ChatInputActionSize,
+        // 上下文用量 `Button/ContextUsage`：40 浅底圆，内含 20 用量表（外圈 1.5 描边 + 扇形表示已用比例）；
+        // ≥ 80% 改为 Amber（规范 8.1）。弧长过渡 `standard`（9.3「进度数值」）。
+        val animatedProgress by androidx.compose.animation.core.animateFloatAsState(
+            targetValue = (progress ?: 0f).coerceIn(0f, 1f),
+            animationSpec = io.github.mangi.eta.ui.theme.MovoMotion.standard(),
+            label = "contextUsage",
+        )
+        val meterColor = if ((progress ?: 0f) >= 0.80f) {
+            io.github.mangi.eta.ui.theme.MovoColors.amberFg
+        } else {
+            io.github.mangi.eta.ui.theme.MovoColors.textPrimary
+        }
+        Box(
+            modifier = Modifier
+                .size(ChatInputActionSize)
+                .movoClickable(
+                    io.github.mangi.eta.ui.components.movo.PressKind.Solid,
+                    shape = CircleShape,
+                    onClick = { scope.launch { tooltipState.show() } },
+                )
+                .clip(CircleShape)
+                .background(io.github.mangi.eta.ui.theme.MovoColors.bgSurfaceMuted)
+                .semantics { contentDescription = usageDescription },
+            contentAlignment = Alignment.Center,
         ) {
-            CircularProgressIndicator(
-                progress = progress ?: 0f,
-                colors = ProgressIndicatorDefaults.progressIndicatorColors(
-                    foregroundColor = progressColor,
-                    disabledForegroundColor = progressColor,
-                    backgroundColor = MiuixTheme.colorScheme.secondaryContainer,
-                ),
-                strokeWidth = 2.5.dp,
-                size = ChatInputActionIconSize,
-                modifier = Modifier.semantics {
-                    contentDescription = usageDescription
-                },
-            )
+            androidx.compose.foundation.Canvas(Modifier.size(20.dp)) {
+                val stroke = 1.5.dp.toPx()
+                val radius = size.minDimension / 2 - stroke / 2
+                drawCircle(meterColor, radius = radius, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+                val inner = radius - stroke - 1.dp.toPx()
+                drawArc(
+                    color = meterColor,
+                    startAngle = -90f,
+                    sweepAngle = 360f * animatedProgress,
+                    useCenter = true,
+                    topLeft = androidx.compose.ui.geometry.Offset(center.x - inner, center.y - inner),
+                    size = androidx.compose.ui.geometry.Size(inner * 2, inner * 2),
+                )
+            }
         }
     }
 }

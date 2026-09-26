@@ -2,7 +2,6 @@ package io.github.mangi.eta.ui.screens.terminal
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,13 +20,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Insights
-import androidx.compose.material.icons.rounded.Layers
-import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -39,10 +36,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -63,14 +65,23 @@ import io.github.mangi.eta.ui.app.UserTerminalStore
 import io.github.mangi.eta.ui.app.UserTerminalUiState
 import io.github.mangi.eta.ui.components.ansiPlainText
 import io.github.mangi.eta.ui.components.ansiToAnnotatedString
+import io.github.mangi.eta.ui.components.movo.MovoCircleButton
+import io.github.mangi.eta.ui.components.movo.MovoIconButton
+import io.github.mangi.eta.ui.components.movo.MovoPillButton
+import io.github.mangi.eta.ui.components.movo.PressKind
+import io.github.mangi.eta.ui.components.movo.movoClickable
+import io.github.mangi.eta.ui.theme.MovoColors
+import io.github.mangi.eta.ui.theme.MovoIcons
+import io.github.mangi.eta.ui.theme.MovoRadius
+import io.github.mangi.eta.ui.theme.MovoSize
+import io.github.mangi.eta.ui.theme.MovoSpacing
+import io.github.mangi.eta.ui.theme.MovoTypography
 import top.yukonga.miuix.kmp.basic.DropdownImpl
 import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.InfiniteProgressIndicator
 import top.yukonga.miuix.kmp.basic.ListPopupColumn
 import top.yukonga.miuix.kmp.basic.PopupPositionProvider
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.window.WindowListPopup
@@ -120,7 +131,7 @@ internal fun UserTerminalScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MiuixTheme.colorScheme.surface)
+            .background(MovoColors.bgCanvas)
             .imePadding()
             .navigationBarsPadding(),
     ) {
@@ -387,6 +398,10 @@ private fun SystemBlock(block: TerminalBlockUi) {
     )
 }
 
+/**
+ * 终端状态栏（外层骨架，Movo 组件）：环境切换胶囊（选中 = Indigo 浅底 + Indigo 文字）、cwd、
+ * 会话 / 守护任务 / 控制台三个 44 图标按钮，运行中显示「停止」主操作胶囊。
+ */
 @Composable
 private fun StatusBar(
     state: UserTerminalUiState,
@@ -399,84 +414,111 @@ private fun StatusBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp),
+            .padding(start = MovoSpacing.md, end = MovoSpacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        EnvironmentTab(
+        TerminalEnvironmentChip(
             label = "Android",
             selected = state.environment == TerminalEnvironment.ANDROID,
             onClick = { onSwitchEnvironment(TerminalEnvironment.ANDROID) },
         )
-        EnvironmentTab(
+        TerminalEnvironmentChip(
             label = if (state.linuxEnvironment == TerminalEnvironment.ALPINE) "Alpine" else "Debian",
             selected = state.environment == state.linuxEnvironment,
             onClick = { onSwitchEnvironment(state.linuxEnvironment) },
         )
         Text(
             text = state.cwd,
-            style = MiuixTheme.textStyles.footnote2.copy(fontFamily = FontFamily.Monospace),
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            style = MovoTypography.labelRegular.copy(fontFamily = FontFamily.Monospace),
+            color = MovoColors.textSecondary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.End,
             modifier = Modifier
                 .weight(1f)
-                .padding(horizontal = 8.dp),
+                .padding(horizontal = MovoSpacing.sm),
         )
-        IconButton(onClick = onOpenSessions) {
-            Icon(
-                imageVector = Icons.Rounded.Layers,
-                contentDescription = stringResource(R.string.terminal_sessions),
-                modifier = Modifier.size(18.dp),
-                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            )
-        }
-        IconButton(onClick = onOpenTasks) {
-            Icon(
-                imageVector = Icons.Rounded.Insights,
-                contentDescription = stringResource(R.string.terminal_daemon_tasks),
-                modifier = Modifier.size(18.dp),
-                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            )
-        }
+        MovoIconButton(
+            icon = MovoIcons.Layers,
+            contentDescription = stringResource(R.string.terminal_sessions),
+            onClick = onOpenSessions,
+            iconSize = MovoSize.iconMedium,
+            tint = MovoColors.textSecondary,
+        )
+        TerminalMaterialIconButton(
+            icon = Icons.Rounded.Insights,
+            contentDescription = stringResource(R.string.terminal_daemon_tasks),
+            onClick = onOpenTasks,
+        )
         if (onOpenConsole != null) {
-            IconButton(onClick = onOpenConsole) {
-                Icon(
-                    imageVector = Icons.Rounded.Terminal,
-                    contentDescription = stringResource(R.string.terminal_console_mode),
-                    modifier = Modifier.size(18.dp),
-                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                )
-            }
+            MovoIconButton(
+                icon = MovoIcons.Terminal,
+                contentDescription = stringResource(R.string.terminal_console_mode),
+                onClick = onOpenConsole,
+                iconSize = MovoSize.iconMedium,
+                tint = MovoColors.textSecondary,
+            )
         }
         if (state.running) {
-            TextButton(
-                text = stringResource(R.string.terminal_stop),
+            Spacer(Modifier.width(MovoSpacing.xs))
+            MovoPillButton(
+                label = stringResource(R.string.terminal_stop),
                 onClick = onStop,
+                primary = true,
             )
         }
     }
 }
 
+/** 环境切换胶囊：高 32、圆角 16；选中 Indigo 浅底 + Indigo 文字（Medium），未选中透明底 + 次要色。 */
 @Composable
-private fun EnvironmentTab(
+internal fun TerminalEnvironmentChip(
     label: String,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    Text(
-        text = label,
-        style = MiuixTheme.textStyles.footnote1,
-        color = if (selected) {
-            MiuixTheme.colorScheme.primary
-        } else {
-            MiuixTheme.colorScheme.onSurfaceVariantSummary
-        },
-        fontWeight = if (selected) FontWeight.SemiBold else null,
+    val shape = RoundedCornerShape(MovoRadius.md)
+    Box(
         modifier = Modifier
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-    )
+            .height(MovoSize.controlSmall)
+            .movoClickable(PressKind.Solid, shape = shape, role = Role.Tab, onClick = onClick)
+            .clip(shape)
+            .background(if (selected) MovoColors.indigoBg else Color.Transparent)
+            .padding(horizontal = MovoSpacing.md),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            style = if (selected) MovoTypography.labelMedium else MovoTypography.labelRegular,
+            color = if (selected) MovoColors.indigoFg else MovoColors.textSecondary,
+        )
+    }
+}
+
+/**
+ * 暂无对应 Lucide 图标（需要 `activity`）时的过渡：Material 图标放进 Movo 图标按钮的热区与按压态，
+ * 热区 44、图标 20、次要色。
+ */
+@Composable
+internal fun TerminalMaterialIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(MovoSize.touchTarget)
+            .movoClickable(PressKind.Icon, onClick = onClick)
+            .semantics { this.contentDescription = contentDescription },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(MovoSize.iconMedium),
+            tint = MovoColors.textSecondary,
+        )
+    }
 }
 
 @Composable
@@ -492,8 +534,8 @@ private fun InputRow(
         onValueChange = onInputChange,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .padding(bottom = 10.dp),
+            .padding(horizontal = MovoSpacing.md)
+            .padding(bottom = MovoSpacing.sm),
         label = stringResource(
             if (running) R.string.terminal_input_running_hint else R.string.terminal_input_hint,
         ),
@@ -501,20 +543,15 @@ private fun InputRow(
         maxLines = 4,
         textStyle = MiuixTheme.textStyles.body2.copy(fontFamily = FontFamily.Monospace),
         trailingIcon = {
-            IconButton(
+            // 主按钮：空闲无内容 = 发送置灰；有内容 = 发送 ↑（规范 8「输入框主按钮」）。
+            MovoCircleButton(
+                icon = MovoIcons.ArrowUp,
+                contentDescription = stringResource(R.string.terminal_send),
                 onClick = onSubmit,
+                primary = true,
                 enabled = canSend,
-                modifier = Modifier
-                    .padding(end = 6.dp)
-                    .alpha(if (canSend) 1f else 0.34f),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.ArrowUpward,
-                    contentDescription = stringResource(R.string.terminal_send),
-                    modifier = Modifier.size(19.dp),
-                    tint = MiuixTheme.colorScheme.onSurface,
-                )
-            }
+                modifier = Modifier.padding(end = MovoSpacing.sm),
+            )
         },
     )
 }
@@ -524,20 +561,21 @@ private fun LinuxGuide(onOpenEnvironment: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(32.dp),
+            .padding(MovoSpacing.section),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
         Text(
             text = stringResource(R.string.terminal_linux_not_ready),
-            style = MiuixTheme.textStyles.body2,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            style = MovoTypography.bodyRegular,
+            color = MovoColors.textSecondary,
             textAlign = TextAlign.Center,
         )
-        TextButton(
-            text = stringResource(R.string.terminal_open_environment),
+        Spacer(Modifier.height(MovoSpacing.md))
+        MovoPillButton(
+            label = stringResource(R.string.terminal_open_environment),
             onClick = onOpenEnvironment,
-            modifier = Modifier.padding(top = 12.dp),
+            primary = true,
         )
     }
 }
@@ -547,13 +585,13 @@ private fun EmptyHint(message: String? = null) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(32.dp),
+            .padding(MovoSpacing.section),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = message ?: stringResource(R.string.terminal_empty_hint),
-            style = MiuixTheme.textStyles.footnote1,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            style = MovoTypography.bodyRegular,
+            color = MovoColors.textSecondary,
             textAlign = TextAlign.Center,
         )
     }

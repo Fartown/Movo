@@ -3,11 +3,11 @@ package io.github.mangi.eta.ui.screens.chat
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import io.github.mangi.eta.ui.components.AgentChatBody
 import io.github.mangi.eta.ui.components.AgentConversationDraftStore
 import io.github.mangi.eta.ui.components.LocalConversationComposer
-import io.github.mangi.eta.ui.components.chatConversationCompositionKey
 import io.github.mangi.eta.ui.model.AgentChatAction
 import io.github.mangi.eta.ui.model.AgentChatUiState
 import io.github.mangi.eta.ui.model.AgentModelPickerUiState
@@ -26,9 +26,20 @@ internal fun AgentChatScreen(
     initiallyShowLatestMessage: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
-    key(chatConversationCompositionKey(conversationKey)) {
+    val compositionKeys = remember { io.github.mangi.eta.ui.components.ChatCompositionKeys() }
+    val compositionKey = compositionKeys.keyFor(
+        conversationKey,
+        adoptedFromDraft = conversationKey != null &&
+            conversationKey == io.github.mangi.eta.ui.components.AgentConversationDraftStore.shared.lastAssignedConversationId,
+    )
+    key(compositionKey) {
         CompositionLocalProvider(
             LocalConversationComposer provides AgentConversationDraftStore.shared.get(conversationKey, state.input),
+            io.github.mangi.eta.ui.components.LocalRunControls provides io.github.mangi.eta.ui.components.RunControls(
+                isPaused = state.isStreaming && state.isPaused,
+                onResume = { onAction(AgentChatAction.ResumeRun) },
+                onEndTask = { onAction(AgentChatAction.StopRun) },
+            ),
         ) {
             AgentChatBody(
                 messages = state.messages,

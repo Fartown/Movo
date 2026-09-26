@@ -313,6 +313,7 @@ internal class AgentRunMessageProjector(
             status = ToolActivityStatusUi.Running,
             argumentsSummary = event.argsPreview,
             command = event.command,
+            startedAtMillis = event.atMillis.takeIf { it > 0L },
         )
         if (messages.any { it.id == message.id }) return messages
         return messages + message
@@ -343,6 +344,7 @@ internal class AgentRunMessageProjector(
                     status = status,
                     resultSummary = event.resultSummary,
                     imageCount = event.imageCount,
+                    finishedAtMillis = event.atMillis.takeIf { it > 0L } ?: message.finishedAtMillis,
                 )
             } else {
                 message
@@ -360,6 +362,7 @@ internal class AgentRunMessageProjector(
             toolName = event.name,
             status = ToolActivityStatusUi.Running,
             argumentsSummary = "",
+            startedAtMillis = event.atMillis.takeIf { it > 0L },
         )
         return if (messages.any { it.id == message.id }) messages else messages + message
     }
@@ -375,6 +378,7 @@ internal class AgentRunMessageProjector(
                 message.copy(
                     status = if (event.success) ToolActivityStatusUi.Success else ToolActivityStatusUi.Failed,
                     resultSummary = null,
+                    finishedAtMillis = event.atMillis.takeIf { it > 0L } ?: message.finishedAtMillis,
                 )
             } else {
                 message

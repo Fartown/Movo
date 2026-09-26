@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 启动页图标：与启动器图标同一前景（光球 + M），落在 bg/canvas 启动页底色上。 -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@mipmap/ic_launcher_foreground" />
+</layer-list>

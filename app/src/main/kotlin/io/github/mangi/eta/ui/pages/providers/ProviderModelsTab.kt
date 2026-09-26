@@ -7,35 +7,30 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.CloudDownload
-import androidx.compose.material.icons.rounded.RadioButtonUnchecked
-import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -43,12 +38,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -66,35 +62,35 @@ import io.github.mangi.eta.data.model.ReasoningEffort
 import io.github.mangi.eta.data.repository.ModelRepository
 import io.github.mangi.eta.data.repository.RemoteModelFetcher
 import io.github.mangi.eta.data.repository.RuntimeConfigRepository
-import io.github.mangi.eta.ui.components.MiuixDialogActions
-import io.github.mangi.eta.ui.components.PreferenceIcon
-import io.github.mangi.eta.ui.components.StatusError
-import io.github.mangi.eta.ui.components.StatusSuccess
+import io.github.mangi.eta.ui.components.movo.BlockTone
+import io.github.mangi.eta.ui.components.movo.CardTitle
+import io.github.mangi.eta.ui.components.movo.MovoBlockButton
+import io.github.mangi.eta.ui.components.movo.MovoButtonRow
+import io.github.mangi.eta.ui.components.movo.MovoConfirmDialog
+import io.github.mangi.eta.ui.components.movo.MovoDialogHost
+import io.github.mangi.eta.ui.components.movo.MovoDivider
+import io.github.mangi.eta.ui.components.movo.MovoIconButton
+import io.github.mangi.eta.ui.components.movo.MovoPillButton
+import io.github.mangi.eta.ui.components.movo.PressKind
+import io.github.mangi.eta.ui.components.movo.RowTrailing
+import io.github.mangi.eta.ui.components.movo.SettingsRow
+import io.github.mangi.eta.ui.components.movo.movoClickable
+import io.github.mangi.eta.ui.components.movo.movoSurface
 import io.github.mangi.eta.ui.model.formatCompactTokenCount
+import io.github.mangi.eta.ui.theme.MovoColors
+import io.github.mangi.eta.ui.theme.MovoElevation
+import io.github.mangi.eta.ui.theme.MovoIcon
+import io.github.mangi.eta.ui.theme.MovoIcons
+import io.github.mangi.eta.ui.theme.MovoMotion
+import io.github.mangi.eta.ui.theme.MovoRadius
+import io.github.mangi.eta.ui.theme.MovoSize
+import io.github.mangi.eta.ui.theme.MovoSpacing
+import io.github.mangi.eta.ui.theme.MovoTypography
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.CardDefaults
-import top.yukonga.miuix.kmp.basic.Checkbox
-import top.yukonga.miuix.kmp.basic.HorizontalDivider
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.InputField
-import top.yukonga.miuix.kmp.basic.ScrollBehavior
-import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
-import top.yukonga.miuix.kmp.preference.ArrowPreference
-import top.yukonga.miuix.kmp.preference.CheckboxLocation
-import top.yukonga.miuix.kmp.preference.CheckboxPreference
-import top.yukonga.miuix.kmp.preference.SwitchPreference
-import top.yukonga.miuix.kmp.squircle.squircleSurface
-import top.yukonga.miuix.kmp.theme.LocalContentColor
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 
@@ -176,11 +172,15 @@ private fun String.containsCharactersInOrder(query: String): Boolean {
     return false
 }
 
+/**
+ * 提供商详情 ·「模型」（规范 8.7 列表页）：「模型管理」卡（从远端拉取、添加自定义模型、就地结果）→ 搜索框 →
+ * 模型列表卡（卡内标题写数量；点行设为当前，长按进入多选，右侧编辑与单选）。模型数量可能上百，
+ * 列表卡拆成多个 Lazy 条目，由 [movoCardSegment] 画出同一张卡片。
+ */
 @Composable
 internal fun ProviderModelsTab(
     provider: ProviderSetting,
     scope: CoroutineScope,
-    scrollBehavior: ScrollBehavior,
     contentSidePadding: Dp,
 ) {
     val context = LocalContext.current
@@ -192,6 +192,8 @@ internal fun ProviderModelsTab(
     var isCreatingModel by remember { mutableStateOf(false) }
     var editorError by remember { mutableStateOf<String?>(null) }
     var modelPendingDelete by remember { mutableStateOf<Model?>(null) }
+    var lastModelPendingDelete by remember { mutableStateOf<Model?>(null) }
+    if (modelPendingDelete != null) lastModelPendingDelete = modelPendingDelete
     var selectionMode by remember(provider.id) { mutableStateOf(false) }
     var selectedModelIds by remember(provider.id) { mutableStateOf(setOf<String>()) }
     var showBatchDeleteDialog by remember { mutableStateOf(false) }
@@ -200,6 +202,9 @@ internal fun ProviderModelsTab(
     val filteredModels = remember(provider.models, modelSearchQuery) {
         filterProviderModels(provider.models, modelSearchQuery)
     }
+    val failPrefix = stringResource(R.string.page_fail_3e3c80)
+    val navigation = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val actionsEnabled = !isFetching && !isMutatingModel
 
     val selectionBackState = rememberNavigationEventState(NavigationEventInfo.None)
     NavigationBackHandler(
@@ -216,25 +221,24 @@ internal fun ProviderModelsTab(
             modifier = Modifier
                 .fillMaxSize()
                 .scrollEndHaptic()
-                .overScrollVertical()
-                .nestedScroll(scrollBehavior.nestedScrollConnection),
+                .overScrollVertical(),
             contentPadding = PaddingValues(
-                start = contentSidePadding,
-                end = contentSidePadding,
+                start = contentSidePadding + MovoSpacing.pageEdge,
+                end = contentSidePadding + MovoSpacing.pageEdge,
+                top = MovoSpacing.md,
+                // 多选操作栏悬浮在底部时，预留高度避免遮挡最后一个列表项。
+                bottom = navigation + if (selectionMode) ModelSelectionBarReserve else MovoSpacing.section,
             ),
             overscrollEffect = null,
         ) {
             item(key = "actions", contentType = "section") {
                 ProviderSection(title = stringResource(R.string.ui_model_management_183414)) {
-                    ArrowPreference(
+                    SettingsRow(
                         title = if (isFetching) context.getString(R.string.page_retrieving_a880c9) else context.getString(R.string.page_automatically_pull_from_remote_f883d0),
-                        summary = stringResource(R.string.provider_models_endpoint_summary, provider.baseUrl),
-                        enabled = !isFetching && !isMutatingModel,
-                        startAction = {
-                            PreferenceIcon(
-                                icon = Icons.Rounded.CloudDownload,
-                                enabled = !isFetching && !isMutatingModel,
-                            )
+                        subtitle = stringResource(R.string.provider_models_endpoint_summary, provider.baseUrl),
+                        enabled = actionsEnabled,
+                        trailing = RowTrailing.Custom {
+                            MovoIcon(MovoIcons.Download, null, size = MovoSize.iconMedium, tint = MovoColors.textSecondary)
                         },
                         onClick = {
                             scope.launch {
@@ -282,16 +286,13 @@ internal fun ProviderModelsTab(
                             }
                         },
                     )
-
-                    ArrowPreference(
+                    SettingsRow(
                         title = stringResource(R.string.ui_add_custom_model_a5ddc0),
-                        summary = stringResource(R.string.ui_manually_fill_in_the_display_name_and_model_id_077a7b),
-                        enabled = !isFetching && !isMutatingModel,
-                        startAction = {
-                            PreferenceIcon(
-                                icon = Icons.Rounded.Add,
-                                enabled = !isFetching && !isMutatingModel,
-                            )
+                        subtitle = stringResource(R.string.ui_manually_fill_in_the_display_name_and_model_id_077a7b),
+                        enabled = actionsEnabled,
+                        showDivider = message != null,
+                        trailing = RowTrailing.Custom {
+                            MovoIcon(MovoIcons.Plus, null, size = MovoSize.iconMedium, tint = MovoColors.textSecondary)
                         },
                         onClick = {
                             editorError = null
@@ -304,29 +305,21 @@ internal fun ProviderModelsTab(
                         },
                     )
                     message?.let {
-                        HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
-                        Text(
-                            text = it,
-                            style = MiuixTheme.textStyles.footnote2,
-                            color = if (it.startsWith(context.getString(R.string.page_fail_3e3c80))) StatusError else StatusSuccess,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        ProviderStatusLine(
+                            message = it,
+                            isError = it.startsWith(failPrefix),
+                            modifier = Modifier.padding(horizontal = MovoSpacing.lg, vertical = MovoSpacing.md),
                         )
                     }
                 }
             }
 
             item(key = "model_search", contentType = "search") {
-                InputField(
+                MovoSearchField(
                     query = modelSearchQuery,
                     onQueryChange = { modelSearchQuery = it },
-                    onSearch = {},
-                    expanded = false,
-                    onExpandedChange = {},
-                    label = stringResource(R.string.ui_search_model_df5586),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp)
-                        .padding(top = 12.dp, bottom = 8.dp),
+                    placeholder = stringResource(R.string.ui_search_model_df5586),
+                    modifier = Modifier.padding(top = MovoSpacing.lg),
                 )
             }
 
@@ -343,93 +336,83 @@ internal fun ProviderModelsTab(
                 item(key = "models_empty", contentType = "empty") {
                     ProviderSection(
                         title = modelListTitle,
-                        modifier = Modifier.padding(bottom = 24.dp),
+                        modifier = Modifier.padding(top = MovoSpacing.lg),
                     ) {
-                        Box(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = if (provider.models.isEmpty()) {
-                                    context.getString(R.string.page_there_is_no_model_yet_please_pull_it_from_the_remote_ced865)
-                                } else {
-                                    context.getString(R.string.page_no_matching_model_found_ae7e96)
-                                },
-                                style = MiuixTheme.textStyles.body2,
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                            )
-                        }
+                        Text(
+                            text = if (provider.models.isEmpty()) {
+                                context.getString(R.string.page_there_is_no_model_yet_please_pull_it_from_the_remote_ced865)
+                            } else {
+                                context.getString(R.string.page_no_matching_model_found_ae7e96)
+                            },
+                            style = MovoTypography.labelRegular,
+                            color = MovoColors.textSecondary,
+                            modifier = Modifier.padding(horizontal = MovoSpacing.lg, vertical = MovoSpacing.md),
+                        )
                     }
                 }
             } else {
                 item(key = "models_title", contentType = "section_title") {
-                    SmallTitle(modelListTitle)
+                    CardTitle(
+                        text = modelListTitle,
+                        modifier = Modifier
+                            .padding(top = MovoSpacing.lg)
+                            .movoCardSegment(CardSegment.Top),
+                    )
                 }
                 itemsIndexed(
                     items = filteredModels,
                     key = { _, model -> "model:${model.id}" },
                     contentType = { _, _ -> "model" },
                 ) { index, model ->
-                    ModelListGroupItem(
-                        isFirst = index == 0,
-                        isLast = index == filteredModels.lastIndex,
-                    ) {
-                        ModelListItem(
-                            model = model,
-                            enabled = !isFetching && !isMutatingModel,
-                            isSelected = model.id == selectedModelId,
-                            selectionMode = selectionMode,
-                            checked = model.id in selectedModelIds,
-                            onToggleChecked = {
-                                selectedModelIds = if (model.id in selectedModelIds) {
-                                    selectedModelIds - model.id
-                                } else {
-                                    selectedModelIds + model.id
-                                }
-                            },
-                            onEnterSelection = {
-                                selectionMode = true
-                                selectedModelIds = setOf(model.id)
-                            },
-                            onEdit = {
-                                editorError = null
-                                isCreatingModel = false
-                                editingModel = model
-                            },
-                            onSetCurrent = {
-                                scope.launch {
-                                    RuntimeConfigRepository.setSelectedModelId(model.id)
-                                    RuntimeConfigRepository.syncToRemotePreferences(EtaApp.serviceInstance)
-                                }
-                            },
-                        )
-                    }
+                    val isLast = index == filteredModels.lastIndex
+                    ModelListItem(
+                        model = model,
+                        enabled = actionsEnabled,
+                        isSelected = model.id == selectedModelId,
+                        selectionMode = selectionMode,
+                        checked = model.id in selectedModelIds,
+                        showDivider = !isLast,
+                        onToggleChecked = {
+                            selectedModelIds = if (model.id in selectedModelIds) {
+                                selectedModelIds - model.id
+                            } else {
+                                selectedModelIds + model.id
+                            }
+                        },
+                        onEnterSelection = {
+                            selectionMode = true
+                            selectedModelIds = setOf(model.id)
+                        },
+                        onEdit = {
+                            editorError = null
+                            isCreatingModel = false
+                            editingModel = model
+                        },
+                        onSetCurrent = {
+                            scope.launch {
+                                RuntimeConfigRepository.setSelectedModelId(model.id)
+                                RuntimeConfigRepository.syncToRemotePreferences(EtaApp.serviceInstance)
+                            }
+                        },
+                        modifier = Modifier
+                            .movoCardSegment(if (isLast) CardSegment.Bottom else CardSegment.Middle)
+                            .padding(bottom = if (isLast) MovoSpacing.xs else 0.dp),
+                    )
                 }
-                item(key = "models_section_gap", contentType = "spacer") {
-                    Spacer(modifier = Modifier.height(24.dp))
-                }
-            }
-
-            item(key = "bottom_spacer", contentType = "spacer") {
-                // 多选操作栏悬浮在底部时，预留高度避免遮挡最后一个列表项；其余情况与大圆角屏幕下沿保持间距
-                Spacer(
-                    modifier = Modifier
-                        .height(if (selectionMode) 88.dp else 24.dp)
-                        .navigationBarsPadding(),
-                )
             }
         }
 
         AnimatedVisibility(
             visible = selectionMode,
             modifier = Modifier.align(Alignment.BottomCenter),
-            enter = slideInVertically { it } + fadeIn(),
-            exit = slideOutVertically { it } + fadeOut(),
+            enter = slideInVertically(MovoMotion.standard(MovoMotion.EasingEnter)) { it } + fadeIn(MovoMotion.standard()),
+            exit = slideOutVertically(MovoMotion.standardExit()) { it } + fadeOut(MovoMotion.standardExit()),
         ) {
             ModelSelectionBar(
                 selectedCount = selectedModelIds.size,
                 totalCount = provider.models.size,
-                enabled = !isFetching && !isMutatingModel,
+                enabled = actionsEnabled,
+                sidePadding = contentSidePadding + MovoSpacing.pageEdge,
                 onToggleAll = {
                     selectedModelIds = if (selectedModelIds.size == provider.models.size) {
                         emptySet()
@@ -483,187 +466,148 @@ internal fun ProviderModelsTab(
         )
     }
 
-    modelPendingDelete?.let { model ->
-        OverlayDialog(
-            show = true,
-            title = stringResource(R.string.ui_delete_model_cf24da),
-            summary = stringResource(R.string.provider_model_delete_summary, model.displayName),
-            onDismissRequest = { if (!isMutatingModel) modelPendingDelete = null },
-        ) {
-            MiuixDialogActions(
-                confirmText = if (isMutatingModel) context.getString(R.string.page_deleting_6f941d) else context.getString(R.string.page_delete_3755f5),
-                cancelEnabled = !isMutatingModel,
-                confirmEnabled = !isMutatingModel,
-                destructive = true,
-                onCancel = { modelPendingDelete = null },
-                onConfirm = {
-                    scope.launch {
-                        isMutatingModel = true
-                        try {
-                            ModelRepository.deleteModel(provider.id, model.id)
-                            RuntimeConfigRepository.syncToRemotePreferences(EtaApp.serviceInstance)
-                            message = context.getString(R.string.provider_model_deleted, model.displayName)
-                            modelPendingDelete = null
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (throwable: Throwable) {
-                            message = context.getString(
-                                R.string.provider_error,
-                                throwable.message ?: context.getString(R.string.provider_delete_failed),
-                            )
-                            modelPendingDelete = null
-                        } finally {
-                            isMutatingModel = false
-                        }
-                    }
-                },
-            )
-        }
-    }
+    MovoConfirmDialog(
+        show = modelPendingDelete != null,
+        title = stringResource(R.string.ui_delete_model_cf24da),
+        message = stringResource(R.string.provider_model_delete_summary, lastModelPendingDelete?.displayName.orEmpty()),
+        confirmText = if (isMutatingModel) context.getString(R.string.page_deleting_6f941d) else context.getString(R.string.page_delete_3755f5),
+        cancelEnabled = !isMutatingModel,
+        confirmEnabled = !isMutatingModel,
+        destructive = true,
+        onDismissRequest = { if (!isMutatingModel) modelPendingDelete = null },
+        onConfirm = {
+            val model = modelPendingDelete ?: return@MovoConfirmDialog
+            scope.launch {
+                isMutatingModel = true
+                try {
+                    ModelRepository.deleteModel(provider.id, model.id)
+                    RuntimeConfigRepository.syncToRemotePreferences(EtaApp.serviceInstance)
+                    message = context.getString(R.string.provider_model_deleted, model.displayName)
+                    modelPendingDelete = null
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (throwable: Throwable) {
+                    message = context.getString(
+                        R.string.provider_error,
+                        throwable.message ?: context.getString(R.string.provider_delete_failed),
+                    )
+                    modelPendingDelete = null
+                } finally {
+                    isMutatingModel = false
+                }
+            }
+        },
+    )
 
-    if (showBatchDeleteDialog) {
-        OverlayDialog(
-            show = true,
-            title = stringResource(R.string.ui_delete_model_cf24da),
-            summary = pluralStringResource(
-                R.plurals.provider_selected_delete_summary,
-                selectedModelIds.size,
-                selectedModelIds.size,
-            ),
-            onDismissRequest = { if (!isMutatingModel) showBatchDeleteDialog = false },
-        ) {
-            MiuixDialogActions(
-                confirmText = if (isMutatingModel) context.getString(R.string.page_deleting_6f941d) else context.getString(R.string.page_delete_3755f5),
-                cancelEnabled = !isMutatingModel,
-                confirmEnabled = !isMutatingModel,
-                destructive = true,
-                onCancel = { showBatchDeleteDialog = false },
-                onConfirm = {
-                    scope.launch {
-                        val deletedCount = selectedModelIds.size
-                        isMutatingModel = true
-                        try {
-                            ModelRepository.deleteModels(provider.id, selectedModelIds)
-                            RuntimeConfigRepository.syncToRemotePreferences(EtaApp.serviceInstance)
-                            message = context.resources.getQuantityString(
-                                R.plurals.provider_models_deleted,
-                                deletedCount,
-                                deletedCount,
-                            )
-                            showBatchDeleteDialog = false
-                            selectionMode = false
-                            selectedModelIds = emptySet()
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (throwable: Throwable) {
-                            message = context.getString(
-                                R.string.provider_error,
-                                throwable.message ?: context.getString(R.string.provider_delete_failed),
-                            )
-                            showBatchDeleteDialog = false
-                        } finally {
-                            isMutatingModel = false
-                        }
-                    }
-                },
-            )
-        }
-    }
+    MovoConfirmDialog(
+        show = showBatchDeleteDialog,
+        title = stringResource(R.string.ui_delete_model_cf24da),
+        message = pluralStringResource(
+            R.plurals.provider_selected_delete_summary,
+            selectedModelIds.size,
+            selectedModelIds.size,
+        ),
+        confirmText = if (isMutatingModel) context.getString(R.string.page_deleting_6f941d) else context.getString(R.string.page_delete_3755f5),
+        cancelEnabled = !isMutatingModel,
+        confirmEnabled = !isMutatingModel,
+        destructive = true,
+        onDismissRequest = { if (!isMutatingModel) showBatchDeleteDialog = false },
+        onConfirm = {
+            scope.launch {
+                val deletedCount = selectedModelIds.size
+                isMutatingModel = true
+                try {
+                    ModelRepository.deleteModels(provider.id, selectedModelIds)
+                    RuntimeConfigRepository.syncToRemotePreferences(EtaApp.serviceInstance)
+                    message = context.resources.getQuantityString(
+                        R.plurals.provider_models_deleted,
+                        deletedCount,
+                        deletedCount,
+                    )
+                    showBatchDeleteDialog = false
+                    selectionMode = false
+                    selectedModelIds = emptySet()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (throwable: Throwable) {
+                    message = context.getString(
+                        R.string.provider_error,
+                        throwable.message ?: context.getString(R.string.provider_delete_failed),
+                    )
+                    showBatchDeleteDialog = false
+                } finally {
+                    isMutatingModel = false
+                }
+            }
+        },
+    )
 }
 
-@Composable
-private fun ModelListGroupItem(
-    isFirst: Boolean,
-    isLast: Boolean,
-    content: @Composable () -> Unit,
-) {
-    val surfaceColor = MiuixTheme.colorScheme.surfaceContainer
-    val contentColor = MiuixTheme.colorScheme.onSurfaceContainer
-    val cornerRadius = CardDefaults.CornerRadius
-    val surfaceModifier = if (isFirst || isLast) {
-        Modifier.squircleSurface(
-            color = surfaceColor,
-            topStart = if (isFirst) cornerRadius else 0.dp,
-            topEnd = if (isFirst) cornerRadius else 0.dp,
-            bottomEnd = if (isLast) cornerRadius else 0.dp,
-            bottomStart = if (isLast) cornerRadius else 0.dp,
-        )
-    } else {
-        Modifier.background(surfaceColor)
-    }
+/** 多选操作栏高 56（32 按钮上下各 12）+ 下方 12，列表为它预留的底部空间。 */
+private val ModelSelectionBarReserve = 88.dp
 
-    CompositionLocalProvider(LocalContentColor provides contentColor) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp)
-                .then(surfaceModifier),
-        ) {
-            content()
-        }
-    }
-}
-
-/** 多选模式底部悬浮操作栏：退出在左，已选数量其次，全选与删除在右；删除沿用统一破坏性配色。 */
+/**
+ * 多选模式底部悬浮操作栏：白底圆角 28、E2 阴影，高 56；退出在左，已选数量其次，全选与删除在右（行内按钮 32 高）。
+ */
 @Composable
 private fun ModelSelectionBar(
     selectedCount: Int,
     totalCount: Int,
     enabled: Boolean,
+    sidePadding: Dp,
     onToggleAll: () -> Unit,
     onDelete: () -> Unit,
     onExit: () -> Unit,
 ) {
     val context = LocalContext.current
-    Card(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(horizontal = 12.dp)
-            .padding(bottom = 12.dp),
+            .padding(start = sidePadding, end = sidePadding, bottom = MovoSpacing.md)
+            .movoSurface(RoundedCornerShape(MovoRadius.xl), elevation = MovoElevation.Composer)
+            .heightIn(min = 56.dp)
+            .padding(start = MovoSpacing.xxs, end = MovoSpacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(MovoSpacing.sm),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            IconButton(onClick = onExit, enabled = enabled) {
-                Icon(
-                    imageVector = Icons.Rounded.Close,
-                    contentDescription = stringResource(R.string.ui_exit_multiple_selection_c194fd),
-                    tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
-                )
-            }
-            Text(
-                text = pluralStringResource(
-                    R.plurals.provider_models_selected,
-                    selectedCount,
-                    selectedCount,
-                ),
-                style = MiuixTheme.textStyles.body2,
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(
-                text = if (selectedCount == totalCount) context.getString(R.string.page_select_none_ba20eb) else context.getString(R.string.page_select_all_3e44b2),
-                enabled = enabled,
-                onClick = onToggleAll,
-            )
-            TextButton(
-                text = stringResource(R.string.ui_delete_3755f5),
-                enabled = selectedCount > 0 && enabled,
-                colors = ButtonDefaults.textButtonColorsPrimary(
-                    color = MiuixTheme.colorScheme.error,
-                    textColor = MiuixTheme.colorScheme.onError,
-                ),
-                onClick = onDelete,
-            )
-        }
+        MovoIconButton(
+            icon = MovoIcons.X,
+            contentDescription = stringResource(R.string.ui_exit_multiple_selection_c194fd),
+            onClick = onExit,
+            enabled = enabled,
+            tint = MovoColors.textSecondary,
+        )
+        Text(
+            text = pluralStringResource(
+                R.plurals.provider_models_selected,
+                selectedCount,
+                selectedCount,
+            ),
+            style = MovoTypography.bodyStrong,
+            color = MovoColors.textPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        MovoPillButton(
+            label = if (selectedCount == totalCount) context.getString(R.string.page_select_none_ba20eb) else context.getString(R.string.page_select_all_3e44b2),
+            enabled = enabled,
+            onClick = onToggleAll,
+        )
+        MovoPillButton(
+            label = stringResource(R.string.ui_delete_3755f5),
+            icon = MovoIcons.Trash2,
+            enabled = selectedCount > 0 && enabled,
+            onClick = onDelete,
+        )
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+/**
+ * 模型行：显示名（Body/Strong）、Model ID（Label 次要色）、能力标签；右侧编辑（笔）+ 单选（设为当前），
+ * 多选模式换成复选框。点行 = 设为当前（多选模式下 = 勾选），长按进入多选。
+ */
 @Composable
 private fun ModelListItem(
     model: Model,
@@ -671,6 +615,7 @@ private fun ModelListItem(
     isSelected: Boolean,
     selectionMode: Boolean,
     checked: Boolean,
+    showDivider: Boolean,
     onToggleChecked: () -> Unit,
     onEnterSelection: () -> Unit,
     onEdit: () -> Unit,
@@ -678,78 +623,89 @@ private fun ModelListItem(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .combinedClickable(
-                enabled = enabled,
-                onClick = if (selectionMode) onToggleChecked else onSetCurrent,
-                onLongClick = {
-                    if (selectionMode) onToggleChecked() else onEnterSelection()
-                },
-            )
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = model.displayName,
-                style = MiuixTheme.textStyles.headline1,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = model.modelId,
-                style = MiuixTheme.textStyles.body2,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 2.dp),
-            )
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.padding(top = 6.dp),
-            ) {
-                capabilityTags(model).forEach { tag ->
-                    TagChip(text = tag)
+    val setCurrentDescription = if (isSelected) {
+        context.getString(R.string.page_current_model_a0af8f)
+    } else {
+        context.getString(R.string.page_set_as_current_model_183d7d)
+    }
+    Box(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .movoClickable(
+                    kind = PressKind.Row,
+                    enabled = enabled,
+                    role = if (selectionMode) Role.Checkbox else Role.Button,
+                    onLongClick = {
+                        if (selectionMode) onToggleChecked() else onEnterSelection()
+                    },
+                    onClick = if (selectionMode) onToggleChecked else onSetCurrent,
+                )
+                .heightIn(min = 68.dp)
+                .padding(start = MovoSpacing.lg, top = MovoSpacing.md, bottom = MovoSpacing.md, end = MovoSpacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = model.displayName,
+                    style = MovoTypography.bodyStrong,
+                    color = MovoColors.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = model.modelId,
+                    style = MovoTypography.labelRegular,
+                    color = MovoColors.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(top = MovoSpacing.sm),
+                ) {
+                    capabilityTags(model).forEach { tag ->
+                        TagChip(text = tag)
+                    }
+                    if (isSelected) {
+                        TagChip(text = stringResource(R.string.ui_current_25e74d), tone = TagChipTone.Emphasized)
+                    }
                 }
-                if (isSelected) {
-                    TagChip(text = stringResource(R.string.ui_current_25e74d), tone = TagChipTone.Emphasized)
+            }
+            if (selectionMode) {
+                Box(modifier = Modifier.size(MovoSize.touchTarget), contentAlignment = Alignment.Center) {
+                    MovoCheckbox(checked = checked, enabled = enabled)
+                }
+            } else {
+                MovoIconButton(
+                    icon = MovoIcons.PenLine,
+                    contentDescription = stringResource(R.string.ui_edit_model_parameters_ba4864),
+                    onClick = onEdit,
+                    enabled = enabled,
+                    iconSize = MovoSize.iconMedium,
+                    tint = MovoColors.textSecondary,
+                )
+                Box(
+                    modifier = Modifier
+                        .size(MovoSize.touchTarget)
+                        .semantics { contentDescription = setCurrentDescription }
+                        .movoClickable(PressKind.Icon, enabled = enabled, role = Role.RadioButton, onClick = onSetCurrent),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    MovoRadioMark(selected = isSelected)
                 }
             }
         }
-        if (selectionMode) {
-            Checkbox(
-                state = if (checked) ToggleableState.On else ToggleableState.Off,
-                onClick = onToggleChecked,
-                enabled = enabled,
-            )
-        } else {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onEdit, enabled = enabled) {
-                    Icon(
-                        imageVector = Icons.Rounded.Tune,
-                        contentDescription = stringResource(R.string.ui_edit_model_parameters_ba4864),
-                        tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
-                    )
-                }
-                IconButton(onClick = onSetCurrent, enabled = enabled) {
-                    Icon(
-                        imageVector = if (isSelected) Icons.Rounded.Check
-                            else Icons.Rounded.RadioButtonUnchecked,
-                        contentDescription = if (isSelected) context.getString(R.string.page_current_model_a0af8f) else context.getString(R.string.page_set_as_current_model_183d7d),
-                        tint = if (isSelected) {
-                            MiuixTheme.colorScheme.primary
-                        } else {
-                            MiuixTheme.colorScheme.onSurfaceVariantActions
-                        },
-                    )
-                }
-            }
+        if (showDivider) {
+            MovoDivider(modifier = Modifier.align(Alignment.BottomStart), start = MovoSpacing.lg)
         }
     }
 }
 
+/**
+ * 模型参数对话框（规范 8.11 对话框容器）：标题 → 可滚动的字段区（显示名、Model ID、上下文长度、思考能力与档位）→
+ * 取消 / 保存两个整行按钮。字段区按弹窗实际高度让出标题与按钮区，横屏时按钮不会被挤出。
+ */
 @Composable
 private fun ModelEditDialog(
     model: Model,
@@ -821,204 +777,235 @@ private fun ModelEditDialog(
         },
     )
 
-    OverlayDialog(
+    MovoDialogHost(
         show = true,
-        title = if (isNew) context.getString(R.string.page_add_model_532a64) else context.getString(R.string.page_edit_model_29e31e),
         onDismissRequest = { if (!isSaving) onDismiss() },
+        dismissible = !isSaving,
     ) {
-        Column {
+        Text(
+            text = if (isNew) context.getString(R.string.page_add_model_532a64) else context.getString(R.string.page_edit_model_29e31e),
+            style = MovoTypography.titleSection,
+            color = MovoColors.textPrimary,
+            modifier = Modifier.padding(start = MovoSpacing.xxl, end = MovoSpacing.xxl, top = MovoSpacing.xxl, bottom = MovoSpacing.sm),
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .modelDialogScrollableBody()
+                .scrollEndHaptic()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = MovoSpacing.xxl),
+        ) {
+            TextField(
+                value = displayName,
+                onValueChange = { displayName = it },
+                label = stringResource(R.string.ui_display_name_ed16be),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(modifier = Modifier.height(MovoSpacing.md))
+            TextField(
+                value = modelId,
+                onValueChange = { modelId = it },
+                label = "Model ID",
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Ascii,
+                    imeAction = ImeAction.Next,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(modifier = Modifier.height(MovoSpacing.md))
+            TextField(
+                value = contextWindowOverrideText,
+                onValueChange = { contextWindowOverrideText = it },
+                label = stringResource(R.string.ui_context_length_tokens_227860),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Number,
+                    imeAction = ImeAction.Done,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = MovoSpacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = when {
+                        contextWindowOverrideText.isNotBlank() -> context.getString(R.string.page_overwritten_will_take_precedence_over_remote_metadat_59934d)
+                        model.contextWindow != null ->
+                            stringResource(
+                                R.string.provider_auto_context,
+                                formatCompactTokenCount(model.contextWindow),
+                            )
+                        else -> context.getString(R.string.page_automatic_no_context_cap_was_provided_by_the_remote__db027f)
+                    },
+                    style = MovoTypography.labelRegular,
+                    color = MovoColors.textSecondary,
+                    modifier = Modifier.weight(1f),
+                )
+                if (contextWindowOverrideText.isNotBlank()) {
+                    Spacer(Modifier.width(MovoSpacing.sm))
+                    MovoPillButton(
+                        label = stringResource(R.string.ui_restore_automatic_8d4e1e),
+                        enabled = !isSaving,
+                        onClick = { contextWindowOverrideText = "" },
+                    )
+                }
+            }
+            contextError?.let { validationError ->
+                ProviderStatusLine(
+                    message = validationError,
+                    isError = true,
+                    modifier = Modifier.padding(top = MovoSpacing.xs),
+                )
+            }
+            Text(
+                text = stringResource(R.string.ui_this_value_is_used_for_session_clipping_and_context__c3f9e7),
+                style = MovoTypography.labelRegular,
+                color = MovoColors.textSecondary,
+                modifier = Modifier.padding(top = MovoSpacing.xs, bottom = MovoSpacing.md),
+            )
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .modelDialogScrollableBody()
-                    .scrollEndHaptic()
-                    .verticalScroll(rememberScrollState()),
+                    .movoSurface(RoundedCornerShape(MovoRadius.lg)),
             ) {
-                TextField(
-                    value = displayName,
-                    onValueChange = { displayName = it },
-                    label = stringResource(R.string.ui_display_name_ed16be),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                    modifier = Modifier.fillMaxWidth(),
+                SettingsRow(
+                    title = stringResource(R.string.ui_support_thinking_5b9e4c),
+                    subtitle = if (reasoningOverrideActive) {
+                        context.getString(R.string.page_covered_model_automatic_capabilities_3fa7d4)
+                    } else {
+                        stringResource(
+                            if (model.reasoning == true) {
+                                R.string.provider_auto_reasoning_supported
+                            } else {
+                                R.string.provider_auto_reasoning_unknown
+                            },
+                        )
+                    },
+                    trailing = RowTrailing.Switch(reasoningEnabled) { enabled ->
+                        reasoningOverrideActive = true
+                        reasoningEnabled = enabled
+                    },
+                    enabled = !isSaving,
+                    showDivider = reasoningEnabled,
                 )
-                Spacer(modifier = Modifier.height(12.dp))
-                TextField(
-                    value = modelId,
-                    onValueChange = { modelId = it },
-                    label = "Model ID",
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Ascii,
-                        imeAction = ImeAction.Next,
-                    ),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                TextField(
-                    value = contextWindowOverrideText,
-                    onValueChange = { contextWindowOverrideText = it },
-                    label = stringResource(R.string.ui_context_length_tokens_227860),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Number,
-                        imeAction = ImeAction.Done,
-                    ),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = when {
-                            contextWindowOverrideText.isNotBlank() -> context.getString(R.string.page_overwritten_will_take_precedence_over_remote_metadat_59934d)
-                            model.contextWindow != null ->
-                                stringResource(
-                                    R.string.provider_auto_context,
-                                    formatCompactTokenCount(model.contextWindow),
-                                )
-                            else -> context.getString(R.string.page_automatic_no_context_cap_was_provided_by_the_remote__db027f)
-                        },
-                        style = MiuixTheme.textStyles.footnote2,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                        modifier = Modifier.weight(1f),
+                if (reasoningEnabled) {
+                    ReasoningEffortRow(
+                        title = ReasoningEffort.DEFAULT.displayName,
+                        summary = stringResource(R.string.ui_determined_by_model_or_provider_06c326),
+                        checked = true,
+                        enabled = false,
+                        showDivider = true,
+                        onToggle = null,
                     )
-                    if (contextWindowOverrideText.isNotBlank()) {
-                        TextButton(
-                            text = stringResource(R.string.ui_restore_automatic_8d4e1e),
+                    editableReasoningEfforts.forEachIndexed { index, effort ->
+                        ReasoningEffortRow(
+                            title = effort.displayName,
+                            summary = if (effort == ReasoningEffort.OFF) {
+                                context.getString(R.string.page_allow_thinking_to_be_turned_off_during_conversations_5a32a9)
+                            } else {
+                                null
+                            },
+                            checked = effort in selectedReasoningEfforts,
                             enabled = !isSaving,
-                            onClick = { contextWindowOverrideText = "" },
-                        )
-                    }
-                }
-                contextError?.let { validationError ->
-                    Text(
-                        text = validationError,
-                        style = MiuixTheme.textStyles.footnote2,
-                        color = StatusError,
-                    )
-                }
-                Text(
-                    text = stringResource(R.string.ui_this_value_is_used_for_session_clipping_and_context__c3f9e7),
-                    style = MiuixTheme.textStyles.footnote2,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
-                )
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    SwitchPreference(
-                        checked = reasoningEnabled,
-                        onCheckedChange = { enabled ->
-                            reasoningOverrideActive = true
-                            reasoningEnabled = enabled
-                        },
-                        title = stringResource(R.string.ui_support_thinking_5b9e4c),
-                        summary = if (reasoningOverrideActive) {
-                            context.getString(R.string.page_covered_model_automatic_capabilities_3fa7d4)
-                        } else {
-                            stringResource(
-                                if (model.reasoning == true) {
-                                    R.string.provider_auto_reasoning_supported
+                            showDivider = index != editableReasoningEfforts.lastIndex,
+                            onToggle = {
+                                reasoningOverrideActive = true
+                                selectedReasoningEfforts = if (effort in selectedReasoningEfforts) {
+                                    selectedReasoningEfforts - effort
                                 } else {
-                                    R.string.provider_auto_reasoning_unknown
-                                },
-                            )
-                        },
-                        enabled = !isSaving,
-                    )
-                    if (reasoningEnabled) {
-                        HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
-                        CheckboxPreference(
-                            title = ReasoningEffort.DEFAULT.displayName,
-                            summary = stringResource(R.string.ui_determined_by_model_or_provider_06c326),
-                            checked = true,
-                            onCheckedChange = null,
-                            checkboxLocation = CheckboxLocation.End,
-                            enabled = false,
+                                    selectedReasoningEfforts + effort
+                                }
+                            },
                         )
-                        editableReasoningEfforts.forEach { effort ->
-                            HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
-                            CheckboxPreference(
-                                title = effort.displayName,
-                                summary = if (effort == ReasoningEffort.OFF) {
-                                    context.getString(R.string.page_allow_thinking_to_be_turned_off_during_conversations_5a32a9)
-                                } else {
-                                    null
-                                },
-                                checked = effort in selectedReasoningEfforts,
-                                onCheckedChange = { checked ->
-                                    reasoningOverrideActive = true
-                                    selectedReasoningEfforts = if (checked) {
-                                        selectedReasoningEfforts + effort
-                                    } else {
-                                        selectedReasoningEfforts - effort
-                                    }
-                                },
-                                checkboxLocation = CheckboxLocation.End,
-                                enabled = !isSaving,
-                            )
-                        }
-                    }
-                }
-                Text(
-                    text = stringResource(R.string.ui_only_check_the_ranges_actually_supported_by_the_mode_2c343d),
-                    style = MiuixTheme.textStyles.footnote2,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-                error?.let { message ->
-                    Text(
-                        text = message,
-                        style = MiuixTheme.textStyles.footnote2,
-                        color = StatusError,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
-                }
-                if (reasoningOverrideActive || onDelete != null) {
-                    Row(
-                        modifier = Modifier.padding(top = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(24.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (reasoningOverrideActive) {
-                            Text(
-                                text = stringResource(R.string.ui_restore_automatic_8d4e1e),
-                                style = MiuixTheme.textStyles.body2,
-                                color = MiuixTheme.colorScheme.primary,
-                                modifier = Modifier
-                                    .clickable(
-                                        enabled = !isSaving,
-                                        onClick = ::resetAutomaticReasoning,
-                                    )
-                                    .padding(vertical = 4.dp),
-                            )
-                        }
-                        onDelete?.let { delete ->
-                            Text(
-                                text = stringResource(R.string.ui_delete_model_cf24da),
-                                style = MiuixTheme.textStyles.body2,
-                                color = MiuixTheme.colorScheme.error,
-                                modifier = Modifier
-                                    .clickable(enabled = !isSaving, onClick = delete)
-                                    .padding(vertical = 4.dp),
-                            )
-                        }
                     }
                 }
             }
+            Text(
+                text = stringResource(R.string.ui_only_check_the_ranges_actually_supported_by_the_mode_2c343d),
+                style = MovoTypography.labelRegular,
+                color = MovoColors.textSecondary,
+                modifier = Modifier.padding(top = MovoSpacing.sm),
+            )
+            error?.let { message ->
+                ProviderStatusLine(
+                    message = message,
+                    isError = true,
+                    modifier = Modifier.padding(top = MovoSpacing.sm),
+                )
+            }
+            if (reasoningOverrideActive || onDelete != null) {
+                Row(
+                    modifier = Modifier.padding(top = MovoSpacing.md),
+                    horizontalArrangement = Arrangement.spacedBy(MovoSpacing.sm),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (reasoningOverrideActive) {
+                        MovoPillButton(
+                            label = stringResource(R.string.ui_restore_automatic_8d4e1e),
+                            icon = MovoIcons.RotateCcw,
+                            enabled = !isSaving,
+                            onClick = ::resetAutomaticReasoning,
+                        )
+                    }
+                    onDelete?.let { delete ->
+                        MovoPillButton(
+                            label = stringResource(R.string.ui_delete_model_cf24da),
+                            icon = MovoIcons.Trash2,
+                            enabled = !isSaving,
+                            onClick = delete,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(MovoSpacing.lg))
         }
-        MiuixDialogActions(
-            confirmText = if (isSaving) context.getString(R.string.page_saving_d70d42) else context.getString(R.string.page_save_fadf24),
-            confirmEnabled = !isSaving &&
-                displayName.isNotBlank() &&
-                modelId.isNotBlank() &&
-                contextError == null,
-            cancelEnabled = !isSaving,
-            onCancel = onDismiss,
-            onConfirm = { onSubmit(updated()) },
-            modifier = Modifier.padding(top = 16.dp),
-        )
+        MovoButtonRow(modifier = Modifier.padding(MovoSpacing.xs)) {
+            MovoBlockButton(
+                label = stringResource(R.string.action_cancel),
+                onClick = onDismiss,
+                tone = BlockTone.Secondary,
+                enabled = !isSaving,
+                modifier = Modifier.weight(1f),
+            )
+            MovoBlockButton(
+                label = if (isSaving) context.getString(R.string.page_saving_d70d42) else context.getString(R.string.page_save_fadf24),
+                onClick = { onSubmit(updated()) },
+                enabled = !isSaving &&
+                    displayName.isNotBlank() &&
+                    modelId.isNotBlank() &&
+                    contextError == null,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
+}
+
+/** 思考档位复选行：标题 15 Medium + 可选说明 13 次要色，右侧 [MovoCheckbox]；整行可点。 */
+@Composable
+private fun ReasoningEffortRow(
+    title: String,
+    summary: String?,
+    checked: Boolean,
+    enabled: Boolean,
+    showDivider: Boolean,
+    onToggle: (() -> Unit)?,
+) {
+    SettingsRow(
+        title = title,
+        subtitle = summary,
+        trailing = RowTrailing.Custom {
+            // 可点的行由整行负责 40% 禁用态；不可点的「默认」行只让复选框自身变淡。
+            MovoCheckbox(checked = checked, enabled = onToggle != null || enabled)
+        },
+        enabled = enabled,
+        showDivider = showDivider,
+        onClick = onToggle,
+    )
 }
 
 @Composable

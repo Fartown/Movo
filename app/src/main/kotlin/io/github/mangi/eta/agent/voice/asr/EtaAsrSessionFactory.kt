@@ -53,6 +53,14 @@ internal class EtaDictationController(
                 if (engine === current) listener.onPartial(text)
             }
 
+            override fun onPartial(text: String, confirmedLength: Int) {
+                if (engine === current) listener.onPartial(text, confirmedLength)
+            }
+
+            override fun onLevel(level: Float) {
+                if (engine === current) listener.onLevel(level)
+            }
+
             override fun onFinal(text: String) {
                 if (engine === current) listener.onFinal(text)
             }

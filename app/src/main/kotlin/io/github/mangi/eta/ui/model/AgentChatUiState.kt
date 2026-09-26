@@ -16,6 +16,8 @@ internal data class AgentChatUiState(
     val input: String,
     val isStreaming: Boolean,
     val isCompacting: Boolean = false,
+    /** 本轮在悬浮球里被暂停（规范 8.2 已暂停：主按钮 ▶，执行卡底部栏「结束任务」）；不持久化。 */
+    val isPaused: Boolean = false,
     val thinkingEnabled: Boolean,
     val reasoningEffort: ReasoningEffort = ReasoningEffort.fromLegacy(thinkingEnabled),
     val availableReasoningEfforts: List<ReasoningEffort> = emptyList(),
@@ -140,6 +142,9 @@ data class ToolActivityMessageUi(
     val command: String? = null,
     val resultSummary: String? = null,
     val imageCount: Int = 0,
+    /** 工具开始 / 结束时刻（毫秒）；旧数据或旧版本 Runtime 没有时为 null，界面不显示用时。 */
+    val startedAtMillis: Long? = null,
+    val finishedAtMillis: Long? = null,
 ) : AgentChatMessageUi
 
 enum class ToolActivityStatusUi {

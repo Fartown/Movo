@@ -20,6 +20,8 @@ data class ConversationSummaryUi(
     val isPinned: Boolean = false,
     val isActiveRun: Boolean = false,
     val characterName: String? = null,
+    /** 搜索时的命中片段（没有搜索词时为 null）。 */
+    val matchSnippet: String? = null,
 )
 
 @Immutable

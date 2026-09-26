@@ -59,7 +59,7 @@ class AgentContextCompactionTest {
             } else {
                 assertTrue(request.messages.toString().contains("最新请求必须保留"))
                 assertTrue(request.messages.toString().contains("固定约束"))
-                assertTrue(request.messages.toString().contains("Eta 上下文摘要"))
+                assertTrue(request.messages.toString().contains("Movo 上下文摘要"))
                 response("完成最新请求")
             }
         }

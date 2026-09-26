@@ -32,6 +32,14 @@ internal enum class FailureAction(val label: String) {
     BACKGROUND_SETTINGS("去后台设置"),
 }
 
+/** 对话中失败任务卡（Figma 26）的文字：原因标题、说明与建议、用时；[action] 与任务详情原因卡相同。 */
+internal data class ChatFailure(
+    val title: String,
+    val message: String,
+    val duration: String?,
+    val action: FailureAction?,
+)
+
 /** 耗时构成的一段；[kind] 决定颜色。 */
 internal data class BreakdownPart(val kind: BreakdownKind, val label: String, val ms: Long)
 
@@ -43,7 +51,9 @@ internal data class ExportHeader(val device: String, val android: String, val ap
 /**
  * 运行日志的文案与数值格式；界面和导出共用同一套措辞（功能定义第 4 节“时间与单位统一”）。
  *
- * 单位：列表和结论写「18.4 秒」；时间线和耗时构成沿用执行详情页的紧凑写法「3.7s」，相对时间写「+3.4s」。
+ * 单位（规范 8.10）：时长小于 1 秒写毫秒，大于等于 1 秒写一位小数的秒；列表和结论写「18.4 秒」「645 毫秒」，
+ * 时间线和耗时构成沿用执行详情页的紧凑写法「3.7s」「420ms」，相对时间写「+3.4s」。
+ * 分隔符「·」两边不加空格（规范 5 文案）。
  */
 internal class DiagnosticsFormat(
     private val toolName: (String) -> String = { it },
@@ -70,22 +80,22 @@ internal class DiagnosticsFormat(
 
     // ---- 数值 ----
 
-    fun duration(ms: Long): String = when {
-        ms < 1_000 -> "$ms 毫秒"
-        ms < 60_000 -> String.format(Locale.ROOT, "%.1f 秒", ms / 1_000.0)
-        else -> "${ms / 60_000} 分 ${(ms % 60_000) / 1_000} 秒"
+    /** 列表与结论用的时长：小于 1 秒写毫秒，否则一位小数的秒（不换算成分钟）。 */
+    fun duration(ms: Long): String {
+        val value = ms.coerceAtLeast(0)
+        return if (value < 1_000) "$value 毫秒" else String.format(Locale.ROOT, "%.1f 秒", value / 1_000.0)
     }
 
-    fun compact(ms: Long): String = when {
-        ms < 1_000 -> "${ms}ms"
-        ms < 60_000 -> String.format(Locale.ROOT, "%.1fs", ms / 1_000.0)
-        else -> "${ms / 60_000}m${(ms % 60_000) / 1_000}s"
+    /** 时间线与耗时构成用的紧凑时长，规则同 [duration]。 */
+    fun compact(ms: Long): String {
+        val value = ms.coerceAtLeast(0)
+        return if (value < 1_000) "${value}ms" else String.format(Locale.ROOT, "%.1fs", value / 1_000.0)
     }
 
+    /** 相对任务开始的时刻：一位小数的秒；开头 50 毫秒内写「+0s」。 */
     fun offset(ms: Long): String = when {
         ms < 50 -> "+0s"
-        ms < 60_000 -> String.format(Locale.ROOT, "+%.1fs", ms / 1_000.0)
-        else -> "+${ms / 60_000}m${(ms % 60_000) / 1_000}s"
+        else -> String.format(Locale.ROOT, "+%.1fs", ms / 1_000.0)
     }
 
     fun timer(ms: Long): String {
@@ -115,23 +125,23 @@ internal class DiagnosticsFormat(
     fun stepLabel(step: CurrentStep): String = when (step) {
         is CurrentStep.WaitingModel -> "等待模型回复"
         is CurrentStep.Receiving -> "正在接收回答"
-        is CurrentStep.Tool -> "执行工具 · ${toolName(step.tool.name)}"
+        is CurrentStep.Tool -> "执行工具$SEP${toolName(step.tool.name)}"
         is CurrentStep.RetryWait -> "等待重试"
         is CurrentStep.Preparing -> "准备中"
     }
 
-    /** 列表每行的一句话结论。 */
-    fun listSubtitle(run: RunTrace, nowElapsed: Long): String = "${clock(run.startedAt)} · " + when (run.status) {
+    /** 列表每行的一句话结论：开始时刻 + 进行中写当前步骤与已等时长，失败写原因，成功写请求 / 工具次数。 */
+    fun listSubtitle(run: RunTrace, nowElapsed: Long): String = "${clock(run.startedAt)}$SEP" + when (run.status) {
         TraceStatus.RUNNING -> {
             val step = run.currentStep()
-            "${stepLabel(step)} · 已 ${seconds(nowElapsed - step.sinceElapsed)}"
+            "${stepLabel(step)}${SEP}已 ${seconds(nowElapsed - step.sinceElapsed)}"
         }
         TraceStatus.FAILED, TraceStatus.INTERRUPTED -> explain(run)?.title.orEmpty()
         TraceStatus.CANCELLED -> "已停止"
         TraceStatus.SUCCEEDED -> buildList {
             add("${run.modelRequests} 次请求")
             if (run.tools.isNotEmpty()) add("${run.tools.size} 次工具")
-        }.joinToString(" · ")
+        }.joinToString(SEP)
     }
 
     fun listValue(run: RunTrace, nowElapsed: Long): String =
@@ -144,11 +154,11 @@ internal class DiagnosticsFormat(
             listOfNotNull(
                 stepLabel(step),
                 request?.displayRound?.let { "第 $it 轮" },
-                request?.takeIf { it.isRetry }?.let { "重试第 ${(it.attempt ?: 2) - 1} 次" },
-            ).joinToString(" · ")
+                request?.takeIf { it.isRetry }?.let { "第 ${it.attempt ?: 2} 次尝试" },
+            ).joinToString(SEP)
         }
-        TraceStatus.SUCCEEDED -> listOfNotNull("完成", run.lastRound?.let { "共 $it 轮" }).joinToString(" · ")
-        TraceStatus.FAILED -> listOfNotNull("失败", run.failure?.round?.let { "第 $it 轮模型请求" }).joinToString(" · ")
+        TraceStatus.SUCCEEDED -> listOfNotNull("完成", run.lastRound?.let { "共 $it 轮" }).joinToString(SEP)
+        TraceStatus.FAILED -> listOfNotNull("失败", run.failure?.round?.let { "第 $it 轮模型请求" }).joinToString(SEP)
         TraceStatus.INTERRUPTED -> "中断"
         TraceStatus.CANCELLED -> "已停止"
     }
@@ -160,17 +170,25 @@ internal class DiagnosticsFormat(
         add("${dayClock(run.startedAt)} 开始")
         run.durationMs?.let { add("${clock(run.startedAt + it)} 结束") }
         add(run.id)
-    }.joinToString(" · ")
+    }.joinToString(SEP)
 
     /**
-     * 进行中任务的一句提示（Q3）：多久没收到数据；超过 [STALL_MS] 时提醒网络可能不稳定。
-     * [silenceMs] 为空表示正在执行工具，或任务不在本进程里。
+     * 进行中任务「卡住」的提示（Q3，规范 8.10）：超过 [STALL_MS] 没有收到数据才返回，
+     * 结论卡据此显示底部栏（提示 +「回到对话」）；没卡住时为 null。
+     * [silenceMs] 为空表示正在执行工具，或任务不在本进程里，不算卡住。
      */
-    fun runningHint(run: RunTrace, nowElapsed: Long, silenceMs: Long?): String = when {
-        silenceMs != null && silenceMs >= STALL_MS -> "已 ${seconds(silenceMs)}没有收到数据，网络可能不稳定"
-        silenceMs != null && silenceMs >= 1_000 -> "${seconds(silenceMs)}前收到过数据，一切正常"
+    fun stallHint(silenceMs: Long?): String? =
+        silenceMs?.takeIf { it >= STALL_MS }?.let { "已 ${seconds(it)}没有收到数据，网络可能不稳定" }
+
+    /**
+     * 没卡住时的实时状态（Q3），放在时间线卡标题右侧：多久前收到过数据，或正在执行的步骤与已等时长。
+     * 卡住时返回 null（由结论卡底部栏说明）。
+     */
+    fun liveNote(run: RunTrace, nowElapsed: Long, silenceMs: Long?): String? = when {
+        silenceMs != null && silenceMs >= STALL_MS -> null
+        silenceMs != null && silenceMs >= 1_000 -> "${seconds(silenceMs)}前收到过数据"
         silenceMs != null -> "正在收到数据"
-        else -> "${stepLabel(run.currentStep())}，已 ${seconds(nowElapsed - run.currentStep().sinceElapsed)}"
+        else -> "${stepLabel(run.currentStep())}${SEP}已 ${seconds(nowElapsed - run.currentStep().sinceElapsed)}"
     }
 
     // ---- 失败原因（Q1） ----
@@ -223,6 +241,20 @@ internal class DiagnosticsFormat(
         }
     }
 
+    /**
+     * 对话里失败任务卡（26）需要的文字：原因标题、说明 + 建议一句、用时。
+     * 成功、进行中、已停止的任务返回 null。
+     */
+    fun chatFailure(run: RunTrace): ChatFailure? {
+        val explanation = explain(run) ?: return null
+        return ChatFailure(
+            title = explanation.title,
+            message = listOf(explanation.detail, explanation.advice).joinToString("") { it.trimEnd('。') + "。" },
+            duration = run.durationMs?.let { "用时 ${duration(it)}" },
+            action = explanation.action,
+        )
+    }
+
     // ---- 耗时构成（Q2） ----
 
     fun breakdownParts(breakdown: TimeBreakdown): List<BreakdownPart> = listOf(
@@ -237,10 +269,10 @@ internal class DiagnosticsFormat(
     // ---- 时间线 ----
 
     fun requestTitle(request: RequestTrace): String = when {
-        request.purpose == "COMPACTION" -> "模型请求 · 上下文压缩"
-        request.purpose == "REPLY_REWRITE" -> "模型请求 · 改写回复"
-        request.isRetry -> "模型请求 · 第 ${request.displayRound ?: "?"} 轮 · 重试第 ${(request.attempt ?: 2) - 1} 次"
-        request.displayRound != null -> "模型请求 · 第 ${request.displayRound} 轮"
+        request.purpose == "COMPACTION" -> "模型请求${SEP}上下文压缩"
+        request.purpose == "REPLY_REWRITE" -> "模型请求${SEP}改写回复"
+        request.isRetry -> (request.displayRound?.let { "第 $it 轮" } ?: "模型请求") + "${SEP}第 ${request.attempt ?: 2} 次尝试"
+        request.displayRound != null -> "模型请求${SEP}第 ${request.displayRound} 轮"
         else -> "模型请求"
     }
 
@@ -252,40 +284,40 @@ internal class DiagnosticsFormat(
         }
         TraceStatus.FAILED -> listOfNotNull(
             request.httpStatus?.takeIf { it >= 400 }?.let { "HTTP $it" } ?: request.errorCode?.let(::shortError),
-            request.retryDelayMs?.let { "${it / 1_000}s 后重试" } ?: "不再重试",
+            request.retryDelayMs?.let { "${compact(it)} 后重试" } ?: "不再重试",
         )
         TraceStatus.RUNNING -> listOf(if (request.firstDataMs == null) "等待首字" else "接收中")
         TraceStatus.CANCELLED -> listOf("已取消")
         TraceStatus.INTERRUPTED -> listOf("中断")
-    }).joinToString(" · ")
+    }).joinToString(SEP)
 
     fun requestDetail(request: RequestTrace): String = buildList {
-        if (request.phases.isNotEmpty()) add(request.phases.joinToString(" · ") { "${it.label} ${compact(it.offsetMs)}" })
+        if (request.phases.isNotEmpty()) add(request.phases.joinToString(SEP) { "${it.label} ${compact(it.offsetMs)}" })
         add(listOfNotNull(
             request.httpStatus?.let { "状态：HTTP $it" },
             request.serverRequestId?.let { "请求 ID：$it" },
-        ).joinToString(" · "))
+        ).joinToString(SEP))
         add(listOfNotNull(
             "服务：${request.provider}",
             request.receivedBytes?.let { "收到 ${bytes(it)}" },
-        ).joinToString(" · "))
+        ).joinToString(SEP))
         if (request.errorCode != null) {
-            add(listOfNotNull("错误码：${request.errorCode}", request.providerErrorCode?.let { "服务商代码：$it" }).joinToString(" · "))
+            add(listOfNotNull("错误码：${request.errorCode}", request.providerErrorCode?.let { "服务商代码：$it" }).joinToString(SEP))
         }
     }.filter { it.isNotBlank() }.joinToString("\n")
 
-    fun toolTitle(tool: ToolTrace): String = "工具 · ${toolName(tool.name)}"
+    fun toolTitle(tool: ToolTrace): String = "工具$SEP${toolName(tool.name)}"
 
     fun toolSubtitle(tool: ToolTrace, offsetMs: Long): String =
-        listOfNotNull(offset(offsetMs), if (tool.success == false) "失败" else null).joinToString(" · ")
+        listOfNotNull(offset(offsetMs), if (tool.success == false) "失败" else null).joinToString(SEP)
 
     fun compactionSubtitle(item: TimelineItem.Compaction): String = listOfNotNull(
         offset(item.offsetMs),
         if (item.tokensBefore != null && item.tokensAfter != null) "${tokens(item.tokensBefore)} → ${tokens(item.tokensAfter)} tokens" else null,
-    ).joinToString(" · ")
+    ).joinToString(SEP)
 
     fun systemSubtitle(event: SystemEvent, offsetMs: Long): String =
-        "${offset(offsetMs)} · ${event.detail.ifBlank { "系统事件" }}"
+        "${offset(offsetMs)}$SEP${event.detail.ifBlank { "系统事件" }}"
 
     private fun shortError(code: String): String = when (code) {
         "MODEL_TIMEOUT" -> "等待超时"
@@ -314,7 +346,7 @@ internal class DiagnosticsFormat(
         appendLine()
         appendLine("- 导出时间：${stamp(generatedAt)}")
         appendLine("- 范围：$scope")
-        appendLine("- 设备：${header.device} · ${header.android}")
+        appendLine("- 设备：${header.device}$SEP${header.android}")
         appendLine("- App：${header.app}")
         appendLine("- 说明：只包含请求阶段、工具名和设备状态，不含对话内容、会话标题、工具参数和结果、API Key。")
         runs.forEach { run ->
@@ -326,7 +358,7 @@ internal class DiagnosticsFormat(
             appendLine("## 系统事件")
             appendLine()
             system.forEach { event ->
-                appendLine("- ${stamp(event.timeMillis)} ${event.title}" + event.detail.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty())
+                appendLine("- ${stamp(event.timeMillis)} ${event.title}" + event.detail.takeIf { it.isNotBlank() }?.let { "$SEP$it" }.orEmpty())
             }
         }
         appendLine()
@@ -342,7 +374,7 @@ internal class DiagnosticsFormat(
     }
 
     fun exportRun(run: RunTrace): String = buildString {
-        appendLine("## ${run.id} · ${statusLine(run)} · ${run.durationMs?.let(::duration) ?: "进行中"}")
+        appendLine("## ${run.id}$SEP${statusLine(run)}$SEP${run.durationMs?.let(::duration) ?: "进行中"}")
         appendLine()
         appendLine("- 开始：${stamp(run.startedAt)}")
         explain(run)?.let {
@@ -350,19 +382,19 @@ internal class DiagnosticsFormat(
             appendLine("- 建议：${it.advice}")
         }
         run.breakdown()?.let { breakdown ->
-            appendLine("- 耗时：" + breakdownParts(breakdown).joinToString(" · ") { "${it.label} ${duration(it.ms)}" })
+            appendLine("- 耗时：" + breakdownParts(breakdown).joinToString(SEP) { "${it.label} ${duration(it.ms)}" })
         }
         appendLine()
         run.timeline.forEach { item ->
             when (item) {
                 is TimelineItem.Request -> {
-                    appendLine("- ${requestTitle(item.request)} · ${item.request.durationMs?.let(::compact) ?: "进行中"} · ${requestSubtitle(item.request, item.offsetMs)}")
+                    appendLine("- ${requestTitle(item.request)}$SEP${item.request.durationMs?.let(::compact) ?: "进行中"}$SEP${requestSubtitle(item.request, item.offsetMs)}")
                     requestDetail(item.request).lineSequence().forEach { appendLine("  - $it") }
                 }
-                is TimelineItem.Tool -> appendLine("- ${toolTitle(item.tool)}（${item.tool.name}） · " +
-                    "${item.tool.durationMs?.let(::compact) ?: "进行中"} · ${toolSubtitle(item.tool, item.offsetMs)}")
-                is TimelineItem.Compaction -> appendLine("- 上下文压缩 · ${compactionSubtitle(item)}")
-                is TimelineItem.System -> appendLine("- ${item.event.title} · ${systemSubtitle(item.event, item.offsetMs)}")
+                is TimelineItem.Tool -> appendLine("- ${toolTitle(item.tool)}（${item.tool.name}）$SEP" +
+                    "${item.tool.durationMs?.let(::compact) ?: "进行中"}$SEP${toolSubtitle(item.tool, item.offsetMs)}")
+                is TimelineItem.Compaction -> appendLine("- 上下文压缩$SEP${compactionSubtitle(item)}")
+                is TimelineItem.System -> appendLine("- ${item.event.title}$SEP${systemSubtitle(item.event, item.offsetMs)}")
             }
         }
     }
@@ -370,6 +402,9 @@ internal class DiagnosticsFormat(
     companion object {
         /** 超过这么久没有收到数据就算“卡住”。 */
         const val STALL_MS = 30_000L
+
+        /** 分隔符「·」，两边不加空格（规范 5、8.10）。 */
+        const val SEP = "·"
 
         private val QUOTA_CODES = setOf("insufficient_quota", "quota_exceeded", "billing_error", "usage_limit_reached")
 

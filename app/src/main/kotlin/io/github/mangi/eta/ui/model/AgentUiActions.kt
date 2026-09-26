@@ -40,6 +40,8 @@ sealed interface AgentChatAction {
     data class ModelSelected(val modelId: String) : AgentChatAction
     data class SubmitMessage(val text: String) : AgentChatAction
     data object StopRun : AgentChatAction
+    /** 继续在悬浮球里暂停的这一轮（主按钮 ▶）。 */
+    data object ResumeRun : AgentChatAction
     data object OpenBrowser : AgentChatAction
     data class ImageAttached(val uri: String) : AgentChatAction
     data class RemoveImage(val id: String) : AgentChatAction

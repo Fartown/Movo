@@ -57,6 +57,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
@@ -73,6 +74,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.R
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.produceState
+import io.github.mangi.eta.ui.components.movo.movoElevation
+import io.github.mangi.eta.ui.components.movo.movoClickable
 import io.github.mangi.eta.agent.browser.AgentBrowserSession
 import io.github.mangi.eta.agent.voice.session.VoiceEntry
 import io.github.mangi.eta.agent.voice.session.VoiceSessionManager
@@ -318,9 +323,15 @@ private fun AgentChatScaffold(
         drawRect(surfaceColor)
         drawContent()
     }
+    // Q1 文字飞成气泡 / Q6 光球延续的飞行层（规范 9.4「首页 → 对话」「后续发送」）。
+    val reducedMotion = io.github.mangi.eta.ui.theme.LocalReducedMotion.current
+    val flight = remember(reducedMotion) { ChatFlightController(reducedMotion) }
+    val homeExitShift = with(LocalDensity.current) { 8.dp.roundToPx() }
 
+    androidx.compose.runtime.CompositionLocalProvider(LocalChatFlight provides flight) {
+    Box(modifier = modifier.fillMaxSize()) {
     Scaffold(
-        modifier = modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize(),
         containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets(
             left = 0.dp,
@@ -359,16 +370,8 @@ private fun AgentChatScaffold(
         },
     ) { innerPadding ->
         val bottomPadding = innerPadding.calculateBottomPadding()
-        if (!hasMessages) {
-            EmptyChatState(
-                showSuggestions = showEmptySuggestions,
-                characterName = characterName,
-                onSuggestionClick = onSuggestionClick,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(bottom = bottomPadding),
-            )
-        } else {
+        Box(modifier = Modifier.fillMaxSize()) {
+        if (hasMessages) {
             AgentConversationMessages(
                 visibleMessages = visibleMessages,
                 scrollState = scrollState,
@@ -391,6 +394,28 @@ private fun AgentChatScaffold(
                     .then(if (frostEnabled) Modifier.layerBackdrop(messageBackdrop) else Modifier),
             )
         }
+        // 首页 → 对话：问候、能力卡整体淡出 + 上移 8，120ms + `exit`（光球由飞行层接走，规范 9.4 ②）。
+        AnimatedVisibility(
+            visible = !hasMessages,
+            enter = fadeIn(io.github.mangi.eta.ui.theme.MovoMotion.standard()),
+            exit = fadeOut(io.github.mangi.eta.ui.theme.MovoMotion.fastExit()) +
+                androidx.compose.animation.slideOutVertically(io.github.mangi.eta.ui.theme.MovoMotion.fastExit()) {
+                    if (reducedMotion) 0 else -homeExitShift
+                },
+        ) {
+            MovoHomeContent(
+                characterName = characterName,
+                showCapabilities = showEmptySuggestions,
+                onSend = onSuggestionClick,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(bottom = bottomPadding),
+            )
+        }
+        }
+    }
+    ChatFlightOverlay(flight)
+    }
     }
 }
 
@@ -416,6 +441,7 @@ internal fun AgentConversationMessages(
     modifier: Modifier = Modifier,
 ) {
     val timelineEntries = remember(visibleMessages) { visibleMessages.toTimelineEntries() }
+    val lastWorkKey = timelineEntries.lastOrNull { it is AgentTimelineEntry.WorkProcess }?.key
     // 复制按钮只出现在每轮对话的最终结果上，中间步骤的过渡文本不提供复制入口。
     // 流式进行中当前这一轮尚未收尾，此时的“最后一条正文”只是中间步骤，不标记。
     val finalResultMessageIds = remember(visibleMessages, isStreaming) {
@@ -623,7 +649,7 @@ internal fun AgentConversationMessages(
                 key = { it.key },
             ) { entry ->
                 val itemModifier = Modifier.animateItem(
-                    fadeInSpec = tween(durationMillis = 180),
+                    fadeInSpec = io.github.mangi.eta.ui.theme.MovoMotion.fast(),
                     placementSpec = null,
                     // 历史轮次被编辑、删除或重新生成时必须立即退出；退出动画会让已从
                     // 状态中裁掉的旧消息继续绘制，并与同位置的新流式消息短暂重叠。
@@ -632,6 +658,9 @@ internal fun AgentConversationMessages(
                 when (entry) {
                     is AgentTimelineEntry.Message -> {
                         val message = entry.message
+                        // 删除 / 重新生成：内容先淡出 120ms，随后高度收起 `standard`，下方各行跟随上移（规范 9.3「列表增删」、9.4），
+                        // 播完才真正改动列表，避免旧消息的退场与同位置的新流式消息重叠。
+                        LeavingItem(leaving = message.id in LocalLeavingMessages.current, modifier = itemModifier) {
                         ChatMessageItem(
                             message = message,
                             retainedStreamingState = (message as? AgentMessageUi)
@@ -657,8 +686,8 @@ internal fun AgentConversationMessages(
                             onDeleteMessage = onDeleteMessage,
                             onRegenerateMessage = onRegenerateMessage,
                             onSelectReplyCandidate = onSelectReplyCandidate,
-                            modifier = itemModifier,
                         )
+                        }
                     }
 
                     is AgentTimelineEntry.WorkProcess -> {
@@ -672,15 +701,36 @@ internal fun AgentConversationMessages(
                         AgentWorkProcess(
                             id = entry.key,
                             messages = entry.messages,
+                            // 本轮仍在进行：模型在两步之间思考时步骤都已完成，但执行卡不能当作完成收起。
+                            runActive = isStreaming && entry.key == lastWorkKey,
                             onOpenBrowser = onOpenBrowser,
                             currentBrowserMessageId = currentBrowserMessageId,
                             retainedStreamingStates = streamingMarkdownStates,
+                            actionsEnabled = messageActionsEnabled,
+                            onEditMessage = onEditMessage,
+                            onDeleteMessage = onDeleteMessage,
                             modifier = itemModifier,
                         )
                     }
                 }
             }
             if (isStreaming) {
+                // 等待首个事件（最后一条还是用户消息）：16 小光球作为「正在处理」指示（Q6）。
+                val lastEntry = timelineEntries.lastOrNull()
+                if (lastEntry is AgentTimelineEntry.Message && lastEntry.message is UserMessageUi) {
+                    item(key = "waiting-orb") {
+                        // 只淡入不做列表退场：被移除的退场项会残留在原位（真机验收发现叠在回答文字上）。
+                        Box(
+                            Modifier
+                                .animateItem(
+                                    fadeInSpec = io.github.mangi.eta.ui.theme.MovoMotion.fast(),
+                                    placementSpec = null,
+                                    fadeOutSpec = null,
+                                )
+                                .padding(horizontal = 20.dp),
+                        ) { WaitingOrb() }
+                    }
+                }
                 item(key = "run-stall") { RunStallNotice(messageIds = visibleMessages.map { it.id }) }
             }
             item(key = ChatBottomSentinelKey) {
@@ -692,32 +742,140 @@ internal fun AgentConversationMessages(
             }
         }
 
+        // 执行条 `Composer/TaskBar`（规范 8.2.1）：执行中的任务卡滚出屏幕时，在输入框上方 8 出现；
+        // 点条身滚回任务卡，「查看」打开执行详情。只显示进度，不放停止（停止在正下方的主按钮 ■）。
+        val runControls = LocalRunControls.current
+        val workEntry = lastWorkKey?.let { key ->
+            timelineEntries.lastOrNull { it.key == key } as? AgentTimelineEntry.WorkProcess
+        }
+        val workVisible by remember(lastWorkKey) {
+            derivedStateOf { scrollState.layoutInfo.visibleItemsInfo.any { it.key == lastWorkKey } }
+        }
+        val showTaskBar = isStreaming && workEntry != null && !workVisible
+        val openRunDetail = LocalOpenRunDetail.current
+        AnimatedVisibility(
+            visible = showTaskBar,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(start = 20.dp, end = 20.dp, bottom = bottomInset + 8.dp),
+            enter = fadeIn(io.github.mangi.eta.ui.theme.MovoMotion.fast()) +
+                androidx.compose.animation.slideInVertically(io.github.mangi.eta.ui.theme.MovoMotion.fast()) { it / 4 },
+            exit = fadeOut(io.github.mangi.eta.ui.theme.MovoMotion.fastExit()),
+        ) {
+            workEntry?.let { entry ->
+                TaskBar(
+                    workKey = entry.key,
+                    messages = entry.messages,
+                    paused = runControls.isPaused,
+                    onScrollToCard = {
+                        val index = timelineEntries.indexOfFirst { it.key == entry.key }
+                        if (index >= 0) coroutineScope.launch { scrollState.animateScrollToItem(index) }
+                    },
+                    onView = openRunDetail?.let { open -> { open(entry.key) } },
+                )
+            }
+        }
+
+        // 回到底部（9.3）：离开底部时出现，淡入 + 缩放 0.86 → 1（fast）；执行条出现时让到它上方。
         AnimatedVisibility(
             visible = !keepBottomAnchored && !isAtBottom,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = bottomInset + 12.dp),
-            enter = fadeIn(tween(160)) + scaleIn(tween(180), initialScale = 0.82f),
-            exit = fadeOut(tween(100)) + scaleOut(tween(120), targetScale = 0.86f),
+                .padding(bottom = bottomInset + if (showTaskBar) 56.dp else 12.dp),
+            enter = fadeIn(io.github.mangi.eta.ui.theme.MovoMotion.fast()) +
+                scaleIn(io.github.mangi.eta.ui.theme.MovoMotion.fast(), initialScale = 0.86f),
+            exit = fadeOut(io.github.mangi.eta.ui.theme.MovoMotion.fastExit()),
         ) {
-            IconButton(
-                onClick = {
-                    onBottomAnchorChanged(true)
-                    coroutineScope.launch {
-                        scrollState.animateScrollToItem(bottomItemIndex)
+            val shape = androidx.compose.foundation.shape.CircleShape
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .movoElevationCard(shape)
+                    .movoClickable(io.github.mangi.eta.ui.components.movo.PressKind.Solid, shape = shape) {
+                        onBottomAnchorChanged(true)
+                        coroutineScope.launch { scrollState.animateScrollToItem(bottomItemIndex) }
                     }
-                },
-                backgroundColor = MiuixTheme.colorScheme.surfaceContainerHigh,
-                minWidth = 40.dp,
-                minHeight = 40.dp,
+                    .clip(shape)
+                    .background(io.github.mangi.eta.ui.theme.MovoColors.bgSurface)
+                    .border(io.github.mangi.eta.ui.theme.MovoSize.hairline, io.github.mangi.eta.ui.theme.MovoColors.borderHairline, shape),
+                contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.ArrowDownward,
+                io.github.mangi.eta.ui.theme.MovoIcon(
+                    io.github.mangi.eta.ui.theme.MovoIcons.ArrowDown,
                     contentDescription = stringResource(R.string.ui_back_to_bottom_32282e),
-                    modifier = Modifier.size(17.dp),
-                    tint = MiuixTheme.colorScheme.onSurface,
+                    size = 20.dp,
                 )
             }
+        }
+    }
+}
+
+private fun Modifier.movoElevationCard(shape: androidx.compose.ui.graphics.Shape): Modifier =
+    movoElevation(io.github.mangi.eta.ui.theme.MovoElevation.Card, shape)
+
+/**
+ * `Composer/TaskBar`：宽 372、高 40、圆角 20，bg/surface + 描边 + E1；16 小光球 +「正在执行·第 N 步」（Q3）+ 计时 +
+ * `Button/Pill`「查看」；左内边距 12，「查看」距右 4，上下 4。
+ */
+@Composable
+private fun TaskBar(
+    workKey: String,
+    messages: List<AgentChatMessageUi>,
+    paused: Boolean,
+    onScrollToCard: () -> Unit,
+    onView: (() -> Unit)?,
+) {
+    val tools = messages.filterIsInstance<ToolActivityMessageUi>()
+    val firstStart = tools.mapNotNull { it.startedAtMillis }.minOrNull()
+    val now by produceState(System.currentTimeMillis(), paused) {
+        while (!paused) {
+            value = System.currentTimeMillis()
+            kotlinx.coroutines.delay(1_000)
+        }
+    }
+    val shape = RoundedCornerShape(20.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            // Q4：执行卡不在屏幕上时，从执行条打开的详情页从执行条的位置长出来。
+            .onGloballyPositioned { io.github.mangi.eta.ui.components.movo.RunDetailMorph.report(workKey, it.windowRect()) }
+            .height(40.dp)
+            .movoElevationCard(shape)
+            .movoClickable(io.github.mangi.eta.ui.components.movo.PressKind.Card, shape = shape, onClick = onScrollToCard)
+            .clip(shape)
+            .background(io.github.mangi.eta.ui.theme.MovoColors.bgSurface)
+            .border(io.github.mangi.eta.ui.theme.MovoSize.hairline, io.github.mangi.eta.ui.theme.MovoColors.borderHairline, shape)
+            .padding(start = 12.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (paused) {
+            io.github.mangi.eta.ui.theme.MovoIcon(io.github.mangi.eta.ui.theme.MovoIcons.Pause, null, size = 16.dp, tint = io.github.mangi.eta.ui.theme.MovoColors.textSecondary)
+        } else {
+            io.github.mangi.eta.ui.components.movo.MovoOrb(size = 16.dp)
+        }
+        Spacer(Modifier.width(8.dp))
+        io.github.mangi.eta.ui.components.movo.MovoShimmerText(
+            text = when {
+                paused -> stringResource(R.string.movo_work_paused_step, tools.size)
+                tools.isNotEmpty() -> stringResource(R.string.movo_work_running_step, tools.size)
+                else -> stringResource(R.string.movo_work_analyzing)
+            },
+            style = io.github.mangi.eta.ui.theme.MovoTypography.labelMedium,
+            color = io.github.mangi.eta.ui.theme.MovoColors.textPrimary,
+            active = !paused,
+            modifier = Modifier.weight(1f),
+        )
+        if (firstStart != null) {
+            val seconds = ((now - firstStart) / 1000).coerceAtLeast(0)
+            Text(
+                String.format(java.util.Locale.ROOT, "%02d:%02d", seconds / 60, seconds % 60),
+                style = io.github.mangi.eta.ui.theme.MovoTypography.numericLabel,
+                color = io.github.mangi.eta.ui.theme.MovoColors.textSecondary,
+            )
+            Spacer(Modifier.width(8.dp))
+        }
+        if (onView != null) {
+            io.github.mangi.eta.ui.components.movo.MovoPillButton(label = stringResource(R.string.movo_work_view), onClick = onView)
         }
     }
 }
@@ -767,7 +925,7 @@ internal fun smoothBottomFollowStep(
     return min(distancePx, min(easedStep.coerceAtLeast(BOTTOM_FOLLOW_MIN_STEP_PX), speedLimitedStep))
 }
 
-private sealed interface AgentTimelineEntry {
+internal sealed interface AgentTimelineEntry {
     val key: String
 
     data class Message(
@@ -782,7 +940,7 @@ private sealed interface AgentTimelineEntry {
     ) : AgentTimelineEntry
 }
 
-private fun List<AgentChatMessageUi>.toTimelineEntries(): List<AgentTimelineEntry> = buildList {
+internal fun List<AgentChatMessageUi>.toTimelineEntries(): List<AgentTimelineEntry> = buildList {
     val workMessages = mutableListOf<AgentChatMessageUi>()
 
     fun flushWorkProcess() {
@@ -797,7 +955,8 @@ private fun List<AgentChatMessageUi>.toTimelineEntries(): List<AgentTimelineEntr
     }
 
     this@toTimelineEntries.forEach { message ->
-        if (message.isWorkProcessMessage()) {
+        // 执行中的补充紧跟在工作过程之后时，作为「你的补充」步骤留在同一张执行卡里（规范 8.1、8.4）。
+        if (message.isWorkProcessMessage() || (message.isRunSupplement() && workMessages.isNotEmpty())) {
             workMessages += message
         } else {
             flushWorkProcess()
@@ -806,6 +965,10 @@ private fun List<AgentChatMessageUi>.toTimelineEntries(): List<AgentTimelineEntr
     }
     flushWorkProcess()
 }
+
+/** 运行时补充以 `user-<runId>-supplement-<index>` 的用户消息投影进来（见 AgentRunMessageProjector）。 */
+internal fun AgentChatMessageUi.isRunSupplement(): Boolean =
+    this is UserMessageUi && id.startsWith("user-") && id.contains("-supplement-")
 
 private fun AgentChatMessageUi.isWorkProcessMessage(): Boolean =
     this is ThinkingMessageUi || this is ToolActivityMessageUi || this is ToolSummaryMessageUi
@@ -881,7 +1044,7 @@ private fun AgentChatBottomBar(
         if (messageBackdrop != null) {
             val blurColors = BlurDefaults.blurColors(
                 blendColors = listOf(
-                    BlendColorEntry(MiuixTheme.colorScheme.surface.copy(alpha = 0.72f))
+                    BlendColorEntry(io.github.mangi.eta.ui.theme.MovoColors.bgCanvas.copy(alpha = 0.72f))
                 ),
             )
             Box(
@@ -922,18 +1085,19 @@ private fun AgentChatBottomBar(
                         Brush.verticalGradient(
                             colors = listOf(
                                 Color.Transparent,
-                                MiuixTheme.colorScheme.surface,
+                                io.github.mangi.eta.ui.theme.MovoColors.bgCanvas,
                             ),
                         )
                     ),
             )
         }
+        // 输入框外边距 20，距手势条 8（规范 2.2、8.2）。
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(MiuixTheme.colorScheme.surface)
+                .background(io.github.mangi.eta.ui.theme.MovoColors.bgCanvas)
                 .navigationBarsPadding()
-                .padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
+                .padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
         ) {
             AgentChatInputBar(
                 input = input,
@@ -1020,141 +1184,29 @@ internal fun shouldRequestInitialBottom(
     isUserDragging: Boolean,
 ): Boolean = isStreaming && keepBottomAnchored && !isUserDragging
 
-@Composable
-private fun EmptyChatState(
-    showSuggestions: Boolean,
-    characterName: String?,
-    onSuggestionClick: (String) -> Unit,
+/** 正在离场的消息（删除、重新生成确认后），由对话容器提供。 */
+internal val LocalLeavingMessages = androidx.compose.runtime.compositionLocalOf<Collection<String>> { emptyList() }
+
+/** 离场：内容淡出 120ms（`exit`），随后高度收起 `standard`。 */
+@androidx.compose.runtime.Composable
+private fun LeavingItem(
+    leaving: Boolean,
     modifier: Modifier = Modifier,
+    content: @androidx.compose.runtime.Composable () -> Unit,
 ) {
-    val isCharacterConversation = characterName != null
-    val suggestions = listOf(
-        SuggestionItem(
-            title = stringResource(R.string.ui_analyze_current_screen_ebf08f),
-            icon = Icons.Rounded.DocumentScanner,
-            prompt = stringResource(R.string.suggestion_analyze_screen_prompt),
-        ),
-        SuggestionItem(
-            title = stringResource(R.string.ui_open_wechat_6b2c28),
-            icon = Icons.Rounded.RocketLaunch,
-            prompt = stringResource(R.string.suggestion_open_wechat_prompt),
-        ),
-        SuggestionItem(
-            title = stringResource(R.string.ui_browse_the_web_da7afb),
-            icon = Icons.Rounded.Language,
-            prompt = stringResource(R.string.suggestion_browse_web_prompt),
-        ),
-        SuggestionItem(
-            title = stringResource(R.string.ui_check_memory_pressure_2d9600),
-            icon = Icons.Rounded.Terminal,
-            prompt = stringResource(R.string.suggestion_memory_pressure_prompt),
-        ),
-    )
-
-    Box(modifier = modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .padding(bottom = 56.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            if (isCharacterConversation) {
-                Text(
-                    text = characterName.orEmpty(),
-                    style = MiuixTheme.textStyles.title2,
-                    color = MiuixTheme.colorScheme.onSurface,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "故事从这里开始",
-                    style = MiuixTheme.textStyles.body2,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                )
-            } else {
-                Text(
-                    text = stringResource(R.string.ui_how_can_i_help_you_e75391),
-                    style = MiuixTheme.textStyles.headline1,
-                    color = MiuixTheme.colorScheme.onSurface,
-                )
-            }
-
-            Spacer(modifier = Modifier.height(30.dp))
-
-            AnimatedVisibility(
-                visible = showSuggestions && !isCharacterConversation,
-                enter = fadeIn(
-                    animationSpec = tween(durationMillis = 220)
-                ) + slideInVertically(
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMediumLow,
-                    ),
-                    initialOffsetY = { it / 3 },
+    AnimatedVisibility(
+        visible = !leaving,
+        modifier = modifier,
+        enter = androidx.compose.animation.EnterTransition.None,
+        exit = fadeOut(io.github.mangi.eta.ui.theme.MovoMotion.fastExit()) +
+            androidx.compose.animation.shrinkVertically(
+                tween(
+                    io.github.mangi.eta.ui.theme.MovoMotion.STANDARD,
+                    delayMillis = io.github.mangi.eta.ui.theme.MovoMotion.FAST_EXIT,
+                    easing = io.github.mangi.eta.ui.theme.MovoMotion.EasingStandard,
                 ),
-                exit = fadeOut(
-                    animationSpec = tween(durationMillis = 130)
-                ) + slideOutVertically(
-                    animationSpec = tween(durationMillis = 180),
-                    targetOffsetY = { it / 4 },
-                ),
-            ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    suggestions.chunked(2).forEach { rowItems ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            rowItems.forEach { item ->
-                                SuggestionCard(
-                                    item = item,
-                                    onClick = { onSuggestionClick(item.prompt) },
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SuggestionCard(
-    item: SuggestionItem,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(MiuixTheme.colorScheme.surface)
-            .border(
-                width = 0.5.dp,
-                color = MiuixTheme.colorScheme.outline.copy(alpha = 0.5f),
-                shape = RoundedCornerShape(12.dp),
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 13.dp, vertical = 12.dp),
+            ),
     ) {
-        Icon(
-            imageVector = item.icon,
-            contentDescription = null,
-            modifier = Modifier.size(17.dp),
-            tint = MiuixTheme.colorScheme.onBackground,
-        )
-        Spacer(modifier = Modifier.height(9.dp))
-        Text(
-            text = item.title,
-            style = MiuixTheme.textStyles.body2,
-            color = MiuixTheme.colorScheme.onSurface,
-            maxLines = 1,
-        )
+        content()
     }
 }
-
-private data class SuggestionItem(
-    val title: String,
-    val icon: ImageVector,
-    val prompt: String,
-)

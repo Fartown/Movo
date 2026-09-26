@@ -10,11 +10,14 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -23,7 +26,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Insights
-import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -60,11 +62,15 @@ import io.github.mangi.eta.agent.terminal.TerminalScreenBuffer
 import io.github.mangi.eta.ui.app.ConsoleStore
 import io.github.mangi.eta.ui.app.ConsoleUiState
 import io.github.mangi.eta.ui.app.UserTerminalStore
+import io.github.mangi.eta.ui.components.movo.MovoIconButton
+import io.github.mangi.eta.ui.components.movo.MovoPillButton
 import io.github.mangi.eta.ui.components.toSpanStyle
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
+import io.github.mangi.eta.ui.theme.MovoColors
+import io.github.mangi.eta.ui.theme.MovoIcons
+import io.github.mangi.eta.ui.theme.MovoSize
+import io.github.mangi.eta.ui.theme.MovoSpacing
+import io.github.mangi.eta.ui.theme.MovoTypography
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** 终端入口：块式终端为本体；PTY 可用时状态栏提供控制台模式切换。 */
@@ -122,7 +128,7 @@ internal fun ConsoleScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MiuixTheme.colorScheme.surface)
+            .background(MovoColors.bgCanvas)
             .imePadding()
             .navigationBarsPadding(),
     ) {
@@ -196,6 +202,7 @@ internal fun ConsoleScreen(
     }
 }
 
+/** 控制台状态栏：与块式终端同一套 Movo 外层组件（环境胶囊、44 图标按钮、「简洁模式」胶囊）。 */
 @Composable
 private fun ConsoleStatusBar(
     environment: TerminalEnvironment,
@@ -208,15 +215,15 @@ private fun ConsoleStatusBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp),
+            .padding(start = MovoSpacing.md, end = MovoSpacing.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        EnvironmentTab(
+        TerminalEnvironmentChip(
             label = "Android",
             selected = environment == TerminalEnvironment.ANDROID,
             onClick = { onSwitchEnvironment(TerminalEnvironment.ANDROID) },
         )
-        EnvironmentTab(
+        TerminalEnvironmentChip(
             label = if (linuxEnvironment == TerminalEnvironment.ALPINE) "Alpine" else "Debian",
             selected = environment == linuxEnvironment,
             onClick = { onSwitchEnvironment(linuxEnvironment) },
@@ -226,24 +233,21 @@ private fun ConsoleStatusBar(
             horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onOpenSessions) {
-                Icon(
-                    imageVector = Icons.Rounded.Layers,
-                    contentDescription = stringResource(R.string.terminal_sessions),
-                    modifier = Modifier.size(18.dp),
-                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                )
-            }
-            IconButton(onClick = onOpenTasks) {
-                Icon(
-                    imageVector = Icons.Rounded.Insights,
-                    contentDescription = stringResource(R.string.terminal_daemon_tasks),
-                    modifier = Modifier.size(18.dp),
-                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                )
-            }
-            TextButton(
-                text = stringResource(R.string.terminal_block_mode),
+            MovoIconButton(
+                icon = MovoIcons.Layers,
+                contentDescription = stringResource(R.string.terminal_sessions),
+                onClick = onOpenSessions,
+                iconSize = MovoSize.iconMedium,
+                tint = MovoColors.textSecondary,
+            )
+            TerminalMaterialIconButton(
+                icon = Icons.Rounded.Insights,
+                contentDescription = stringResource(R.string.terminal_daemon_tasks),
+                onClick = onOpenTasks,
+            )
+            Spacer(Modifier.width(MovoSpacing.xs))
+            MovoPillButton(
+                label = stringResource(R.string.terminal_block_mode),
                 onClick = onExitConsole,
             )
         }
@@ -340,27 +344,30 @@ private fun ColumnScope.ConsoleGrid(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(MiuixTheme.colorScheme.surface.copy(alpha = 0.92f)),
+                    .background(MovoColors.bgCanvas.copy(alpha = 0.92f))
+                    .padding(MovoSpacing.section),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
                 Text(
                     text = state.failMessage ?: stringResource(R.string.terminal_session_closed),
-                    style = MiuixTheme.textStyles.body2,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    style = MovoTypography.bodyRegular,
+                    color = MovoColors.textSecondary,
                     textAlign = TextAlign.Center,
                 )
-                TextButton(
-                    text = stringResource(R.string.terminal_reconnect),
-                    onClick = store::reconnect,
-                    modifier = Modifier.padding(top = 12.dp),
-                )
-                if (state.failMessage != null) {
-                    TextButton(
-                        text = stringResource(R.string.terminal_open_environment),
-                        onClick = onOpenEnvironment,
-                        modifier = Modifier.padding(top = 4.dp),
+                Spacer(Modifier.height(MovoSpacing.md))
+                Row(horizontalArrangement = Arrangement.spacedBy(MovoSpacing.sm)) {
+                    MovoPillButton(
+                        label = stringResource(R.string.terminal_reconnect),
+                        onClick = store::reconnect,
+                        primary = true,
                     )
+                    if (state.failMessage != null) {
+                        MovoPillButton(
+                            label = stringResource(R.string.terminal_open_environment),
+                            onClick = onOpenEnvironment,
+                        )
+                    }
                 }
             }
         }
@@ -482,30 +489,9 @@ private fun KeyChip(
             } else {
                 MiuixTheme.colorScheme.onSurfaceVariantSummary
             },
-            fontWeight = if (active) FontWeight.SemiBold else null,
+            fontWeight = if (active) FontWeight.Medium else null,
         )
     }
-}
-
-@Composable
-private fun EnvironmentTab(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    Text(
-        text = label,
-        style = MiuixTheme.textStyles.footnote1,
-        color = if (selected) {
-            MiuixTheme.colorScheme.primary
-        } else {
-            MiuixTheme.colorScheme.onSurfaceVariantSummary
-        },
-        fontWeight = if (selected) FontWeight.SemiBold else null,
-        modifier = Modifier
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-    )
 }
 
 private fun measureCell(textMeasurer: TextMeasurer, style: TextStyle): Pair<Int, Int> {

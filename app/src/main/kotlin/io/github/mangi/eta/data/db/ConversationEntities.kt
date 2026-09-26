@@ -103,4 +103,7 @@ internal data class ConversationMessageEntity(
     @ColumnInfo(name = "result_summary") val resultSummary: String? = null,
     @ColumnInfo(name = "image_count") val imageCount: Int = 0,
     @ColumnInfo(name = "tools_json") val toolsJson: String = "[]",
+    /** 工具步骤开始 / 结束时刻（毫秒，v22 起）；旧数据为 null。 */
+    @ColumnInfo(name = "started_at") val startedAt: Long? = null,
+    @ColumnInfo(name = "finished_at") val finishedAt: Long? = null,
 )
