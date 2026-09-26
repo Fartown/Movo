@@ -139,6 +139,8 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // Permissions may have changed in system settings while this activity was paused.
         io.github.fartown.movo.agent.voice.MovoWakeWordController.refresh(this)
+        // 常驻悬浮球（默认开）：App 在前台时把待命悬浮球建好（此时藏着），离开 App 后就在。
+        io.github.fartown.movo.agent.overlay.OrbPrefs.requestStandbyOrb(this)
     }
 
     override fun onNewIntent(intent: Intent) {

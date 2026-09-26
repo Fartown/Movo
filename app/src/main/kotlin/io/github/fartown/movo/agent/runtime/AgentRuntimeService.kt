@@ -151,7 +151,16 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private val orbFadeToken = Any()
     private val appLeaveToken = Any()
     private val orbPrefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == io.github.fartown.movo.agent.overlay.OrbPrefs.KEY_KEEP_ORB) mainHandler.post { updateStandbyOrbVisibility() }
+        if (key != io.github.fartown.movo.agent.overlay.OrbPrefs.KEY_KEEP_ORB) return@OnSharedPreferenceChangeListener
+        mainHandler.post {
+            val keep = io.github.fartown.movo.agent.overlay.OrbPrefs.keepOrbAfterExit(this)
+            when {
+                keep && activeSession == null -> ensureStandbyOrb()
+                // 关掉常驻、又没有任务：待命悬浮球没有用处，撤掉并停服务。
+                !keep && activeSession == null && standby.value -> dismissAndStop()
+            }
+            updateStandbyOrbVisibility()
+        }
     }
     /** 悬浮球退场（移除）时置 false，播完退场再移除窗口。 */
     private val orbShown = mutableStateOf(true)
@@ -224,10 +233,37 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STANDBY_ORB) {
+            // 常驻悬浮球：有任务时沿用任务的悬浮球；没有任务时建待命悬浮球，建不出来（没有无障碍也没有悬浮窗权限）就停。
+            if (activeSession == null && !ensureStandbyOrb()) stopSelf(startId)
+            return START_NOT_STICKY
+        }
         if (intent?.action != ACTION_KEEP_ALIVE || activeSession == null) {
             stopSelf(startId)
         }
         return START_NOT_STICKY
+    }
+
+    /**
+     * 「常驻悬浮球」开（默认，[io.github.fartown.movo.agent.overlay.OrbPrefs]）时，没有任务也保留一个待命悬浮球：
+     * 只有光球、没有光晕与状态环；Movo 自己在前台时藏起（[updateStandbyOrbVisibility]）。返回是否有悬浮球。
+     */
+    private fun ensureStandbyOrb(): Boolean {
+        if (!io.github.fartown.movo.agent.overlay.OrbPrefs.keepOrbAfterExit(this)) return false
+        if (orbView != null) return true
+        val wasVisible = VoiceSurfaceTracker.appVisible
+        // App 在前台时建：先不播进场，离开 App 时直接出现在原位。
+        orbEntrance = !wasVisible
+        showOverlay()
+        orbEntrance = true
+        if (orbView == null) return false
+        glowView?.let { view -> runCatching { windowManager?.removeView(view) } }
+        glowView = null
+        glowParams = null
+        state.value = AgentOverlayState.Initial
+        standby.value = true
+        updateStandbyOrbVisibility()
+        return true
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
@@ -1762,6 +1798,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         } else if (standby.value && orbView != null) {
             // 常驻的待命悬浮球：这次没有操作其他 App，结果就在对话里，悬浮球保持待命。
             state.value = AgentOverlayState.Initial
+        } else if (activeSession == null && ensureStandbyOrb()) {
+            // 常驻开：纯问答结束后也留下待命悬浮球（原来服务随即停止，离开 App 后没有悬浮球）。
+            Unit
         } else {
             dismissAndStop()
         }
@@ -1941,6 +1980,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
         const val ORB_DISC_DP = 32
         const val ACTION_KEEP_ALIVE = "io.github.fartown.movo.agent.runtime.KEEP_ALIVE"
+        /** 常驻悬浮球：没有任务时也建待命悬浮球（见 [io.github.fartown.movo.agent.overlay.OrbPrefs.requestStandbyOrb]）。 */
+        const val ACTION_STANDBY_ORB = "io.github.fartown.movo.agent.runtime.STANDBY_ORB"
         const val HIDE_DELAY_MS = 2_500L
         const val ORB_WINDOW_DP = 44
         const val ORB_EDGE_DP = 8
