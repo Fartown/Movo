@@ -159,6 +159,7 @@
   <string name="movo_work_unfinished_steps">Not finished · ran %1$d steps</string>
   <string name="movo_work_stopped_steps">Stopped · ran %1$d steps</string>
   <string name="movo_thinking_in_progress">Thinking</string>
+  <string name="movo_thinking_live_seconds">%1$ds</string>
   <string name="movo_thinking_seconds">Thought · %1$d s</string>
   <string name="movo_thinking_done">Thought</string>
   <string name="movo_thought_seconds">Thought for %1$ds</string>

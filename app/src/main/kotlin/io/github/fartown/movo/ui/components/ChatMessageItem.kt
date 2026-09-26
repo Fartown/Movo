@@ -798,6 +798,53 @@ private fun workTimeSpan(tools: List<ToolActivityMessageUi>, outcome: WorkOutcom
 }
 
 /**
+ * 思考的状态图标（规范 8.1，Figma「14-0」，2026-09-27 定稿方案 3）：思考中是小光球（与执行卡「正在执行」同一个
+ * 「Movo 在工作」信号，渐变转动 + 呼吸），思考完交叉淡化成次要色 sparkle（9.3.1 图标切换）。
+ */
+@Composable
+private fun ThinkingStatusIcon(streaming: Boolean, size: androidx.compose.ui.unit.Dp) {
+    val reduced = io.github.fartown.movo.ui.theme.LocalReducedMotion.current
+    AnimatedContent(
+        targetState = streaming,
+        modifier = Modifier.size(size),
+        contentAlignment = Alignment.Center,
+        transitionSpec = { movoIconSwap(reduced) },
+        label = "thinkingStatusIcon",
+    ) { thinking ->
+        if (thinking) {
+            io.github.fartown.movo.ui.components.movo.MovoOrb(size = size)
+        } else {
+            io.github.fartown.movo.ui.theme.MovoIcon(
+                io.github.fartown.movo.ui.theme.MovoIcons.Sparkle, null, size = size,
+                tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+            )
+        }
+    }
+}
+
+/**
+ * 「思考中」后面的实时秒数（方案 3）：从这段思考开始计，每秒 +1，数字直接换（9.0 规则 5）；`Label/Regular` 三级色。
+ * 开始时刻按 [key] 存，滚出屏幕再回来不重新计。模型两段输出之间停顿时，数字仍在走，看得出没有卡住。
+ */
+@Composable
+private fun ThinkingLiveSeconds(key: String) {
+    val startedAt by rememberSaveable(key) { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
+    val seconds by androidx.compose.runtime.produceState(0L, startedAt) {
+        while (true) {
+            value = ((System.currentTimeMillis() - startedAt) / 1000).coerceAtLeast(0)
+            kotlinx.coroutines.delay(1_000L - (System.currentTimeMillis() - startedAt) % 1_000L)
+        }
+    }
+    Spacer(Modifier.width(6.dp))
+    Text(
+        text = stringResource(R.string.movo_thinking_live_seconds, seconds.toInt()),
+        style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular,
+        color = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
+        maxLines = 1,
+    )
+}
+
+/**
  * 思考中的滚动预览（规范 8.1，Figma「14-0」）：高度固定两行（`Label/Regular` 行高 18 × 2），显示最新写出的内容：
  * 文字按底部对齐排版、超出的往上推出视口，上沿 14 渐隐；新字只会让文字上移，高度不变，不随段落切换跳动。
  */
@@ -862,10 +909,7 @@ private fun ThinkingOnlyRow(
                 .movoClickable(io.github.fartown.movo.ui.components.movo.PressKind.Link) { expanded = !expanded },
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            io.github.fartown.movo.ui.theme.MovoIcon(
-                io.github.fartown.movo.ui.theme.MovoIcons.Sparkle, null, size = 14.dp,
-                tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
-            )
+            ThinkingStatusIcon(streaming = streaming, size = 14.dp)
             Spacer(Modifier.width(6.dp))
             io.github.fartown.movo.ui.components.movo.MovoShimmerText(
                 text = when {
@@ -877,6 +921,7 @@ private fun ThinkingOnlyRow(
                 color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
                 active = streaming,
             )
+            if (streaming) ThinkingLiveSeconds(key = id)
             Spacer(Modifier.width(4.dp))
             val rotation = androidx.compose.animation.core.animateFloatAsState(
                 targetValue = if (expanded) 180f else 0f,
@@ -3389,24 +3434,21 @@ private fun WorkThinkingStep(
             .padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
-                io.github.fartown.movo.ui.theme.MovoIcon(
-                    io.github.fartown.movo.ui.theme.MovoIcons.Sparkle, null, size = 16.dp,
-                    tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
-                )
-            }
+            ThinkingStatusIcon(streaming = message.isStreaming, size = 16.dp)
             Spacer(Modifier.width(12.dp))
-            io.github.fartown.movo.ui.components.movo.MovoShimmerText(
-                text = when {
-                    message.isStreaming -> stringResource(R.string.movo_thinking_in_progress)
-                    (message.elapsedSeconds ?: 0) > 0 -> stringResource(R.string.movo_thinking_seconds, message.elapsedSeconds ?: 0)
-                    else -> stringResource(R.string.movo_thinking_done)
-                },
-                style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
-                color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
-                active = message.isStreaming,
-                modifier = Modifier.weight(1f),
-            )
+            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                io.github.fartown.movo.ui.components.movo.MovoShimmerText(
+                    text = when {
+                        message.isStreaming -> stringResource(R.string.movo_thinking_in_progress)
+                        (message.elapsedSeconds ?: 0) > 0 -> stringResource(R.string.movo_thinking_seconds, message.elapsedSeconds ?: 0)
+                        else -> stringResource(R.string.movo_thinking_done)
+                    },
+                    style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
+                    color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                    active = message.isStreaming,
+                )
+                if (message.isStreaming) ThinkingLiveSeconds(key = message.id)
+            }
         }
         if (message.content.isNotBlank()) {
             // 展开 / 收起（规范 9.3）：高度 `standard`；展开内容在高度过渡开始 40ms 后淡入 `fast`，收起时先淡出 120ms。
