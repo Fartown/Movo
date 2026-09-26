@@ -36,6 +36,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        logRelaunchConfigDiff()
         var contentReady = false
         // 冷启动：首页进场等启动页开始退场再播。
         if (savedInstanceState == null) io.github.fartown.movo.ui.app.StartupReveal.hold()
@@ -124,6 +125,28 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        lastConfiguration = android.content.res.Configuration(newConfig)
+    }
+
+    /**
+     * 被系统重建（而不是走 onConfigurationChanged）时，记录与上一次配置相差的项。
+     * 重建会整屏黑一下；日志用于定位还缺哪些 configChanges（2026-09-26 据此补上 screenLayout：
+     * 切换语言时 screenLayout 的布局方向位随之变化，冷启动后首次切换曾被重建、黑屏约 167ms）。
+     */
+    private fun logRelaunchConfigDiff() {
+        val previous = lastConfiguration
+        val current = android.content.res.Configuration(resources.configuration)
+        lastConfiguration = current
+        if (previous == null) return
+        val diff = previous.diff(current)
+        if (diff == 0) return
+        io.github.fartown.movo.core.AndroidAgentLogger.info(
+            "MainActivity relaunched: config diff=0x${Integer.toHexString(diff)} (${configDiffNames(diff)})",
+        )
+    }
+
     private fun updateApplicationNightMode(themeMode: AppearanceThemeMode) {
         val mode = when (themeMode) {
             AppearanceThemeMode.LIGHT -> UiModeManager.MODE_NIGHT_NO
@@ -161,5 +184,36 @@ class MainActivity : ComponentActivity() {
         overridePendingTransition(0, 0)
         recreate()
         overridePendingTransition(0, 0)
+    }
+
+    private companion object {
+        /** 进程内上一次看到的 Activity 配置（Activity 重建时仍在）。 */
+        var lastConfiguration: android.content.res.Configuration? = null
+
+        fun configDiffNames(diff: Int): String {
+            val names = listOf(
+                android.content.pm.ActivityInfo.CONFIG_MCC to "mcc",
+                android.content.pm.ActivityInfo.CONFIG_MNC to "mnc",
+                android.content.pm.ActivityInfo.CONFIG_LOCALE to "locale",
+                android.content.pm.ActivityInfo.CONFIG_TOUCHSCREEN to "touchscreen",
+                android.content.pm.ActivityInfo.CONFIG_KEYBOARD to "keyboard",
+                android.content.pm.ActivityInfo.CONFIG_KEYBOARD_HIDDEN to "keyboardHidden",
+                android.content.pm.ActivityInfo.CONFIG_NAVIGATION to "navigation",
+                android.content.pm.ActivityInfo.CONFIG_ORIENTATION to "orientation",
+                android.content.pm.ActivityInfo.CONFIG_SCREEN_LAYOUT to "screenLayout",
+                android.content.pm.ActivityInfo.CONFIG_UI_MODE to "uiMode",
+                android.content.pm.ActivityInfo.CONFIG_SCREEN_SIZE to "screenSize",
+                android.content.pm.ActivityInfo.CONFIG_SMALLEST_SCREEN_SIZE to "smallestScreenSize",
+                android.content.pm.ActivityInfo.CONFIG_DENSITY to "density",
+                android.content.pm.ActivityInfo.CONFIG_LAYOUT_DIRECTION to "layoutDirection",
+                android.content.pm.ActivityInfo.CONFIG_COLOR_MODE to "colorMode",
+                android.content.pm.ActivityInfo.CONFIG_GRAMMATICAL_GENDER to "grammaticalGender",
+                android.content.pm.ActivityInfo.CONFIG_FONT_WEIGHT_ADJUSTMENT to "fontWeightAdjustment",
+                android.content.pm.ActivityInfo.CONFIG_FONT_SCALE to "fontScale",
+            )
+            val known = names.filter { (flag, _) -> diff and flag != 0 }.joinToString("|") { it.second }
+            val rest = diff and names.fold(0) { acc, (flag, _) -> acc or flag }.inv()
+            return if (rest != 0) "$known|other=0x${Integer.toHexString(rest)}" else known
+        }
     }
 }
