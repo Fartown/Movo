@@ -10,28 +10,52 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.ResultReceiver
-import android.view.Gravity
-import android.view.MotionEvent
 import android.view.WindowManager
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.Crossfade
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color as ComposeColor
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
@@ -70,6 +94,12 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
     /** 系统分享进来的内容（规范 8.9.1）：打开时新建会话并预填进输入框，用完置空。 */
     private var sharedContent by mutableStateOf<io.github.fartown.movo.ui.share.SharedContent?>(null)
     private var mainHandoffToken: Any? = null
+    /** 会话没能打开（规范 8.11：不用 Toast）：内容区显示原因与「重试」，不直接关闭浮层。 */
+    private var openError by mutableStateOf<String?>(null)
+    /** 点「重试」加一，重新执行打开会话。 */
+    private var openAttempt by mutableIntStateOf(0)
+    /** 「展开到 App」没成功：头部标题处短暂说明原因（规范 8.11 就地反馈）。 */
+    private var headerNotice by mutableStateOf<String?>(null)
     private var resizeAnimator: ValueAnimator? = null
     /** 进场、下拉回弹与退场共用：整块浮层的位移与后方遮罩（规范 8.9 / 9.5）。 */
     private var sheetAnimator: ValueAnimator? = null
@@ -78,9 +108,25 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
     private var closing = false
     /** 这次是从悬浮球点开的：关闭时反向收回球。 */
     private var openedFromOrb = false
-    /** Q4 浮层 → App：推满全屏的进度（驱动顶部圆角与把手）。 */
-    private var expandProgress by mutableStateOf(0f)
-    private var windowHeight = 0
+    /** Q4 浮层 → App：推满全屏的进度（驱动顶部圆角与把手）。只在绘制阶段读取。 */
+    private var expandProgress by mutableFloatStateOf(0f)
+    /*
+     * 窗口固定全屏（审查 A1）：拖动、展开、进出场都不再改窗口尺寸与 dimAmount（每帧跨进程 relayout），
+     * 浮层的高度在 Compose 布局阶段、位移 / 透明度 / 轮廓 / 遮罩在绘制阶段读取下面这些状态。
+     */
+    /** 浮层高度（窗口坐标 px，贴屏幕底）；原来的窗口高度。 */
+    private var windowHeight by mutableIntStateOf(0)
+    /** 浮层整体下移（进场、下拉关闭、退场）。 */
+    private var sheetOffset by mutableFloatStateOf(0f)
+    /** 后方遮罩 `overlay/scrim` 的显示比例 0–1。 */
+    private var scrimFraction by mutableFloatStateOf(0f)
+    /** 浮层本身的透明度（Q4 球 ↔ 浮层前 30% 淡入）；不影响遮罩。 */
+    private var sheetAlpha by mutableFloatStateOf(1f)
+    /** Q4 球 ↔ 浮层：起点（悬浮球玻璃圆，浮层自身坐标）；为 null 时不做轮廓裁切。 */
+    private var orbMorphStart by mutableStateOf<android.graphics.RectF?>(null)
+    private var orbMorphProgress by mutableFloatStateOf(1f)
+    /** 根布局（= 窗口）的高度，用来算浮层顶边在窗口里的位置。 */
+    private var rootHeight by mutableIntStateOf(0)
     private var keyboardLift = 0
     private var dragging = false
     private var dragHeight = 0f
@@ -91,7 +137,8 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
     ) { allowed ->
         if (allowed && !isFinishing) io.github.fartown.movo.agent.voice.session.VoiceEntry.startInPlace(this)
-        else Toast.makeText(this, "未获得麦克风权限，可以继续文字输入", Toast.LENGTH_LONG).show()
+        // 不用 Toast（规范 8.11）：原因显示在浮层输入框上方的语音提示里。
+        else if (!allowed) io.github.fartown.movo.agent.voice.session.VoiceSessionManager.showNotice(MIC_DENIED_NOTICE)
     }
 
     private fun startVoiceInput() {
@@ -113,10 +160,9 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         enableEdgeToEdge()
         window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-        window.setGravity(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
-        // 后方 `overlay/scrim` 32%：浮层是模态的，点遮罩关闭浮层（不停止任务）。
-        window.attributes = window.attributes.apply { windowAnimations = 0; dimAmount = 0f }
-        window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+        // 窗口固定全屏、只设这一次；后方 `overlay/scrim` 32% 由 Compose 画在浮层下面：浮层是模态的，点遮罩关闭浮层（不停止任务）。
+        window.attributes = window.attributes.apply { windowAnimations = 0 }
+        window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT)
         updateHeight(AgentResultSheetSizing.height(screenHeight(), false))
         animateIn()
         MemoryDiagnostics.record("conversation", "sheet.created")
@@ -134,14 +180,17 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                         moveTaskToBack(true)
                     }) {
                         val density = LocalDensity.current
-                        val imeBottom = WindowInsets.ime.getBottom(density)
-                        val navigationBottom = WindowInsets.navigationBars.getBottom(density)
-                        LaunchedEffect(imeBottom, navigationBottom) {
-                            avoidKeyboard(imeBottom, navigationBottom)
+                        // 键盘避让：只在 snapshotFlow 里读 insets，键盘动画期间不重组整棵树，浮层高度只触发重新布局。
+                        val ime = WindowInsets.ime
+                        val navigationBars = WindowInsets.navigationBars
+                        LaunchedEffect(ime, navigationBars, density) {
+                            snapshotFlow { ime.getBottom(density) to navigationBars.getBottom(density) }
+                                .collect { (imeBottom, navigationBottom) -> avoidKeyboard(imeBottom, navigationBottom) }
                         }
-                        LaunchedEffect(request, assistantMode, sharedContent, keyguardGate.locked) {
+                        LaunchedEffect(request, assistantMode, sharedContent, keyguardGate.locked, openAttempt) {
                             // 锁屏时不加载会话，解锁成功后本 effect 会重新执行。
                             if (keyguardGate.locked) return@LaunchedEffect
+                            openError = null
                             sharedContent?.let { shared ->
                                 // 分享进来：新会话，内容预填进输入框，自动获焦等用户补一句指令（不自动发送）。
                                 sharedContent = null
@@ -155,22 +204,15 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                                 val opened = runCatching { agentState.voiceConversationId() }
                                 ready = opened.isSuccess
                                 opened.onFailure { failure ->
-                                    Toast.makeText(
-                                        this@AgentConversationSheetActivity,
-                                        failure.message ?: getString(R.string.overlay_result_open_failed),
-                                        Toast.LENGTH_LONG,
-                                    ).show()
-                                    finish()
+                                    // 不用 Toast、不直接关闭（规范 8.11）：内容区显示原因与「重试」。
+                                    openError = failure.message ?: getString(R.string.overlay_result_open_failed)
                                 }
                                 return@LaunchedEffect
                             }
                             val opened = agentState.openResultConversation(opening.target, opening.runId)
                             ready = opened
                             opening.acknowledge(opened)
-                            if (!opened) {
-                                Toast.makeText(this@AgentConversationSheetActivity, R.string.overlay_result_open_failed, Toast.LENGTH_LONG).show()
-                                finish()
-                            }
+                            if (!opened) openError = getString(R.string.overlay_result_open_failed)
                         }
                         LaunchedEffect(ready, autoListen, keyguardGate.locked) {
                             if (ready && autoListen && !keyguardGate.locked) {
@@ -178,31 +220,76 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                                 startVoiceInput()
                             }
                         }
+                        LaunchedEffect(headerNotice) {
+                            if (headerNotice != null) {
+                                delay(HEADER_NOTICE_HOLD_MS)
+                                headerNotice = null
+                            }
+                        }
                         BackHandler { dismissAnimated() }
                         val pane = agentState.conversationPaneState
-                        AgentConversationSheet(
-                            title = pane.conversations.firstOrNull { it.id == pane.selectedConversationId }?.title
-                                ?.takeUnless { keyguardGate.locked }
-                                ?: getString(R.string.app_name),
-                            onDrag = ::drag,
-                            onDragStopped = ::endDrag,
-                            onOpenConversation = ::expandIntoApp,
-                            onClose = ::dismissAnimated,
-                            expandProgress = { expandProgress },
+                        val statusBars = WindowInsets.statusBars
+                        // Miuix 弹出菜单挂在 Scaffold 上：Scaffold 放在铺满窗口的根上，菜单按窗口坐标定位，不被浮层裁切。
+                        top.yukonga.miuix.kmp.basic.Scaffold(
+                            modifier = Modifier.fillMaxSize(),
+                            containerColor = ComposeColor.Transparent,
+                            contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
                         ) {
-                            if (ready && !keyguardGate.locked) {
-                                AgentConversationContent(
-                                    agentState = agentState,
-                                    onOpenBrowser = ::openBrowser,
-                                    onNavigateBack = ::finish,
-                                    initiallyShowLatestMessage = true,
+                            Box(Modifier.fillMaxSize().onSizeChanged { rootHeight = it.height }) {
+                                // 后方遮罩 `overlay/scrim`：透明度只在绘制阶段读；点遮罩关闭浮层。
+                                Box(
+                                    Modifier.fillMaxSize()
+                                        .graphicsLayer { alpha = scrimFraction }
+                                        .background(io.github.fartown.movo.ui.theme.MovoColors.overlayScrim)
+                                        .pointerInput(Unit) {
+                                            awaitEachGesture {
+                                                awaitFirstDown(requireUnconsumed = false)
+                                                if (waitForUpOrCancellation() != null) dismissAnimated()
+                                            }
+                                        },
                                 )
-                            } else {
-                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    Text(getString(
-                                        if (keyguardGate.locked) R.string.overlay_unlock_to_continue
-                                        else R.string.overlay_result_opening_conversation,
-                                    ))
+                                Box(
+                                    Modifier.align(Alignment.BottomCenter)
+                                        .fillMaxWidth()
+                                        // 高度在布局阶段读取：拖动、展开、键盘避让都只重新布局浮层，不重组、不改窗口。
+                                        .layout { measurable, constraints ->
+                                            val height = windowHeight.coerceIn(0, constraints.maxHeight)
+                                            val placeable = measurable.measure(constraints.copy(minHeight = height, maxHeight = height))
+                                            layout(placeable.width, height) { placeable.place(0, 0) }
+                                        }
+                                        .graphicsLayer {
+                                            translationY = sheetOffset
+                                            alpha = sheetAlpha
+                                            val start = orbMorphStart
+                                            if (start != null) {
+                                                shape = orbMorphShape(start, orbMorphProgress, this.size, 28.dp.toPx())
+                                                clip = true
+                                            } else {
+                                                clip = false
+                                            }
+                                        }
+                                        // 浮层本身拦下触摸，空白处不落到下面的遮罩上（遮罩点一下会关闭浮层）。
+                                        .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(requireUnconsumed = false) } },
+                                ) {
+                                    val title = pane.conversations.firstOrNull { it.id == pane.selectedConversationId }?.title
+                                        ?.takeUnless { keyguardGate.locked }
+                                        ?: getString(R.string.app_name)
+                                    AgentConversationSheet(
+                                        title = headerNotice ?: title,
+                                        titleIsNotice = headerNotice != null,
+                                        onDrag = ::drag,
+                                        onDragStopped = ::endDrag,
+                                        onOpenConversation = ::expandIntoApp,
+                                        onClose = ::dismissAnimated,
+                                        expandProgress = { expandProgress },
+                                        // 原来窗口只盖住下半屏、收不到状态栏 insets；现在窗口全屏，浮层顶边碰到状态栏时才让出重叠部分。
+                                        topInset = {
+                                            val root = rootHeight
+                                            if (root <= 0) 0 else (statusBars.getTop(density) - (root - windowHeight).coerceAtLeast(0)).coerceAtLeast(0)
+                                        },
+                                    ) {
+                                        SheetBody()
+                                    }
                                 }
                             }
                         }
@@ -288,9 +375,9 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         updateHeight(AgentResultSheetSizing.height(screenHeight(), false, keyboardLift))
     }
 
+    /** 只改浮层高度状态（布局阶段读取），窗口尺寸不变。 */
     private fun updateHeight(height: Int) {
         windowHeight = height
-        window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, height)
     }
 
     private fun drag(deltaY: Float) {
@@ -340,17 +427,18 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         if (orb != null && !isReducedMotion(this)) {
             openedFromOrb = true
             setScrim(0f)
-            decor.alpha = 0f
+            sheetAlpha = 0f
             decor.post { if (!closing) morphWithOrb(orb, expand = true) {} }
             return
         }
         if (isReducedMotion(this)) {
+            // 减少动画：浮层与遮罩一起淡入 `fast`（遮罩现在画在窗口里，随窗口透明度一起淡入）。
             decor.alpha = 0f
             decor.animate().alpha(1f).setDuration(MovoMotion.FAST.toLong()).start()
             setScrim(1f)
             return
         }
-        decor.translationY = screenHeight().toFloat()
+        sheetOffset = screenHeight().toFloat()
         setScrim(0f)
         decor.post {
             if (closing) return@post
@@ -380,7 +468,7 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                 return
             }
         }
-        val from = window.decorView.translationY
+        val from = sheetOffset
         animateSheetOffset(from, windowHeight.toFloat().coerceAtLeast(from + 1f), MovoMotion.SLOW_EXIT.toLong(), EASE_EXIT) {
             finish()
         }
@@ -408,39 +496,28 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
     }
 
     /**
-     * Q4 球 ↔ 浮层（规范 9.3.2 / 9.5）：窗口轮廓在悬浮球玻璃圆（圆角 16）与浮层（顶部圆角 28）之间插值，
+     * Q4 球 ↔ 浮层（规范 9.3.2 / 9.5）：浮层轮廓在悬浮球玻璃圆（圆角 16）与浮层（顶部圆角 28）之间插值，
      * `slow` + `standard`；浮层在前 30% 淡入（收起时后 30% 淡出），遮罩同步。[orb] 为屏幕坐标。
+     * 轮廓、透明度、遮罩都是 Compose 图层属性，只在绘制阶段读取，不改窗口。
      */
     private fun morphWithOrb(orb: android.graphics.Rect, expand: Boolean, onEnd: () -> Unit) {
-        val decor = window.decorView
         sheetAnimator?.cancel()
-        val windowTop = screenHeight() - windowHeight
-        val start = android.graphics.RectF(orb).apply { offset(0f, -windowTop.toFloat()) }
-        val width = decor.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
-        val end = android.graphics.RectF(0f, 0f, width.toFloat(), windowHeight.toFloat())
-        val sheetRadius = resources.displayMetrics.density * 28f
-        var progress = if (expand) 0f else 1f
-        decor.outlineProvider = object : android.view.ViewOutlineProvider() {
-            override fun getOutline(view: android.view.View, outline: android.graphics.Outline) {
-                val p = progress
-                val radius = start.height() / 2f + (sheetRadius - start.height() / 2f) * p
-                val left = start.left + (end.left - start.left) * p
-                val top = start.top + (end.top - start.top) * p
-                val right = start.right + (end.right - start.right) * p
-                // 底边随展开伸出窗口外，最终底部圆角被屏幕裁掉（浮层贴底，底部圆角 0）。
-                val bottom = start.bottom + (end.bottom + radius - start.bottom) * p
-                outline.setRoundRect(left.roundToInt(), top.roundToInt(), right.roundToInt(), bottom.roundToInt(), radius)
-            }
+        // 屏幕坐标 → 浮层自身坐标：减去窗口在屏幕上的位置和浮层顶边在窗口里的位置。
+        val windowOnScreen = IntArray(2).also(window.decorView::getLocationOnScreen)
+        val windowSize = rootHeight.takeIf { it > 0 } ?: screenHeight()
+        val sheetTop = (windowSize - windowHeight).coerceAtLeast(0)
+        orbMorphStart = android.graphics.RectF(orb).apply {
+            offset(-windowOnScreen[0].toFloat(), -(windowOnScreen[1] + sheetTop).toFloat())
         }
-        decor.clipToOutline = true
-        decor.translationY = 0f
-        sheetAnimator = ValueAnimator.ofFloat(progress, if (expand) 1f else 0f).apply {
+        sheetOffset = 0f
+        orbMorphProgress = if (expand) 0f else 1f
+        sheetAnimator = ValueAnimator.ofFloat(orbMorphProgress, if (expand) 1f else 0f).apply {
             duration = MovoMotion.SLOW.toLong()
             interpolator = EASE_STANDARD
             addUpdateListener {
-                progress = it.animatedValue as Float
-                decor.invalidateOutline()
-                decor.alpha = (progress / 0.3f).coerceIn(0f, 1f)
+                val progress = it.animatedValue as Float
+                orbMorphProgress = progress
+                sheetAlpha = (progress / 0.3f).coerceIn(0f, 1f)
                 setScrim(progress)
             }
             addListener(object : android.animation.AnimatorListenerAdapter() {
@@ -456,10 +533,9 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
     }
 
     private fun resetOrbMorph() {
-        val decor = window.decorView
-        decor.clipToOutline = false
-        decor.outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
-        decor.alpha = 1f
+        orbMorphStart = null
+        orbMorphProgress = 1f
+        sheetAlpha = 1f
     }
 
     /**
@@ -477,24 +553,14 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
 
     /** 浮层下移 [offset]：遮罩按露出比例同步变淡。 */
     private fun applySheetOffset(offset: Float) {
-        window.decorView.translationY = offset
+        sheetOffset = offset
         val height = windowHeight.toFloat().coerceAtLeast(1f)
         setScrim(1f - (offset / height).coerceIn(0f, 1f))
     }
 
+    /** 遮罩比例（绘制阶段读取）；不再改窗口 `dimAmount`。 */
     private fun setScrim(fraction: Float) {
-        window.attributes = window.attributes.apply { dimAmount = SCRIM_ALPHA * fraction }
-    }
-
-    /** 浮层是模态的：点浮层以外（遮罩）关闭浮层。 */
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        val decor = window.decorView
-        val outside = event.y < 0f || event.x < 0f || event.x > decor.width || event.y > decor.height
-        if (outside && event.actionMasked == MotionEvent.ACTION_UP) {
-            dismissAnimated()
-            return true
-        }
-        return outside || super.onTouchEvent(event)
+        scrimFraction = fraction
     }
 
     private fun settle(full: Boolean) {
@@ -505,7 +571,8 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         }
         val height = AgentResultSheetSizing.height(screenHeight(), false, keyboardLift)
         resizeAnimator = ValueAnimator.ofInt(windowHeight, height).apply {
-            duration = 220
+            duration = MovoMotion.STANDARD.toLong()
+            interpolator = EASE_STANDARD
             addUpdateListener { updateHeight(it.animatedValue as Int) }
             start()
         }
@@ -560,7 +627,8 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
             mainHandoffToken = null
             expandProgress = 0f
             settle(false)
-            Toast.makeText(this, R.string.overlay_result_open_failed, Toast.LENGTH_LONG).show()
+            // 不用 Toast（规范 8.11）：在头部标题处短暂说明，浮层回到半屏。
+            headerNotice = getString(R.string.overlay_result_open_failed)
         }
         val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
             override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
@@ -596,8 +664,61 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         moveTaskToBack(true)
     }
 
+    private enum class SheetBodyState { OPENING, LOCKED, FAILED, READY }
+
+    /** 打开失败时最后一条原因：交叉淡化退出失败态期间沿用，不闪空白。 */
+    private var lastOpenError = ""
+
+    /** 浮层内容区：「正在打开会话 / 解锁提示 / 打开失败 + 重试」与会话内容之间交叉淡化 `standard`（审查 B14）。 */
+    @androidx.compose.runtime.Composable
+    private fun SheetBody() {
+        openError?.let { lastOpenError = it }
+        val body = when {
+            keyguardGate.locked -> SheetBodyState.LOCKED
+            ready -> SheetBodyState.READY
+            openError != null -> SheetBodyState.FAILED
+            else -> SheetBodyState.OPENING
+        }
+        Crossfade(targetState = body, animationSpec = MovoMotion.standard(), label = "sheetBody") { current ->
+            if (current == SheetBodyState.READY) {
+                AgentConversationContent(
+                    agentState = agentState,
+                    onOpenBrowser = ::openBrowser,
+                    onNavigateBack = ::finish,
+                    initiallyShowLatestMessage = true,
+                )
+            } else {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            when (current) {
+                                SheetBodyState.LOCKED -> getString(R.string.overlay_unlock_to_continue)
+                                SheetBodyState.FAILED -> lastOpenError
+                                else -> getString(R.string.overlay_result_opening_conversation)
+                            },
+                            textAlign = TextAlign.Center,
+                        )
+                        if (current == SheetBodyState.FAILED) {
+                            Spacer(Modifier.height(12.dp))
+                            io.github.fartown.movo.ui.components.movo.MovoPillButton(
+                                label = getString(R.string.action_retry),
+                                onClick = {
+                                    openError = null
+                                    openAttempt++
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     companion object {
-        private const val SCRIM_ALPHA = 0.32f
+        /** 浮层里点麦克风被拒绝时的提示（原来的 Toast 文案）。 */
+        private const val MIC_DENIED_NOTICE = "未获得麦克风权限，可以继续文字输入"
+        /** 「展开到 App」失败的说明在头部停留的时长。 */
+        private const val HEADER_NOTICE_HOLD_MS = 4_000L
         private const val ORB_ORIGIN_TTL_MS = 2_000L
         @Volatile private var orbOrigin: android.graphics.Rect? = null
         @Volatile private var orbOriginAt = 0L
@@ -660,4 +781,22 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                 catch (_: InterruptedException) { Thread.currentThread().interrupt(); false }
         }
     }
+}
+
+/**
+ * Q4 球 ↔ 浮层的裁切轮廓（浮层自身坐标）：从悬浮球玻璃圆 [start]（圆角 = 半高）插值到整块浮层（顶部圆角 [sheetRadius]）；
+ * 底边随展开伸出浮层外，最终底部圆角落在屏幕外（浮层贴底，底部圆角 0）。
+ */
+internal fun orbMorphShape(start: android.graphics.RectF, progress: Float, size: Size, sheetRadius: Float): Shape {
+    val p = progress
+    val radius = start.height() / 2f + (sheetRadius - start.height() / 2f) * p
+    val left = start.left + (0f - start.left) * p
+    val top = start.top + (0f - start.top) * p
+    val right = start.right + (size.width - start.right) * p
+    val bottom = start.bottom + (size.height + radius - start.bottom) * p
+    return OrbMorphShape(RoundRect(left, top, right, bottom, CornerRadius(radius)))
+}
+
+private class OrbMorphShape(private val rect: RoundRect) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline = Outline.Rounded(rect)
 }
