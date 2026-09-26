@@ -78,6 +78,9 @@ internal fun AgentChatScreen(
                 modifier = modifier,
                 isDrawerOpen = isDrawerOpen,
                 initiallyShowLatestMessage = initiallyShowLatestMessage,
+                // 分享提示只属于分享新开、还没发出消息的那条会话（规范 8.9.1）；App 与对话浮层都走这里。
+                shareIntro = io.github.fartown.movo.ui.share.ShareIntake.intro
+                    ?.takeIf { conversationKey == null && state.messages.isEmpty() },
             )
         }
     }
