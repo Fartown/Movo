@@ -83,6 +83,7 @@ import io.github.fartown.movo.agent.voice.session.VoiceEntry
 import io.github.fartown.movo.agent.voice.session.VoiceSessionManager
 import io.github.fartown.movo.data.model.ReasoningEffort
 import io.github.fartown.movo.ui.app.AgentConversationRevisionReducer
+import io.github.fartown.movo.ui.app.AgentFollowUpSuggestions
 import io.github.fartown.movo.ui.app.LocalBlurEnabled
 import io.github.fartown.movo.ui.model.AgentChatMessageUi
 import io.github.fartown.movo.ui.model.AgentContextUsageUi
@@ -91,6 +92,7 @@ import io.github.fartown.movo.ui.model.AgentModelPickerUiState
 import io.github.fartown.movo.ui.model.MessageEditUiState
 import io.github.fartown.movo.ui.model.PendingFileReferenceUi
 import io.github.fartown.movo.ui.model.PendingImageUi
+import io.github.fartown.movo.ui.model.SuggestionChipsMessageUi
 import io.github.fartown.movo.ui.model.ThinkingMessageUi
 import io.github.fartown.movo.ui.model.ToolActivityMessageUi
 import io.github.fartown.movo.ui.model.ToolSummaryMessageUi
@@ -179,13 +181,13 @@ internal fun AgentChatBody(
         latestContextUsage(messages, modelPickerState.selectedModel)
     }
 
-    val visibleMessages = remember(messages, messageEdit?.targetMessageId, messageEdit?.preserveFollowingMessages) {
+    val visibleMessages = remember(messages, messageEdit?.targetMessageId, messageEdit?.preserveFollowingMessages, isStreaming) {
         AgentConversationRevisionReducer.visibleMessagesForEdit(
             messages = messages,
             targetMessageId = messageEdit?.takeUnless { it.preserveFollowingMessages }?.targetMessageId,
         ).filterNot { message ->
             message is AgentMessageUi && message.content.isBlank()
-        }
+        }.let { AgentFollowUpSuggestions.visible(it, isStreaming) }
     }
     // Initial result presentation starts at the latest turn. Window resizing and onResume do
     // not restart this effect, so a reader's position remains untouched afterwards.
@@ -226,6 +228,19 @@ internal fun AgentChatBody(
     }
     var sentFromKeyboard by remember { mutableStateOf(false) }
     var keepBottomAnchored by remember { mutableStateOf(true) }
+    // 推荐追问在回答结束后才异步到达：用户仍停在底部时把它带进视野，正在上翻阅读时不打扰。
+    val tailSuggestionId = (visibleMessages.lastOrNull() as? SuggestionChipsMessageUi)?.id
+    var seenTailSuggestionId by remember { mutableStateOf(tailSuggestionId) }
+    LaunchedEffect(tailSuggestionId) {
+        val arrived = tailSuggestionId != null && tailSuggestionId != seenTailSuggestionId
+        seenTailSuggestionId = tailSuggestionId
+        if (arrived && keepBottomAnchored && !scrollState.isScrollInProgress) {
+            withFrameNanos { }
+            scrollState.animateScrollToItem(visibleMessages.toTimelineEntries().size)
+            withFrameNanos { }
+            if (scrollState.canScrollForward) scrollState.scroll { scrollBy(Float.MAX_VALUE / 4) }
+        }
+    }
 
     LaunchedEffect(isStreaming) {
         if (isStreaming && sentFromKeyboard) {
@@ -282,7 +297,11 @@ internal fun AgentChatBody(
         onDeleteMessage = onDeleteMessage,
         onRegenerateMessage = onRegenerateMessage,
         onSelectReplyCandidate = onSelectReplyCandidate,
-        onSuggestionClick = onSuggestionClick,
+        onSuggestionClick = { prompt ->
+            // 点追问等同于发送，同样重新锚定底部。
+            keepBottomAnchored = true
+            onSuggestionClick(prompt)
+        },
         onRunTraceClick = onRunTraceClick,
         onOpenBrowser = onOpenBrowser,
         currentBrowserMessageId = currentBrowserMessageId,

@@ -33,7 +33,9 @@ internal enum class EndpointKind {
 }
 
 internal enum class ProviderRequestPurpose {
-    CHAT, COMPACTION, REPLY_REWRITE;
+    CHAT, COMPACTION, REPLY_REWRITE,
+    /** 回答结束后的推荐追问：不带工具的独立小请求，见 [AgentFollowUpSuggester]。 */
+    FOLLOW_UP_SUGGESTIONS;
 
     val allowsTools: Boolean get() = this == CHAT
 }

@@ -15,6 +15,7 @@ import io.github.fartown.movo.data.model.ReasoningEffort
 import io.github.fartown.movo.ui.model.AgentChatHomeUiState
 import io.github.fartown.movo.ui.model.AgentChatMessageUi
 import io.github.fartown.movo.ui.model.AgentMessageUi
+import io.github.fartown.movo.ui.model.SuggestionChipsMessageUi
 import io.github.fartown.movo.ui.model.ThinkingMessageUi
 import io.github.fartown.movo.ui.model.SystemNoticeCode
 import io.github.fartown.movo.ui.model.SystemNoticeMessageUi
@@ -264,6 +265,16 @@ internal object AgentConversationStore {
                 toolsJson = tools.toJsonArrayString(),
             )
 
+            // 推荐追问沿用工具列表字段存文字；旧版本不认识该类型，读取时直接跳过。
+            is SuggestionChipsMessageUi -> ConversationMessageEntity(
+                id = id,
+                conversationId = conversationId,
+                sortIndex = sortIndex,
+                type = TYPE_SUGGESTIONS,
+                content = "",
+                toolsJson = prompts.toJsonArrayString(),
+            )
+
             else -> null
         }
 
@@ -324,6 +335,10 @@ internal object AgentConversationStore {
                 tools = toolsJson.toStringList(),
             )
 
+            TYPE_SUGGESTIONS -> toolsJson.toStringList().takeIf { it.isNotEmpty() }?.let { prompts ->
+                SuggestionChipsMessageUi(id = id, prompts = prompts)
+            }
+
             else -> null
         }
 
@@ -374,6 +389,7 @@ internal object AgentConversationStore {
     private const val TYPE_THINKING = "thinking"
     private const val TYPE_TOOL = "tool"
     private const val TYPE_TOOL_SUMMARY = "tool_summary"
+    private const val TYPE_SUGGESTIONS = "suggestions"
     private const val MESSAGE_LOAD_PAGE_SIZE = 128
     private const val LEGACY_UNNAMED_TITLE = "新对话"
 }

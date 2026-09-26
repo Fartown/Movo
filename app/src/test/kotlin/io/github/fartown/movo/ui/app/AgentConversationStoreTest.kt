@@ -14,6 +14,7 @@ import io.github.fartown.movo.data.db.MovoDatabase
 import io.github.fartown.movo.data.model.ReasoningEffort
 import io.github.fartown.movo.ui.model.AgentChatHomeUiState
 import io.github.fartown.movo.ui.model.AgentMessageUi
+import io.github.fartown.movo.ui.model.SuggestionChipsMessageUi
 import io.github.fartown.movo.ui.model.SystemNoticeCode
 import io.github.fartown.movo.ui.model.SystemNoticeMessageUi
 import io.github.fartown.movo.ui.model.ThinkingMessageUi
@@ -211,6 +212,35 @@ class AgentConversationStoreTest {
             notice,
             snapshot.conversationsById.getValue("conv-notice").messages.single(),
         )
+    }
+
+    @Test
+    fun saveAndLoadPreservesLatestFollowUpSuggestions() {
+        val messages = listOf(
+            UserMessageUi(id = "user-run-1", content = "查一下我的快递"),
+            AgentMessageUi(id = "assistant-run-1-1", content = "取件码 3-2-1106", isStreaming = false),
+            SuggestionChipsMessageUi(id = "suggestions-assistant-run-1-1", prompts = listOf("设置取件提醒", "把取件码发给我自己")),
+        )
+        runBlocking {
+            AgentConversationStore.save(
+                context = context,
+                selectedConversationId = "conv-follow-up",
+                conversationsById = mapOf(
+                    "conv-follow-up" to AgentChatHomeUiState(
+                        messages = messages,
+                        input = "",
+                        isStreaming = false,
+                        thinkingEnabled = false,
+                    ),
+                ),
+                titles = mapOf("conv-follow-up" to "快递"),
+                updatedAt = mapOf("conv-follow-up" to 1L),
+            )
+        }
+
+        val restored = AgentConversationStore.load(context).conversationsById.getValue("conv-follow-up").messages
+        assertEquals(messages.last(), restored.last())
+        assertEquals(3, restored.size)
     }
 
     @Test

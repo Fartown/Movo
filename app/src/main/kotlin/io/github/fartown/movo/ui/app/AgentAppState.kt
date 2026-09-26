@@ -35,6 +35,7 @@ import io.github.fartown.movo.agent.model.AgentFileReference
 import io.github.fartown.movo.agent.model.AgentFileReferenceKind
 import io.github.fartown.movo.agent.model.AgentFileReferencePolicy
 import io.github.fartown.movo.agent.model.AgentFileReferencePromptCodec
+import io.github.fartown.movo.agent.model.AgentFollowUpSuggester
 import io.github.fartown.movo.agent.model.AgentModelClient
 import io.github.fartown.movo.agent.roleplay.RoleplayBinding
 import io.github.fartown.movo.agent.roleplay.CharacterMacros
@@ -146,6 +147,9 @@ internal class AgentAppState(
         val onResult: (AgentRuntimeWire.RunResult) -> Unit,
     )
     private val voiceRunListeners = java.util.concurrent.ConcurrentHashMap<String, VoiceRunListener>()
+    // 推荐追问：只为本进程发起的普通文字对话记下所用模型，结束后用同一模型另发小请求（见 AgentFollowUpSuggester）。
+    private val followUpRunConfigs = java.util.concurrent.ConcurrentHashMap<String, AgentModelClient.ModelConfig>()
+    private val followUpJobs = mutableMapOf<String, Job>()
     private var currentRunId: String? by mutableStateOf(null)
     private var currentRunJob: Job? = null
     internal data class QueuedTextSubmission(
@@ -1001,6 +1005,7 @@ internal class AgentAppState(
     fun deleteConversation(conversationId: String) {
         if (voiceSession.ownsConversation(conversationId)) voiceSession.end("对话已删除，语音已结束")
         if (queuedTextSubmission?.conversationId == conversationId) queuedTextSubmission = null
+        followUpJobs.remove(conversationId)?.cancel()
         io.github.fartown.movo.ui.components.AgentConversationDraftStore.shared.remove(conversationId)
         val wasSelected = selectedConversationId == conversationId
         conversationsById = conversationsById - conversationId
@@ -1529,6 +1534,8 @@ internal class AgentAppState(
     ) {
         runConversationIds[runId] = conversationId
         currentRunId = runId
+        // 新一轮开始：上一轮的推荐追问连同还在路上的请求一起作废。
+        followUpJobs.remove(conversationId)?.cancel()
 
         updateConversation(
             conversationId,
@@ -1537,7 +1544,7 @@ internal class AgentAppState(
                 history = if (operation == AgentRuntimeWire.OP_REWRITE_REPLY) state.history else history + listOfNotNull(userHistoryMessage),
                 journal = state.journal.ifEmpty { state.history } + listOfNotNull(userHistoryMessage),
                 isCompacting = operation == AgentRuntimeWire.OP_COMPACT,
-                messages = messages,
+                messages = AgentFollowUpSuggestions.strip(messages),
                 messageEdit = null,
             )
         )
@@ -1628,6 +1635,10 @@ internal class AgentAppState(
                     bytes = 0,
                     source = "user_attach",
                 )
+            }
+            // 语音对话靠说不靠点、角色扮演是剧情而非设备动作，这两类不出推荐追问。
+            if (operation == AgentRuntimeWire.OP_CHAT && voiceSessionId.isBlank() && state.roleplay == null) {
+                followUpRunConfigs[runId] = config
             }
             if (withContext(Dispatchers.Main) { runId in stopRequestedRunIds }) {
                 withContext(Dispatchers.Main) {
@@ -2492,6 +2503,7 @@ internal class AgentAppState(
             return
         }
         flushPendingRunDelta(runId)
+        val followUpConfig = followUpRunConfigs.remove(runId)
         val rewriting = result.operation == AgentRuntimeWire.OP_REWRITE_REPLY || isReplyRewrite(runId)
         stopRequestedRunIds.remove(runId)
         if (runId == currentRunId) {
@@ -2560,6 +2572,11 @@ internal class AgentAppState(
         conversationIdForRun(runId)?.let { id -> conversationsById[id]?.let {
             updateConversation(id, RoleplayConversationReducer.linkRun(it, runId))
         } }
+        // 失败、停止、中断、空结果、压缩与恢复出来的结果都不生成追问。
+        if (followUpConfig != null && result.ok && result.content.isNotBlank() &&
+            result.operation == AgentRuntimeWire.OP_CHAT && recoveredHandoff == null) {
+            conversationIdForRun(runId)?.let { id -> requestFollowUpSuggestions(id, runId, followUpConfig) }
+        }
         runMessageProjector.clearRun(runId)
         runConversationIds.remove(runId)
         refreshConversationSummaries()
@@ -2573,6 +2590,34 @@ internal class AgentAppState(
             }
         )
         voiceRunListeners.remove(runId)?.onResult?.invoke(result)
+    }
+
+    private fun requestFollowUpSuggestions(
+        conversationId: String,
+        runId: String,
+        config: AgentModelClient.ModelConfig,
+    ) {
+        val state = conversationsById[conversationId] ?: return
+        if (state.isCompacting || state.roleplay != null) return
+        val target = AgentFollowUpSuggestions.target(runId, state.messages) ?: return
+        if (!AgentFollowUpSuggester.shouldSuggest(target.answer, target.usedTools)) return
+        followUpJobs.remove(conversationId)?.cancel()
+        lateinit var job: Job
+        job = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val prompts = AgentFollowUpSuggester.suggest(config, target.userText, target.answer)
+                val current = conversationsById[conversationId] ?: return@launch
+                if (current.isStreaming || current.messageEdit != null) return@launch
+                val messages = AgentFollowUpSuggestions.attach(current.messages, target.answerMessageId, prompts)
+                    ?: return@launch
+                updateConversation(conversationId, current.copy(messages = messages), updateTimestamp = false)
+                persistConversations()
+            } finally {
+                if (followUpJobs[conversationId] === job) followUpJobs.remove(conversationId)
+            }
+        }
+        followUpJobs[conversationId] = job
+        job.start()
     }
 
     private fun updateRunTrace(
