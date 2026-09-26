@@ -111,12 +111,25 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     )
 
     private var windowManager: WindowManager? = null
+    /** [windowManager] 取自哪个 context（无障碍服务实例或本服务）；变了就要整体重建浮窗。 */
+    private var overlayOwner: Context? = null
+    /** 打开补充输入时自动暂停了任务：发送或取消后自动继续（用户自己暂停的不自动继续）。 */
+    private var pausedForTyping = false
+    /** 下一次创建悬浮球时是否播进场；重建浮窗时为 false。 */
+    private var orbEntrance = true
+    /** 重建浮窗时沿用的悬浮球位置（用户可能拖过）。 */
+    private var restoreOrbPosition: WindowManager.LayoutParams? = null
+    private val onAccessibilityInstanceChanged: () -> Unit = {
+        mainHandler.post(::rebuildOverlayIfOwnerChanged)
+    }
     private var glowView: ComposeView? = null
     private var orbView: ComposeView? = null
     private var bubbleView: ComposeView? = null
     private var glowParams: WindowManager.LayoutParams? = null
     private var orbParams: WindowManager.LayoutParams? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
+    /** 展开卡的原始位置（距屏幕底部）；键盘补充时抬到键盘上方，键盘收起后回到这里。 */
+    private var bubbleBaseY = 0
     private val resultConversationOpening = mutableStateOf(false)
     private var resultConversationTarget: AgentConversationTarget? = null
     private var resultConversationRunId: String? = null
@@ -172,6 +185,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
         application.registerActivityLifecycleCallbacks(appActivityCallbacks)
+        AgentAccessibilityService.addInstanceListener(onAccessibilityInstanceChanged)
         // 语音对话与悬浮窗联动（规范 8.5）：执行中语音开始时展开卡以语音模式弹出；语音结束后展开卡恢复自动收起。
         lifecycleScope.launch {
             VoiceSessionManager.state.map { it.active }.distinctUntilChanged().collect(::onVoiceActiveChanged)
@@ -203,6 +217,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     override fun onDestroy() {
         application.unregisterActivityLifecycleCallbacks(appActivityCallbacks)
+        AgentAccessibilityService.removeInstanceListener(onAccessibilityInstanceChanged)
         clearResultHandoff()
         io.github.fartown.movo.diagnostics.MemoryDiagnostics.record("lifecycle", "runtime.destroyed",
             fields = mapOf("run_active" to (activeSession?.isTerminal == false)))
@@ -237,6 +252,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         orbParams = null
         glowParams = null
         windowManager = null
+        overlayOwner = null
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         super.onDestroy()
     }
@@ -615,7 +631,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                             } else {
                                 AgentOverlayStatus.RunFailed
                             },
-                            detailText = result.error.orEmpty(),
+                            detailText = io.github.fartown.movo.agent.model.UserFacingFailure.message(
+                                result.error,
+                                getString(R.string.movo_failure_network),
+                            ).orEmpty(),
                         ),
                         keepVisible = entrySurfaceGuard?.wasTriggered == true,
                     )
@@ -870,6 +889,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     private fun requestResume() {
+        pausedForTyping = false
         activeSession?.controller?.resume()
         activeSession?.broadcast(AgentEvent.RunResumed)
         state.value = state.value.markResumed()
@@ -954,6 +974,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     private fun showOverlay() {
+        if (orbView != null && overlayOwner !== overlayContext()) rebuildOverlayIfOwnerChanged()
         if (orbView != null) {
             // 悬浮球已常驻：只补上边缘光晕。
             if (glowView == null) windowManager?.let(::showGlow)
@@ -961,17 +982,24 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
         // TYPE_ACCESSIBILITY_OVERLAY 免 SYSTEM_ALERT_WINDOW 权限；仅回退态（无障碍未启用）才需检查
         if (AgentAccessibilityService.current() == null && !Settings.canDrawOverlays(this)) return
-        val wm = overlayContext().getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
+        val owner = overlayContext()
+        val wm = owner.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
         windowManager = wm
+        overlayOwner = owner
 
         showGlow(wm)
 
         // ── 光球窗口：始终显示，右侧中下 ──────────────────────────────
         orbShown.value = true
+        val animateOrbEntrance = orbEntrance
+        orbEntrance = true
         val orb = createOverlayComposeView {
             val voice by VoiceSessionManager.state.collectAsState()
             AgentOverlayOrb(
-                mode = orbMode(state.value.phase, standby.value, voice.active),
+                mode = orbMode(
+                    state.value.phase, standby.value, voice.active,
+                    stopped = state.value.status == AgentOverlayStatus.Stopped,
+                ),
                 onTap = ::onOrbTapped,
                 onLongPress = ::onOrbLongPressed,
                 onDragStart = ::onOrbDragStart,
@@ -981,9 +1009,17 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 engaged = removeEngaged.value,
                 hearing = voice.channel == VoiceChannel.Hearing,
                 longRun = (state.value.elapsedMillis(System.currentTimeMillis()) ?: 0L) >= 10_000L,
+                animateEntrance = animateOrbEntrance,
             )
         }
-        val orbLp = orbLayoutParams()
+        val orbLp = orbLayoutParams().apply {
+            restoreOrbPosition?.let { previous ->
+                gravity = previous.gravity
+                x = previous.x
+                y = previous.y
+            }
+            restoreOrbPosition = null
+        }
         runCatching { wm.addView(orb, orbLp) }.onFailure { throwable ->
             AndroidAgentLogger.warnThrottled("runtime_orb_add_view_failed") {
                 "Agent runtime orb addView failed: type=${throwable.safeLogType()}"
@@ -999,6 +1035,47 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         if (!collapsed.value) {
             showBubble(wm)
         }
+    }
+
+    /**
+     * 无障碍服务重连（或断开、恢复）后，旧实例名下的浮窗已被系统移除，旧 WindowManager 再加窗口会
+     * BadTokenException（光晕、展开卡加不上，悬浮球消失）。用当前可用的 context 按原状态重建。
+     */
+    private fun rebuildOverlayIfOwnerChanged() {
+        if (orbView == null || overlayOwner === overlayContext()) return
+        AndroidAgentLogger.debug { "Agent runtime overlay owner changed; rebuilding overlay windows" }
+        val wasStandby = standby.value
+        val hadGlow = glowView != null
+        // 先用新的 context 加好新窗口，再撤旧窗口：旧窗口还在屏幕上时（例如从普通悬浮窗换回无障碍浮窗）不留空档；
+        // 新球沿用原位置、不播进场。
+        val oldManager = windowManager
+        val oldViews = listOfNotNull(orbView, bubbleView, glowView, removeZoneView)
+        restoreOrbPosition = orbParams
+        removeZoneView = null
+        orbView = null
+        bubbleView = null
+        glowView = null
+        orbParams = null
+        bubbleParams = null
+        glowParams = null
+        orbDiscRect = null
+        standby.value = false
+        windowManager = null
+        overlayOwner = null
+        orbEntrance = false
+        showOverlay()
+        orbEntrance = true
+        restoreOrbPosition = null
+        oldViews.forEach { view -> runCatching { oldManager?.removeView(view) } }
+        if (orbView == null) return
+        if (!hadGlow) {
+            glowView?.let { view -> runCatching { windowManager?.removeView(view) } }
+            glowView = null
+            glowParams = null
+        }
+        if (wasStandby) standby.value = true
+        // 重建出来的球默认可见：Movo 自己在前台时要重新按规则藏起来。
+        updateStandbyOrbVisibility()
     }
 
     /** 氛围光窗口：全屏触摸穿透，彩虹光圈，截图时被 takeScreenshotOfWindow 过滤。 */
@@ -1126,6 +1203,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 onStop = ::requestStop,
                 onSupplementModeChange = ::setBubbleInputMode,
                 onSupplement = ::requestSupplement,
+                onSupplementKeyboardRequested = ::onSupplementKeyboardRequested,
                 anchorEnd = orbOnEnd.value,
                 visible = bubbleVisible.value,
                 onInteraction = ::scheduleBubbleAutoCollapse,
@@ -1144,6 +1222,126 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
         bubbleView = bubble
         bubbleParams = lp
+        bubbleBaseY = lp.y
+        bubbleTargetY = lp.y
+    }
+
+    /**
+     * 键盘补充：浮窗不会被系统随键盘挪动，无障碍浮窗也收不到键盘 insets。输入期间定时从无障碍服务读取
+     * 输入法窗口的位置，把展开卡抬到键盘上方 8；键盘收起或退出输入后回到原位。
+     */
+    private val trackImeForBubble = object : Runnable {
+        override fun run() {
+            val lp = bubbleParams ?: return
+            if (lp.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE != 0) return
+            placeBubbleAboveIme(imeTopOnScreen())
+            mainHandler.postDelayed(this, IME_TRACK_INTERVAL_MS)
+        }
+    }
+
+    private fun imeTopOnScreen(): Int? = runCatching {
+        AgentAccessibilityService.current()?.windows
+            ?.firstOrNull { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+            ?.let { window ->
+                android.graphics.Rect().also(window::getBoundsInScreen).takeIf { it.height() > 0 }?.top
+            }
+    }.getOrNull()
+
+    /** 上次读到的键盘高度（距屏幕底）；下次打开补充输入时先按它上移，不等输入法窗口出现。 */
+    private var lastImeHeight: Int
+        get() = imeHeightCache.takeIf { it > 0 }
+            ?: getSharedPreferences(OVERLAY_PREFS, Context.MODE_PRIVATE).getInt(PREF_IME_HEIGHT, 0).also { imeHeightCache = it }
+        set(value) {
+            if (value == imeHeightCache) return
+            imeHeightCache = value
+            getSharedPreferences(OVERLAY_PREFS, Context.MODE_PRIVATE).edit().putInt(PREF_IME_HEIGHT, value).apply()
+        }
+    private var bubbleYAnimator: android.animation.ValueAnimator? = null
+    private var bubbleTargetY = 0
+
+    private fun screenRealHeight(): Int = runCatching {
+        android.graphics.Point().also { @Suppress("DEPRECATION") windowManager?.defaultDisplay?.getRealSize(it) }.y
+    }.getOrDefault(0).takeIf { it > 0 } ?: resources.displayMetrics.heightPixels
+
+    /** 展开卡底边放在距屏幕底 [imeHeight] 的键盘上方 8（窗口按底部对齐，卡片四周有阴影余量）。 */
+    private fun bubbleYAbove(imeHeight: Int): Int =
+        maxOf(bubbleBaseY, imeHeight + dpToPx(8) - dpToPx(PANEL_SHADOW_DP))
+
+    /**
+     * 打开补充输入：实测过键盘高度就立刻按它上移，与键盘同时到位；第一次没有实测值时不猜
+     * （猜高了会先跳上去再掉下来），等读到稳定的输入法位置再移。
+     */
+    private fun liftBubbleForTyping() {
+        typingLift = 0
+        sessionImeMax = 0
+        // 没有实测值时先按屏高 33% 上移：不高于常见键盘，之后读到实际位置只会再往上补一点，不会先高后掉。
+        val estimate = lastImeHeight.takeIf { it > 0 } ?: (screenRealHeight() * 0.33f).toInt()
+        liftBubbleTo(bubbleYAbove(estimate))
+    }
+
+    /** 键盘收起后再点输入框：键盘即将弹出，按缓存高度提前上移（键盘已在时高度不变，不会移动）。 */
+    private fun onSupplementKeyboardRequested() {
+        val lp = bubbleParams ?: return
+        if (lp.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE != 0) return
+        if (sessionImeMax == 0) liftBubbleForTyping()
+    }
+
+    /** 本次补充输入里读到的最大键盘高度；0 = 键盘还没出现过（或已被收起）。 */
+    private var sessionImeMax = 0
+
+    /** 本次补充输入里展开卡已经抬到的高度：输入期间只升不降（键盘升起过程中的读数会变小，跟着降就会上下晃）。 */
+    private var typingLift = 0
+
+    private fun liftBubbleTo(target: Int) {
+        if (target <= typingLift) return
+        typingLift = target
+        moveBubbleTo(target)
+    }
+
+    private fun placeBubbleAboveIme(imeTop: Int?) {
+        if (imeTop == null) {
+            // 键盘出现过又没了（用户按返回收起）：卡片回原位；再点输入框弹出键盘时重新上移。
+            // 键盘还没出现时（正在升起）保持当前位置。
+            if (sessionImeMax > 0) {
+                sessionImeMax = 0
+                typingLift = 0
+                moveBubbleTo(bubbleBaseY)
+            }
+            return
+        }
+        val height = screenRealHeight() - imeTop
+        if (height <= 0) return
+        // 只记本次输入里的最大高度：升起或收起过程中读到的中间值偏小，记下来会让下次上移不够。
+        if (height > sessionImeMax) {
+            sessionImeMax = height
+            lastImeHeight = height
+        }
+        liftBubbleTo(bubbleYAbove(height))
+    }
+
+    /** 展开卡窗口的上下移动：`fast` + `standard`；减少动画时直接到位。 */
+    private fun moveBubbleTo(target: Int) {
+        val wm = windowManager ?: return
+        val bubble = bubbleView ?: return
+        val lp = bubbleParams ?: return
+        if (target == bubbleTargetY && (lp.y == target || bubbleYAnimator?.isRunning == true)) return
+        bubbleTargetY = target
+        bubbleYAnimator?.cancel()
+        if (io.github.fartown.movo.ui.theme.isReducedMotion(this)) {
+            lp.y = target
+            runCatching { wm.updateViewLayout(bubble, lp) }
+            return
+        }
+        bubbleYAnimator = android.animation.ValueAnimator.ofInt(lp.y, target).apply {
+            duration = io.github.fartown.movo.ui.theme.MovoMotion.FAST.toLong()
+            interpolator = android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f)
+            addUpdateListener { animator ->
+                if (bubbleParams !== lp || bubbleView !== bubble) return@addUpdateListener
+                lp.y = animator.animatedValue as Int
+                runCatching { wm.updateViewLayout(bubble, lp) }
+            }
+            start()
+        }
     }
 
     private fun createOverlayComposeView(content: @Composable () -> Unit): ComposeView =
@@ -1385,11 +1583,27 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             lp.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
         }
         if (lp.flags == nextFlags) return
+        // 打字期间 Agent 不能同时操作屏幕：展开卡拿走了输入焦点，前台会被判成 Movo，「返回」也只会收起键盘。
+        // 所以打开补充输入时先暂停（停在下一步之前），发送或取消后再继续。
+        if (focusable && activeSession != null && state.value.phase == AgentOverlayPhase.RUNNING) {
+            pausedForTyping = true
+            requestPause()
+        } else if (!focusable && pausedForTyping) {
+            pausedForTyping = false
+            if (activeSession != null && state.value.phase == AgentOverlayPhase.PAUSED) requestResume()
+        }
         lp.flags = nextFlags
         runCatching { wm.updateViewLayout(bubble, lp) }.onFailure { throwable ->
             AndroidAgentLogger.warnThrottled("runtime_bubble_focus_update_failed") {
                 "Agent runtime bubble focus update failed: type=${throwable.safeLogType()}"
             }
+        }
+        mainHandler.removeCallbacks(trackImeForBubble)
+        if (focusable) {
+            liftBubbleForTyping()
+            mainHandler.postDelayed(trackImeForBubble, IME_TRACK_INTERVAL_MS)
+        } else {
+            moveBubbleTo(bubbleBaseY)
         }
     }
 
@@ -1455,6 +1669,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         (dp * resources.displayMetrics.density).toInt()
 
     private fun enterFinalState(finalState: AgentOverlayState, keepVisible: Boolean = false) {
+        pausedForTyping = false
         state.value = finalState
 
         if (hasExecutedForegroundTool || isResultConversation) {
@@ -1464,8 +1679,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             collapseBubble()
             if (!AgentConversationSheetActivity.isConversationVisible(resultConversationTarget)) {
                 ensureOverlayVisible()
+                updateStandbyOrbVisibility()
                 // 失败：展开卡自动弹出显示原因，保持失败态直到用户点开（规范 9.5）。
-                if (finalState.phase == AgentOverlayPhase.FAILED && finalState.status != AgentOverlayStatus.Stopped) {
+                // Movo 自己在前台时原因已在 App 里显示，球也藏着，不单独弹展开卡。
+                if (finalState.phase == AgentOverlayPhase.FAILED && finalState.status != AgentOverlayStatus.Stopped &&
+                    !VoiceSurfaceTracker.appVisible
+                ) {
                     mainHandler.postDelayed({
                         if (state.value.phase == AgentOverlayPhase.FAILED && activeSession == null) expandBubble()
                     }, BUBBLE_EXIT_MS)
@@ -1509,9 +1728,17 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         updateStandbyOrbVisibility()
     }
 
+    /**
+     * Movo 自己的界面在前台时藏起悬浮球：待命时如此，任务结束（✓ / !）后也是——结果已经在 App 里，
+     * 球留着只会盖住键盘和输入框；回到其他 App 时再出现，✓ / ! 仍保留到点开。执行中始终显示。
+     */
     private fun updateStandbyOrbVisibility() {
         val view = orbView ?: return
-        view.visibility = if (standby.value && VoiceSurfaceTracker.appVisible) View.GONE else View.VISIBLE
+        val idle = standby.value || activeSession == null
+        val hide = idle && VoiceSurfaceTracker.appVisible
+        view.visibility = if (hide) View.GONE else View.VISIBLE
+        // 失败时自动弹出的展开卡也一起收起：否则切回 Movo 后它留在键盘上，透明的阴影区还会吃掉点击。
+        if (hide && !collapsed.value) collapseBubble()
     }
 
     private fun onVoiceActiveChanged(active: Boolean) {
@@ -1542,6 +1769,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         clearResultHandoff()
         removeAmbientWindows()
         windowManager = null
+        overlayOwner = null
         stopSelf()
     }
 
@@ -1598,6 +1826,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     internal companion object {
+        /** 进程内缓存的键盘高度（跨运行时服务重建保留）。 */
+        private var imeHeightCache = 0
+
         @Volatile
         var orbDiscRect: android.graphics.Rect? = null
             private set
@@ -1621,6 +1852,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         const val PANEL_SHADOW_DP = 12
         const val BUBBLE_EXIT_MS = 150L
         const val PANEL_AUTO_COLLAPSE_MS = 4_000L
+        const val IME_TRACK_INTERVAL_MS = 60L
+        private const val OVERLAY_PREFS = "agent_overlay"
+        private const val PREF_IME_HEIGHT = "ime_height_px"
         const val GLOW_FADE_MS = 300L
         const val ORB_EXIT_MS = 200L
         const val REMOVE_ZONE_DP = 48

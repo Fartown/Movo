@@ -81,6 +81,13 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
@@ -221,6 +228,7 @@ internal fun AgentOverlayOrb(
     engaged: Boolean = false,
     hearing: Boolean = false,
     longRun: Boolean = false,
+    animateEntrance: Boolean = true,
 ) {
     val reduced = LocalReducedMotion.current
     // Q8：看着它从执行中变为完成、且任务用时 ≥ 10 秒时，光球亮度 1 → 1.3 → 1（600ms），只播一次。
@@ -234,7 +242,8 @@ internal fun AgentOverlayOrb(
             brighten.animateTo(0f, tween(300, easing = MovoMotion.EasingStandard))
         }
     }
-    var entered by remember { mutableStateOf(false) }
+    // 浮窗重建（无障碍服务重连）时球本来就在屏幕上，直接显示，不再从 0.5 放大进场。
+    var entered by remember { mutableStateOf(!animateEntrance) }
     LaunchedEffect(Unit) { entered = true }
     var dragging by remember { mutableStateOf(false) }
     var pressed by remember { mutableStateOf(false) }
@@ -530,6 +539,8 @@ internal fun AgentOverlayBubble(
     onStop: () -> Unit,
     onSupplementModeChange: (Boolean) -> Unit,
     onSupplement: (String) -> Unit,
+    /** 补充输入框被点（键盘收起后再弹出）：让窗口按缓存的键盘高度提前上移。 */
+    onSupplementKeyboardRequested: () -> Unit = {},
     anchorEnd: Boolean = true,
     visible: Boolean = true,
     onInteraction: () -> Unit = {},
@@ -618,6 +629,7 @@ internal fun AgentOverlayBubble(
                     onValueChange = { supplementText = it; onInteraction() },
                     onCancel = ::closeSupplementMode,
                     onSend = ::submitSupplement,
+                    onTap = onSupplementKeyboardRequested,
                 )
             }
             AnimatedVisibility(
@@ -678,7 +690,10 @@ private fun PanelHeader(state: AgentOverlayState) {
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        state.elapsedMillis(now)?.let { elapsed ->
+        // 继续后的第一帧 produceState 还没刷新，时钟仍是暂停那一刻，而暂停时长已扣掉，会闪一帧偏小的计时；
+        // 执行中取当前时刻兜底。
+        val clock = if (state.phase == AgentOverlayPhase.RUNNING) maxOf(now, System.currentTimeMillis()) else now
+        state.elapsedMillis(clock)?.let { elapsed ->
             Spacer(Modifier.width(8.dp))
             val seconds = elapsed / 1000
             Text(
@@ -956,6 +971,7 @@ private fun SupplementInput(
     onValueChange: (String) -> Unit,
     onCancel: () -> Unit,
     onSend: () -> Unit,
+    onTap: () -> Unit = {},
 ) {
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -986,9 +1002,28 @@ private fun SupplementInput(
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
-                modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester)
+                    // 只观察按下、不消费：点输入框会弹出键盘，先通知窗口上移。
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            onTap()
+                        }
+                    }
+                    // 实体键盘 / 注入的回车同样发送（Shift+回车仍换行）。
+                    .onPreviewKeyEvent { event ->
+                        val enter = event.key == androidx.compose.ui.input.key.Key.Enter ||
+                            event.key == androidx.compose.ui.input.key.Key.NumPadEnter
+                        if (!enter || event.isShiftPressed) return@onPreviewKeyEvent false
+                        if (event.type == androidx.compose.ui.input.key.KeyEventType.KeyDown && value.isNotBlank()) onSend()
+                        true
+                    },
                 textStyle = MovoTypography.labelRegular.copy(color = MovoColors.textPrimary),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
+                // 键盘的回车键直接发送（展开卡里的发送键可能被键盘挡住）。
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSend = { if (value.isNotBlank()) onSend() }),
                 cursorBrush = SolidColor(MovoColors.indigoFg),
                 maxLines = 4,
             )

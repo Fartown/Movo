@@ -12,8 +12,15 @@ internal enum class AgentOverlayPhase { RUNNING, PAUSED, FINISHED, FAILED }
  */
 internal enum class OrbMode { STANDBY, RUNNING, PAUSED, LISTENING, FINISHED, FAILED }
 
-internal fun orbMode(phase: AgentOverlayPhase, standby: Boolean, listening: Boolean): OrbMode = when {
+internal fun orbMode(
+    phase: AgentOverlayPhase,
+    standby: Boolean,
+    listening: Boolean,
+    stopped: Boolean = false,
+): OrbMode = when {
     standby -> OrbMode.STANDBY
+    // 用户主动结束不是出错：不挂 Rose 环与「!」，按待命外观显示；点开仍能查看保留的结果。
+    phase == AgentOverlayPhase.FAILED && stopped -> OrbMode.STANDBY
     phase == AgentOverlayPhase.FINISHED -> OrbMode.FINISHED
     phase == AgentOverlayPhase.FAILED -> OrbMode.FAILED
     listening -> OrbMode.LISTENING

@@ -94,6 +94,8 @@ import io.github.fartown.movo.ui.model.PendingImageUi
 import io.github.fartown.movo.ui.model.ThinkingMessageUi
 import io.github.fartown.movo.ui.model.ToolActivityMessageUi
 import io.github.fartown.movo.ui.model.ToolSummaryMessageUi
+import io.github.fartown.movo.ui.model.SystemNoticeCode
+import io.github.fartown.movo.ui.model.SystemNoticeMessageUi
 import io.github.fartown.movo.ui.model.UserMessageUi
 import io.github.fartown.movo.ui.model.latestContextUsage
 import kotlin.math.exp
@@ -442,6 +444,7 @@ internal fun AgentConversationMessages(
 ) {
     val timelineEntries = remember(visibleMessages) { visibleMessages.toTimelineEntries() }
     val lastWorkKey = timelineEntries.lastOrNull { it is AgentTimelineEntry.WorkProcess }?.key
+    val workOutcomes = remember(timelineEntries) { workOutcomes(timelineEntries) }
     // 复制按钮只出现在每轮对话的最终结果上，中间步骤的过渡文本不提供复制入口。
     // 流式进行中当前这一轮尚未收尾，此时的“最后一条正文”只是中间步骤，不标记。
     val finalResultMessageIds = remember(visibleMessages, isStreaming) {
@@ -703,6 +706,7 @@ internal fun AgentConversationMessages(
                             messages = entry.messages,
                             // 本轮仍在进行：模型在两步之间思考时步骤都已完成，但执行卡不能当作完成收起。
                             runActive = isStreaming && entry.key == lastWorkKey,
+                            outcome = workOutcomes[entry.key],
                             onOpenBrowser = onOpenBrowser,
                             currentBrowserMessageId = currentBrowserMessageId,
                             retainedStreamingStates = streamingMarkdownStates,
@@ -925,6 +929,64 @@ internal fun smoothBottomFollowStep(
     return min(distancePx, min(easedStep.coerceAtLeast(BOTTOM_FOLLOW_MIN_STEP_PX), speedLimitedStep))
 }
 
+/**
+ * 执行卡所在这一轮没有正常完成的原因与这一轮总共执行的步数（一轮里的回答会把执行卡分成几张，
+ * 摘要写整轮的步数）；正常完成的执行卡不在结果里。
+ */
+internal data class WorkOutcome(
+    val kind: Kind,
+    val steps: Int,
+    /** 整轮第一步开始 / 最后一步结束的时刻，摘要条用时按整轮算。 */
+    val startedAt: Long? = null,
+    val finishedAt: Long? = null,
+) {
+    enum class Kind { Unfinished, Stopped }
+}
+
+/**
+ * 执行卡之后、下一条用户消息之前出现了失败 / 中断卡（[WorkOutcome.Unfinished]）或「已停止」（[WorkOutcome.Stopped]）。
+ * 这类执行卡即使每一步都成功，摘要条也不能显示「✓ 已完成」。
+ */
+internal fun workOutcomes(entries: List<AgentTimelineEntry>): Map<String, WorkOutcome> {
+    val outcomes = mutableMapOf<String, WorkOutcome>()
+    var pending: String? = null
+    var turnSteps = 0
+    var turnStart: Long? = null
+    var turnEnd: Long? = null
+    for (entry in entries) {
+        when (entry) {
+            is AgentTimelineEntry.WorkProcess -> {
+                pending = entry.key
+                val tools = entry.messages.filterIsInstance<ToolActivityMessageUi>()
+                turnSteps += tools.size
+                tools.mapNotNull { it.startedAtMillis }.minOrNull()?.let { turnStart = minOf(turnStart ?: it, it) }
+                tools.mapNotNull { it.finishedAtMillis }.maxOrNull()?.let { turnEnd = maxOf(turnEnd ?: it, it) }
+            }
+            is AgentTimelineEntry.Message -> when (val message = entry.message) {
+                is UserMessageUi -> if (!message.isRunSupplement()) {
+                    pending = null
+                    turnSteps = 0
+                    turnStart = null
+                    turnEnd = null
+                }
+                is SystemNoticeMessageUi -> {
+                    val kind = when (message.code) {
+                        SystemNoticeCode.RuntimeFailed, SystemNoticeCode.Interrupted -> WorkOutcome.Kind.Unfinished
+                        SystemNoticeCode.Stopped -> WorkOutcome.Kind.Stopped
+                        else -> null
+                    }
+                    if (kind != null) {
+                        pending?.let { outcomes[it] = WorkOutcome(kind, turnSteps, turnStart, turnEnd) }
+                        pending = null
+                    }
+                }
+                else -> Unit
+            }
+        }
+    }
+    return outcomes
+}
+
 internal sealed interface AgentTimelineEntry {
     val key: String
 
@@ -954,7 +1016,7 @@ internal fun List<AgentChatMessageUi>.toTimelineEntries(): List<AgentTimelineEnt
         workMessages.clear()
     }
 
-    this@toTimelineEntries.forEach { message ->
+    arrangeTurnsForTimeline(this@toTimelineEntries).forEach { message ->
         // 执行中的补充紧跟在工作过程之后时，作为「你的补充」步骤留在同一张执行卡里（规范 8.1、8.4）。
         if (message.isWorkProcessMessage() || (message.isRunSupplement() && workMessages.isNotEmpty())) {
             workMessages += message
@@ -969,6 +1031,53 @@ internal fun List<AgentChatMessageUi>.toTimelineEntries(): List<AgentTimelineEnt
 /** 运行时补充以 `user-<runId>-supplement-<index>` 的用户消息投影进来（见 AgentRunMessageProjector）。 */
 internal fun AgentChatMessageUi.isRunSupplement(): Boolean =
     this is UserMessageUi && id.startsWith("user-") && id.contains("-supplement-")
+
+private val RETRY_NOTICE_ID = Regex("^assistant-(.+)-retry-(\\d+)$")
+
+/**
+ * 只影响显示，不改消息本身（导出、重放仍用原始消息）。按轮（两条用户消息之间）整理：
+ * - 模型自动重试后恢复了（后面还有步骤或回答）：去掉重试提示，以及失败那一轮已经输出的半截回答（它不进上下文，
+ *   重试会重新生成），执行卡与回答都不被切开；仍在重试或最终失败时照常显示。
+ * - 「已停止」「运行失败」「已中断」是这一轮的结尾：停止后才到的步骤排在它们前面。
+ */
+internal fun arrangeTurnsForTimeline(messages: List<AgentChatMessageUi>): List<AgentChatMessageUi> {
+    val result = ArrayList<AgentChatMessageUi>(messages.size)
+    var turn = ArrayList<AgentChatMessageUi>()
+    fun flushTurn() {
+        if (turn.isEmpty()) return
+        val dropped = HashSet<String>()
+        turn.forEachIndexed { index, message ->
+            if (message !is SystemNoticeMessageUi || message.code != SystemNoticeCode.ModelRetry) return@forEachIndexed
+            val recovered = turn.subList(index + 1, turn.size).any { it.isWorkProcessMessage() || it is AgentMessageUi }
+            if (!recovered) return@forEachIndexed
+            dropped += message.id
+            RETRY_NOTICE_ID.find(message.id)?.let { match ->
+                val failedRoundText = "assistant-${match.groupValues[1]}-${match.groupValues[2]}-"
+                turn.forEach { if (it is AgentMessageUi && it.id.startsWith(failedRoundText)) dropped += it.id }
+            }
+        }
+        val kept = turn.filterNot { it.id in dropped }
+        val (endings, body) = kept.partition { it.isTurnEnding() }
+        result += body
+        result += endings
+        turn = ArrayList()
+    }
+    for (message in messages) {
+        if (message is UserMessageUi && !message.isRunSupplement()) {
+            flushTurn()
+            result += message
+        } else {
+            turn += message
+        }
+    }
+    flushTurn()
+    return result
+}
+
+private fun AgentChatMessageUi.isTurnEnding(): Boolean =
+    this is SystemNoticeMessageUi && (
+        code == SystemNoticeCode.Stopped || code == SystemNoticeCode.RuntimeFailed || code == SystemNoticeCode.Interrupted
+    )
 
 private fun AgentChatMessageUi.isWorkProcessMessage(): Boolean =
     this is ThinkingMessageUi || this is ToolActivityMessageUi || this is ToolSummaryMessageUi

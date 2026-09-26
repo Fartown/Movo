@@ -94,6 +94,7 @@ class AgentAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         instance = this
+        notifyInstanceChanged()
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
@@ -108,7 +109,10 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     private fun clearCurrentInstance() {
-        if (instance === this) instance = null
+        if (instance === this) {
+            instance = null
+            notifyInstanceChanged()
+        }
         scrollEventObservationGate.clear()
         signalWindowChanged()
     }
@@ -2369,6 +2373,24 @@ class AgentAccessibilityService : AccessibilityService() {
         fun current(): AgentAccessibilityService? = instance
 
         fun isAvailable(): Boolean = instance != null
+
+        private val instanceListeners = java.util.concurrent.CopyOnWriteArraySet<() -> Unit>()
+
+        /**
+         * 服务实例变化（连上 / 解绑 / 重连成新实例）时回调，在主线程。系统会移除旧实例名下的
+         * TYPE_ACCESSIBILITY_OVERLAY 窗口，旧实例的 WindowManager 也不能再加窗口，持有浮窗的一方需要重建。
+         */
+        fun addInstanceListener(listener: () -> Unit) {
+            instanceListeners += listener
+        }
+
+        fun removeInstanceListener(listener: () -> Unit) {
+            instanceListeners -= listener
+        }
+
+        private fun notifyInstanceChanged() {
+            instanceListeners.forEach { it() }
+        }
     }
 
     private sealed interface NodeValidation {

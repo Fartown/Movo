@@ -132,8 +132,11 @@ internal fun AgentAppRoot(
         io.github.fartown.movo.agent.voice.MovoWakeWordController.refresh(context)
     }
     val lifecycleOwner = LocalLifecycleOwner.current
+    val rootFocusManager = LocalFocusManager.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
+            // 退到后台（例如 Movo 去操作其他 App）时放下输入焦点：回来时系统不会恢复键盘盖住结果。
+            if (event == Lifecycle.Event.ON_STOP) rootFocusManager.clearFocus()
             if (event == Lifecycle.Event.ON_RESUME) {
                 RootAccess.refresh(context)
                 appViewModel.refreshKimiWeb()
@@ -223,6 +226,8 @@ internal fun AgentAppRoot(
         restoreConversationPaneOnBack: Boolean = conversationPaneOpen,
     ) {
         conversationPaneOpen = restoreConversationPaneOnBack
+        // 进入二级页时放下对话输入框的焦点，否则它在下层保持焦点，回到前台或切换语言后会在设置页弹出键盘。
+        focusManager.clearFocus()
         // Q4：刚从设置行起飞的标题认领这一页，返回时飞回原来那一行。
         io.github.fartown.movo.ui.components.movo.TitleMorph.bindRoute(route)
         navigator.push(route)

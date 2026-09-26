@@ -5,6 +5,9 @@ import java.io.IOException
 import java.io.InterruptedIOException
 import java.net.ProtocolException
 import javax.net.ssl.SSLException
+import javax.net.ssl.SSLHandshakeException
+import javax.net.ssl.SSLKeyException
+import javax.net.ssl.SSLPeerUnverifiedException
 
 /** Provider 边界只分类失败；重试预算与上下文由 Loop 持有。 */
 internal class AgentModelFailure(
@@ -81,7 +84,12 @@ internal class AgentModelFailure(
                 "模型请求等待超时（连接或写入超时，或读取响应等待超过 ${AgentHttpClient.MODEL_READ_TIMEOUT_MS / 60_000} 分钟）。",
                 failure,
             )
-            is SSLException, is ProtocolException -> null
+            // 握手、证书与密钥错误是配置问题，重试无益；连接建立后读写流时的 SSL 错误
+            // （如 `Read error: ssl=…`、对端重置）与普通连接中断相同，按可重试处理。
+            is SSLHandshakeException, is SSLPeerUnverifiedException, is SSLKeyException, is ProtocolException -> null
+            is SSLException -> AgentModelFailure(
+                "MODEL_CONNECTION_FAILED", true, "模型连接中断或暂时无法建立，请检查网络与服务商状态。", failure,
+            )
             is IOException -> AgentModelFailure(
                 "MODEL_CONNECTION_FAILED", true, "模型连接中断或暂时无法建立，请检查网络与服务商状态。", failure,
             )

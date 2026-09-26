@@ -155,6 +155,8 @@
   <string name="movo_work_done_steps">已完成 %1$d 個步驟</string>
   <string name="movo_work_done">已完成</string>
   <string name="movo_work_failed_step">第 %1$d 步未完成</string>
+  <string name="movo_work_unfinished_steps">未完成·已執行 %1$d 步</string>
+  <string name="movo_work_stopped_steps">已停止·已執行 %1$d 步</string>
   <string name="movo_thinking_in_progress">思考中</string>
   <string name="movo_thinking_seconds">思考·%1$d 秒</string>
   <string name="movo_thinking_done">思考</string>
@@ -218,4 +220,5 @@
   <string name="movo_overlay_remove">移除</string>
   <string name="movo_overlay_mic_required">需要麥克風權限才能開始語音</string>
   <string name="movo_overlay_voice_failed">暫時無法開始語音，請回到 Movo 再試</string>
+  <string name="movo_failure_network">網路連線中斷，模型沒有回傳結果，請重試</string>
 </resources>

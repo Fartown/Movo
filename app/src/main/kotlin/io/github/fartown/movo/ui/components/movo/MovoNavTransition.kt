@@ -38,18 +38,7 @@ internal fun movoNavTransition(reducedMotion: Boolean): NavTransition {
             return@navGraphicsTransition
         }
         if (scope.isGestureDriven()) {
-            NavGestureTracker.lastGestureMillis = NavGestureTracker.nowMillis()
-            val scale = 1f - GESTURE_SCALE_DROP * hidden
-            scaleX = scale
-            scaleY = scale
-            // 手势中只缩小、不淡出（露出的是缩小后四周的上一页），避免看起来「拖到一半就完成了」；
-            // 松手确认返回后在收尾的 `standard` 时长里淡出。
-            val settle = scope.settle
-            alpha = if (scope.gesture == null && settle?.phase == NavSettlePhase.Commit) {
-                1f - (settle.elapsedMillis / MovoMotion.STANDARD).coerceIn(0f, 1f)
-            } else {
-                1f
-            }
+            applyGestureBack(scope, hidden)
             return@navGraphicsTransition
         }
         val shift = with(scope.density) { PAGE_SHIFT.toPx() }
@@ -62,6 +51,26 @@ internal fun movoNavTransition(reducedMotion: Boolean): NavTransition {
         }
         translationX = shift * (1f - visible) * if (scope.layoutDirection == androidx.compose.ui.unit.LayoutDirection.Rtl) -1f else 1f
         alpha = visible
+    }
+}
+
+/**
+ * 返回手势跟手：只缩小、不淡出（露出的是缩小后四周的上一页），避免看起来「拖到一半就完成了」；
+ * 松手确认返回后在收尾的 `standard` 时长里淡出。系统给的手势进度在部分机型上拖出很短就接近 1，
+ * 所以手势阶段只能用这种幅度有限的变化。
+ */
+private fun androidx.compose.ui.graphics.GraphicsLayerScope.applyGestureBack(scope: NavTransitionScope, hidden: Float) {
+    NavGestureTracker.lastGestureMillis = NavGestureTracker.nowMillis()
+    val scale = 1f - GESTURE_SCALE_DROP * hidden
+    scaleX = scale
+    scaleY = scale
+    // 确认返回后的收尾：导航库在收尾期间仍保留手势上下文（gesture 非空），只能按收尾阶段判断。
+    val settle = scope.settle
+    // 只淡出正在离开的页（hidden > 0）；回到栈顶的页在最后一帧深度正好为 0，不能跟着变透明。
+    alpha = if (settle?.phase == NavSettlePhase.Commit && hidden > 0f) {
+        1f - (settle.elapsedMillis / MovoMotion.STANDARD).coerceIn(0f, 1f)
+    } else {
+        1f
     }
 }
 
@@ -123,8 +132,17 @@ internal fun movoMorphTransition(reducedMotion: Boolean, origin: () -> androidx.
             val modifier = this
             val start = origin() ?: return with(fallback) { modifier.transformEntry(scope) }
             fun progress(): Float = if (scope.relativeDepth > 0f) 1f else 1f - (-scope.relativeDepth).coerceIn(0f, 1f)
+            // 返回手势（含松手后的收尾）不走容器变形：变形把进度直接映射成收回卡片 + 淡出，系统进度
+            // 涨得快时一拖就像整页切走了。改用与其他二级页相同的跟手缩小。
+            fun gesture(): Boolean = scope.relativeDepth <= 0f && scope.isGestureDriven()
             return modifier
                 .graphicsLayer {
+                    if (gesture()) {
+                        applyGestureBack(scope, 1f - progress())
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(MORPH_START_RADIUS * (1f - progress()))
+                        clip = true
+                        return@graphicsLayer
+                    }
                     val p = progress()
                     if (p >= 1f) return@graphicsLayer
                     val full = androidx.compose.ui.geometry.Rect(0f, 0f, size.width, size.height)
@@ -135,10 +153,10 @@ internal fun movoMorphTransition(reducedMotion: Boolean, origin: () -> androidx.
                 }
                 .drawBehind {
                     val p = progress()
-                    if (p < 1f) drawRect(androidx.compose.ui.graphics.lerp(io.github.fartown.movo.ui.theme.MovoColors.bgSurface, io.github.fartown.movo.ui.theme.MovoColors.bgCanvas, p))
+                    if (p < 1f && !gesture()) drawRect(androidx.compose.ui.graphics.lerp(io.github.fartown.movo.ui.theme.MovoColors.bgSurface, io.github.fartown.movo.ui.theme.MovoColors.bgCanvas, p))
                 }
                 .graphicsLayer {
-                    alpha = ((progress() - 0.3f) / 0.7f).coerceIn(0f, 1f)
+                    alpha = if (gesture()) 1f else ((progress() - 0.3f) / 0.7f).coerceIn(0f, 1f)
                 }
         }
     }

@@ -407,7 +407,11 @@ internal fun AgentWorkProcess(
     onEditMessage: (String) -> Unit = {},
     onDeleteMessage: (String) -> Unit = {},
     runActive: Boolean = false,
+    outcome: WorkOutcome? = null,
 ) {
+    val runUnfinished = outcome?.kind == WorkOutcome.Kind.Unfinished
+    val runStopped = outcome?.kind == WorkOutcome.Kind.Stopped
+    val turnSteps = outcome?.steps ?: 0
     val runControls = LocalRunControls.current
     val paused = runActive && runControls.isPaused
     val stepRunning = messages.any { message ->
@@ -419,7 +423,7 @@ internal fun AgentWorkProcess(
     var confirmEndTask by remember(id) { mutableStateOf(false) }
     val tools = messages.filterIsInstance<ToolActivityMessageUi>()
     val toolCount = tools.size
-    val failedIndex = tools.indexOfFirst { it.status == ToolActivityStatusUi.Failed }
+    val failedIndex = unrecoveredFailedStep(tools)
     var expanded by rememberSaveable(id) { mutableStateOf(running) }
     var manuallyExpanded by rememberSaveable(id) { mutableStateOf(false) }
 
@@ -448,7 +452,7 @@ internal fun AgentWorkProcess(
     val runMillis = finishedTools.mapNotNull { it.finishedAtMillis }.maxOrNull()?.let { end ->
         finishedTools.mapNotNull { it.startedAtMillis }.minOrNull()?.let { end - it }
     } ?: 0L
-    val glint = sawRunning && !running && !paused && failedIndex < 0 && runMillis >= 10_000L
+    val glint = sawRunning && !running && !paused && failedIndex < 0 && outcome == null && runMillis >= 10_000L
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -483,7 +487,11 @@ internal fun AgentWorkProcess(
                         io.github.fartown.movo.ui.theme.MovoIcons.Pause, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
                     )
                     running -> io.github.fartown.movo.ui.components.movo.MovoOrb(size = 16.dp)
-                    failedIndex >= 0 -> io.github.fartown.movo.ui.theme.MovoIcon(
+                    // 用户主动停止不是出错：次要色停止方块。
+                    runStopped -> io.github.fartown.movo.ui.theme.MovoIcon(
+                        io.github.fartown.movo.ui.theme.MovoIcons.Square, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                    )
+                    failedIndex >= 0 || runUnfinished -> io.github.fartown.movo.ui.theme.MovoIcon(
                         io.github.fartown.movo.ui.theme.MovoIcons.X, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.roseFg,
                     )
                     else -> io.github.fartown.movo.ui.theme.MovoIcon(
@@ -492,47 +500,45 @@ internal fun AgentWorkProcess(
                 }
             }
             Spacer(modifier = Modifier.width(8.dp))
-            io.github.fartown.movo.ui.components.movo.MovoShimmerText(
-                text = when {
-                    paused && toolCount > 0 -> stringResource(R.string.movo_work_paused_step, toolCount)
-                    paused -> stringResource(R.string.movo_work_paused)
-                    running && toolCount > 0 -> stringResource(R.string.movo_work_running_step, toolCount)
-                    running -> stringResource(R.string.movo_work_analyzing)
-                    failedIndex >= 0 -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
-                    toolCount > 0 -> stringResource(R.string.movo_work_done_steps, toolCount)
-                    else -> stringResource(R.string.movo_work_done)
+            // 计时：执行中「00:18」每秒直接换数字（9.0 规则 5，不滚动不闪）；结束后「用时 18 秒」。
+            // 失败 / 停止的一轮可能被回答分成几张卡，用时与步数一样按整轮算。
+            val firstStart = outcome?.startedAt ?: tools.mapNotNull { it.startedAtMillis }.minOrNull()
+            val lastFinish = outcome?.finishedAt ?: tools.mapNotNull { it.finishedAtMillis }.maxOrNull()
+            val now by androidx.compose.runtime.produceState(System.currentTimeMillis(), running, firstStart) {
+                while (running && firstStart != null) {
+                    value = System.currentTimeMillis()
+                    kotlinx.coroutines.delay(1_000)
+                }
+                value = System.currentTimeMillis()
+            }
+            val elapsed = firstStart?.let { start -> if (running) now - start else lastFinish?.let { it - start } }
+            val timerText = elapsed?.let { if (running) formatClock(it) else formatElapsed(it) }
+            // 放不下完整计时时退成「1:06」，状态文字不让位（规范：摘要条状态优先完整显示）。
+            val compactTimer = elapsed?.takeIf { !running }?.let(::formatCompactElapsed)
+            StatusWithTimer(
+                status = {
+                    io.github.fartown.movo.ui.components.movo.MovoShimmerText(
+                        text = when {
+                            paused && toolCount > 0 -> stringResource(R.string.movo_work_paused_step, toolCount)
+                            paused -> stringResource(R.string.movo_work_paused)
+                            running && toolCount > 0 -> stringResource(R.string.movo_work_running_step, toolCount)
+                            running -> stringResource(R.string.movo_work_analyzing)
+                            runStopped -> stringResource(R.string.movo_work_stopped_steps, turnSteps)
+                            failedIndex >= 0 -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
+                            runUnfinished -> stringResource(R.string.movo_work_unfinished_steps, turnSteps)
+                            toolCount > 0 -> stringResource(R.string.movo_work_done_steps, toolCount)
+                            else -> stringResource(R.string.movo_work_done)
+                        },
+                        style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
+                        color = if (running || paused) io.github.fartown.movo.ui.theme.MovoColors.textPrimary else io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                        active = running,
+                    )
                 },
-                style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
-                color = if (running || paused) io.github.fartown.movo.ui.theme.MovoColors.textPrimary else io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
-                active = running,
+                timer = timerText,
+                compactTimer = compactTimer,
+                timerColor = if (running) io.github.fartown.movo.ui.theme.MovoColors.textSecondary else io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
                 modifier = Modifier.weight(1f),
             )
-            // 计时：执行中「00:18」每秒直接换数字（9.0 规则 5，不滚动不闪）；结束后「用时 18 秒」。
-            val firstStart = tools.mapNotNull { it.startedAtMillis }.minOrNull()
-            val lastFinish = tools.mapNotNull { it.finishedAtMillis }.maxOrNull()
-            if (firstStart != null) {
-                val now by androidx.compose.runtime.produceState(System.currentTimeMillis(), running) {
-                    while (running) {
-                        value = System.currentTimeMillis()
-                        kotlinx.coroutines.delay(1_000)
-                    }
-                    value = System.currentTimeMillis()
-                }
-                val timerText = if (running) {
-                    formatClock(now - firstStart)
-                } else {
-                    lastFinish?.let { formatElapsed(it - firstStart) }
-                }
-                if (timerText != null) {
-                    Text(
-                        text = timerText,
-                        style = io.github.fartown.movo.ui.theme.MovoTypography.numericLabel,
-                        color = if (running) io.github.fartown.movo.ui.theme.MovoColors.textSecondary else io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
-                        maxLines = 1,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                }
-            }
             val rotation by androidx.compose.animation.core.animateFloatAsState(
                 targetValue = if (expanded) 180f else 0f,
                 animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
@@ -726,10 +732,61 @@ internal fun WorkSteps(
 private fun Modifier.movoClickableRow(onClick: () -> Unit): Modifier =
     movoClickable(io.github.fartown.movo.ui.components.movo.PressKind.Row, onClick = onClick)
 
+/**
+ * 摘要条的状态 + 右侧计时（含到箭头的间距）：状态文字优先完整显示；剩余宽度放得下完整计时（「用时 1 分 6 秒」）
+ * 就放，放不下退成 [compactTimer]（「1:06」，两侧间距缩到 4，大字号窄屏也放得下），再放不下就不显示计时。
+ */
+@Composable
+internal fun StatusWithTimer(
+    status: @Composable () -> Unit,
+    timer: String?,
+    compactTimer: String?,
+    timerColor: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier,
+) {
+    val timerStyle = io.github.fartown.movo.ui.theme.MovoTypography.numericLabel
+    androidx.compose.ui.layout.Layout(
+        contents = listOf(
+            status,
+            { if (timer != null) Text(timer, style = timerStyle, color = timerColor, maxLines = 1, softWrap = false) },
+            { if (compactTimer != null) Text(compactTimer, style = timerStyle, color = timerColor, maxLines = 1, softWrap = false) },
+        ),
+        modifier = modifier,
+    ) { (statusMeasurables, fullMeasurables, compactMeasurables), constraints ->
+        val gap = 8.dp.roundToPx()
+        val tightGap = 4.dp.roundToPx()
+        val loose = constraints.copy(minWidth = 0)
+        val full = fullMeasurables.firstOrNull()?.measure(loose.copy(maxWidth = androidx.compose.ui.unit.Constraints.Infinity))
+        val compact = compactMeasurables.firstOrNull()?.measure(loose.copy(maxWidth = androidx.compose.ui.unit.Constraints.Infinity))
+        val statusMeasurable = statusMeasurables.first()
+        val statusWanted = statusMeasurable.maxIntrinsicWidth(constraints.maxHeight).coerceAtMost(constraints.maxWidth)
+        val room = constraints.maxWidth - statusWanted
+        // 选中的计时与它两侧的间距（状态 → 计时、计时 → 箭头）。
+        val (chosen, sideGap) = when {
+            full != null && full.width + gap * 2 <= room -> full to gap
+            compact != null && compact.width + tightGap * 2 <= room -> compact to tightGap
+            else -> null to gap
+        }
+        val trailing = if (chosen != null) chosen.width + sideGap * 2 else gap
+        val statusPlaceable = statusMeasurable.measure(loose.copy(maxWidth = (constraints.maxWidth - trailing).coerceAtLeast(0)))
+        val height = maxOf(statusPlaceable.height, chosen?.height ?: 0, constraints.minHeight)
+        layout(constraints.maxWidth, height) {
+            statusPlaceable.placeRelative(0, (height - statusPlaceable.height) / 2)
+            chosen?.placeRelative(constraints.maxWidth - sideGap - chosen.width, (height - chosen.height) / 2)
+        }
+    }
+}
+
 /** 执行中计时：mm:ss（等宽数字）。 */
 private fun formatClock(elapsedMillis: Long): String {
     val seconds = (elapsedMillis / 1000).coerceAtLeast(0)
     return String.format(java.util.Locale.ROOT, "%02d:%02d", seconds / 60, seconds % 60)
+}
+
+/** 摘要条放不下完整用时时的紧凑写法：「1:13」「0:09」（分钟不补零）。 */
+private fun formatCompactElapsed(elapsedMillis: Long): String {
+    val seconds = ((elapsedMillis + 500) / 1000).coerceAtLeast(1)
+    return String.format(java.util.Locale.ROOT, "%d:%02d", seconds / 60, seconds % 60)
 }
 
 /** 结束后的总用时：「用时 18 秒」「用时 2 分 5 秒」。 */
@@ -1229,7 +1286,7 @@ private fun StableMarkdown(
 ) {
     // 流式终态已有完整 AST，直接复用，避免新解析器的 Loading 原文先撑高页面再缩回。
     val state = parsedState ?: (markdownState ?: rememberMarkdownState(
-        content = content,
+        content = io.github.fartown.movo.ui.markdown.CjkEmphasis.normalize(content),
         retainState = true,
     )).state.collectAsState().value
     val components = remember { chatMarkdownComponents() }
@@ -2453,7 +2510,7 @@ private fun ThinkingRow(
     // 避免每次展开都重新走一遍异步解析。
     val stableMarkdownState = if (streamingState == null && completedMarkdownState == null) {
         rememberMarkdownState(
-            content = message.content,
+            content = io.github.fartown.movo.ui.markdown.CjkEmphasis.normalize(message.content),
             retainState = true,
         )
     } else {
@@ -3500,7 +3557,11 @@ private fun RunFailureCard(
         if (message.code == SystemNoticeCode.Interrupted) R.string.system_notice_interrupted else R.string.system_notice_runtime_failed,
     )
     val title = failure?.failure?.title ?: noticeText
-    val detail = failure?.failure?.message ?: message.detail?.takeIf(String::isNotBlank)
+    // 网络 / TLS 原始报错换成可操作的说明，原文留在运行日志。
+    val detail = io.github.fartown.movo.agent.model.UserFacingFailure.message(
+        failure?.failure?.message ?: message.detail?.takeIf(String::isNotBlank),
+        stringResource(R.string.movo_failure_network),
+    )
     val openRunLog = openLog?.let { open -> { open(failure?.runId ?: io.github.fartown.movo.ui.screens.diagnostics.DiagnosticsLinks.runForMessage(message.id)) } }
     @Suppress("DEPRECATION")
     val clipboardManager = LocalClipboardManager.current
@@ -3610,4 +3671,14 @@ private fun RunLogLink(messageId: String) {
     ) {
         Text(text = "查看日志", style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurface)
     }
+}
+
+/**
+ * 执行卡 / 执行详情的「第 N 步未完成」：只看**没有被补救**的失败——最后一个工具步骤失败才算。
+ * 中途某步失败、随后换了方式成功继续（真机：粘贴文本失败后改用替换文本完成），整张卡按完成显示；
+ * 失败的那一步在时间线里仍标 ✕。返回失败步的下标，没有则为 -1。
+ */
+internal fun unrecoveredFailedStep(tools: List<ToolActivityMessageUi>): Int {
+    val last = tools.lastIndex
+    return if (last >= 0 && tools[last].status == ToolActivityStatusUi.Failed) last else -1
 }

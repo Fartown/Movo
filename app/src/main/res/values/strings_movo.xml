@@ -156,6 +156,8 @@
   <string name="movo_work_done_steps">Completed %1$d steps</string>
   <string name="movo_work_done">Done</string>
   <string name="movo_work_failed_step">Step %1$d didn\'t finish</string>
+  <string name="movo_work_unfinished_steps">Not finished · ran %1$d steps</string>
+  <string name="movo_work_stopped_steps">Stopped · ran %1$d steps</string>
   <string name="movo_thinking_in_progress">Thinking</string>
   <string name="movo_thinking_seconds">Thought · %1$d s</string>
   <string name="movo_thinking_done">Thought</string>
@@ -219,4 +221,5 @@
   <string name="movo_overlay_remove">Remove</string>
   <string name="movo_overlay_mic_required">Allow microphone access to start voice</string>
   <string name="movo_overlay_voice_failed">Couldn\'t start voice. Open Movo and try again</string>
+  <string name="movo_failure_network">The network connection dropped before the model replied. Please try again.</string>
 </resources>

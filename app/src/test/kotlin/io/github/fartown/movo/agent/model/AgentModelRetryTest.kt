@@ -81,6 +81,10 @@ class AgentModelRetryTest {
         }
         assertFalse(AgentModelFailure.http(429, """{"error":{"code":"insufficient_quota"}}""").retryable)
         assertNull(AgentModelFailure.transport(SSLHandshakeException("certificate")))
+        assertNull(AgentModelFailure.transport(javax.net.ssl.SSLPeerUnverifiedException("peer not verified")))
+        assertTrue(AgentModelFailure.transport(
+            javax.net.ssl.SSLException("Read error: ssl=0x0: Failure in SSL library, usually a protocol error"),
+        )?.retryable == true)
         assertNull(AgentModelFailure.transport(org.json.JSONException("invalid JSON")))
         assertTrue(AgentModelFailure.stream(JSONObject().put("type", "overloaded_error"), "过载").retryable)
         assertFalse(AgentModelFailure.stream(JSONObject().put("type", "authentication_error"), "认证失败").retryable)

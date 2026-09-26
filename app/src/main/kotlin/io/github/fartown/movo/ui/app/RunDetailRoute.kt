@@ -29,10 +29,12 @@ internal fun RunDetailRoute(
 ) {
     val context = LocalContext.current
     val state = agentState.homeState
-    val steps = state.messages.toTimelineEntries()
+    val entries = state.messages.toTimelineEntries()
+    val steps = entries
         .filterIsInstance<AgentTimelineEntry.WorkProcess>()
         .firstOrNull { it.key == workKey }
         ?.messages
+    val outcome = io.github.fartown.movo.ui.components.workOutcomes(entries)[workKey]
     val conversationId = agentState.conversationPaneState.selectedConversationId
     val unnamed = stringResource(R.string.conversation_unnamed)
     val title = agentState.conversationPaneState.conversations
@@ -43,6 +45,7 @@ internal fun RunDetailRoute(
     RunDetailScreen(
         title = title,
         steps = steps,
+        outcome = outcome,
         onBack = onBack,
         onOpenBrowser = onOpenBrowser,
         onSwitchToApp = { label -> launchAppByLabel(context, label) },

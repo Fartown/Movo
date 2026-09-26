@@ -62,6 +62,7 @@ import top.yukonga.miuix.kmp.basic.Text
 internal fun RunDetailScreen(
     title: String,
     steps: List<AgentChatMessageUi>?,
+    outcome: io.github.fartown.movo.ui.components.WorkOutcome? = null,
     onBack: () -> Unit,
     onOpenBrowser: () -> Unit,
     onSwitchToApp: ((String) -> Unit)?,
@@ -99,7 +100,7 @@ internal fun RunDetailScreen(
                         )
                     }
                 } else {
-                    item(key = "summary") { RunSummaryCard(steps, running, onSwitchToApp) }
+                    item(key = "summary") { RunSummaryCard(steps, running, onSwitchToApp, outcome) }
                     item(key = "steps") {
                         MovoCard(bottomPadding = 0.dp) {
                             CardTitle(stringResource(R.string.movo_run_detail_steps))
@@ -137,11 +138,13 @@ private fun RunSummaryCard(
     steps: List<AgentChatMessageUi>,
     running: Boolean,
     onSwitchToApp: ((String) -> Unit)?,
+    outcome: io.github.fartown.movo.ui.components.WorkOutcome? = null,
 ) {
     val tools = steps.filterIsInstance<ToolActivityMessageUi>()
-    val failedIndex = tools.indexOfFirst { it.status == ToolActivityStatusUi.Failed }
-    val firstStart = tools.mapNotNull { it.startedAtMillis }.minOrNull()
-    val lastFinish = tools.mapNotNull { it.finishedAtMillis }.maxOrNull()
+    val failedIndex = io.github.fartown.movo.ui.components.unrecoveredFailedStep(tools)
+    // 失败 / 停止的一轮用时与对话里的摘要条一致，按整轮算。
+    val firstStart = outcome?.startedAt ?: tools.mapNotNull { it.startedAtMillis }.minOrNull()
+    val lastFinish = outcome?.finishedAt ?: tools.mapNotNull { it.finishedAtMillis }.maxOrNull()
     val now by produceState(System.currentTimeMillis(), running) {
         while (running) {
             value = System.currentTimeMillis()
@@ -157,7 +160,8 @@ private fun RunSummaryCard(
                 Box(Modifier.size(MovoSize.iconSmall), contentAlignment = Alignment.Center) {
                     when {
                         running -> MovoOrb(size = MovoSize.iconSmall)
-                        failedIndex >= 0 -> MovoIcon(MovoIcons.X, null, size = MovoSize.iconSmall, tint = MovoColors.roseFg)
+                        outcome?.kind == io.github.fartown.movo.ui.components.WorkOutcome.Kind.Stopped -> MovoIcon(MovoIcons.Square, null, size = MovoSize.iconSmall, tint = MovoColors.textSecondary)
+                        failedIndex >= 0 || outcome?.kind == io.github.fartown.movo.ui.components.WorkOutcome.Kind.Unfinished -> MovoIcon(MovoIcons.X, null, size = MovoSize.iconSmall, tint = MovoColors.roseFg)
                         else -> MovoIcon(MovoIcons.Check, null, size = MovoSize.iconSmall, tint = MovoColors.greenFg)
                     }
                 }
@@ -166,7 +170,9 @@ private fun RunSummaryCard(
                     text = when {
                         running && tools.isNotEmpty() -> stringResource(R.string.movo_work_running_step, tools.size)
                         running -> stringResource(R.string.movo_work_analyzing)
+                        outcome?.kind == io.github.fartown.movo.ui.components.WorkOutcome.Kind.Stopped -> stringResource(R.string.movo_work_stopped_steps, outcome.steps)
                         failedIndex >= 0 -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
+                        outcome?.kind == io.github.fartown.movo.ui.components.WorkOutcome.Kind.Unfinished -> stringResource(R.string.movo_work_unfinished_steps, outcome.steps)
                         tools.isNotEmpty() -> stringResource(R.string.movo_work_done_steps, tools.size)
                         else -> stringResource(R.string.movo_work_done)
                     },
