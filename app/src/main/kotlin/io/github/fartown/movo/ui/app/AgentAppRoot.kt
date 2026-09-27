@@ -70,6 +70,7 @@ import io.github.fartown.movo.ui.screens.diagnostics.LocalRunLogOpener
 import io.github.fartown.movo.ui.components.LocalOpenCapabilities
 import io.github.fartown.movo.ui.pages.providers.ModelProviderDetailScreen
 import io.github.fartown.movo.ui.pages.providers.ModelProviderListScreen
+import io.github.fartown.movo.ui.pages.providers.ModelProviderMoreScreen
 import io.github.fartown.movo.ui.screens.backup.DataBackupScreen
 import io.github.fartown.movo.ui.screens.browser.AgentBrowserScreen
 import io.github.fartown.movo.ui.screens.characters.CharacterLibraryScreen
@@ -727,6 +728,18 @@ internal fun AgentAppRoot(
             entry<AppRoute.ModelProviderNew>(swipeDismiss = swipeDismiss) { route ->
                 ModelProviderDetailScreen(
                     newType = route.providerType,
+                    onBack = ::popRoute
+                )
+            }
+            entry<AppRoute.ModelProviderTemplate>(swipeDismiss = swipeDismiss) { route ->
+                ModelProviderDetailScreen(
+                    templateId = route.templateId,
+                    onBack = ::popRoute
+                )
+            }
+            entry<AppRoute.ModelProviderMore>(swipeDismiss = swipeDismiss) {
+                ModelProviderMoreScreen(
+                    onNavigate = { route -> pushRoute(route) },
                     onBack = ::popRoute
                 )
             }

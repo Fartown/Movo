@@ -99,6 +99,7 @@ import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 internal fun ModelProviderDetailScreen(
     providerId: String? = null,
     newType: NewProviderType? = null,
+    templateId: String? = null,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -110,8 +111,9 @@ internal fun ModelProviderDetailScreen(
     val provider = remember(providers, effectiveId) {
         effectiveId?.let { id -> providers?.firstOrNull { it.id == id } }
     }
-    val draft = remember(newType) {
-        when (newType) {
+    val draft = remember(newType, templateId) {
+        // 从模板添加：预填名称 / Base URL / 类型 / 官方模型目录，保存（须填 API Key）后才写入数据库。
+        if (templateId != null) ProviderRepository.templateDraft(templateId) else when (newType) {
             NewProviderType.OpenAiCompatible -> CustomProviderSetting(
                 id = "",
                 name = "",
@@ -159,6 +161,7 @@ internal fun ModelProviderDetailScreen(
 
     val initial = provider ?: draft!!
     val isNew = provider == null
+    val fromTemplate = templateId != null
     var currentTab by rememberSaveable { mutableIntStateOf(0) }
     // 两个标签各自的列表状态放在外面（B13）：切回时回到原来的滚动位置；顶栏滚动态跟随当前标签的列表，不残留。
     val configListState = rememberLazyListState()
@@ -171,7 +174,7 @@ internal fun ModelProviderDetailScreen(
     ) {
         mutableStateOf(ProviderConfigDraft.from(initial))
     }
-    val title = if (isNew) context.getString(R.string.page_create_new_provider_36cab9) else initial.name
+    val title = if (isNew && !fromTemplate) context.getString(R.string.page_create_new_provider_36cab9) else initial.name
     val reduced = LocalReducedMotion.current
 
     MovoPage(
@@ -221,6 +224,7 @@ internal fun ModelProviderDetailScreen(
                         onDraftChange = { configDraft = it },
                         scope = scope,
                         isNew = isNew,
+                        fromTemplate = fromTemplate,
                         contentSidePadding = sidePadding,
                         onCreated = { id -> createdId = id },
                         onDeleted = onBack,
@@ -247,6 +251,7 @@ private fun ProviderConfigTab(
     onDraftChange: (ProviderConfigDraft) -> Unit,
     scope: CoroutineScope,
     isNew: Boolean,
+    fromTemplate: Boolean,
     contentSidePadding: Dp,
     onCreated: (String) -> Unit,
     onDeleted: () -> Unit,
@@ -451,6 +456,8 @@ private fun ProviderConfigTab(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = {
                         val validationError = validateProviderDraft(context, draft)
+                            ?: context.getString(R.string.provider_api_key_required)
+                                .takeIf { isNew && fromTemplate && draft.apiKey.isBlank() }
                         if (validationError != null) {
                             status = context.getString(R.string.provider_error, validationError)
                             return@MovoBlockButton
@@ -471,9 +478,14 @@ private fun ProviderConfigTab(
                             )
                             try {
                                 if (isNew) {
-                                    val added = ProviderRepository.addProvider(
-                                        built.withId(ProviderRepository.newId())
-                                    )
+                                    val added = if (fromTemplate) {
+                                        // 模板 id 沿用，据此从「可以添加」里去掉。
+                                        ProviderRepository.addFromTemplate(built)
+                                    } else {
+                                        ProviderRepository.addProvider(
+                                            built.withId(ProviderRepository.newId())
+                                        )
+                                    }
                                     if (added.isEnabled) {
                                         RuntimeConfigRepository.setSelectedProviderId(added.id)
                                     }
@@ -521,7 +533,25 @@ private fun ProviderConfigTab(
 
         if (!isNew) {
             item(key = "danger_zone") {
+                // 内置预设已改为模板：添加过的预设（ChatGPT 除外）也能删除，删除后回到「可以添加」。
+                val removablePreset = provider.isBuiltIn && !isChatGpt
                 MovoCard(modifier = movoAnimateItem()) {
+                    if (removablePreset) {
+                        SettingsRow(
+                            title = context.getString(R.string.page_remove_provider_9f848f),
+                            leading = RowLeading.Custom {
+                                MovoIcon(
+                                    MovoIcons.Trash2,
+                                    contentDescription = null,
+                                    size = MovoSize.iconMedium,
+                                    tint = MovoColors.roseFg,
+                                )
+                            },
+                            trailing = RowTrailing.None,
+                            enabled = !isWorking,
+                            onClick = { showDeleteDialog = true },
+                        )
+                    }
                     SettingsRow(
                         title = if (provider.isBuiltIn) {
                             context.getString(R.string.page_reset_built_in_configuration_35b6ec)

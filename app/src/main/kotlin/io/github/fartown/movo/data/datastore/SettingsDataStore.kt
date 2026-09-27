@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import io.github.fartown.movo.data.model.AppearanceAccentColor
@@ -41,6 +42,8 @@ internal object SettingsDataStore {
     private val APPEARANCE_PREDICTIVE_BACK_ENABLED =
         booleanPreferencesKey("appearance_predictive_back_enabled")
     private val APPEARANCE_INTERFACE_SCALE = floatPreferencesKey("appearance_interface_scale")
+    /** 服务商数据迁移版本（内置预设改为模板等），见 ProviderRepository.ensureBuiltInsMerged。 */
+    private val PROVIDER_DATA_VERSION = intPreferencesKey("provider_data_version")
     private const val SELECTED_MODEL_BY_PROVIDER_PREFIX = "selected_model_id_by_provider."
 
     private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = STORE_NAME)
@@ -154,6 +157,21 @@ internal object SettingsDataStore {
                 prefs[selectedModelByProviderKey(providerId)] = modelId
             }
         }
+    }
+
+    suspend fun providerDataVersion(): Int {
+        ensureInitialized()
+        return dataStore.data
+            .catch { cause ->
+                if (cause is IOException) emit(emptyPreferences()) else throw cause
+            }
+            .map { prefs -> prefs[PROVIDER_DATA_VERSION] ?: 0 }
+            .first()
+    }
+
+    suspend fun setProviderDataVersion(version: Int) {
+        ensureInitialized()
+        dataStore.edit { prefs -> prefs[PROVIDER_DATA_VERSION] = version }
     }
 
     suspend fun clearSelectedModelIdForProvider(providerId: String) {

@@ -7,6 +7,7 @@ import io.github.fartown.movo.data.model.OpenAiEndpointMode
 import io.github.fartown.movo.data.model.withModels
 import io.github.fartown.movo.data.provider.BuiltinProviders
 import io.github.fartown.movo.data.provider.PackagedModelDefaults
+import io.github.fartown.movo.data.provider.ProviderCatalog
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
@@ -38,6 +39,7 @@ class PackagedModelDefaultsTest {
             // Open the current test database explicitly before accessing those repositories.
             MovoDatabase.get(context).providerDao().replaceAll(emptyList())
             SettingsDataStore.setSelection(null, null)
+            SettingsDataStore.setProviderDataVersion(0)
             assertTrue(ProviderRepository.allProviders().isEmpty())
         }
     }
@@ -50,8 +52,9 @@ class PackagedModelDefaultsTest {
 
         ProviderRepository.ensureBuiltInsMerged(initialProvider = null)
 
-        assertEquals(BuiltinProviders.PROVIDERS.size, ProviderRepository.allProviders().size)
-        assertEquals(BuiltinProviders.OPENAI_ID, SettingsDataStore.settings().selectedProviderId)
+        // 内置预设是模板、不落库：只有承载订阅登录的 ChatGPT 记录；没有可用的服务商时不选（输入框提示「未配置模型」）。
+        assertEquals(listOf(BuiltinProviders.CHATGPT_ID), ProviderRepository.allProviders().map { it.id })
+        assertNull(SettingsDataStore.settings().selectedProviderId)
     }
 
     @Test
@@ -62,6 +65,12 @@ class PackagedModelDefaultsTest {
 
         val stored = ProviderRepository.providerById(preset.id)!!
         val config = RuntimeConfigRepository.currentRuntimeConfig()!!
+        assertEquals(
+            setOf(preset.id, BuiltinProviders.CHATGPT_ID),
+            ProviderRepository.allProviders().map { it.id }.toSet(),
+        )
+        assertTrue(ProviderCatalog.isPackaged(stored))
+        assertTrue(ProviderCatalog.isConfigured(stored))
         assertFalse(stored.isBuiltIn)
         assertFalse(stored.models.single().isBuiltIn)
         assertEquals(preset.id, SettingsDataStore.settings().selectedProviderId)
@@ -108,7 +117,7 @@ class PackagedModelDefaultsTest {
         ProviderRepository.ensureBuiltInsMerged(preset)
 
         assertNull(ProviderRepository.providerById(preset.id))
-        assertEquals(BuiltinProviders.OPENAI_ID, SettingsDataStore.settings().selectedProviderId)
+        assertNull(SettingsDataStore.settings().selectedProviderId)
     }
 
     @Test

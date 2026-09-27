@@ -306,7 +306,6 @@
   <string name="ui_allow_reading_of_sensitive_device_information_feaec0">允许读取敏感设备信息</string>
   <string name="ui_about_bed172">关于</string>
   <string name="ui_after_closing_no_memory_will_be_injected_and_the_mod_db3d23">关闭后不注入记忆，也不允许模型读写；已有内容会保留</string>
-  <string name="ui_built_in_09ceea">内置</string>
   <string name="ui_built_in_skills_1ceedf">内置</string>
   <string name="ui_analyze_current_screen_ebf08f">分析当前屏幕</string>
   <string name="ui_delete_3755f5">删除</string>
@@ -348,15 +347,9 @@
   <string name="ui_long_press_on_the_gesture_bar_triggers_a_circle_to_s_b80117">手势条长按触发一圈即搜</string>
   <string name="ui_open_current_browser_58358e">打开当前浏览器</string>
   <string name="ui_open_wechat_6b2c28">打开微信</string>
-  <string name="ui_search_provider_74e049">搜索提供商</string>
   <string name="ui_search_model_df5586">搜索模型</string>
-  <string name="ui_support_anthropic_claude_official_or_compatible_api_de3f80">支持 Anthropic Claude 官方或兼容 API</string>
-  <string name="ui_support_chatgpt_deepseek_kimi_glm_qwen_etc_b31d02">支持 ChatGPT, DeepSeek, Kimi, GLM, Qwen等</string>
   <string name="ui_supports_files_and_folders_under_internal_storage_or_520786">支持任意本地绝对路径下的文件和文件夹</string>
   <string name="ui_support_thinking_5b9e4c">支持思考</string>
-  <string name="ui_new_anthropic_db6098">新增 Anthropic</string>
-  <string name="ui_added_openai_compatible_6bd471">新增 OpenAI-compatible</string>
-  <string name="ui_add_new_provider_74df54">新增提供商</string>
   <string name="ui_accessibility_enhancement_tools_8fd257">无障碍增强工具</string>
   <string name="ui_no_skills_installed_yet_4e960f">尚未安装任何 Skill</string>
   <string name="ui_replace_user_skills_250e98">替换 Skill？</string>
@@ -367,7 +360,6 @@
   <string name="ui_permission_health_3048bb">权限健康</string>
   <string name="ui_check_memory_pressure_2d9600">查看内存压力</string>
   <string name="ui_core_memory_injection_budget_48b5d5">核心记忆注入预算</string>
-  <string name="ui_model_provider_e8c7f5">模型提供商</string>
   <string name="ui_model_management_183414">模型管理</string>
   <string name="ui_test_connection_10b7d8">测试连接</string>
   <string name="ui_the_browser_has_not_opened_the_web_page_yet_31e095">浏览器尚未打开网页</string>
@@ -1033,16 +1025,9 @@
   <string name="status_cancelled">已取消</string>
   <string name="status_ready">已就绪</string>
   <string name="status_needs_attention">需注意</string>
-  <plurals name="provider_configured_count">
-    <item quantity="other">已配置提供商（共 %d 个）</item>
-  </plurals>
-  <string name="provider_empty">暂无模型提供商，请新增</string>
-  <string name="provider_no_matches">未找到匹配的提供商</string>
   <plurals name="provider_models_count">
     <item quantity="other">%d 个模型</item>
   </plurals>
-  <string name="provider_selected">已选中</string>
-  <string name="provider_set_current">设为当前</string>
   <string name="skills_checking_package">正在检查 Skill 包</string>
   <string name="skills_import_zip">从 ZIP 导入</string>
   <string name="skills_installing_package">正在验证并安装，请稍候</string>
@@ -1286,4 +1271,47 @@
   <string name="chatgpt_logged_out">已退出 ChatGPT 登录</string>
   <string name="chatgpt_open_browser_failed">无法打开浏览器</string>
   <string name="chatgpt_login_exchanging">正在完成登录…</string>
+  <!-- 设置 → 模型（服务商页，Figma「15」） -->
+  <string name="provider_page_title">模型</string>
+  <string name="provider_more_title">更多服务商</string>
+  <string name="provider_tag_current">当前</string>
+  <string name="provider_tag_packaged">预置</string>
+  <string name="provider_tag_recommended">推荐</string>
+  <string name="provider_chatgpt_intro">用你的 ChatGPT 订阅，不用 API Key</string>
+  <string name="provider_chatgpt_sign_in">登录 ChatGPT</string>
+  <string name="provider_in_use">正在用 %1$s</string>
+  <string name="provider_in_use_with_account">正在用 %1$s · %2$s</string>
+  <string name="provider_no_models">还没有模型</string>
+  <string name="provider_mine_title">我的服务商</string>
+  <string name="provider_mine_empty">还没有添加服务商</string>
+  <string name="provider_available_title">可以添加</string>
+  <string name="provider_available_hint">填 API Key 后出现在上面</string>
+  <string name="provider_add">添加</string>
+  <string name="provider_more_entry">更多服务商与自定义接口</string>
+  <string name="provider_common_title">常用服务商</string>
+  <string name="provider_common_hint">填 API Key 即可使用</string>
+  <string name="provider_custom_title">自定义接口</string>
+  <string name="provider_custom_openai">OpenAI 兼容接口</string>
+  <string name="provider_custom_anthropic">Anthropic 兼容接口</string>
+  <string name="provider_custom_summary">填写 Base URL、API Key 和模型</string>
+  <string name="provider_api_key_required">请填写 API Key</string>
+  <string name="provider_tagline_openai">GPT-5.5、o3</string>
+  <string name="provider_tagline_anthropic">Claude</string>
+  <string name="provider_tagline_deepseek">DeepSeek-V4</string>
+  <string name="provider_tagline_kimi">Kimi K2.6</string>
+  <string name="provider_tagline_bailian">通义千问</string>
+  <string name="provider_tagline_minimax">MiniMax-M2</string>
+  <string name="provider_tagline_siliconflow">开源模型</string>
+  <string name="provider_tagline_openrouter">多家模型聚合</string>
+  <string name="provider_tagline_stepfun">Step 3.7</string>
+  <string name="provider_tagline_mimo">MiMo V2.5</string>
+  <plurals name="provider_account_models">
+    <item quantity="other">%1$s · %2$d 个模型</item>
+  </plurals>
+  <plurals name="provider_models_summary">
+    <item quantity="other">%1$s 等 %2$d 个模型</item>
+  </plurals>
+  <plurals name="provider_mine_count">
+    <item quantity="other">%d 个</item>
+  </plurals>
 </resources>

@@ -127,6 +127,29 @@ internal object BuiltinProviders {
         ),
     )
 
+    /**
+     * 服务商模板（设置 → 模型的「可以添加」「更多服务商」）：内置预设不再默认写进数据库占位，
+     * 用户填 API Key 保存后才落库成为服务商。顺序按 Figma「15」：常用的在前；ChatGPT 走订阅登录，单独一张卡，不在模板里。
+     */
+    private val TEMPLATE_ORDER = listOf(
+        OPENAI_ID,
+        ANTHROPIC_ID,
+        DEEPSEEK_ID,
+        KIMI_ID,
+        BAILIAN_ID,
+        MINIMAX_ID,
+        SILICONFLOW_ID,
+        OPENROUTER_ID,
+        STEPFUN_ID,
+        MIMO_ID,
+    )
+
+    val TEMPLATES: List<ProviderSetting> = TEMPLATE_ORDER.map { id -> PROVIDERS.first { it.id == id } }
+
     fun providerById(id: String): ProviderSetting? =
         PROVIDERS.firstOrNull { it.id == id }
+
+    /** 是否为内置预设（含 ChatGPT）的 id：这些记录由模板生成，id 沿用模板 id。 */
+    fun isPresetId(id: String): Boolean =
+        PROVIDERS.any { it.id == id }
 }
