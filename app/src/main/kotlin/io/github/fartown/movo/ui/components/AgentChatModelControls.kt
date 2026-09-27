@@ -242,13 +242,13 @@ private fun ModelPickerPopupContent(
                 stringResource(R.string.model_expand_provider, group.providerName)
             },
         )
-        // 分组展开 / 收起（规范 9.3）：高度 `standard`，内容在高度开始 40ms 后淡入 `fast`；收起时淡出 120ms、高度同时收起。
+        // 分组展开 / 收起（规范 9.3）：高度 `standard`，内容与高度同时淡入 `fast`；收起时淡出 120ms、高度同时收起。
         AnimatedVisibility(
             visible = expanded,
             enter = if (reduced) {
                 fadeIn(MovoMotion.fast())
             } else {
-                fadeIn(tween(MovoMotion.FAST, delayMillis = MovoMotion.STAGGER, easing = MovoMotion.EasingStandard)) +
+                fadeIn(tween(MovoMotion.FAST, easing = MovoMotion.EasingStandard)) +
                     expandVertically(MovoMotion.standard())
             },
             exit = if (reduced) {

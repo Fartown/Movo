@@ -52,7 +52,7 @@ internal fun LazyListScope.providerHeadersEditor(
 ) {
     // 请求头数量很少且必须收进同一张卡片，折叠/展开态整组重排，不拆成独立 Lazy 条目。
     item(key = "custom_headers") {
-        // 展开 / 收起与增删请求头：卡片高度 `standard` 过渡，内容 40ms 后淡入（9.3）。
+        // 展开 / 收起与增删请求头：卡片高度 `standard` 过渡，内容同时淡入（9.3）。
         ProviderSection(title = stringResource(R.string.movo_provider_headers_title), modifier = movoAnimateItem()) {
             val chevronRotation by animateFloatAsState(
                 targetValue = if (expanded) 180f else 0f,

@@ -72,7 +72,7 @@ internal fun MovoListPage(
     val barHeight = movoTopBarHeight()
     val navigation = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     Box(modifier = modifier.fillMaxSize().background(MovoColors.bgCanvas)) {
-        WidePageContent { sidePadding ->
+        WidePageContent { sidePadding -> ProvideMovoListResize {
             LazyColumn(
                 state = listState,
                 modifier = Modifier
@@ -90,7 +90,7 @@ internal fun MovoListPage(
                 verticalArrangement = Arrangement.spacedBy(itemSpacing),
                 content = content,
             )
-        }
+        } }
         MovoTopBar(title = title, onBack = onBack, scrolled = scrolled, backdrop = backdrop, actions = actions)
     }
 }
@@ -120,8 +120,11 @@ internal fun MovoPage(
                 .captureMovoBackdrop(backdrop)
                 .nestedScroll(detector),
         ) {
-            WidePageContent { sidePadding ->
-                content(PaddingValues(top = barHeight), sidePadding)
+            // 页内 Lazy 列表里展开区变高时，其余项跟着实际位置走（[MovoListResize]）。
+            ProvideMovoListResize {
+                WidePageContent { sidePadding ->
+                    content(PaddingValues(top = barHeight), sidePadding)
+                }
             }
         }
         MovoTopBar(title = title, onBack = onBack, scrolled = scrolled ?: detector.scrolled, backdrop = backdrop, actions = actions)

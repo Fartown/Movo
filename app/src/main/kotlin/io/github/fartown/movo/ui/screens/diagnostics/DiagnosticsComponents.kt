@@ -332,7 +332,7 @@ internal fun BreakdownCard(parts: List<BreakdownPart>, format: DiagnosticsFormat
 /**
  * Work/Step：时间线的一行。行内边距 16 / 10，状态图标 16 → 12 → 标题 13 Medium + 说明 13 次要色（间距 2），
  * 右侧时长 Numeric/Label 三级色；图标之间用 1 宽 border/strong 连接线串起来（x = 24，图标上下各留约 4）。
- * [expanded] 时在文字列（卡内 44）下方展开 Run/StepDetail（高度 `standard`、内容 40ms 后淡入，9.3「展开 / 收起」）。
+ * [expanded] 时在文字列（卡内 44）下方展开 Run/StepDetail（高度 `standard`、内容与高度同时淡入，9.3「展开 / 收起」）。
  * [muted] 用于设备事件：标题也用次要色。
  */
 @Composable

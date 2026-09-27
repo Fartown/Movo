@@ -244,12 +244,12 @@ internal fun AgentChatInputBar(
         }
     }
 
-    // 输入框上方的附件条、排队条、提示条（规范 9.3「展开 / 收起」「列表增删」）：高度展开 `standard`，内容在高度开始 40ms 后
+    // 输入框上方的附件条、排队条、提示条（规范 9.3「展开 / 收起」「列表增删」）：高度展开 `standard`，内容与高度同时
     // 淡入 `fast`；消失时内容淡出 120ms、高度同时收起 `standard`。减少动画时只淡入淡出、高度直接到位（9.8）。
     val aboveEnter = if (reducedMotion) {
         fadeIn(MovoMotion.fast())
     } else {
-        fadeIn(tween(MovoMotion.FAST, delayMillis = MovoMotion.STAGGER, easing = MovoMotion.EasingStandard)) +
+        fadeIn(tween(MovoMotion.FAST, easing = MovoMotion.EasingStandard)) +
             expandVertically(MovoMotion.standard())
     }
     val aboveExit = if (reducedMotion) {
@@ -564,25 +564,47 @@ internal fun AgentChatInputBar(
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                } else if (isEditingMessage) {
-                    MovoCircleButton(
-                        icon = MovoIcons.X,
-                        contentDescription = stringResource(R.string.ui_cancel_edit_c698df),
-                        onClick = onCancelMessageEdit,
-                    )
                 } else {
-                    // 从语音切回文字时附件「+」原地淡入（首次出现时直接显示）。
-                    io.github.fartown.movo.ui.components.movo.MovoEntrance(play = cameFromVoice, shift = 0.dp, durationMillis = MovoMotion.FAST) {
-                        AgentAttachmentPickerButton(
-                            popupAnchorTopPx = inputContainerTopPx,
-                            popupMaxHeight = thinkingPopupMaxHeight,
-                            onAttachImage = onAttachImage,
-                            onAttachFiles = onAttachFiles,
-                            onAttachFolder = onAttachFolder,
-                            onAttachFilePath = onAttachFilePath,
-                        )
+                    // 编辑消息进出：左侧「+」↔「×」按图标切换（9.3「图标切换」）：旧的缩到 0.72 淡出、新的从 0.72 放大淡入，
+                    // 同时进行，不会先空几帧再跳出来。
+                    androidx.compose.animation.AnimatedContent(
+                        targetState = isEditingMessage,
+                        transitionSpec = {
+                            if (reducedMotion) {
+                                fadeIn(MovoMotion.fast()) togetherWith fadeOut(MovoMotion.fastExit())
+                            } else {
+                                (fadeIn(MovoMotion.fast()) + scaleIn(MovoMotion.fast(), initialScale = 0.72f)) togetherWith
+                                    (fadeOut(MovoMotion.fastExit()) + scaleOut(MovoMotion.fastExit(), targetScale = 0.72f))
+                            }.using(androidx.compose.animation.SizeTransform(clip = false))
+                        },
+                        contentAlignment = Alignment.Center,
+                        label = "composerLeading",
+                    ) { editing ->
+                        if (editing) {
+                            MovoCircleButton(
+                                icon = MovoIcons.X,
+                                contentDescription = stringResource(R.string.ui_cancel_edit_c698df),
+                                onClick = onCancelMessageEdit,
+                            )
+                        } else {
+                            // 从语音切回文字时附件「+」原地淡入（首次出现时直接显示）。
+                            io.github.fartown.movo.ui.components.movo.MovoEntrance(play = cameFromVoice, shift = 0.dp, durationMillis = MovoMotion.FAST) {
+                                AgentAttachmentPickerButton(
+                                    popupAnchorTopPx = inputContainerTopPx,
+                                    popupMaxHeight = thinkingPopupMaxHeight,
+                                    onAttachImage = onAttachImage,
+                                    onAttachFiles = onAttachFiles,
+                                    onAttachFolder = onAttachFolder,
+                                    onAttachFilePath = onAttachFilePath,
+                                )
+                            }
+                        }
                     }
-                    if (availableReasoningEfforts.isNotEmpty() && !isStreaming) {
+                    AnimatedVisibility(
+                        visible = !isEditingMessage && availableReasoningEfforts.isNotEmpty() && !isStreaming,
+                        enter = fadeIn(MovoMotion.fast()),
+                        exit = fadeOut(MovoMotion.fastExit()),
+                    ) {
                         ThinkingEffortChip(
                             effort = reasoningEffort,
                             options = availableReasoningEfforts,

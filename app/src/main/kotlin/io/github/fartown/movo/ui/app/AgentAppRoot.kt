@@ -368,7 +368,10 @@ internal fun AgentAppRoot(
         val reducedMotion = io.github.fartown.movo.ui.theme.LocalReducedMotion.current
         NavDisplay(
             backStack = backStack,
-            onBack = { popRoute() },
+            // 系统返回（返回键、返回手势）：栈底时照常关闭界面；顶栏返回按钮走 [popRoute]（栈底为首页时不关闭）。
+            onBack = {
+                if (!navigator.pop()) (context as? Activity)?.finish()
+            },
             transition = remember(reducedMotion) {
                 io.github.fartown.movo.ui.components.movo.movoNavTransition(reducedMotion)
             },

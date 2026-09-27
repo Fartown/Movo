@@ -49,7 +49,7 @@ internal fun LazyListScope.characterWorldbookEditor(
                 showDivider = expanded,
                 onClick = onToggleExpanded,
             ) {
-                // 9.3「展开 / 收起」：单一箭头旋转 `fast`，内容高度 `standard`、40ms 后淡入。
+                // 9.3「展开 / 收起」：单一箭头旋转 `fast`，内容高度 `standard`、内容同时淡入。
                 MovoExpandChevron(expanded = expanded)
             }
             MovoExpandable(visible = expanded) {

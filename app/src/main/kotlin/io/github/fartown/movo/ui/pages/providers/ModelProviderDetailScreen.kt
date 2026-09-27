@@ -195,7 +195,7 @@ internal fun ModelProviderDetailScreen(
                     fadeIn(MovoMotion.fast())
                 } else {
                     expandVertically(MovoMotion.standard(), expandFrom = Alignment.Top) +
-                        fadeIn(tween(MovoMotion.FAST, delayMillis = MovoMotion.STAGGER, easing = MovoMotion.EasingStandard))
+                        fadeIn(tween(MovoMotion.FAST, easing = MovoMotion.EasingStandard))
                 },
                 exit = if (reduced) fadeOut(MovoMotion.fastExit()) else shrinkVertically(MovoMotion.standard(), shrinkTowards = Alignment.Top) + fadeOut(MovoMotion.fastExit()),
             ) {

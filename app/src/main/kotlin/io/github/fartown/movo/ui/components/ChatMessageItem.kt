@@ -713,13 +713,12 @@ internal fun AgentWorkProcess(
             )
         }
 
-        // 展开：高度 `standard`，内容在高度过渡开始 40ms 后淡入 `fast`（规范 9.3「展开 / 收起」）。
+        // 展开：高度 `standard`，内容与高度同时开始淡入 `fast`（不等待，第一帧就有内容）（规范 9.3「展开 / 收起」）。
         AnimatedVisibility(
             visible = shownExpanded,
             enter = fadeIn(
                 tween(
                     io.github.fartown.movo.ui.theme.MovoMotion.FAST,
-                    delayMillis = io.github.fartown.movo.ui.theme.MovoMotion.STAGGER,
                     easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard,
                 ),
             ) + expandVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), expandFrom = Alignment.Top),
@@ -772,6 +771,12 @@ internal fun AgentWorkProcess(
     }
     }
 }
+
+/** 思考步骤「两行预览 ↔ 全文」的错开时长（见 WorkThinkingStep）。 */
+private const val THINKING_EXPAND_OUT_MS = 50
+private const val THINKING_EXPAND_IN_DELAY_MS = 16
+private const val THINKING_COLLAPSE_OUT_MS = 100
+private const val THINKING_COLLAPSE_IN_MS = 40
 
 /** 执行中步骤超过这个数时折叠较早的步骤（规范 8.1「工作过程 · 展开」）。 */
 private const val WORK_FOLD_THRESHOLD = 6
@@ -3470,18 +3475,23 @@ private fun WorkThinkingStep(
             }
         }
         if (message.content.isNotBlank()) {
-            // 展开 / 收起（规范 9.3）：高度 `standard`；展开内容在高度过渡开始 40ms 后淡入 `fast`，收起时先淡出 120ms。
+            // 展开 / 收起（规范 9.3）：高度 `standard`。两行预览（纯文本 13 三级色）与全文（Markdown 14 次要色）排版不同，
+            // 同时半透明就会叠字，所以按「先出后进」错开：
+            // 展开：预览 50ms 内快速淡出，全文 16ms 起快速淡入——重叠只有一两帧且预览已很淡，新长出的区域也不空；
+            // 收起：全文陪着高度收完，最后 100ms 才快速淡出，两行预览在最后 40ms 淡入，几乎不重叠。
             AnimatedContent(
                 targetState = expanded,
                 transitionSpec = {
-                    fadeIn(
-                        tween(
-                            io.github.fartown.movo.ui.theme.MovoMotion.FAST,
-                            delayMillis = io.github.fartown.movo.ui.theme.MovoMotion.STAGGER,
-                            easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard,
-                        ),
-                    ).togetherWith(fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()))
-                        .using(androidx.compose.animation.SizeTransform { _, _ -> io.github.fartown.movo.ui.theme.MovoMotion.standard() })
+                    val motion = io.github.fartown.movo.ui.theme.MovoMotion
+                    if (targetState) {
+                        fadeIn(tween(motion.FAST, delayMillis = THINKING_EXPAND_IN_DELAY_MS, easing = motion.EasingEnter))
+                            .togetherWith(fadeOut(tween(THINKING_EXPAND_OUT_MS, easing = motion.EasingEnter)))
+                    } else {
+                        fadeIn(tween(THINKING_COLLAPSE_IN_MS, delayMillis = motion.STANDARD - THINKING_COLLAPSE_IN_MS, easing = motion.EasingEnter))
+                            .togetherWith(
+                                fadeOut(tween(THINKING_COLLAPSE_OUT_MS, delayMillis = motion.STANDARD - THINKING_COLLAPSE_OUT_MS, easing = motion.EasingEnter)),
+                            )
+                    }.using(androidx.compose.animation.SizeTransform { _, _ -> motion.standard() })
                 },
                 contentAlignment = Alignment.TopStart,
                 label = "thinkingStepContent",
@@ -3524,11 +3534,10 @@ private fun WorkThinkingStep(
     }
 }
 
-/** 展开（规范 9.3「展开 / 收起」）：高度 `standard`，内容在高度过渡开始 40ms 后淡入 `fast`。 */
+/** 展开（规范 9.3「展开 / 收起」）：高度 `standard`，内容与高度同时开始淡入 `fast`（不等待，第一帧就有内容）。 */
 private fun expandContentEnter(): androidx.compose.animation.EnterTransition = fadeIn(
     tween(
         io.github.fartown.movo.ui.theme.MovoMotion.FAST,
-        delayMillis = io.github.fartown.movo.ui.theme.MovoMotion.STAGGER,
         easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard,
     ),
 ) + expandVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), expandFrom = Alignment.Top)
@@ -3657,13 +3666,12 @@ private fun WorkToolStep(
                 )
             }
         }
-        // 展开：高度 `standard`，内容在高度过渡开始 40ms 后淡入 `fast`（规范 9.3「展开 / 收起」）。
+        // 展开：高度 `standard`，内容与高度同时开始淡入 `fast`（不等待，第一帧就有内容）（规范 9.3「展开 / 收起」）。
         AnimatedVisibility(
             visible = expanded,
             enter = fadeIn(
                 tween(
                     io.github.fartown.movo.ui.theme.MovoMotion.FAST,
-                    delayMillis = io.github.fartown.movo.ui.theme.MovoMotion.STAGGER,
                     easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard,
                 ),
             ) + expandVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), expandFrom = Alignment.Top),
