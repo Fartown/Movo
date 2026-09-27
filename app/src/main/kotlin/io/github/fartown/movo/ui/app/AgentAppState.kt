@@ -1,5 +1,6 @@
 package io.github.fartown.movo.ui.app
 
+import io.github.fartown.movo.ui.components.isRunSupplement
 import io.github.fartown.movo.agent.model.AgentContextSnapshot
 import io.github.fartown.movo.agent.voice.session.VoiceConversationHost
 import io.github.fartown.movo.agent.voice.session.VoiceSessionOwner
@@ -1544,7 +1545,9 @@ internal class AgentAppState(
                 history = if (operation == AgentRuntimeWire.OP_REWRITE_REPLY) state.history else history + listOfNotNull(userHistoryMessage),
                 journal = state.journal.ifEmpty { state.history } + listOfNotNull(userHistoryMessage),
                 isCompacting = operation == AgentRuntimeWire.OP_COMPACT,
-                messages = AgentFollowUpSuggestions.strip(messages),
+                messages = AgentFollowUpSuggestions.strip(messages).let { stripped ->
+                    if (operation == AgentRuntimeWire.OP_CHAT) stampTurnStarted(stripped) else stripped
+                },
                 messageEdit = null,
             )
         )
@@ -2453,7 +2456,7 @@ internal class AgentAppState(
                 updateRunTrace(runId) { messages ->
                     val finalizedThinking = runMessageProjector.finalizeThinking(runId, messages)
                     val finalizedText = runMessageProjector.finalizeText(runId, finalizedThinking)
-                    runMessageProjector.failRunningTools(event.reason, finalizedText)
+                    stampTurnFinished(runMessageProjector.failRunningTools(event.reason, finalizedText))
                 }
             }
 
@@ -2473,7 +2476,7 @@ internal class AgentAppState(
             is AgentEvent.RunFinished -> {
                 updateRunTrace(runId) { messages ->
                     val finalizedThinking = runMessageProjector.finalizeThinking(runId, messages)
-                    runMessageProjector.finalizeText(runId, finalizedThinking)
+                    stampTurnFinished(runMessageProjector.finalizeText(runId, finalizedThinking))
                 }
             }
 
@@ -2490,6 +2493,25 @@ internal class AgentAppState(
         }
     }
 
+    /** 这一轮开始：给发起它的用户消息记下开始时刻（执行卡按整轮计时，与运行日志一致）。 */
+    private fun stampTurnStarted(messages: List<AgentChatMessageUi>): List<AgentChatMessageUi> {
+        val index = messages.indexOfLast { it is UserMessageUi && !it.isRunSupplement() }
+        if (index < 0) return messages
+        val now = System.currentTimeMillis()
+        return messages.mapIndexed { i, message ->
+            if (i == index && message is UserMessageUi) message.copy(runStartedAtMillis = now, runFinishedAtMillis = null) else message
+        }
+    }
+
+    /** 这一轮结束：给最近一轮已记开始、未记结束的用户消息记下结束时刻。 */
+    private fun stampTurnFinished(messages: List<AgentChatMessageUi>): List<AgentChatMessageUi> {
+        val index = messages.indexOfLast { it is UserMessageUi && !it.isRunSupplement() }
+        val target = messages.getOrNull(index) as? UserMessageUi ?: return messages
+        if (target.runStartedAtMillis == null || target.runFinishedAtMillis != null) return messages
+        val finished = target.copy(runFinishedAtMillis = System.currentTimeMillis())
+        return messages.mapIndexed { i, message -> if (i == index) finished else message }
+    }
+
     private fun applyRunResult(
         runId: String,
         result: AgentRuntimeWire.RunResult,
@@ -2503,6 +2525,8 @@ internal class AgentAppState(
             return
         }
         flushPendingRunDelta(runId)
+        // 停止、失败等不经过 RunFinished 的结束：这里补记这一轮的结束时刻（已记过的不覆盖）。
+        if (recoveredHandoff == null) updateMessages(runId) { messages -> stampTurnFinished(messages) }
         val followUpConfig = followUpRunConfigs.remove(runId)
         val rewriting = result.operation == AgentRuntimeWire.OP_REWRITE_REPLY || isReplyRewrite(runId)
         stopRequestedRunIds.remove(runId)

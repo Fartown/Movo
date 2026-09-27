@@ -528,6 +528,7 @@ internal fun AgentWorkProcess(
     answerStarted: Boolean = false,
     stepOffset: Int = 0,
     outcome: WorkOutcome? = null,
+    turnSpan: WorkTurnSpan? = null,
 ) {
     // 只有思考、没有执行步骤（纯问答）：不出执行卡，一行「✦ 已思考 N 秒 ⌄」（2026-09-27 定稿方案 2）。
     // 之后出现工具步骤时换成执行卡，思考成为卡里第一步。
@@ -700,10 +701,14 @@ internal fun AgentWorkProcess(
             Spacer(modifier = Modifier.width(8.dp))
             // 计时：执行中「00:18」每秒直接换数字（9.0 规则 5，不滚动不闪）；结束后「用时 18 秒」。
             // 失败 / 停止的一轮可能被回答分成几张卡，用时与步数一样按整轮算。
-            val firstStart = outcome?.startedAt ?: tools.mapNotNull { it.startedAtMillis }.minOrNull()
-            val lastFinish = outcome?.finishedAt ?: tools.mapNotNull { it.finishedAtMillis }.maxOrNull()
-            val now by androidx.compose.runtime.produceState(System.currentTimeMillis(), running, firstStart) {
-                while (running && firstStart != null) {
+            // 按整轮任务计时（与运行日志一致）；旧数据没有整轮时刻时按步骤时间。
+            val firstStart = turnSpan?.startedAt ?: outcome?.startedAt ?: tools.mapNotNull { it.startedAtMillis }.minOrNull()
+            val lastFinish = turnSpan?.finishedAt ?: outcome?.finishedAt ?: tools.mapNotNull { it.finishedAtMillis }.maxOrNull()
+            // 步骤做完、回答还在输出：这一轮还没结束，「用时」继续走，结束时停在整轮用时，不先停住再跳（真机 turntime：26 秒 → 31 秒）。
+            val answering = !running && !paused && runActive && turnSpan != null && turnSpan.finishedAt == null
+            val ticking = running || answering
+            val now by androidx.compose.runtime.produceState(System.currentTimeMillis(), ticking, firstStart) {
+                while (ticking && firstStart != null) {
                     value = System.currentTimeMillis()
                     kotlinx.coroutines.delay(1_000)
                 }
@@ -717,7 +722,7 @@ internal fun AgentWorkProcess(
                 SideEffect { if (endedAt == 0L) endedAt = System.currentTimeMillis() }
             }
             val elapsed = firstStart?.let { start ->
-                if (running) now - start else (endedAt.takeIf { it > 0L } ?: lastFinish)?.let { it - start }
+                if (ticking) now - start else (turnSpan?.finishedAt ?: endedAt.takeIf { it > 0L } ?: lastFinish)?.let { it - start }
             }
             val timerText = elapsed?.let { if (running) formatClock(it) else formatElapsed(it) }
             // 放不下完整计时时退成「1:06」，状态文字不让位（规范：摘要条状态优先完整显示）。
@@ -840,7 +845,7 @@ internal fun AgentWorkProcess(
                 // （2026-09-27 定稿方案 1）：长记录滑到末尾不用回到头部就能收起；执行中不出这一行（头部即可收起）。
                 if (!running && !paused) {
                     WorkCardFooter(
-                        span = workTimeSpan(tools, outcome),
+                        span = workTimeSpan(tools, outcome, turnSpan),
                         logMessageId = tools.firstOrNull()?.id ?: messages.firstOrNull()?.id,
                         onCollapse = ::collapseFromFooter,
                     )
@@ -871,12 +876,34 @@ private fun WorkCardFooter(
     onCollapse: () -> Unit,
 ) {
     val openLog = io.github.fartown.movo.ui.screens.diagnostics.LocalRunLogOpener.current
+    // 这次任务的日志已不在（运行日志只保留最近的任务）：左侧时间原地换成「找不到这次任务的日志」，停留后换回（就地反馈，不用 Toast）。
+    var logMissingAt by remember { mutableStateOf(0L) }
+    LaunchedEffect(logMissingAt) {
+        if (logMissingAt == 0L) return@LaunchedEffect
+        kotlinx.coroutines.delay(io.github.fartown.movo.ui.theme.MovoMotion.SUPPLEMENT_ACK_HOLD.toLong())
+        logMissingAt = 0L
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = 16.dp, end = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        androidx.compose.animation.Crossfade(
+            targetState = logMissingAt != 0L,
+            animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
+            modifier = Modifier.weight(1f),
+            label = "workFooterNotice",
+        ) { missing ->
+        if (missing) {
+            Text(
+                text = stringResource(R.string.movo_work_log_missing),
+                style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular,
+                color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+        } else
         // 起止时间完整放得下用完整写法，放不下（大字号、窄屏）退成「15:02–15:03」，不截成省略号。
         androidx.compose.ui.layout.Layout(
             content = {
@@ -885,7 +912,7 @@ private fun WorkCardFooter(
                 Text(span?.full.orEmpty(), style = style, color = color, maxLines = 1, softWrap = false)
                 Text(span?.compact.orEmpty(), style = style, color = color, maxLines = 1, softWrap = false)
             },
-            modifier = Modifier.weight(1f).clipToBounds(),
+            modifier = Modifier.fillMaxWidth().clipToBounds(),
         ) { measurables, constraints ->
             val loose = constraints.copy(minWidth = 0)
             val full = measurables[0]
@@ -893,9 +920,11 @@ private fun WorkCardFooter(
             val placeable = chosen.measure(loose)
             layout(constraints.maxWidth, placeable.height) { placeable.place(0, 0) }
         }
+        }
         if (openLog != null && logMessageId != null) {
             WorkCardFooterAction(label = stringResource(R.string.movo_work_log)) {
-                openLog(io.github.fartown.movo.ui.screens.diagnostics.DiagnosticsLinks.runForMessage(logMessageId))
+                val runId = io.github.fartown.movo.ui.screens.diagnostics.DiagnosticsLinks.runForMessage(logMessageId)
+                if (runId != null) openLog(runId) else logMissingAt = System.currentTimeMillis()
             }
             Spacer(Modifier.width(4.dp))
         }
@@ -959,9 +988,9 @@ private class WorkTimeSpan(val full: String, val compact: String)
 
 /** 本轮起止时间（本地时区 HH:mm）；拿不到开始或结束时间时为 null。 */
 @Composable
-private fun workTimeSpan(tools: List<ToolActivityMessageUi>, outcome: WorkOutcome?): WorkTimeSpan? {
-    val start = outcome?.startedAt ?: tools.mapNotNull { it.startedAtMillis }.minOrNull() ?: return null
-    val end = outcome?.finishedAt ?: tools.mapNotNull { it.finishedAtMillis }.maxOrNull() ?: return null
+private fun workTimeSpan(tools: List<ToolActivityMessageUi>, outcome: WorkOutcome?, turnSpan: WorkTurnSpan?): WorkTimeSpan? {
+    val start = turnSpan?.startedAt ?: outcome?.startedAt ?: tools.mapNotNull { it.startedAtMillis }.minOrNull() ?: return null
+    val end = turnSpan?.finishedAt ?: outcome?.finishedAt ?: tools.mapNotNull { it.finishedAtMillis }.maxOrNull() ?: return null
     val format = remember { java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()) }
     val from = format.format(java.util.Date(start))
     val to = format.format(java.util.Date(end))

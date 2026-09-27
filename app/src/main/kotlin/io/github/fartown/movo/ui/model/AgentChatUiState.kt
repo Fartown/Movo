@@ -44,6 +44,12 @@ data class UserMessageUi(
     val content: String,
     val images: List<String> = emptyList(),
     val isEdited: Boolean = false,
+    /**
+     * 这条消息发起的这一轮任务的开始 / 结束时刻（毫秒）：执行卡的计时、用时、起止时间按整轮算，与运行日志一致
+     * （2026-09-28 定）。旧数据、恢复的任务没有时为 null，执行卡退回按步骤时间算。
+     */
+    val runStartedAtMillis: Long? = null,
+    val runFinishedAtMillis: Long? = null,
 ) : AgentChatMessageUi
 
 @Immutable

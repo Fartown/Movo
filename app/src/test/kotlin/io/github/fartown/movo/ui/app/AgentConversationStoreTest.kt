@@ -244,6 +244,38 @@ class AgentConversationStoreTest {
     }
 
     @Test
+    fun saveAndLoadPreservesTurnStartAndFinishOnUserMessage() {
+        val messages = listOf(
+            UserMessageUi(
+                id = "user-run-2",
+                content = "打开设置看看电量",
+                runStartedAtMillis = 1_700_000_000_000L,
+                runFinishedAtMillis = 1_700_000_157_900L,
+            ),
+            AgentMessageUi(id = "assistant-run-2-1", content = "电量 82%", isStreaming = false),
+        )
+        runBlocking {
+            AgentConversationStore.save(
+                context = context,
+                selectedConversationId = "conv-turn-span",
+                conversationsById = mapOf(
+                    "conv-turn-span" to AgentChatHomeUiState(
+                        messages = messages,
+                        input = "",
+                        isStreaming = false,
+                        thinkingEnabled = false,
+                    ),
+                ),
+                titles = mapOf("conv-turn-span" to "电量"),
+                updatedAt = mapOf("conv-turn-span" to 1L),
+            )
+        }
+
+        val restored = AgentConversationStore.load(context).conversationsById.getValue("conv-turn-span").messages
+        assertEquals(messages.first(), restored.first())
+    }
+
+    @Test
     fun unknownStoredEffortFallsBackToDefault() {
         runBlocking {
             MovoDatabase.get(context).conversationDao().replaceAll(

@@ -547,6 +547,7 @@ internal fun AgentConversationMessages(
     val timelineEntries = remember(visibleMessages) { visibleMessages.toTimelineEntries() }
     val lastWorkKey = timelineEntries.lastOrNull { it is AgentTimelineEntry.WorkProcess }?.key
     val workOutcomes = remember(timelineEntries) { workOutcomes(timelineEntries) }
+    val workTurnSpans = remember(timelineEntries) { workTurnSpans(timelineEntries) }
     // 执行卡后面紧接着出现了有正文的回答：这张卡的步骤已经结束，收成摘要条（方案 B，只收一次）。
     val answeredWorkKeys = remember(timelineEntries) { answeredWorkKeys(timelineEntries) }
     val workStepOffsets = remember(timelineEntries) { workStepOffsets(timelineEntries) }
@@ -865,6 +866,7 @@ internal fun AgentConversationMessages(
                                 answerStarted = entry.key in answeredWorkKeys,
                                 stepOffset = workStepOffsets[entry.key] ?: 0,
                                 outcome = workOutcomes[entry.key],
+                                turnSpan = workTurnSpans[entry.key],
                                 onOpenBrowser = onOpenBrowser,
                                 currentBrowserMessageId = currentBrowserMessageId,
                                 retainedStreamingStates = streamingMarkdownStates,
@@ -1093,6 +1095,30 @@ internal fun workOutcomes(entries: List<AgentTimelineEntry>): Map<String, WorkOu
         }
     }
     return outcomes
+}
+
+/** 一轮任务的起止时刻（发起它的用户消息上记的；结束前 [finishedAt] 为 null）。 */
+internal data class WorkTurnSpan(val startedAt: Long, val finishedAt: Long?)
+
+/**
+ * 每张执行卡所在这一轮任务的起止时刻：执行卡的计时、用时、起止时间按整轮算，与运行日志一致（2026-09-28 定）。
+ * 一轮被回答分成几张卡时，每张都用整轮的时刻。旧数据没有记录时不在结果里，执行卡退回按步骤时间算。
+ */
+internal fun workTurnSpans(entries: List<AgentTimelineEntry>): Map<String, WorkTurnSpan> {
+    val spans = mutableMapOf<String, WorkTurnSpan>()
+    var span: WorkTurnSpan? = null
+    for (entry in entries) {
+        when (entry) {
+            is AgentTimelineEntry.WorkProcess -> span?.let { spans[entry.key] = it }
+            is AgentTimelineEntry.Message -> {
+                val message = entry.message
+                if (message is UserMessageUi && !message.isRunSupplement()) {
+                    span = message.runStartedAtMillis?.let { WorkTurnSpan(it, message.runFinishedAtMillis) }
+                }
+            }
+        }
+    }
+    return spans
 }
 
 /** 所在这一轮（两条用户消息之间）没有执行卡的「已停止」提示：摘要条上没有停止方块，提示自己带（5.7）。 */

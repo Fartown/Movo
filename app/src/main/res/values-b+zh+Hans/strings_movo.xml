@@ -167,6 +167,7 @@
   <string name="movo_expand">展开</string>
   <string name="movo_collapse">收起</string>
   <string name="movo_work_log">日志</string>
+  <string name="movo_work_log_missing">找不到这次任务的日志</string>
   <string name="movo_supplement_title">你的补充</string>
   <string name="movo_supplement_pending">下一步生效</string>
   <string name="movo_supplement_applied">已采纳</string>

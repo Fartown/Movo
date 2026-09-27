@@ -199,6 +199,9 @@ internal object AgentConversationStore {
                 content = content,
                 imagesJson = images.toJsonArrayString(),
                 isEdited = isEdited,
+                // 用户消息借用步骤时刻两列存这一轮的起止时刻（不改表结构）。
+                startedAt = runStartedAtMillis,
+                finishedAt = runFinishedAtMillis,
             )
 
             is AgentMessageUi -> {
@@ -285,6 +288,8 @@ internal object AgentConversationStore {
                 content = content,
                 images = imagesJson.toStringList(),
                 isEdited = isEdited,
+                runStartedAtMillis = startedAt,
+                runFinishedAtMillis = finishedAt,
             )
 
             TYPE_ASSISTANT -> AgentMessageUi(
