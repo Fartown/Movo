@@ -87,7 +87,15 @@ internal fun MovoPopover(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val visibleState = remember { MutableTransitionState(false) }
-    visibleState.targetState = show
+    // 菜单开着时再点它的按钮：这次点击先作为「点外面」关掉菜单，又落到按钮上把菜单重新打开（真机：关不掉、淡出又弹出）。
+    // 刚因点外面关掉的菜单，在 [REOPEN_GUARD_MS] 内又被要求打开时，当作点的就是按钮本身：保持关闭并复位调用方的开关。
+    val outsideDismissedAt = remember { longArrayOf(0L) }
+    val reopenedByAnchorTap = show && !visibleState.targetState &&
+        android.os.SystemClock.uptimeMillis() - outsideDismissedAt[0] < REOPEN_GUARD_MS
+    if (reopenedByAnchorTap) {
+        androidx.compose.runtime.SideEffect { onDismiss() }
+    }
+    visibleState.targetState = show && !reopenedByAnchorTap
     if (!visibleState.currentState && !visibleState.targetState) return
     val density = LocalDensity.current
     val gapPx = with(density) { ChatPopoverGap.roundToPx() }
@@ -104,7 +112,10 @@ internal fun MovoPopover(
     val regionHeight = if (aboveYPx > 0) with(density) { (aboveYPx - gapPx + shadowPadPx).coerceAtLeast(0).toDp() } else Dp.Unspecified
     Popup(
         popupPositionProvider = positionProvider,
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            outsideDismissedAt[0] = android.os.SystemClock.uptimeMillis()
+            onDismiss()
+        },
         properties = PopupProperties(focusable = false, dismissOnClickOutside = true),
     ) {
         Box(
@@ -287,6 +298,9 @@ private fun PopoverCheck(visible: Boolean) {
 }
 
 /** 菜单与输入框之间的间距（与 `Composer/Notice`「输入框上方 8」一致）。 */
+/** 点外面关掉菜单后，这段时间内同一菜单再被打开视为点了它的按钮（同一次点击），不重开。 */
+private const val REOPEN_GUARD_MS = 400L
+
 internal val ChatPopoverGap = MovoSpacing.sm
 
 private val PopoverMinWidth = 200.dp
