@@ -20,6 +20,7 @@ import android.view.KeyEvent
 import io.github.fartown.movo.agent.device.BoundedRootCommandExecutor
 import io.github.fartown.movo.agent.device.RootAccess
 import io.github.fartown.movo.agent.model.AgentModelClient
+import io.github.fartown.movo.agent.overlay.BackgroundStartAnchor
 import io.github.fartown.movo.core.AgentLogger
 import io.github.fartown.movo.agent.device.AgentNotificationHistoryService
 import io.github.fartown.movo.data.repository.NotificationHistoryRepository
@@ -143,19 +144,26 @@ internal class AgentStructuredDeviceTools(
             intent.putExtra(AlarmClock.EXTRA_MESSAGE, it)
         }
         val repeatDays = args.optJSONArray("repeat_days")
-        if (repeatDays != null && repeatDays.length() > 0) {
-            intent.putIntegerArrayListExtra(
-                AlarmClock.EXTRA_DAYS,
-                ArrayList((0 until repeatDays.length()).map { index ->
-                    repeatDays.getString(index).toCalendarDay()
-                }),
-            )
+            ?.let { days -> (0 until days.length()).map { index -> days.getString(index).toCalendarDay() } }
+            .orEmpty()
+        if (repeatDays.isNotEmpty()) {
+            intent.putIntegerArrayListExtra(AlarmClock.EXTRA_DAYS, ArrayList(repeatDays))
         }
         return startClockIntent(
             directIntent = intent,
             fallbackAction = AlarmClock.ACTION_SHOW_ALARMS,
             tool = "set_alarm",
-        ).put("hour", hour).put("minute", minute).toString()
+        ) { _, after, dispatchedAtMs ->
+            ClockActionVerification.judgeAlarm(
+                afterTriggerMs = after,
+                expectedTriggerMs = ClockActionVerification.nextAlarmTrigger(
+                    nowMs = dispatchedAtMs,
+                    hour = hour,
+                    minute = minute,
+                    repeatDays = repeatDays,
+                ),
+            )
+        }.put("hour", hour).put("minute", minute).toString()
     }
 
     private fun setTimer(args: JSONObject): String {
@@ -171,13 +179,26 @@ internal class AgentStructuredDeviceTools(
             directIntent = intent,
             fallbackAction = AlarmClock.ACTION_SHOW_TIMERS,
             tool = "set_timer",
-        ).put("duration_seconds", seconds).toString()
+        ) { before, after, dispatchedAtMs ->
+            ClockActionVerification.judgeTimer(
+                beforeTriggerMs = before,
+                afterTriggerMs = after,
+                dispatchedAtMs = dispatchedAtMs,
+                durationSeconds = seconds,
+                pollTimeoutMs = CLOCK_VERIFY_TIMEOUT_MS,
+            )
+        }.put("duration_seconds", seconds).toString()
     }
 
+    /**
+     * 发起时钟直达动作并用系统「下一次闹钟」确认结果。startActivity 不抛异常不代表生效
+     * （小米「后台弹出界面」未授权时会被静默丢弃），只有 [judge] 判定 VERIFIED 才返回 ok=true。
+     */
     private fun startClockIntent(
         directIntent: Intent,
         fallbackAction: String,
         tool: String,
+        judge: (beforeMs: Long?, afterMs: Long?, dispatchedAtMs: Long) -> ClockActionVerification.Status,
     ): JSONObject {
         val packageManager = context.packageManager
         val preferred = Intent(directIntent).setPackage(COLOROS_CLOCK_PACKAGE)
@@ -186,27 +207,54 @@ internal class AgentStructuredDeviceTools(
             directIntent.resolveActivity(packageManager) != null -> directIntent
             else -> null
         }
-        if (direct != null && runCatching { context.startActivity(direct) }.isSuccess) {
-            logger.info("Agent direct tool action=$tool outcome=dispatched")
-            return JSONObject().put("ok", true).put("tool", tool).put("mode", "direct")
+        val clockPackage = direct?.let { it.`package` ?: it.resolveActivity(packageManager)?.packageName }
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val nextAlarmMs = { runCatching { alarmManager.nextAlarmClock?.triggerTime }.getOrNull() }
+        val before = nextAlarmMs()
+        val dispatchedAtMs = System.currentTimeMillis()
+        val dispatched = direct != null && runCatching {
+            BackgroundStartAnchor.withVisibleWindow(context) { context.startActivity(direct) }
+        }.isSuccess
+        if (dispatched) {
+            var after = nextAlarmMs()
+            var status = judge(before, after, dispatchedAtMs)
+            val deadline = SystemClock.uptimeMillis() + CLOCK_VERIFY_TIMEOUT_MS
+            while (status != ClockActionVerification.Status.VERIFIED && SystemClock.uptimeMillis() < deadline) {
+                Thread.sleep(CLOCK_VERIFY_POLL_MS)
+                after = nextAlarmMs()
+                status = judge(before, after, dispatchedAtMs)
+            }
+            logger.info("Agent direct tool action=$tool outcome=dispatched verification=${status.name.lowercase(Locale.ROOT)}")
+            return ClockActionVerification.result(
+                tool = tool,
+                status = status,
+                observedTriggerMs = after,
+                xiaomiFamily = isXiaomiFamily(),
+            )
         }
 
+        val fallbackPackage = clockPackage ?: COLOROS_CLOCK_PACKAGE
         val fallback = Intent(fallbackAction)
-            .setPackage(COLOROS_CLOCK_PACKAGE)
+            .setPackage(fallbackPackage)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             .takeIf { it.resolveActivity(packageManager) != null }
-            ?: packageManager.getLaunchIntentForPackage(COLOROS_CLOCK_PACKAGE)
+            ?: packageManager.getLaunchIntentForPackage(fallbackPackage)
                 ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         if (fallback != null && runCatching { context.startActivity(fallback) }.isSuccess) {
             return JSONObject()
                 .put("ok", false)
                 .put("code", "DIRECT_CLOCK_ACTION_FAILED")
-                .put("message", "系统未确认直接创建，已打开时钟页面，请让用户完成确认")
+                .put("message", "系统未确认直接创建，已尝试打开时钟页面；不要告诉用户已设置成功，请 observe_screen 核实并在界面上完成")
                 .put("tool", tool)
                 .put("mode", "ui_fallback")
+                .put("verified", false)
         }
         return JSONObject(error("CLOCK_UNAVAILABLE", "没有可处理该请求的时钟应用"))
     }
+
+    private fun isXiaomiFamily(): Boolean =
+        Build.MANUFACTURER.lowercase(Locale.ROOT) in XIAOMI_MANUFACTURERS ||
+            Build.BRAND.lowercase(Locale.ROOT) in XIAOMI_MANUFACTURERS
 
     private fun deviceStatus(): String {
         val battery = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
@@ -678,6 +726,9 @@ internal class AgentStructuredDeviceTools(
             "酒店", "电影票",
         )
         const val COLOROS_CLOCK_PACKAGE = "com.coloros.alarmclock"
+        const val CLOCK_VERIFY_TIMEOUT_MS = 4_000L
+        const val CLOCK_VERIFY_POLL_MS = 200L
+        val XIAOMI_MANUFACTURERS = setOf("xiaomi", "redmi", "poco")
         val PACKAGE_NAME = Regex("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+")
         val NETWORK_BLOCK = Regex("<Network>.*?</Network>", setOf(RegexOption.DOT_MATCHES_ALL))
         val XML_SSID = Regex("""<string name="SSID">(.*?)</string>""")
