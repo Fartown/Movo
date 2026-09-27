@@ -228,8 +228,7 @@ internal object ChatGptOAuth {
                     }.getOrNull().orEmpty()
                     val target = requestLine.split(' ').getOrNull(1).orEmpty()
                     val (status, message) = handleCallback(target)
-                    val body = "<!doctype html><meta charset=utf-8><title>Movo</title>" +
-                        "<body style=\"font-family:sans-serif;padding:32px\"><p>$message</p></body>"
+                    val body = if (status == "200 OK") returnToMovoPage(message) else messagePage(message)
                     val bytes = body.toByteArray(Charsets.UTF_8)
                     runCatching {
                         connection.getOutputStream().apply {
@@ -255,11 +254,33 @@ internal object ChatGptOAuth {
             if (params["state"] != authorization.state) return "400 Bad Request" to "授权状态不匹配。"
             val code = params["code"]?.takeIf { it.isNotBlank() } ?: return "400 Bad Request" to "缺少授权码。"
             finish(Result.success(code))
-            return "200 OK" to "已收到 ChatGPT 授权，可以关闭此页面返回 Movo。"
+            return "200 OK" to "已收到 ChatGPT 授权，正在返回 Movo。"
         }
     }
 
     fun startLogin(): LoginSession = LoginSession(createAuthorizationRequest())
+
+    /** 浏览器回到 Movo 的入口（MainActivity 的 intent-filter）；只是把 Movo 拉回前台，登录结果由回环服务收下。 */
+    const val RETURN_URI = "movo://chatgpt-login"
+    private const val RETURN_INTENT =
+        "intent://chatgpt-login#Intent;scheme=movo;package=io.github.fartown.movo;end"
+
+    private fun messagePage(message: String): String =
+        "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">" +
+            "<title>Movo</title><body style=\"font-family:sans-serif;padding:32px;font-size:17px\"><p>$message</p></body>"
+
+    /**
+     * 授权成功页：加载后立即跳回 Movo（由浏览器在前台打开 Movo，不受后台启动界面限制）；
+     * 浏览器拦下自动跳转时，页面上的「返回 Movo」按钮是一次真实点击，一定能跳。
+     */
+    private fun returnToMovoPage(message: String): String =
+        "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">" +
+            "<title>Movo</title>" +
+            "<body style=\"font-family:sans-serif;padding:32px;font-size:17px;line-height:1.5\">" +
+            "<p>$message</p>" +
+            "<p><a href=\"$RETURN_INTENT\" style=\"display:inline-block;margin-top:8px;padding:12px 24px;" +
+            "border-radius:24px;background:#4F46E5;color:#fff;text-decoration:none\">返回 Movo</a></p>" +
+            "<script>location.replace(\"$RETURN_INTENT\")</script></body>"
 
     private fun parseQuery(query: String): Map<String, String> =
         query.split('&').mapNotNull { pair ->

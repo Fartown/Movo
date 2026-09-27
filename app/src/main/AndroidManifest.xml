@@ -73,6 +73,13 @@
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
             </intent-filter>
+            <!-- ChatGPT 登录完成页跳回 Movo（ChatGptOAuth.RETURN_URI）：只把 Movo 拉回前台，singleTask 顺带收掉浏览器授权页。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="movo" android:host="chatgpt-login" />
+            </intent-filter>
         </activity>
 
         <activity
