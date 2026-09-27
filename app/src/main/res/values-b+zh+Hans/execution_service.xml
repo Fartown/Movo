@@ -4,4 +4,7 @@
     <string name="execution_title">Movo 正在运行</string>
     <string name="execution_summary">%1$d 项任务正在运行，可返回 Movo 查看进度</string>
     <string name="execution_stop">停止运行任务</string>
+    <string name="execution_label_chatgpt_login">正在等待 ChatGPT 登录完成</string>
+    <string name="execution_label_background_command">后台命令正在运行</string>
+    <string name="execution_label_terminal">终端会话正在运行</string>
 </resources>

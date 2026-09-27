@@ -1675,7 +1675,7 @@ internal class AgentAppState(
         currentRunJob = preparationJob
         if (!RootAccess.isGranted) {
             val leaseId = "prepare:$runId"
-            val acquired = AgentExecutionService.acquire(appContext, leaseId) {
+            val acquired = AgentExecutionService.acquire(appContext, leaseId, task = runId) {
                 scope.launch(Dispatchers.Main.immediate) {
                     if (currentRunId == runId) stopCurrentRun()
                 }

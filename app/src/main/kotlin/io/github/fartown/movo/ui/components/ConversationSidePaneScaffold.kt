@@ -306,7 +306,16 @@ fun ConversationSidePaneScaffold(
             onOpenSettings = onOpenSettings,
             modifier = Modifier
                 .zIndex(0f)
-                .graphicsLayer { alpha = if (paneShowing || warmingUp) 1f else 0f },
+                .graphicsLayer { alpha = if (paneShowing || warmingUp) 1f else 0f }
+                // 打开后在面板上横滑同样收起：与主页面共用同一个拖动状态，左滑时主页面跟手盖回来。
+                // 列表是竖向滚动，横向拖动过了触摸阈值才归这里，不影响上下滚动与点按。
+                .anchoredDraggable(
+                    state = paneDragState,
+                    reverseDirection = false,
+                    orientation = Orientation.Horizontal,
+                    enabled = backHandlerEnabled && visible,
+                    flingBehavior = flingBehavior,
+                ),
         )
 
         val foregroundShape = AbsoluteRoundedCornerShape(

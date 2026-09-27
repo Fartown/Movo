@@ -531,7 +531,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         // Root 入口保留原有绑定服务生命周期；新增 FGS 不能成为厂商后台入口的新前置权限。
         val allowBoundFallback = RootAccess.isGranted
         val executionHeld = AgentExecutionService.acquire(
-            this, "run:${request.runId}", allowBoundFallback = allowBoundFallback,
+            this, "run:${request.runId}", allowBoundFallback = allowBoundFallback, task = request.runId,
         ) { session.controller.cancel() }
         if (!executionHeld && !allowBoundFallback) {
             session.complete(AgentRuntimeWire.RunResult(
@@ -1610,14 +1610,15 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
-            // 出现在球朝屏幕中心的一侧、距球 8，底边与球对齐（卡片四周留 12 的阴影余量）。
+            // 卡片在球朝屏幕中心的一侧、距球 8，底边与球对齐（卡片四周留 12 的阴影余量）。
+            // 窗口在球那一侧一直延伸到球窗口的外边缘（卡片内容里留出 PANEL_ORB_LANE 通道）：
+            // 展开卡从球心长出来，起点要在本窗口内才画得出来（规范 9.5「悬浮球 → 展开卡」）。
             val orb = orbParams
             val orbX = orb?.x ?: dpToPx(ORB_EDGE_DP)
             val orbBottom = (orb?.y ?: 0) + dpToPx(ORB_WINDOW_DP)
             gravity = (if (orbOnEnd.value) Gravity.END else Gravity.START) or Gravity.BOTTOM
             val width = resources.displayMetrics.widthPixels
-            val besideOrb = orbX + dpToPx(ORB_WINDOW_DP) + dpToPx(8) - dpToPx(PANEL_SHADOW_DP)
-            x = if (orbOnEnd.value) besideOrb else (width - orbX - dpToPx(ORB_WINDOW_DP)) + dpToPx(ORB_WINDOW_DP) + dpToPx(8) - dpToPx(PANEL_SHADOW_DP)
+            x = if (orbOnEnd.value) orbX else width - orbX - dpToPx(ORB_WINDOW_DP)
             y = (resources.displayMetrics.heightPixels - orbBottom - dpToPx(PANEL_SHADOW_DP) + dpToPx(6)).coerceAtLeast(0)
             windowAnimations = 0
         }

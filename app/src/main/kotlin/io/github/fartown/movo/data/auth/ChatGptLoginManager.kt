@@ -81,7 +81,9 @@ internal object ChatGptLoginManager {
             pending = null
             ChatGptOAuth.startLogin().also { session = it }
         }
-        val keptAlive = context != null && AgentExecutionService.acquire(context, KEEP_ALIVE_LEASE) { cancel() }
+        val keptAlive = context != null && AgentExecutionService.acquire(
+            context, KEEP_ALIVE_LEASE, label = io.github.fartown.movo.R.string.execution_label_chatgpt_login,
+        ) { cancel() }
         synchronized(lock) { keepAliveActive = keptAlive }
         val waiting = State.WaitingForBrowser(started.authorization.url, started.callbackListening)
         mutableState.value = waiting
@@ -143,14 +145,16 @@ internal object ChatGptLoginManager {
         val result = runCatching { target.session.exchange(target.code).also(ChatGptAuth::save) }
         val retryLater = synchronized(lock) {
             exchanging = false
-            if (pending !== target) return
+            // 换取期间被取消（pending 已清空）仍要走完 finish：凭证已保存，前台服务租约也必须在这里释放，
+            // 否则通知栏会一直显示「正在运行」。只有被新一次登录取代（session 已换）时才交给新会话收尾。
+            if (pending !== target && session !== target.session) return
             val failure = result.exceptionOrNull()
             // 网络请求刚发出时应用又退到后台，同样会被系统断网；授权码仍有效，回到前台后重试。
             if (failure is IOException && !isForegroundLocked()) {
                 Log.i(TAG, "token exchange interrupted in background; retrying on foreground")
                 true
             } else {
-                pending = null
+                if (pending === target) pending = null
                 false
             }
         }

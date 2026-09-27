@@ -14,7 +14,11 @@ internal enum class LinuxExecutionBackend(val wireName: String) {
 internal object TerminalRuntime {
     @Volatile private var appContext: Context? = null
     fun acquireUserTask(id: String, onStop: () -> Unit): Boolean =
-        appContext?.let { AgentExecutionService.acquire(it, id, onStop = onStop) } ?: true
+        appContext?.let {
+            AgentExecutionService.acquire(
+                it, id, label = io.github.fartown.movo.R.string.execution_label_background_command, onStop = onStop,
+            )
+        } ?: true
 
     fun releaseUserTask(id: String) {
         if (appContext != null) AgentExecutionService.release(id)

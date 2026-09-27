@@ -2,19 +2,38 @@ package io.github.fartown.movo.agent.runtime
 
 /** 用户任务的运行引用；通知停止只消费这里登记的任务，不接管 Root daemon。 */
 internal class ExecutionLeaseRegistry {
-    private data class Lease(val owner: Long?, val allowBoundFallback: Boolean, val onStop: () -> Unit)
+    private data class Lease(
+        val owner: Long?,
+        val allowBoundFallback: Boolean,
+        val label: Int?,
+        val task: String,
+        val onStop: () -> Unit,
+    )
     private val leases = linkedMapOf<String, Lease>()
     private var activeOwner: Long? = null
 
-    @Synchronized fun acquire(id: String, allowBoundFallback: Boolean = false, onStop: () -> Unit): Boolean {
+    @Synchronized fun acquire(
+        id: String,
+        allowBoundFallback: Boolean = false,
+        label: Int? = null,
+        /** 同一个用户任务的多段引用（App 里的准备阶段、运行时服务里的执行阶段）用同一个键，通知里只算一项。 */
+        task: String = id,
+        onStop: () -> Unit,
+    ): Boolean {
         require(id.isNotBlank())
         if (id in leases) return false
-        leases[id] = Lease(activeOwner, allowBoundFallback, onStop)
+        leases[id] = Lease(activeOwner, allowBoundFallback, label, task, onStop)
         return true
     }
 
     @Synchronized fun release(id: String) { leases.remove(id) }
     @Synchronized fun count(): Int = leases.size
+
+    /** 通知里显示的任务数：同一任务的多段引用只算一项。 */
+    @Synchronized fun taskCount(): Int = leases.values.distinctBy { it.task }.size
+
+    /** 所有引用都是同一种非任务用途（登录、后台命令、终端）时返回它的说明文案，否则按任务计数显示。 */
+    @Synchronized fun sharedLabel(): Int? = leases.values.map { it.label }.distinct().singleOrNull()
 
     @Synchronized fun attachOwner(owner: Long) {
         activeOwner = owner

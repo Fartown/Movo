@@ -56,4 +56,18 @@ class ExecutionLeaseRegistryTest {
         registry.release("user:daemon")
         assertEquals(1, registry.count())
     }
+
+    @Test
+    fun preparationAndExecutionOfOneRunCountAsOneTask() {
+        val registry = ExecutionLeaseRegistry()
+        registry.acquire("prepare:r1", task = "r1") {}
+        registry.acquire("run:r1", task = "r1") {}
+        assertEquals(1, registry.taskCount())
+        registry.acquire("daemon:d1", label = 42) {}
+        assertEquals(2, registry.taskCount())
+        assertEquals(null, registry.sharedLabel())
+        registry.release("prepare:r1")
+        registry.release("run:r1")
+        assertEquals(42, registry.sharedLabel())
+    }
 }

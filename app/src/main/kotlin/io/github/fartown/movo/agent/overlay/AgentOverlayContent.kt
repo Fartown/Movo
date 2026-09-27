@@ -37,6 +37,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -663,83 +665,100 @@ internal fun AgentOverlayBubble(
             label = "panelMorph",
         ) { if (it == androidx.compose.animation.EnterExitState.Visible || reduced) 1f else 0f }
         val shape = RoundedCornerShape(16.dp)
-        Column(
-            modifier = Modifier
-                .padding(12.dp)
-                .width(224.dp)
-                .orbMorph(progress = { morph }, anchorEnd = anchorEnd)
-                // 卡片高度随内容动画变化：用硬件阴影（RenderNode 按轮廓实时算），不再每帧重画 32 模糊的位图阴影（审查 A10）。
-                // 色调取规范第 7 章暖灰阴影色；系统会再乘主题的 ambient / spot 透明度，spot 取一半使主阴影接近 `0 12 32 −8 / 10%`。
-                .shadow(
-                    elevation = 12.dp,
-                    shape = shape,
-                    clip = false,
-                    ambientColor = MovoColors.shadow,
-                    spotColor = MovoColors.shadow.copy(alpha = 0.5f),
-                )
-                .clip(shape)
-                .background(GlassSurface)
-                .border(0.5.dp, MovoColors.borderHairline, shape)
-                .padding(4.dp)
-                // 内容在形变 30%–100% 淡入：前段只有玻璃底色从球里长出来。
-                .graphicsLayer { alpha = ((morph - 0.45f) / 0.55f).coerceIn(0f, 1f) },
-        ) {
-            val voiceMode = voice.active && !supplementMode
-            Crossfade(
-                targetState = voiceMode,
-                animationSpec = MovoMotion.standard(),
-                modifier = Modifier.animateContentSize(MovoMotion.standard()),
-                label = "panelVoiceMode",
-            ) { inVoice ->
-                if (inVoice) PanelVoiceBody(state, voice) else PanelHeader(state)
-            }
-            PanelNotice(notice)
-            AnimatedVisibility(
-                visible = supplementMode,
-                enter = fadeIn(MovoMotion.fast()) + expandVertically(MovoMotion.standard()),
-                exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
+        // 展开卡窗口在球那一侧多留一条与球重叠的通道（PANEL_ORB_LANE，AgentRuntimeService.bubbleLayoutParams）：
+        // 形变从球心开始，起点必须落在本窗口里，否则前几帧被窗口边缘裁掉，看起来是从边缘冒出来。
+        // 通道盖住了悬浮球，点它等同点球（收起）。
+        Box {
+            Column(
+                modifier = Modifier
+                    .padding(
+                        start = if (anchorEnd) 12.dp else PANEL_ORB_LANE,
+                        end = if (anchorEnd) PANEL_ORB_LANE else 12.dp,
+                        top = 12.dp,
+                        bottom = 12.dp,
+                    )
+                    .width(224.dp)
+                    .orbMorph(progress = { morph }, anchorEnd = anchorEnd)
+                    // 卡片高度随内容动画变化：用硬件阴影（RenderNode 按轮廓实时算），不再每帧重画 32 模糊的位图阴影（审查 A10）。
+                    // 色调取规范第 7 章暖灰阴影色；系统会再乘主题的 ambient / spot 透明度，spot 取一半使主阴影接近 `0 12 32 −8 / 10%`。
+                    .shadow(
+                        elevation = 12.dp,
+                        shape = shape,
+                        clip = false,
+                        ambientColor = MovoColors.shadow,
+                        spotColor = MovoColors.shadow.copy(alpha = 0.5f),
+                    )
+                    .clip(shape)
+                    .background(GlassSurface)
+                    .border(0.5.dp, MovoColors.borderHairline, shape)
+                    .padding(4.dp)
+                    // 内容在形变 30%–100% 淡入：前段只有玻璃底色从球里长出来。
+                    .graphicsLayer { alpha = ((morph - 0.45f) / 0.55f).coerceIn(0f, 1f) },
             ) {
-                SupplementInput(
-                    value = supplementText,
-                    onValueChange = { supplementText = it; onInteraction() },
-                    onCancel = ::closeSupplementMode,
-                    onSend = ::submitSupplement,
-                    onTap = onSupplementKeyboardRequested,
-                )
-            }
-            AnimatedVisibility(
-                visible = !supplementMode,
-                enter = fadeIn(MovoMotion.fast()) + expandVertically(MovoMotion.standard()),
-                exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
-            ) {
-                Column {
-                    AnimatedVisibility(
-                        visible = !voiceMode,
-                        enter = fadeIn(MovoMotion.standard()) + expandVertically(MovoMotion.standard()),
-                        exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
-                    ) {
-                        // 失败与最近步骤之间交叉淡化，高度同步 `standard`（审查 B6）。
-                        Crossfade(
-                            targetState = state.phase == AgentOverlayPhase.FAILED,
-                            animationSpec = MovoMotion.fast(),
-                            modifier = Modifier.animateContentSize(MovoMotion.standard()),
-                            label = "panelFailure",
-                        ) { failed ->
-                            if (failed) PanelFailure(state, onOpenResult) else RecentSteps(state)
-                        }
-                    }
-                    PanelActions(
-                        phase = state.phase,
-                        voiceMode = voiceMode,
-                        onType = ::enterSupplementMode,
-                        onStartVoice = { onInteraction(); onStartVoice() },
-                        onEndVoice = { onInteraction(); onEndVoice() },
-                        onPause = { onInteraction(); onPause() },
-                        onResume = { onInteraction(); onResume() },
-                        onStop = { onInteraction(); onStop() },
+                val voiceMode = voice.active && !supplementMode
+                Crossfade(
+                    targetState = voiceMode,
+                    animationSpec = MovoMotion.standard(),
+                    modifier = Modifier.animateContentSize(MovoMotion.standard()),
+                    label = "panelVoiceMode",
+                ) { inVoice ->
+                    if (inVoice) PanelVoiceBody(state, voice) else PanelHeader(state)
+                }
+                PanelNotice(notice)
+                AnimatedVisibility(
+                    visible = supplementMode,
+                    enter = fadeIn(MovoMotion.fast()) + expandVertically(MovoMotion.standard()),
+                    exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
+                ) {
+                    SupplementInput(
+                        value = supplementText,
+                        onValueChange = { supplementText = it; onInteraction() },
+                        onCancel = ::closeSupplementMode,
+                        onSend = ::submitSupplement,
+                        onTap = onSupplementKeyboardRequested,
                     )
                 }
+                AnimatedVisibility(
+                    visible = !supplementMode,
+                    enter = fadeIn(MovoMotion.fast()) + expandVertically(MovoMotion.standard()),
+                    exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
+                ) {
+                    Column {
+                        AnimatedVisibility(
+                            visible = !voiceMode,
+                            enter = fadeIn(MovoMotion.standard()) + expandVertically(MovoMotion.standard()),
+                            exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
+                        ) {
+                            // 失败与最近步骤之间交叉淡化，高度同步 `standard`（审查 B6）。
+                            Crossfade(
+                                targetState = state.phase == AgentOverlayPhase.FAILED,
+                                animationSpec = MovoMotion.fast(),
+                                modifier = Modifier.animateContentSize(MovoMotion.standard()),
+                                label = "panelFailure",
+                            ) { failed ->
+                                if (failed) PanelFailure(state, onOpenResult) else RecentSteps(state)
+                            }
+                        }
+                        PanelActions(
+                            phase = state.phase,
+                            voiceMode = voiceMode,
+                            onType = ::enterSupplementMode,
+                            onStartVoice = { onInteraction(); onStartVoice() },
+                            onEndVoice = { onInteraction(); onEndVoice() },
+                            onPause = { onInteraction(); onPause() },
+                            onResume = { onInteraction(); onResume() },
+                            onStop = { onInteraction(); onStop() },
+                        )
+                    }
+                }
             }
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .wrapContentWidth(if (anchorEnd) Alignment.End else Alignment.Start)
+                    .width(PANEL_ORB_LANE)
+                    .pointerInput(onCollapse) { detectTapGestures { onCollapse() } },
+            )
         }
     }
 }
@@ -1191,6 +1210,9 @@ private fun SupplementInput(
 /** 展开卡从悬浮球长出 / 缩回的时长（规范 9.5「悬浮球 → 展开卡」）。收起须短于窗口移除的延迟（BUBBLE_EXIT_MS 150）。 */
 private const val PANEL_MORPH_IN_MS = MovoMotion.SLOW
 private const val PANEL_MORPH_OUT_MS = 140
+
+/** 卡片与窗口球侧边缘之间的通道：球窗口 44 + 卡片与球间距 8，正好盖住悬浮球（这一侧的阴影余量落在通道里）。 */
+internal val PANEL_ORB_LANE = 52.dp
 
 /**
  * 以悬浮球球心为锚点，把卡片从与球重合的 32 圆放大到自身大小。卡片与球的相对位置由窗口摆放决定

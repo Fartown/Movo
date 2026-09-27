@@ -42,7 +42,7 @@ internal class TerminalSessionLease private constructor(
         fun acquire(context: Context, onStop: (String) -> Unit): TerminalSessionLease? {
             val lease = TerminalSessionLease("terminal-ui:${UUID.randomUUID()}", onStop)
             return lease.takeIf {
-                AgentExecutionService.acquire(context, lease.id) {
+                AgentExecutionService.acquire(context, lease.id, label = io.github.fartown.movo.R.string.execution_label_terminal) {
                     lease.stopped.set(true)
                     lease.session.get()?.let(lease.onStop)
                 }

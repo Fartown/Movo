@@ -108,7 +108,7 @@ internal class AgentExecutionService : Service() {
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(getString(R.string.execution_title))
-            .setContentText(getString(R.string.execution_summary, leases.count()))
+            .setContentText(leases.sharedLabel()?.let(::getString) ?: getString(R.string.execution_summary, leases.taskCount()))
             .setContentIntent(open)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -130,10 +130,14 @@ internal class AgentExecutionService : Service() {
             context: Context,
             id: String,
             allowBoundFallback: Boolean = false,
+            /** 不是用户任务时（登录、后台命令、终端）通知里显示的说明，见 [ExecutionLeaseRegistry.sharedLabel]。 */
+            @androidx.annotation.StringRes label: Int? = null,
+            /** 用户任务的运行 id：准备与执行两段引用共用，通知只算一项。 */
+            task: String = id,
             onStop: () -> Unit,
         ): Boolean {
             if (instance?.startRejected == true) return false
-            if (!leases.acquire(id, allowBoundFallback, onStop)) return true
+            if (!leases.acquire(id, allowBoundFallback, label, task, onStop)) return true
             return try {
                 context.applicationContext.startForegroundService(Intent(context, AgentExecutionService::class.java))
                 true
