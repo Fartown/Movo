@@ -26,6 +26,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
+import kotlin.math.roundToInt
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import io.github.fartown.movo.ui.theme.LocalReducedMotion
 import io.github.fartown.movo.ui.theme.MovoColors
 import io.github.fartown.movo.ui.theme.MovoIcon
@@ -151,10 +154,10 @@ internal class MovoListResize {
     private var holders by androidx.compose.runtime.mutableIntStateOf(0)
     val active: Boolean get() = holders > 0
 
-    suspend fun hold() {
+    suspend fun hold(durationMillis: Long = MovoMotion.STANDARD.toLong()) {
         holders++
         try {
-            kotlinx.coroutines.delay(MovoMotion.STANDARD.toLong() + LIST_RESIZE_SLACK_MS)
+            kotlinx.coroutines.delay(durationMillis + LIST_RESIZE_SLACK_MS)
         } finally {
             holders--
         }
@@ -172,9 +175,9 @@ internal fun ProvideMovoListResize(content: @Composable () -> Unit) {
     androidx.compose.runtime.CompositionLocalProvider(LocalMovoListResize provides resize, content = content)
 }
 
-/** 展开状态 [key] 变化（不含首次出现）时，在高度过渡期间通知所在列表与所在卡片。 */
+/** 展开状态 [key] 变化（不含首次出现）时，在高度过渡（[durationMillis]）期间通知所在列表与所在卡片。 */
 @Composable
-internal fun ReportMovoListResize(key: Any?) {
+internal fun ReportMovoListResize(key: Any?, durationMillis: Long = MovoMotion.STANDARD.toLong()) {
     val resize = LocalMovoListResize.current
     val card = LocalMovoCardResize.current
     if (resize == null && card == null) return
@@ -185,11 +188,171 @@ internal fun ReportMovoListResize(key: Any?) {
     if (!changed[0]) return
     LaunchedEffect(key) {
         coroutineScope {
-            if (card != null) launch { card.hold() }
-            if (resize != null) launch { resize.hold() }
+            if (card != null) launch { card.hold(durationMillis) }
+            if (resize != null) launch { resize.hold(durationMillis) }
         }
     }
 }
 
 /** 过渡结束后再多等一两帧才恢复移位动画。 */
 private const val LIST_RESIZE_SLACK_MS = 32L
+
+/**
+ * 卡片里逐行排出（非 Lazy）的行的增删（规范 9.3「列表增删」）：新增行从顶部展开 `standard`、内容同时淡入 `fast`；
+ * 删除行内容先淡出 120ms，随后高度收起 `standard`，播完才真正移除。首次出现的行不播放。
+ * 变化期间通知所在卡片与列表（[ReportMovoListResize]），卡片高度直接跟随行的每一帧、下方各项跟着实际位置走，
+ * 不会出现「行已消失、卡片还没缩，下半截一块空白」或「新行一帧出现、下面的内容先被裁掉」。
+ */
+@Composable
+internal fun <T> MovoAnimatedRows(
+    items: List<T>,
+    key: (T) -> Any,
+    content: @Composable (T) -> Unit,
+) {
+    val reduced = LocalReducedMotion.current
+    val rows = remember { androidx.compose.runtime.mutableStateListOf<AnimatedRow<T>>() }
+    val firstComposition = remember { booleanArrayOf(true) }
+    // 按新列表的顺序排，离场中的行留在它原来的位置之后，直到退场播完。
+    val byKey = rows.associateBy { it.key }
+    val newKeys = items.mapTo(HashSet(), key)
+    val merged = ArrayList<AnimatedRow<T>>(items.size + rows.size)
+    var next = 0
+    fun take(item: T): AnimatedRow<T> {
+        val k = key(item)
+        val existing = byKey[k]
+        return if (existing != null) {
+            existing.item = item
+            existing.state.targetState = true
+            existing
+        } else {
+            AnimatedRow(k, item, androidx.compose.animation.core.MutableTransitionState(firstComposition[0] || reduced).apply { targetState = true })
+        }
+    }
+    for (row in rows) {
+        if (row.key in newKeys) {
+            while (next < items.size) {
+                val item = items[next++]
+                merged += take(item)
+                if (key(item) == row.key) break
+            }
+        } else {
+            row.state.targetState = false
+            merged += row
+        }
+    }
+    while (next < items.size) merged += take(items[next++])
+    // 退场播完的行真正移除。
+    merged.removeAll { !it.state.targetState && !it.state.currentState && it.state.isIdle }
+    if (merged.map { it.key } != rows.map { it.key }) {
+        rows.clear()
+        rows.addAll(merged)
+    }
+    firstComposition[0] = false
+    ReportMovoListResize(items.map(key), durationMillis = (MovoMotion.FAST_EXIT + MovoMotion.STANDARD).toLong())
+    for (row in merged) {
+        androidx.compose.runtime.key(row.key) {
+            AnimatedVisibility(
+                visibleState = row.state,
+                enter = if (reduced) fadeIn(MovoMotion.fast()) else fadeIn(MovoMotion.fast()) +
+                    expandVertically(MovoMotion.standard(), expandFrom = Alignment.Top),
+                exit = if (reduced) fadeOut(MovoMotion.fastExit()) else fadeOut(MovoMotion.fastExit()) +
+                    shrinkVertically(
+                        tween(MovoMotion.STANDARD, delayMillis = MovoMotion.FAST_EXIT, easing = MovoMotion.EasingStandard),
+                        shrinkTowards = Alignment.Top,
+                    ),
+            ) {
+                content(row.item)
+            }
+        }
+    }
+}
+
+@androidx.compose.runtime.Stable
+private class AnimatedRow<T>(
+    val key: Any,
+    item: T,
+    val state: androidx.compose.animation.core.MutableTransitionState<Boolean>,
+) {
+    var item by androidx.compose.runtime.mutableStateOf(item)
+}
+
+/**
+ * 可能超过可见区的内容（执行卡全部步骤、长思考、长回答）展开 / 收起用的高度过渡（规范 9.3「展开 / 收起」）：
+ * 只有「元素顶部到可见区底边」这一段做 `standard` 过渡，看不见的部分在可见区外一次到位。
+ * 直接按全高过渡时，`standard` 曲线前段很快，几千 px 的内容第一帧就越过了整块可见区域，看起来是一帧展开；
+ * 按整屏高度封顶也不够——卡片在屏幕中下方时，可见的只有输入栏上方那一小段，过渡仍然只露出 30ms（真机 verify3）。
+ * 展开：可见部分 0 → 可见高度按曲线长出，结束时补齐到全高；收起：先把可见区外那段收掉，再按曲线收到 0。
+ * 用法：[rememberVisibleHeightCap] + 在做高度过渡的节点上挂 [trackVisibleHeightCap]，再把它传给
+ * [rememberViewportCappedStandard]。
+ */
+@androidx.compose.runtime.Stable
+internal class VisibleHeightCap internal constructor(
+    private val view: android.view.View,
+    private val visibleBottom: () -> Int?,
+) {
+    /** 做高度过渡的节点顶边（窗口坐标）；还没排过版时为 null，按整窗高度封顶。 */
+    internal var topPx: Int? = null
+
+    fun remainingPx(): Int {
+        val bottom = visibleBottom() ?: view.rootView.height
+        val top = topPx ?: 0
+        return (bottom - top).coerceIn(1, bottom.coerceAtLeast(1))
+    }
+}
+
+/** 列表可见区的底边（窗口坐标，已扣掉压在列表上的输入栏等）；没提供时按整窗高度。 */
+internal val LocalVisibleViewportBottom = androidx.compose.runtime.staticCompositionLocalOf<() -> Int?> { { null } }
+
+@Composable
+internal fun rememberVisibleHeightCap(): VisibleHeightCap {
+    val view = androidx.compose.ui.platform.LocalView.current
+    val visibleBottom = LocalVisibleViewportBottom.current
+    return remember(view, visibleBottom) { VisibleHeightCap(view, visibleBottom) }
+}
+
+internal fun Modifier.trackVisibleHeightCap(cap: VisibleHeightCap): Modifier =
+    this.then(Modifier.onGloballyPositioned { cap.topPx = it.positionInWindow().y.roundToInt() })
+
+@Composable
+internal fun rememberViewportCappedStandard(
+    cap: VisibleHeightCap,
+    delayMillis: Int = 0,
+): androidx.compose.animation.core.FiniteAnimationSpec<IntSize> =
+    remember(cap, delayMillis) {
+        ViewportCappedSizeSpec(cap::remainingPx, tween(MovoMotion.STANDARD, delayMillis, MovoMotion.EasingStandard))
+    }
+
+private class ViewportCappedSizeSpec(
+    private val capPx: () -> Int,
+    private val tween: androidx.compose.animation.core.TweenSpec<IntSize>,
+) : androidx.compose.animation.core.FiniteAnimationSpec<IntSize> {
+    override fun <V : androidx.compose.animation.core.AnimationVector> vectorize(
+        converter: androidx.compose.animation.core.TwoWayConverter<IntSize, V>,
+    ): androidx.compose.animation.core.VectorizedFiniteAnimationSpec<V> {
+        val inner = tween.vectorize(converter)
+        return object : androidx.compose.animation.core.VectorizedFiniteAnimationSpec<V> {
+            private fun capped(value: V): V {
+                val size = converter.convertFromVector(value)
+                return converter.convertToVector(IntSize(size.width, size.height.coerceAtMost(capPx())))
+            }
+
+            override fun getValueFromNanos(playTimeNanos: Long, initialValue: V, targetValue: V, initialVelocity: V): V =
+                if (playTimeNanos >= inner.getDurationNanos(initialValue, targetValue, initialVelocity)) {
+                    targetValue
+                } else {
+                    inner.getValueFromNanos(playTimeNanos, capped(initialValue), capped(targetValue), initialVelocity)
+                }
+
+            override fun getVelocityFromNanos(playTimeNanos: Long, initialValue: V, targetValue: V, initialVelocity: V): V =
+                inner.getVelocityFromNanos(playTimeNanos, capped(initialValue), capped(targetValue), initialVelocity)
+
+            override fun getDurationNanos(initialValue: V, targetValue: V, initialVelocity: V): Long =
+                inner.getDurationNanos(initialValue, targetValue, initialVelocity)
+        }
+    }
+
+    override fun equals(other: Any?): Boolean =
+        other is ViewportCappedSizeSpec && other.capPx == capPx && other.tween == tween
+
+    override fun hashCode(): Int = 31 * capPx.hashCode() + tween.hashCode()
+}

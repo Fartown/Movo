@@ -149,11 +149,12 @@ internal fun CardTitle(
             .padding(start = MovoSpacing.lg, end = MovoSpacing.lg, top = MovoSpacing.lg, bottom = MovoSpacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // 标题先按完整宽度排，右侧补充只占剩下的宽度：状态文字再长也不会把标题挤成省略号。
         Text(
             text = text,
             style = MovoTypography.labelMedium,
             color = MovoColors.textSecondary,
-            modifier = Modifier.weight(1f).semantics { heading() },
+            modifier = Modifier.semantics { heading() },
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -162,16 +163,17 @@ internal fun CardTitle(
             targetState = trailing,
             animationSpec = MovoMotion.fast(),
             label = "cardTitleTrailing",
+            modifier = Modifier.weight(1f),
         ) { value ->
             if (value != null) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.widthIn(max = CardTitleTrailingMax)) {
-                    Spacer(Modifier.width(MovoSpacing.sm))
+                Box(contentAlignment = Alignment.CenterEnd, modifier = Modifier.fillMaxWidth()) {
                     Text(
                         value,
                         style = MovoTypography.labelRegular,
                         color = MovoColors.textTertiary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = MovoSpacing.sm),
                     )
                 }
             }
@@ -252,4 +254,3 @@ internal fun MovoSectionHeader(
 }
 
 /** 卡内标题右侧补充的最大宽度：再长就省略，不挤掉标题。 */
-private val CardTitleTrailingMax = 200.dp

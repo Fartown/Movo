@@ -49,6 +49,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.draw.drawWithCache
@@ -223,18 +226,47 @@ internal fun AgentChatInputBar(
     }.minus(ChatInputPopupMargin * 2)
         .coerceAtLeast(MovoSize.touchTarget + MovoSpacing.lg)
 
+    // 进 / 出编辑时输入框文字整段替换（规范 9.3「值变化」先出后进）：旧文字（或占位文字）先淡出 120ms，新内容再淡入 `fast`，
+    // 不一帧硬切。对话页的文字由 App 状态直接改写，这里拿不到「改之前」的时机，所以在切换那次组合里记下上一次组合时
+    // 显示的文字，作为残影盖在原位淡出；新内容在切换那一帧起就是透明的。
+    val composedText = textFieldState.text.toString()
+    val lastComposedText = remember { arrayOf(composedText) }
+    SideEffect { lastComposedText[0] = composedText }
+    val swapGhost = remember(isEditingMessage) { lastComposedText[0] }
+    var settledEditing by remember { mutableStateOf(isEditingMessage) }
+    val swapProgress = remember { androidx.compose.animation.core.Animatable(1f) }
+    val swapTotalMs = MovoMotion.FAST_EXIT + MovoMotion.FAST
+    // 切换那一帧效果还没开始：按进度 0 画（残影不透明、新内容透明）。
+    val swapElapsedMs: () -> Float = {
+        if (settledEditing != isEditingMessage) 0f else swapProgress.value * swapTotalMs
+    }
+    val ghostAlpha: () -> Float = {
+        1f - MovoMotion.EasingExit.transform((swapElapsedMs() / MovoMotion.FAST_EXIT).coerceIn(0f, 1f))
+    }
+    val swappedContentAlpha: () -> Float = {
+        MovoMotion.EasingStandard.transform(((swapElapsedMs() - MovoMotion.FAST_EXIT) / MovoMotion.FAST).coerceIn(0f, 1f))
+    }
     LaunchedEffect(isEditingMessage) {
-        // 编辑态由外部业务状态驱动；普通输入只保留在本地，避免每个字符把聊天舞台
-        // 的消息流、滚动和 Markdown 一起带入重组。
-        if (conversationComposer == null && (isEditingMessage || wasEditingMessage)) {
-            textFieldState.setTextAndPlaceCursorAtEnd(input)
-        }
         if (isEditingMessage) {
             if (voice.active) onEndVoice()
             runCatching { focusRequester.requestFocus() }
             keyboard?.show()
         }
+        // 编辑态由外部业务状态驱动；普通输入只保留在本地，避免每个字符把聊天舞台
+        // 的消息流、滚动和 Markdown 一起带入重组。
+        val swapText = conversationComposer == null && (isEditingMessage || wasEditingMessage)
         wasEditingMessage = isEditingMessage
+        if (swapText && textFieldState.text.toString() != input) {
+            textFieldState.setTextAndPlaceCursorAtEnd(input)
+        }
+        if (settledEditing == isEditingMessage) return@LaunchedEffect
+        swapProgress.snapTo(0f)
+        settledEditing = isEditingMessage
+        if (reducedMotion) {
+            swapProgress.snapTo(1f)
+        } else {
+            swapProgress.animateTo(1f, tween(swapTotalMs, easing = androidx.compose.animation.core.LinearEasing))
+        }
     }
 
     LaunchedEffect(isStreaming, isCompacting) {
@@ -453,21 +485,42 @@ internal fun AgentChatInputBar(
                         .padding(start = MovoSpacing.sm, top = MovoSpacing.xs, bottom = MovoSpacing.xs),
                     contentAlignment = Alignment.TopStart,
                 ) {
+                    val placeholderText = stringResource(
+                        if (isStreaming) R.string.movo_composer_placeholder_running else R.string.movo_composer_placeholder,
+                    )
+                    // 编辑切换的残影：不参与测量（输入框高度按新内容走），超出部分裁掉。
+                    if (settledEditing != isEditingMessage || swapProgress.isRunning) {
+                        Text(
+                            text = swapGhost.ifBlank { placeholderText },
+                            style = if (swapGhost.isBlank()) {
+                                MovoTypography.inputPlaceholder
+                            } else {
+                                MovoTypography.inputPlaceholder.copy(color = MovoColors.textPrimary)
+                            },
+                            color = if (swapGhost.isBlank()) MovoColors.textTertiary else MovoColors.textPrimary,
+                            maxLines = if (swapGhost.isBlank()) 1 else 6,
+                            overflow = TextOverflow.Clip,
+                            modifier = Modifier
+                                .matchParentSize()
+                                .clipToBounds()
+                                .graphicsLayer { alpha = ghostAlpha() },
+                        )
+                    }
                     if (textFieldState.text.isBlank()) {
                         Text(
-                            text = stringResource(
-                                if (isStreaming) R.string.movo_composer_placeholder_running else R.string.movo_composer_placeholder,
-                            ),
+                            text = placeholderText,
                             style = MovoTypography.inputPlaceholder,
                             color = MovoColors.textTertiary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.graphicsLayer { alpha = swappedContentAlpha() },
                         )
                     }
                     BasicTextField(
                         state = textFieldState,
                         modifier = Modifier
                             .fillMaxWidth()
+                            .graphicsLayer { alpha = swappedContentAlpha() }
                             .focusRequester(focusRequester)
                             .onGloballyPositioned { textLineRect = it.windowRect() }
                             .dictationConfirmBlur(

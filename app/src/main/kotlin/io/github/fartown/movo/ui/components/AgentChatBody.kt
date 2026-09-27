@@ -43,6 +43,7 @@ import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.RocketLaunch
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.runtime.Composable
+import io.github.fartown.movo.ui.components.movo.trackVisibleHeightCap
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -58,6 +59,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
@@ -240,7 +242,8 @@ internal fun AgentChatBody(
     var sentFromKeyboard by remember { mutableStateOf(false) }
     var keepBottomAnchored by remember { mutableStateOf(true) }
     // 推荐追问在回答结束后才异步到达：用户仍停在底部时把它带进视野，正在上翻阅读时不打扰。
-    val tailSuggestionId = (visibleMessages.lastOrNull() as? SuggestionChipsMessageUi)?.id
+    // 按完整时间线判断：编辑预览里被收起、取消编辑后又出现的推荐追问不是「新到达」，不滚动（真机：取消编辑后列表猛滚到底）。
+    val tailSuggestionId = (timelineMessages.lastOrNull() as? SuggestionChipsMessageUi)?.id
     var seenTailSuggestionId by remember { mutableStateOf(tailSuggestionId) }
     LaunchedEffect(tailSuggestionId) {
         val arrived = tailSuggestionId != null && tailSuggestionId != seenTailSuggestionId
@@ -762,14 +765,26 @@ internal fun AgentConversationMessages(
         }
     }
 
+    // 可见区底边（窗口坐标）= 不透明输入框的上沿（列表底边 − 输入栏 + 输入栏顶部的磨砂渐隐区）：可能超过可见区的
+    // 展开 / 收起按它封顶过渡高度。曲线正好走满看得见的部分（含磨砂区），结束时补齐到全高的那一下藏在不透明输入框后面。
+    // 封到磨砂区上沿时，补齐落在磨砂区里看得见一跳；封到列表底边时，曲线最快的前段就走完了可见部分，只露出 58ms（真机 verify4 / verify5）。
+    val listBottomPx = remember { intArrayOf(-1) }
+    val density = LocalDensity.current
+    val hiddenBottomPx = with(density) { (bottomInset - ChatBottomFrostHeight).coerceAtLeast(0.dp).roundToPx() }
+    val currentHiddenBottomPx by rememberUpdatedState(hiddenBottomPx)
+    val visibleBottom: () -> Int? = remember {
+        { listBottomPx[0].takeIf { it >= 0 }?.let { it - currentHiddenBottomPx } }
+    }
     // 滚动层保持整屏，输入器作为后绘制浮层；输入器高度进入列表的
     // afterContentPadding，确保跟到底部时最后一行停在输入器上方。
     Box(modifier = modifier.clipToBounds()) {
+        androidx.compose.runtime.CompositionLocalProvider(io.github.fartown.movo.ui.components.movo.LocalVisibleViewportBottom provides visibleBottom) {
         LazyColumn(
             state = scrollState,
             verticalArrangement = Arrangement.Top,
             modifier = Modifier
                 .fillMaxSize()
+                .onGloballyPositioned { listBottomPx[0] = it.boundsInWindow().bottom.toInt() }
                 .scrollEndHaptic()
                 .overScrollVertical(),
             contentPadding = PaddingValues(
@@ -888,6 +903,7 @@ internal fun AgentConversationMessages(
                         .height(1.dp),
                 )
             }
+        }
         }
 
         // 回到底部（9.3）：离开底部时出现，淡入 + 缩放 0.86 → 1（fast）。
@@ -1456,8 +1472,10 @@ private fun LeavingItem(
 
 /**
  * 编辑预览里被收起的消息（规范 9.3「列表增删」）：进入编辑时内容先淡出 120ms，随后高度收起 `standard`，
- * 下方跟随；取消编辑时高度展开 `standard`、内容同时淡入 `fast`。首次组合就处于收起状态时不播放。
- * 提交编辑后这些消息才被真正删除，那时它们已经收起，删除本身不可见（真正删除仍立即退出，见列表项注释）。
+ * 列表跟随；取消编辑时高度直接恢复、内容整体淡入 `standard`——被收起的是被编辑消息之后的全部内容，下面没有别的
+ * 行会被推动；逐项展开反而让「已思考」行和长回答各自长高、互相推挤（真机：标题晚出、正文被往下推）。
+ * 首次组合就处于收起状态时不播放。提交编辑后这些消息才被真正删除，那时它们已经收起，删除本身不可见
+ * （真正删除仍立即退出，见列表项注释）。
  */
 @androidx.compose.runtime.Composable
 private fun EditHiddenItem(
@@ -1465,20 +1483,17 @@ private fun EditHiddenItem(
     modifier: Modifier = Modifier,
     content: @androidx.compose.runtime.Composable () -> Unit,
 ) {
+    val cap = io.github.fartown.movo.ui.components.movo.rememberVisibleHeightCap()
     AnimatedVisibility(
         visible = !hidden,
-        modifier = modifier,
-        enter = fadeIn(io.github.fartown.movo.ui.theme.MovoMotion.fast()) +
-            androidx.compose.animation.expandVertically(
-                io.github.fartown.movo.ui.theme.MovoMotion.standard(),
-                expandFrom = androidx.compose.ui.Alignment.Top,
-            ),
+        modifier = modifier.trackVisibleHeightCap(cap),
+        enter = fadeIn(io.github.fartown.movo.ui.theme.MovoMotion.standard()),
         exit = fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) +
             androidx.compose.animation.shrinkVertically(
-                tween(
-                    io.github.fartown.movo.ui.theme.MovoMotion.STANDARD,
+                // 被收起的可能是很长的回答：只按屏幕以内的部分过渡。
+                io.github.fartown.movo.ui.components.movo.rememberViewportCappedStandard(
+                    cap,
                     delayMillis = io.github.fartown.movo.ui.theme.MovoMotion.FAST_EXIT,
-                    easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard,
                 ),
                 shrinkTowards = androidx.compose.ui.Alignment.Top,
             ),

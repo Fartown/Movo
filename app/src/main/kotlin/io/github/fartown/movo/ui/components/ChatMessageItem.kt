@@ -59,6 +59,7 @@ import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.runtime.Composable
+import io.github.fartown.movo.ui.components.movo.trackVisibleHeightCap
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -575,6 +576,14 @@ internal fun AgentWorkProcess(
     }
     // 步骤多时（> 6）执行中只显示最近 4 步；点「前面 N 步」或完成后手动展开时显示全部。
     var showAllSteps by rememberSaveable(id) { mutableStateOf(false) }
+    // 从摘要条一次铺开几十步（真机 63 步）要 50ms+ 组合与测量：展开第一帧掉帧、直接画出终态，看起来是一帧展开。
+    // 先排够一屏的前几步，展开过渡结束后再补上其余步骤（在屏幕外，可见部分不变）。
+    var stepLimit by remember(id) { androidx.compose.runtime.mutableIntStateOf(Int.MAX_VALUE) }
+    LaunchedEffect(stepLimit) {
+        if (stepLimit == Int.MAX_VALUE) return@LaunchedEffect
+        kotlinx.coroutines.delay(io.github.fartown.movo.ui.theme.MovoMotion.STANDARD.toLong() + WORK_CARD_RESIZE_SLACK_MS)
+        stepLimit = Int.MAX_VALUE
+    }
     // 回答开始的这一帧就按收起显示：等上面的副作用下一帧再收，会先把全部步骤展开一下再收（真机跳一下）。
     val shownExpanded = expanded && !(answerStarted && !manuallyExpanded)
 
@@ -623,7 +632,10 @@ internal fun AgentWorkProcess(
                 .movoClickableRow {
                     // 摘要条整条可点，原地展开完整记录（⌄ / ⌃）；执行中点头部收起 / 展开。
                     manuallyExpanded = true
-                    if (collapsedSummary) showAllSteps = true
+                    if (collapsedSummary) {
+                        showAllSteps = true
+                        if (messages.size > WORK_FIRST_BATCH_STEPS) stepLimit = WORK_FIRST_BATCH_STEPS
+                    }
                     expanded = !shownExpanded
                 }
                 .padding(horizontal = 16.dp),
@@ -718,17 +730,20 @@ internal fun AgentWorkProcess(
         }
 
         // 展开：高度 `standard`，内容与高度同时开始淡入 `fast`（不等待，第一帧就有内容）（规范 9.3「展开 / 收起」）。
+        val stepsCap = io.github.fartown.movo.ui.components.movo.rememberVisibleHeightCap()
         AnimatedVisibility(
             visible = shownExpanded,
+            modifier = Modifier.trackVisibleHeightCap(stepsCap),
             enter = fadeIn(
                 tween(
                     io.github.fartown.movo.ui.theme.MovoMotion.FAST,
                     easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard,
                 ),
-            ) + expandVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), expandFrom = Alignment.Top),
+            ) + expandVertically(io.github.fartown.movo.ui.components.movo.rememberViewportCappedStandard(stepsCap), expandFrom = Alignment.Top),
             // 收起：内容淡出与高度收起同时进行、同样时长，卡片不会先空成一块白再缩（真机 fix12）。
+            // 全部步骤可能有几屏高：高度只按可见区以内的部分过渡（否则第一帧就越过可见区域，看起来是一帧展开）。
             exit = fadeOut(tween(io.github.fartown.movo.ui.theme.MovoMotion.STANDARD, easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingExit)) +
-                shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), shrinkTowards = Alignment.Top),
+                shrinkVertically(io.github.fartown.movo.ui.components.movo.rememberViewportCappedStandard(stepsCap), shrinkTowards = Alignment.Top),
         ) {
             ReportWorkCardInnerResize()
             Column {
@@ -750,7 +765,7 @@ internal fun AgentWorkProcess(
                     )
                 }
                 WorkSteps(
-                    messages = if (folded) messages.takeLast(WORK_FOLD_VISIBLE) else messages,
+                    messages = (if (folded) messages.takeLast(WORK_FOLD_VISIBLE) else messages).take(stepLimit),
                     running = running,
                     onOpenBrowser = onOpenBrowser,
                     currentBrowserMessageId = currentBrowserMessageId,
@@ -959,14 +974,32 @@ private fun ThinkingOnlyRow(
         }
         // 思考中（没点开）：行下方固定两行的滚动预览，左缩进 20 与文字对齐；思考结束后收起一次，只剩这一行。
         val latest = messages.lastOrNull { it.content.isNotBlank() }?.content
+        val tickerCap = io.github.fartown.movo.ui.components.movo.rememberVisibleHeightCap()
         AnimatedVisibility(
             visible = streaming && !expanded && latest != null,
-            enter = expandContentEnter(),
-            exit = expandContentExit(),
+            modifier = Modifier.trackVisibleHeightCap(tickerCap),
+            enter = expandContentEnter(tickerCap),
+            exit = expandContentExit(tickerCap),
         ) {
             ThinkingTicker(latest.orEmpty(), modifier = Modifier.fillMaxWidth().padding(start = 20.dp, bottom = 4.dp))
         }
-        AnimatedVisibility(visible = expanded, enter = expandContentEnter(), exit = expandContentExit()) {
+        // 思考正文在折叠时就开始解析：展开过渡开始时高度已是最终值。展开时才解析的话，Markdown 在过渡途中解析完、
+        // 高度改变，过渡被打断改用默认弹簧，按全高直冲出可见区（真机 verify4：3 帧就把回答推出屏幕）。
+        val parsedBodies = messages.filter { it.content.isNotBlank() && !it.isStreaming }.associate { message ->
+            message.id to androidx.compose.runtime.key(message.id) {
+                rememberMarkdownState(
+                    content = io.github.fartown.movo.ui.markdown.CjkEmphasis.normalize(message.content),
+                    retainState = true,
+                )
+            }
+        }
+        val bodyCap = io.github.fartown.movo.ui.components.movo.rememberVisibleHeightCap()
+        AnimatedVisibility(
+            visible = expanded,
+            modifier = Modifier.trackVisibleHeightCap(bodyCap),
+            enter = expandContentEnter(bodyCap),
+            exit = expandContentExit(bodyCap),
+        ) {
             // 左侧竖线画在绘制阶段：不用固有高度测量（展开动画与流式思考时每帧都要对 Markdown 做一次固有测量）。
             Column(
                 modifier = Modifier
@@ -995,7 +1028,7 @@ private fun ThinkingOnlyRow(
                                 tone = ChatMarkdownTone.Thinking,
                             )
                         } else {
-                            StableMarkdown(content = message.content, tone = ChatMarkdownTone.Thinking)
+                            StableMarkdown(content = message.content, tone = ChatMarkdownTone.Thinking, markdownState = parsedBodies[message.id])
                         }
                     }
                 }
@@ -1370,13 +1403,16 @@ private fun UserMessageBubble(
                     )
                 }
                 if (visiblePrompt.request.isNotBlank()) {
-                    SelectionContainer {
+                    val requestText: @Composable () -> Unit = {
                         Text(
                             text = visiblePrompt.request,
                             style = io.github.fartown.movo.ui.theme.MovoTypography.bodyReading,
                             color = io.github.fartown.movo.ui.theme.MovoColors.textPrimary,
                         )
                     }
+                    // 长按只出一个菜单：菜单可用时长按归菜单（菜单里有「复制」），不再同时进系统选字、弹系统工具栏；
+                    // 执行中菜单不可用，长按仍可选字复制。
+                    if (actionsEnabled) requestText() else SelectionContainer { requestText() }
                 }
                 if (message.isEdited) {
                     Text(
@@ -3075,10 +3111,12 @@ private fun ThinkingRow(
             )
         }
 
+        val contentCap = io.github.fartown.movo.ui.components.movo.rememberVisibleHeightCap()
         AnimatedVisibility(
             visible = expanded && message.content.isNotBlank(),
-            enter = expandContentEnter(),
-            exit = expandContentExit(),
+            modifier = Modifier.trackVisibleHeightCap(contentCap),
+            enter = expandContentEnter(contentCap),
+            exit = expandContentExit(contentCap),
         ) {
             Column {
                 if (!compact) {
@@ -3301,7 +3339,13 @@ private fun ToolActivityInline(
             }
         }
 
-        AnimatedVisibility(visible = isExpanded, enter = expandContentEnter(), exit = expandContentExit()) {
+        val resultCap = io.github.fartown.movo.ui.components.movo.rememberVisibleHeightCap()
+        AnimatedVisibility(
+            visible = isExpanded,
+            modifier = Modifier.trackVisibleHeightCap(resultCap),
+            enter = expandContentEnter(resultCap),
+            exit = expandContentExit(resultCap),
+        ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -3539,6 +3583,8 @@ private fun ThinkingFoldableBody(
     val density = androidx.compose.ui.platform.LocalDensity.current
     val collapsedPx = with(density) { (THINKING_BODY_LINE_HEIGHT * 2).roundToPx() }
     val fadePx = with(density) { THINKING_BODY_LINE_HEIGHT.toPx() }
+    // 长思考可能超过可见区：只把可见区以内的部分按进度过渡，超出的那段在可见区外一次到位（同 [rememberViewportCappedStandard]）。
+    val visibleCap = io.github.fartown.movo.ui.components.movo.rememberVisibleHeightCap()
     val target = if (expanded) 1f else 0f
     val progress = remember { androidx.compose.animation.core.Animatable(if (startCollapsed) 0f else target) }
     val resize = LocalWorkCardInnerResize.current
@@ -3564,56 +3610,80 @@ private fun ThinkingFoldableBody(
     val overflows = remember { booleanArrayOf(false) }
     Box(
         modifier = modifier
+            .trackVisibleHeightCap(visibleCap)
+            // 裁切与底部渐隐必须在改高度的 layout 外层：外层节点的尺寸才是「可见高度」，
+            // 放在里层时它们拿到的是正文全高，文字会溢出压到下面的步骤上（真机 verify-dda65f5）。
+            .clipToBounds()
+            // 底部渐隐（DstIn）在自己开的图层里做：不依赖外层图层的合成方式。原来按「是否溢出」切换离屏合成，
+            // 而溢出是在排版阶段写的普通变量，图层没刷新时 DstIn 直接画到窗口上，成了一条黑色渐变（真机 verify3）。
+            .drawWithContent {
+                val fade = 1f - progress.value
+                if (fade <= 0f || !overflows[0]) {
+                    drawContent()
+                    return@drawWithContent
+                }
+                drawContext.canvas.saveLayer(
+                    androidx.compose.ui.geometry.Rect(0f, 0f, size.width, size.height),
+                    androidx.compose.ui.graphics.Paint(),
+                )
+                drawContent()
+                drawRect(
+                    brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                        0f to androidx.compose.ui.graphics.Color.Black,
+                        1f to androidx.compose.ui.graphics.Color.Black.copy(alpha = 1f - fade),
+                        startY = size.height - fadePx,
+                        endY = size.height,
+                    ),
+                    blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
+                )
+                drawContext.canvas.restore()
+            }
+            // 正文按不限高度只测量一次，按进度报出可见高度（动画中子项不重新测量）。
             .layout { measurable, constraints ->
                 val placeable = measurable.measure(constraints.copy(minHeight = 0, maxHeight = androidx.compose.ui.unit.Constraints.Infinity))
                 val collapsed = minOf(collapsedPx, placeable.height)
                 overflows[0] = placeable.height > collapsedPx
-                val height = collapsed + ((placeable.height - collapsed) * progress.value).toInt()
-                layout(placeable.width, height) { placeable.place(0, 0) }
-            }
-            .clipToBounds()
-            .graphicsLayer {
-                compositingStrategy = if (progress.value < 1f && overflows[0]) {
-                    androidx.compose.ui.graphics.CompositingStrategy.Offscreen
+                val value = progress.value
+                val height = if (value >= 1f) {
+                    placeable.height
                 } else {
-                    androidx.compose.ui.graphics.CompositingStrategy.Auto
+                    collapsed + ((minOf(placeable.height, visibleCap.remainingPx()) - collapsed).coerceAtLeast(0) * value).toInt()
                 }
-            }
-            .drawWithContent {
-                drawContent()
-                val fade = 1f - progress.value
-                if (fade > 0f && overflows[0]) {
-                    drawRect(
-                        brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                            0f to androidx.compose.ui.graphics.Color.Black,
-                            1f to androidx.compose.ui.graphics.Color.Black.copy(alpha = 1f - fade),
-                            startY = size.height - fadePx,
-                            endY = size.height,
-                        ),
-                        blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
-                    )
-                }
+                layout(placeable.width, height) { placeable.place(0, 0) }
             },
     ) {
         content()
     }
 }
 
+/** 从摘要条展开时第一批排版的步骤数：够铺满一屏，其余等展开过渡结束后补上。 */
+private const val WORK_FIRST_BATCH_STEPS = 12
+
 /** 思考正文行高（[chatMarkdownBodyStyle] Thinking：13 / 20）；折叠态露出两行。 */
 private val THINKING_BODY_LINE_HEIGHT = 20.sp
 
-/** 展开（规范 9.3「展开 / 收起」）：高度 `standard`，内容与高度同时开始淡入 `fast`（不等待，第一帧就有内容）。 */
-private fun expandContentEnter(): androidx.compose.animation.EnterTransition = fadeIn(
+/**
+ * 展开（规范 9.3「展开 / 收起」）：高度 `standard`，内容与高度同时开始淡入 `fast`（不等待，第一帧就有内容）。
+ * 思考、步骤结果可能长过可见区：高度只按可见区以内的部分过渡（[rememberViewportCappedStandard]，
+ * 调用方在 AnimatedVisibility 上挂 `trackVisibleHeightCap(cap)`）。
+ */
+@Composable
+private fun expandContentEnter(
+    cap: io.github.fartown.movo.ui.components.movo.VisibleHeightCap,
+): androidx.compose.animation.EnterTransition = fadeIn(
     tween(
         io.github.fartown.movo.ui.theme.MovoMotion.FAST,
         easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard,
     ),
-) + expandVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), expandFrom = Alignment.Top)
+) + expandVertically(io.github.fartown.movo.ui.components.movo.rememberViewportCappedStandard(cap), expandFrom = Alignment.Top)
 
-/** 收起：内容先淡出 120ms，高度同时收起 `standard`。 */
-private fun expandContentExit(): androidx.compose.animation.ExitTransition =
+/** 收起：内容先淡出 120ms，高度同时收起 `standard`（同样只按可见区以内的部分过渡）。 */
+@Composable
+private fun expandContentExit(
+    cap: io.github.fartown.movo.ui.components.movo.VisibleHeightCap,
+): androidx.compose.animation.ExitTransition =
     fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) +
-        shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), shrinkTowards = Alignment.Top)
+        shrinkVertically(io.github.fartown.movo.ui.components.movo.rememberViewportCappedStandard(cap), shrinkTowards = Alignment.Top)
 
 /**
  * 执行卡里正在做高度过渡的里层数量（步骤结果展开、思考步骤展开 / 收起、执行中手动收起卡片）。

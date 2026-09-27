@@ -1,7 +1,7 @@
 package io.github.fartown.movo.ui.pages.providers
 
-import androidx.compose.runtime.key
 import io.github.fartown.movo.ui.components.movo.movoAnimateItem
+import io.github.fartown.movo.ui.components.movo.MovoAnimatedRows
 import io.github.fartown.movo.ui.components.movo.MovoExpandable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -86,23 +86,24 @@ internal fun LazyListScope.providerHeadersEditor(
                 showDivider = expanded,
             )
             MovoExpandable(visible = expanded) {
-                headers.forEach { row ->
-                    key(row.id) {
-                    ProviderHeaderRow(
-                        row = row,
-                        onNameChange = { value ->
-                            onHeadersChange(headers.map {
-                                if (it.id == row.id) it.copy(header = it.header.copy(name = value)) else it
-                            })
-                        },
-                        onValueChange = { value ->
-                            onHeadersChange(headers.map {
-                                if (it.id == row.id) it.copy(header = it.header.copy(value = value)) else it
-                            })
-                        },
-                        onRemove = { onHeadersChange(headers.filterNot { it.id == row.id }) },
-                    )
-                    MovoDivider(start = MovoSpacing.lg)
+                // 增删一行：新行从顶部展开并淡入，删除的行先淡出再收起，卡片高度跟着行走（9.3「列表增删」）。
+                MovoAnimatedRows(items = headers, key = { it.id }) { row ->
+                    Column {
+                        ProviderHeaderRow(
+                            row = row,
+                            onNameChange = { value ->
+                                onHeadersChange(headers.map {
+                                    if (it.id == row.id) it.copy(header = it.header.copy(name = value)) else it
+                                })
+                            },
+                            onValueChange = { value ->
+                                onHeadersChange(headers.map {
+                                    if (it.id == row.id) it.copy(header = it.header.copy(value = value)) else it
+                                })
+                            },
+                            onRemove = { onHeadersChange(headers.filterNot { it.id == row.id }) },
+                        )
+                        MovoDivider(start = MovoSpacing.lg)
                     }
                 }
                 SettingsRow(

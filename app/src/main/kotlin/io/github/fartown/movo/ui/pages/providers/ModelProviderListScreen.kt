@@ -18,7 +18,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -44,6 +43,7 @@ import io.github.fartown.movo.data.repository.ProviderRepository
 import io.github.fartown.movo.data.repository.RuntimeConfigRepository
 import io.github.fartown.movo.ui.components.movo.CardTitle
 import io.github.fartown.movo.ui.components.movo.MovoBlockButton
+import io.github.fartown.movo.ui.components.movo.MovoAnimatedRows
 import io.github.fartown.movo.ui.components.movo.MovoCard
 import io.github.fartown.movo.ui.components.movo.MovoConfirmDialog
 import io.github.fartown.movo.ui.components.movo.MovoDivider
@@ -156,22 +156,21 @@ internal fun ModelProviderListScreen(
                         )
                     } else {
                         Column {
-                            configured.forEachIndexed { index, provider ->
-                                key(provider.id) {
-                                    ConfiguredProviderRow(
-                                        provider = provider,
-                                        isCurrent = provider.id == selectedProviderId,
-                                        selectedModelId = selectedModelId,
-                                        showDivider = index != configured.lastIndex,
-                                        onOpen = { onNavigate(AppRoute.ModelProviderDetail(provider.id)) },
-                                        // .env 打包的不能长按删除；其余（含添加过的预设）删除后回到「可以添加」。
-                                        onDelete = if (ProviderCatalog.isPackaged(provider)) {
-                                            null
-                                        } else {
-                                            { providerToDelete = provider }
-                                        },
-                                    )
-                                }
+                            // 行增删：新增从顶部展开并淡入，删除先淡出再收起，卡片高度跟着行走（9.3「列表增删」）。
+                            MovoAnimatedRows(items = configured, key = { it.id }) { provider ->
+                                ConfiguredProviderRow(
+                                    provider = provider,
+                                    isCurrent = provider.id == selectedProviderId,
+                                    selectedModelId = selectedModelId,
+                                    showDivider = provider.id != configured.lastOrNull()?.id,
+                                    onOpen = { onNavigate(AppRoute.ModelProviderDetail(provider.id)) },
+                                    // .env 打包的不能长按删除；其余（含添加过的预设）删除后回到「可以添加」。
+                                    onDelete = if (ProviderCatalog.isPackaged(provider)) {
+                                        null
+                                    } else {
+                                        { providerToDelete = provider }
+                                    },
+                                )
                             }
                         }
                     }
@@ -185,20 +184,18 @@ internal fun ModelProviderListScreen(
                     text = stringResource(R.string.provider_available_title),
                     trailing = stringResource(R.string.provider_available_hint),
                 )
-                templates.forEach { template ->
-                    key(template.id) {
-                        TemplateProviderRow(
-                            template = template,
-                            showDivider = true,
-                            onOpen = { openTemplate(template.id) },
-                            trailing = {
-                                MovoPillButton(
-                                    label = stringResource(R.string.provider_add),
-                                    onClick = { openTemplate(template.id) },
-                                )
-                            },
-                        )
-                    }
+                MovoAnimatedRows(items = templates, key = { it.id }) { template ->
+                    TemplateProviderRow(
+                        template = template,
+                        showDivider = true,
+                        onOpen = { openTemplate(template.id) },
+                        trailing = {
+                            MovoPillButton(
+                                label = stringResource(R.string.provider_add),
+                                onClick = { openTemplate(template.id) },
+                            )
+                        },
+                    )
                 }
                 ProviderPageRow(
                     title = stringResource(R.string.provider_more_entry),

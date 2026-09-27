@@ -82,6 +82,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.Text
 
@@ -115,6 +116,13 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
     private var closing = false
     /** 这次是从悬浮球点开的：关闭时反向收回球。 */
     private var openedFromOrb = false
+    /**
+     * 进场动画（从球展开 / 从底部上移）等浮层内容就绪后再开始：冷启动时 Compose 内容要等读完外观设置才挂上，
+     * 会话也还没打开；提前开跑会先空白几帧，露出时轮廓已长到半路、里面还是「正在打开对话…」（真机）。
+     */
+    private var pendingEntrance: (() -> Unit)? = null
+    /** 进场已开始：此前内容区的状态切换（打开中 → 会话）直接换，不做淡出淡入。 */
+    private var entranceStarted by mutableStateOf(false)
     /** Q4 浮层 → App：推满全屏的进度（驱动顶部圆角与把手）。只在绘制阶段读取。 */
     private var expandProgress by mutableFloatStateOf(0f)
     /*
@@ -246,6 +254,7 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                                 headerNotice = null
                             }
                         }
+                        LaunchedEffect(Unit) { startEntranceWhenContentReady() }
                         BackHandler { dismissAnimated() }
                         val pane = agentState.conversationPaneState
                         val statusBars = WindowInsets.statusBars
@@ -456,11 +465,12 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
             openedFromOrb = true
             setScrim(0f)
             sheetAlpha = 0f
-            decor.post { if (!closing) morphWithOrb(orb, expand = true) {} }
+            pendingEntrance = { morphWithOrb(orb, expand = true) {} }
             return
         }
         if (isReducedMotion(this)) {
             // 减少动画：浮层与遮罩一起淡入 `fast`（遮罩现在画在窗口里，随窗口透明度一起淡入）。
+            entranceStarted = true
             decor.alpha = 0f
             decor.animate().alpha(1f).setDuration(MovoMotion.FAST.toLong()).start()
             setScrim(1f)
@@ -468,11 +478,26 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         }
         sheetOffset = screenHeight().toFloat()
         setScrim(0f)
-        decor.post {
-            if (closing) return@post
+        pendingEntrance = {
             val from = windowHeight.toFloat().coerceAtLeast(1f)
             animateSheetOffset(from, 0f, MovoMotion.SLOW.toLong(), EASE_ENTER)
         }
+    }
+
+    /**
+     * 等浮层内容能画出真实内容再开始进场：会话已打开（或失败 / 需解锁），最多等 [ENTRANCE_CONTENT_WAIT_MS]；
+     * 再等两帧，让会话内容完成首次布局（滚到最新消息）后才露出。
+     */
+    private suspend fun startEntranceWhenContentReady() {
+        val entrance = pendingEntrance ?: return
+        kotlinx.coroutines.withTimeoutOrNull(ENTRANCE_CONTENT_WAIT_MS) {
+            snapshotFlow { ready || openError != null || keyguardGate.locked }.first { it }
+        }
+        repeat(2) { androidx.compose.runtime.withFrameNanos { } }
+        if (pendingEntrance !== entrance) return
+        pendingEntrance = null
+        entranceStarted = true
+        if (!closing) entrance()
     }
 
     /**
@@ -484,6 +509,12 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         closing = true
         resizeAnimator?.cancel()
         sheetAnimator?.cancel()
+        // 还没露出就关闭（进场在等内容）：没有可以反向播放的画面，直接结束。
+        if (pendingEntrance != null) {
+            pendingEntrance = null
+            finish()
+            return
+        }
         if (isReducedMotion(this)) {
             window.decorView.animate().alpha(0f).setDuration(MovoMotion.FAST_EXIT.toLong())
                 .withEndAction { finish() }.start()
@@ -729,7 +760,10 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         androidx.compose.animation.AnimatedContent(
             targetState = body,
             transitionSpec = {
-                androidx.compose.animation.fadeIn(
+                // 进场前（浮层还没露出）直接换，露出的第一帧就是最终内容。
+                if (!entranceStarted) {
+                    androidx.compose.animation.EnterTransition.None togetherWith androidx.compose.animation.ExitTransition.None
+                } else androidx.compose.animation.fadeIn(
                     androidx.compose.animation.core.tween(
                         MovoMotion.STANDARD,
                         delayMillis = MovoMotion.FAST_EXIT,
@@ -811,6 +845,8 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         }
         /** 从球揭开时内容的起始透明度（A5b：内容从 20% 淡入，一开始就能看出是对话）。 */
         private const val ORB_CONTENT_START_ALPHA = 0.2f
+        /** 进场最多等会话打开这么久；更慢时先露出「正在打开对话…」。 */
+        private const val ENTRANCE_CONTENT_WAIT_MS = 400L
         /** 收回球里时内容淡出的起点与收尾（相对收起开始 / 结束）。 */
         private const val ORB_CONTENT_FADE_OUT_DELAY_MS = 80L
         private const val ORB_CONTENT_FADE_OUT_TAIL_MS = 30L

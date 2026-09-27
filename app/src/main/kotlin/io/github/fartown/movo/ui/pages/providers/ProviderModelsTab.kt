@@ -78,6 +78,7 @@ import io.github.fartown.movo.ui.components.movo.MovoButtonRow
 import io.github.fartown.movo.ui.components.movo.MovoDialogButtonPadding
 import io.github.fartown.movo.ui.components.movo.MovoConfirmDialog
 import io.github.fartown.movo.ui.components.movo.MovoDialogHost
+import io.github.fartown.movo.ui.components.movo.rememberLastNonNull
 import io.github.fartown.movo.ui.components.movo.MovoDivider
 import io.github.fartown.movo.ui.components.movo.MovoIconButton
 import io.github.fartown.movo.ui.components.movo.MovoPillButton
@@ -473,8 +474,10 @@ internal fun ProviderModelsTab(
         }
     }
 
-    editingModel?.let { model ->
+    // 保存 / 取消后先播退场动画再移除：动画期间保留最后一次编辑的模型。
+    rememberLastNonNull(editingModel)?.let { model ->
         ModelEditDialog(
+            show = editingModel != null,
             model = model,
             isNew = isCreatingModel,
             isSaving = isMutatingModel,
@@ -514,7 +517,8 @@ internal fun ProviderModelsTab(
         show = modelPendingDelete != null,
         title = stringResource(R.string.ui_delete_model_cf24da),
         message = stringResource(R.string.provider_model_delete_summary, lastModelPendingDelete?.displayName.orEmpty()),
-        confirmText = if (isMutatingModel) context.getString(R.string.page_deleting_6f941d) else context.getString(R.string.page_delete_3755f5),
+        confirmText = context.getString(R.string.page_delete_3755f5),
+        confirmLoading = isMutatingModel,
         cancelEnabled = !isMutatingModel,
         confirmEnabled = !isMutatingModel,
         destructive = true,
@@ -551,7 +555,8 @@ internal fun ProviderModelsTab(
             selectedModelIds.size,
             selectedModelIds.size,
         ),
-        confirmText = if (isMutatingModel) context.getString(R.string.page_deleting_6f941d) else context.getString(R.string.page_delete_3755f5),
+        confirmText = context.getString(R.string.page_delete_3755f5),
+        confirmLoading = isMutatingModel,
         cancelEnabled = !isMutatingModel,
         confirmEnabled = !isMutatingModel,
         destructive = true,
@@ -752,6 +757,7 @@ private fun ModelListItem(
  */
 @Composable
 private fun ModelEditDialog(
+    show: Boolean,
     model: Model,
     isNew: Boolean,
     isSaving: Boolean,
@@ -822,7 +828,7 @@ private fun ModelEditDialog(
     )
 
     MovoDialogHost(
-        show = true,
+        show = show,
         onDismissRequest = { if (!isSaving) onDismiss() },
         dismissible = !isSaving,
     ) {
@@ -1016,7 +1022,9 @@ private fun ModelEditDialog(
                 enabled = !isSaving,
             )
             MovoBlockButton(
-                label = if (isSaving) context.getString(R.string.page_saving_d70d42) else context.getString(R.string.page_save_fadf24),
+                // 保存中文字原位换成加载圈，按钮宽度不变，按钮区不会从并排跳成上下排。
+                label = context.getString(R.string.page_save_fadf24),
+                loading = isSaving,
                 onClick = { onSubmit(updated()) },
                 enabled = !isSaving &&
                     displayName.isNotBlank() &&

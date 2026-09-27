@@ -147,11 +147,8 @@ internal fun DataBackupScreen(
         show = showImportDialog,
         title = stringResource(R.string.data_backup_import_confirm_title),
         message = stringResource(R.string.data_backup_import_confirm_summary),
-        confirmText = if (busy) {
-            stringResource(R.string.data_backup_working)
-        } else {
-            stringResource(R.string.action_import)
-        },
+        confirmText = stringResource(R.string.action_import),
+        confirmLoading = busy,
         destructive = true,
         cancelEnabled = !busy,
         confirmEnabled = !busy,

@@ -161,11 +161,8 @@ internal fun McpServersScreen(
         show = showAdd,
         title = stringResource(R.string.mcp_add_server),
         message = null,
-        confirmText = if (working) {
-            stringResource(R.string.mcp_connecting)
-        } else {
-            stringResource(R.string.mcp_add_server)
-        },
+        confirmText = stringResource(R.string.mcp_add_server),
+        confirmLoading = working,
         confirmEnabled = !working,
         // 连接中不能关闭（原先外部点击被屏蔽）；取消按钮同时置灰，避免后台连接完成后结果无处显示。
         cancelEnabled = !working,

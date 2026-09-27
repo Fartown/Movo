@@ -147,6 +147,7 @@ internal fun MovoConfirmDialog(
     cancelText: String = stringResource(R.string.action_cancel),
     confirmEnabled: Boolean = true,
     cancelEnabled: Boolean = true,
+    confirmLoading: Boolean = false,
     extraContent: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     MovoDialogHost(show = show, onDismissRequest = onDismissRequest, dismissible = cancelEnabled) {
@@ -176,6 +177,7 @@ internal fun MovoConfirmDialog(
                 onClick = onConfirm,
                 tone = if (destructive) BlockTone.Destructive else BlockTone.Primary,
                 enabled = confirmEnabled,
+                loading = confirmLoading,
             )
         }
     }

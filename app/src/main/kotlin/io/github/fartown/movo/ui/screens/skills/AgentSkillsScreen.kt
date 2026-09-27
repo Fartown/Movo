@@ -1,6 +1,5 @@
 package io.github.fartown.movo.ui.screens.skills
 
-import androidx.compose.runtime.key
 import androidx.compose.runtime.LaunchedEffect
 import io.github.fartown.movo.ui.components.movo.movoAnimateItem
 import io.github.fartown.movo.ui.components.movo.rememberLastNonNull
@@ -20,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import io.github.fartown.movo.R
 import io.github.fartown.movo.ui.components.movo.CardTitle
+import io.github.fartown.movo.ui.components.movo.MovoAnimatedRows
 import io.github.fartown.movo.ui.components.movo.MovoCard
 import io.github.fartown.movo.ui.components.movo.MovoConfirmDialog
 import io.github.fartown.movo.ui.components.movo.MovoListPage
@@ -113,17 +113,15 @@ fun AgentSkillsScreen(
             item(key = "builtin-card") {
                 MovoCard(modifier = movoAnimateItem()) {
                     CardTitle(stringResource(R.string.ui_built_in_skills_1ceedf))
-                    builtinInstalled.forEachIndexed { index, skill ->
-                        key(skill.id) {
+                    MovoAnimatedRows(items = builtinInstalled, key = { it.id }) { skill ->
                         SkillSwitchRow(
                             skill = skill,
                             enabled = !operationPending,
                             onToggle = { enabled ->
                                 onAction(AgentSkillsAction.ToggleSkill(skill.id, enabled))
                             },
-                            showDivider = index != builtinInstalled.lastIndex,
+                            showDivider = skill.id != builtinInstalled.lastOrNull()?.id,
                         )
-                        }
                     }
                 }
             }
@@ -133,8 +131,7 @@ fun AgentSkillsScreen(
             item(key = "user-card") {
                 MovoCard(modifier = movoAnimateItem()) {
                     CardTitle(stringResource(R.string.ui_user_skills_748e7f))
-                    userInstalled.forEachIndexed { index, skill ->
-                        key(skill.id) {
+                    MovoAnimatedRows(items = userInstalled, key = { it.id }) { skill ->
                         SkillSwitchRow(
                             skill = skill,
                             enabled = !operationPending,
@@ -142,9 +139,8 @@ fun AgentSkillsScreen(
                                 onAction(AgentSkillsAction.ToggleSkill(skill.id, enabled))
                             },
                             onDelete = { deleteTarget = skill },
-                            showDivider = index != userInstalled.lastIndex,
+                            showDivider = skill.id != userInstalled.lastOrNull()?.id,
                         )
-                        }
                     }
                 }
             }
@@ -154,18 +150,16 @@ fun AgentSkillsScreen(
             item(key = "removed-card") {
                 MovoCard(modifier = movoAnimateItem()) {
                     CardTitle(stringResource(R.string.ui_removed_4e5c49))
-                    removed.forEachIndexed { index, skill ->
-                        key(skill.id) {
+                    MovoAnimatedRows(items = removed, key = { it.id }) { skill ->
                         SkillRow(
                             title = skill.name,
                             subtitle = stringResource(R.string.ui_click_to_reinstall_dc60de),
                             enabled = !operationPending,
-                            showDivider = index != removed.lastIndex,
+                            showDivider = skill.id != removed.lastOrNull()?.id,
                             onClick = { onAction(AgentSkillsAction.ReinstallBuiltin(skill.id)) },
                         ) {
                             MovoIcon(MovoIcons.Download, null, size = MovoSize.iconSmall, tint = MovoColors.textTertiary)
-                        }
-                        }
+                    }
                     }
                 }
             }

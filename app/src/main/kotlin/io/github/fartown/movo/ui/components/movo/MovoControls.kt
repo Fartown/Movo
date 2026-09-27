@@ -236,6 +236,7 @@ internal fun MovoBlockButton(
     modifier: Modifier = Modifier,
     tone: BlockTone = BlockTone.Primary,
     enabled: Boolean = true,
+    loading: Boolean = false,
 ) {
     val shape = RoundedCornerShape(MovoRadius.pillLg)
     val (bg, fg) = when (tone) {
@@ -252,13 +253,26 @@ internal fun MovoBlockButton(
             .padding(horizontal = MovoSpacing.lg),
         contentAlignment = Alignment.Center,
     ) {
+        // 进行中：文字原位淡出、加载圈原位淡入（`fast`），按钮宽高不变，所在按钮区不会重排。
+        val loadingProgress by animateFloatAsState(
+            targetValue = if (loading) 1f else 0f,
+            animationSpec = MovoMotion.fast(),
+            label = "blockButtonLoading",
+        )
         Text(
             label,
             style = MovoTypography.bodyStrong,
             color = fg,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.graphicsLayer { alpha = 1f - loadingProgress },
         )
+        if (loadingProgress > 0f) {
+            MovoSpinner(
+                color = fg,
+                modifier = Modifier.graphicsLayer { alpha = loadingProgress },
+            )
+        }
     }
 }
 
