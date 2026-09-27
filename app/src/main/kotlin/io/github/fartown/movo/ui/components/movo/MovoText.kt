@@ -1,5 +1,7 @@
 package io.github.fartown.movo.ui.components.movo
 
+import androidx.compose.ui.graphics.drawscope.translate
+
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
@@ -143,6 +145,12 @@ internal fun MovoWordRevealText(
         modifier = modifier.drawWithCache {
             val layers = List(words.size) { obtainGraphicsLayer() }
             val blurMax = 4.dp.toPx()
+            // 每个词只在排版变化时算一次路径、录一次（只录词自己的范围，模糊也只作用在这一块）；
+            // 之后每帧只改图层的透明度与模糊半径，不重录、不重算路径（原来每帧每个词都录整段、模糊整段）。
+            val paths = arrayOfNulls<androidx.compose.ui.graphics.Path>(words.size)
+            var cachedLayout: androidx.compose.ui.text.TextLayoutResult? = null
+            val recorded = BooleanArray(words.size)
+            val blurRadii = FloatArray(words.size) { -1f }
             onDrawWithContent {
                 val current = layout
                 val elapsed = elapsedMillis()
@@ -151,25 +159,47 @@ internal fun MovoWordRevealText(
                     drawContent()
                     return@onDrawWithContent
                 }
+                if (cachedLayout !== current) {
+                    cachedLayout = current
+                    paths.fill(null)
+                    recorded.fill(false)
+                }
                 val contentScope = this
                 words.forEachIndexed { index, range ->
                     val fraction = ((elapsed - (firstWordIndex + index) * intervalMillis) / MovoMotion.FAST).coerceIn(0f, 1f)
                     if (fraction <= 0f) return@forEachIndexed
-                    val path = current.getPathForRange(range.first, range.last + 1)
+                    val path = paths[index] ?: current.getPathForRange(range.first, range.last + 1).also { paths[index] = it }
                     if (fraction >= 1f) {
                         clipPath(path) { contentScope.drawContent() }
                         return@forEachIndexed
                     }
                     val eased = MovoMotion.EasingEnter.transform(fraction)
                     val layer = layers[index]
-                    layer.alpha = eased
-                    val radius = blurMax * (1f - eased)
-                    layer.renderEffect = if (radius > 0.05f) {
-                        androidx.compose.ui.graphics.BlurEffect(radius, radius, androidx.compose.ui.graphics.TileMode.Decal)
-                    } else {
-                        null
+                    if (!recorded[index]) {
+                        recorded[index] = true
+                        val bounds = path.getBounds().inflate(blurMax)
+                            .intersect(androidx.compose.ui.geometry.Rect(androidx.compose.ui.geometry.Offset.Zero, size))
+                        val left = kotlin.math.floor(bounds.left).toInt()
+                        val top = kotlin.math.floor(bounds.top).toInt()
+                        val width = (kotlin.math.ceil(bounds.right).toInt() - left).coerceAtLeast(1)
+                        val height = (kotlin.math.ceil(bounds.bottom).toInt() - top).coerceAtLeast(1)
+                        layer.topLeft = androidx.compose.ui.unit.IntOffset(left, top)
+                        layer.record(size = androidx.compose.ui.unit.IntSize(width, height)) {
+                            translate(-left.toFloat(), -top.toFloat()) {
+                                contentScope.drawContent()
+                            }
+                        }
                     }
-                    layer.record { contentScope.drawContent() }
+                    layer.alpha = eased
+                    val radius = kotlin.math.round(blurMax * (1f - eased) * 4f) / 4f
+                    if (radius != blurRadii[index]) {
+                        blurRadii[index] = radius
+                        layer.renderEffect = if (radius > 0.05f) {
+                            androidx.compose.ui.graphics.BlurEffect(radius, radius, androidx.compose.ui.graphics.TileMode.Decal)
+                        } else {
+                            null
+                        }
+                    }
                     clipPath(path) { drawLayer(layer) }
                 }
             }
