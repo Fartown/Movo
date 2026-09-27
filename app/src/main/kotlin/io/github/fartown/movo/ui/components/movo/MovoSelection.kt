@@ -17,14 +17,15 @@ import io.github.fartown.movo.ui.theme.MovoSpacing
 
 /**
  * 单选的选中态（规范 8.11「单选」，Figma「10 · 单选样式（整行浅紫）」）：选中项整行 `accent/indigo-bg`，
- * 标题 `accent/indigo-fg` Medium，不放任何图标（不用 ✓、不用单选圈）。卡内列表行内缩 4、圆角 12；
+ * 标题 `accent/indigo-fg` Medium，不放任何图标（不用 ✓、不用单选圈）。卡内列表行内缩 4、圆角 24：
+ * 与卡片同心（28 − 4，规范 3「同心规则」），行贴着卡片上下边时弧线也平行。
  * 对话框选项条自己画底色（圆角 16），只用 [movoSelectedTextColor]。底色与文字颜色过渡 `fast`。
  */
 @Composable
 internal fun Modifier.movoSelectedRow(
     selected: Boolean,
     inset: Dp = MovoSpacing.xs,
-    radius: Dp = MovoRadius.sm,
+    radius: Dp = MovoRadius.xl - inset,
 ): Modifier {
     val background by animateColorAsState(
         if (selected) MovoColors.indigoBg else MovoColors.indigoBg.copy(alpha = 0f),
