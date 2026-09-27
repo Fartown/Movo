@@ -293,6 +293,10 @@ internal class VisibleHeightCap internal constructor(
     /** 做高度过渡的节点顶边（窗口坐标）；还没排过版时为 null，按整窗高度封顶。 */
     internal var topPx: Int? = null
 
+    /** 做高度过渡的节点底边（窗口坐标）。 */
+    internal var bottomPx: Int? = null
+
+
     fun remainingPx(): Int {
         val bottom = visibleBottom() ?: view.rootView.height
         val top = topPx ?: 0
@@ -311,7 +315,13 @@ internal fun rememberVisibleHeightCap(): VisibleHeightCap {
 }
 
 internal fun Modifier.trackVisibleHeightCap(cap: VisibleHeightCap): Modifier =
-    this.then(Modifier.onGloballyPositioned { cap.topPx = it.positionInWindow().y.roundToInt() })
+    this.then(
+        Modifier.onGloballyPositioned {
+            val top = it.positionInWindow().y.roundToInt()
+            cap.topPx = top
+            cap.bottomPx = top + it.size.height
+        },
+    )
 
 @Composable
 internal fun rememberViewportCappedStandard(

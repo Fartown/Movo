@@ -778,7 +778,12 @@ internal fun AgentConversationMessages(
     // 滚动层保持整屏，输入器作为后绘制浮层；输入器高度进入列表的
     // afterContentPadding，确保跟到底部时最后一行停在输入器上方。
     Box(modifier = modifier.clipToBounds()) {
-        androidx.compose.runtime.CompositionLocalProvider(io.github.fartown.movo.ui.components.movo.LocalVisibleViewportBottom provides visibleBottom) {
+        // 从执行卡末尾点「收起」：卡片逐帧收起时把列表往回滚同样的距离，卡片底边与下面的回答不动（Figma 候选「执行卡长记录」方案 1）。
+        val chatListScroll: (Float) -> Float = remember(scrollState) { { delta -> scrollState.dispatchRawDelta(delta) } }
+        androidx.compose.runtime.CompositionLocalProvider(
+            io.github.fartown.movo.ui.components.movo.LocalVisibleViewportBottom provides visibleBottom,
+            LocalChatListScroll provides chatListScroll,
+        ) {
         LazyColumn(
             state = scrollState,
             verticalArrangement = Arrangement.Top,
@@ -1469,6 +1474,9 @@ private fun LeavingItem(
         content()
     }
 }
+
+/** 直接滚动对话列表（像素，正数向后）：执行卡从末尾收起时逐帧补偿高度变化，见 [AgentWorkProcess]。 */
+internal val LocalChatListScroll = androidx.compose.runtime.staticCompositionLocalOf<((Float) -> Float)?> { null }
 
 /**
  * 编辑预览里被收起的消息（规范 9.3「列表增删」）：进入编辑时内容先淡出 120ms，随后高度收起 `standard`，

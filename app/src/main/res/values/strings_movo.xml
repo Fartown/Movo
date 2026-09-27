@@ -167,6 +167,7 @@
   <string name="movo_step_interrupted">Interrupted</string>
   <string name="movo_expand">Expand</string>
   <string name="movo_collapse">Collapse</string>
+  <string name="movo_work_log">Log</string>
   <string name="movo_supplement_title">Your follow-up</string>
   <string name="movo_supplement_pending">Applies next step</string>
   <string name="movo_supplement_applied">Applied</string>

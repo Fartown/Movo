@@ -604,6 +604,50 @@ internal fun AgentWorkProcess(
     }
     val glint = sawRunning && !running && !paused && failedIndex < 0 && outcome == null && runMillis >= 10_000L
     val innerResize = remember { WorkCardInnerResize() }
+    val stepsCap = io.github.fartown.movo.ui.components.movo.rememberVisibleHeightCap()
+    // 从末尾「收起」（2026-09-27 定稿方案 1）：卡片底边钉在原处。收起高度由这里逐帧驱动，每帧同时把列表往回滚同样的距离，
+    // 高度与滚动在同一次布局里生效，卡片底边和下面的回答不动。收起完成后保持钳制，直到下次展开。
+    val footerCollapse = remember { androidx.compose.animation.core.Animatable(0f) }
+    val footerFade = remember { androidx.compose.animation.core.Animatable(1f) }
+    var footerCollapsing by remember { mutableStateOf(false) }
+    val stepsFullHeight = remember { intArrayOf(0) }
+    val listScroll = LocalChatListScroll.current
+    val cardScope = androidx.compose.runtime.rememberCoroutineScope()
+    val reducedMotion = io.github.fartown.movo.ui.theme.LocalReducedMotion.current
+    fun collapseFromFooter() {
+        if (footerCollapsing) return
+        manuallyExpanded = true
+        val full = stepsFullHeight[0].toFloat()
+        if (listScroll == null || reducedMotion || full <= 0f) {
+            expanded = false
+            return
+        }
+        footerCollapsing = true
+        cardScope.launch {
+            // 屏幕顶以上的那段先一次收掉（看不见），可见的部分再按 `standard` 收：与展开按可见高度封顶同一做法。
+            val start = minOf(full, (stepsCap.bottomPx ?: full.toInt()).toFloat().coerceAtLeast(0f))
+            footerCollapse.snapTo(start)
+            listScroll(-(full - start))
+            launch { footerFade.animateTo(0f, io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) }
+            var previous = start
+            footerCollapse.animateTo(
+                0f,
+                tween(io.github.fartown.movo.ui.theme.MovoMotion.STANDARD, easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard),
+            ) {
+                listScroll(-(previous - value))
+                previous = value
+            }
+            expanded = false
+        }
+    }
+    fun resetFooterCollapse() {
+        if (!footerCollapsing) return
+        footerCollapsing = false
+        cardScope.launch {
+            footerCollapse.snapTo(0f)
+            footerFade.snapTo(1f)
+        }
+    }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -632,6 +676,7 @@ internal fun AgentWorkProcess(
                 .movoClickableRow {
                     // 摘要条整条可点，原地展开完整记录（⌄ / ⌃）；执行中点头部收起 / 展开。
                     manuallyExpanded = true
+                    resetFooterCollapse()
                     if (collapsedSummary) {
                         showAllSteps = true
                         if (messages.size > WORK_FIRST_BATCH_STEPS) stepLimit = WORK_FIRST_BATCH_STEPS
@@ -730,7 +775,6 @@ internal fun AgentWorkProcess(
         }
 
         // 展开：高度 `standard`，内容与高度同时开始淡入 `fast`（不等待，第一帧就有内容）（规范 9.3「展开 / 收起」）。
-        val stepsCap = io.github.fartown.movo.ui.components.movo.rememberVisibleHeightCap()
         AnimatedVisibility(
             visible = shownExpanded,
             modifier = Modifier.trackVisibleHeightCap(stepsCap),
@@ -746,7 +790,24 @@ internal fun AgentWorkProcess(
                 shrinkVertically(io.github.fartown.movo.ui.components.movo.rememberViewportCappedStandard(stepsCap), shrinkTowards = Alignment.Top),
         ) {
             ReportWorkCardInnerResize()
-            Column {
+            Column(
+                modifier = Modifier
+                    .clipToBounds()
+                    .layout { measurable, constraints ->
+                        val placeable = measurable.measure(constraints)
+                        stepsFullHeight[0] = placeable.height
+                        val height = if (footerCollapsing) {
+                            footerCollapse.value.toInt().coerceIn(0, placeable.height)
+                        } else {
+                            placeable.height
+                        }
+                        // 从末尾收起时内容贴着底边：手指下的末尾内容原地淡出，只有卡片顶边往下收；
+                        // 顶对齐时，屏幕外那段一次收掉的那一帧，可见内容会从末尾换成开头（真机 footer2）。
+                        val y = if (footerCollapsing) height - placeable.height else 0
+                        layout(placeable.width, height) { placeable.place(0, y) }
+                    }
+                    .graphicsLayer { alpha = if (footerCollapsing) footerFade.value else 1f },
+            ) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -775,14 +836,13 @@ internal fun AgentWorkProcess(
                     onDeleteMessage = onDeleteMessage,
                     modifier = Modifier.padding(top = if (folded) 0.dp else 6.dp, bottom = 6.dp),
                 )
-                // 结束后用户点开：末尾一行起止时间「15:02 开始·15:03 结束」（Figma「05e」）。
-                val span = if (!running && !paused && manuallyExpanded) workTimeSpan(tools, outcome) else null
-                if (span != null) {
-                    Text(
-                        text = span,
-                        style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular,
-                        color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 14.dp),
+                // 结束后点开：末尾一行，左侧起止时间「15:02 开始·15:03 结束」（Figma「05e」），右侧「日志」「收起 ⌃」
+                // （2026-09-27 定稿方案 1）：长记录滑到末尾不用回到头部就能收起；执行中不出这一行（头部即可收起）。
+                if (!running && !paused) {
+                    WorkCardFooter(
+                        span = workTimeSpan(tools, outcome),
+                        logMessageId = tools.firstOrNull()?.id ?: messages.firstOrNull()?.id,
+                        onCollapse = ::collapseFromFooter,
                     )
                 }
             }
@@ -799,6 +859,77 @@ private const val WORK_FOLD_THRESHOLD = 6
 private const val WORK_FOLD_VISIBLE = 4
 
 /** 时间线最上面一行「前面 N 步 ⌄」：`Label/Medium` 次要色，文字对齐步骤标题（左 44），上下 8，整行可点展开。 */
+/**
+ * 执行卡展开后的末尾一行（规范 8.1「工作过程 · 收起」，2026-09-27 定稿）：左侧起止时间 `Label/Regular` 次要色；
+ * 右侧两个文字按钮「日志」「收起 ⌃」，13 Regular 次要色、无底色，按压文字变淡（Link）。
+ * 「日志」打开这次任务的运行日志任务详情（与失败卡「查看日志」同一页）；没有日志入口的宿主不显示。
+ */
+@Composable
+private fun WorkCardFooter(
+    span: WorkTimeSpan?,
+    logMessageId: String?,
+    onCollapse: () -> Unit,
+) {
+    val openLog = io.github.fartown.movo.ui.screens.diagnostics.LocalRunLogOpener.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // 起止时间完整放得下用完整写法，放不下（大字号、窄屏）退成「15:02–15:03」，不截成省略号。
+        androidx.compose.ui.layout.Layout(
+            content = {
+                val style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular
+                val color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary
+                Text(span?.full.orEmpty(), style = style, color = color, maxLines = 1, softWrap = false)
+                Text(span?.compact.orEmpty(), style = style, color = color, maxLines = 1, softWrap = false)
+            },
+            modifier = Modifier.weight(1f).clipToBounds(),
+        ) { measurables, constraints ->
+            val loose = constraints.copy(minWidth = 0)
+            val full = measurables[0]
+            val chosen = if (full.maxIntrinsicWidth(constraints.maxHeight) <= constraints.maxWidth) full else measurables[1]
+            val placeable = chosen.measure(loose)
+            layout(constraints.maxWidth, placeable.height) { placeable.place(0, 0) }
+        }
+        if (openLog != null && logMessageId != null) {
+            WorkCardFooterAction(label = stringResource(R.string.movo_work_log)) {
+                openLog(io.github.fartown.movo.ui.screens.diagnostics.DiagnosticsLinks.runForMessage(logMessageId))
+            }
+            Spacer(Modifier.width(4.dp))
+        }
+        WorkCardFooterAction(label = stringResource(R.string.movo_collapse), showChevron = true, onClick = onCollapse)
+    }
+}
+
+@Composable
+private fun WorkCardFooterAction(label: String, showChevron: Boolean = false, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .height(io.github.fartown.movo.ui.theme.MovoSize.touchTarget)
+            .movoClickable(io.github.fartown.movo.ui.components.movo.PressKind.Link, onClick = onClick)
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular,
+            color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+        )
+        if (showChevron) {
+            Spacer(Modifier.width(2.dp))
+            io.github.fartown.movo.ui.theme.MovoIcon(
+                io.github.fartown.movo.ui.theme.MovoIcons.ChevronDown,
+                contentDescription = null,
+                size = 14.dp,
+                tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                modifier = Modifier.graphicsLayer { rotationZ = 180f },
+            )
+        }
+    }
+}
+
 @Composable
 private fun WorkEarlierSteps(count: Int, onClick: () -> Unit) {
     Row(
@@ -823,13 +954,18 @@ private fun WorkEarlierSteps(count: Int, onClick: () -> Unit) {
     }
 }
 
+/** 起止时间：完整「15:02 开始·15:03 结束」，放不下时用紧凑「15:02–15:03」。 */
+private class WorkTimeSpan(val full: String, val compact: String)
+
 /** 本轮起止时间（本地时区 HH:mm）；拿不到开始或结束时间时为 null。 */
 @Composable
-private fun workTimeSpan(tools: List<ToolActivityMessageUi>, outcome: WorkOutcome?): String? {
+private fun workTimeSpan(tools: List<ToolActivityMessageUi>, outcome: WorkOutcome?): WorkTimeSpan? {
     val start = outcome?.startedAt ?: tools.mapNotNull { it.startedAtMillis }.minOrNull() ?: return null
     val end = outcome?.finishedAt ?: tools.mapNotNull { it.finishedAtMillis }.maxOrNull() ?: return null
     val format = remember { java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()) }
-    return stringResource(R.string.movo_run_detail_span, format.format(java.util.Date(start)), format.format(java.util.Date(end)))
+    val from = format.format(java.util.Date(start))
+    val to = format.format(java.util.Date(end))
+    return WorkTimeSpan(stringResource(R.string.movo_run_detail_span, from, to), "$from–$to")
 }
 
 /**
