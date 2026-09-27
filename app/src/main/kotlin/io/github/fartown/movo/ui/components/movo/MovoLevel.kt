@@ -5,7 +5,11 @@ import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.collectLatest
 import io.github.fartown.movo.ui.theme.LocalReducedMotion
 import io.github.fartown.movo.ui.theme.MovoMotion
 
@@ -24,6 +28,24 @@ internal fun rememberSmoothedLevelState(target: Float): State<Float> {
     LaunchedEffect(goal) {
         val rising = goal > level.value
         level.animateTo(goal, tween(if (rising) LEVEL_RISE_MS else LEVEL_FALL_MS, easing = MovoMotion.EasingLinear))
+    }
+    return level.asState()
+}
+
+/**
+ * 同上，但目标音量由 [target] 在协程里读取（`snapshotFlow`）：原始电平每次回调都变，
+ * 调用方不必在组合期读它，所在界面（整个输入框）不会随电平重组。
+ */
+@Composable
+internal fun rememberSmoothedLevelState(target: () -> Float): State<Float> {
+    val reduced = LocalReducedMotion.current
+    val level = remember { Animatable(0f) }
+    val currentTarget by rememberUpdatedState(target)
+    LaunchedEffect(reduced) {
+        snapshotFlow { if (reduced) 0f else currentTarget().coerceIn(0f, 1f) }.collectLatest { goal ->
+            val rising = goal > level.value
+            level.animateTo(goal, tween(if (rising) LEVEL_RISE_MS else LEVEL_FALL_MS, easing = MovoMotion.EasingLinear))
+        }
     }
     return level.asState()
 }

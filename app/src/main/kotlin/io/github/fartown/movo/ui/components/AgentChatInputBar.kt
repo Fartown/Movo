@@ -47,6 +47,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.drawscope.clipPath
@@ -502,7 +503,8 @@ internal fun AgentChatInputBar(
                         ),
                         active = dictation.listening,
                         onClick = toggleDictation,
-                        level = if (dictation.listening) dictation.level else 0f,
+                        // 电平只在按钮的平滑协程里读：在这里读会让整个输入框随每次电平回调重组。
+                        level = { if (dictation.listening) dictation.level else 0f },
                         // 右侧紧挨声波（中心相距 40）：向右只扩 4，向左扩 8，两者热区不重叠。
                         touchStart = 8.dp,
                         touchEnd = 4.dp,
@@ -675,7 +677,7 @@ private fun ComposerLineButton(
     contentDescription: String,
     active: Boolean,
     onClick: () -> Unit,
-    level: Float = 0f,
+    level: () -> Float = { 0f },
     touchStart: Dp = LineButtonTouchInset,
     touchEnd: Dp = LineButtonTouchInset,
 ) {
@@ -685,8 +687,9 @@ private fun ComposerLineButton(
         MovoMotion.fast(),
         label = "lineButtonBg",
     )
-    // 电平每帧变化：只在绘制阶段读，不让按钮随电平重组。
-    val pulseState = rememberSmoothedLevelState(if (active) level else 0f)
+    // 电平每帧变化：原始电平在平滑协程里读，平滑值只在绘制阶段读，按钮与输入框都不随电平重组。
+    val currentActive by rememberUpdatedState(active)
+    val pulseState = rememberSmoothedLevelState { if (currentActive) level() else 0f }
     val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     val vertical = (MovoSize.touchTarget - MovoSize.controlSmall) / 2
     Box(
@@ -834,6 +837,7 @@ private fun dictationStyle(pending: Pair<Int, Int>) = androidx.compose.foundatio
 /**
  * 刚确认的一段（Q2「语音字幕由未确认变确认」，`fast`）：颜色三级色 → 主色、模糊 2 → 0。这段单独放进图层，
  * 用 SrcIn 着色画出过渡中的颜色并模糊，其余文字照常；进度只在绘制阶段读取，不触发重组。
+ * 两条裁切路径（这一段 / 其余部分）只随区间、排版与滚动变化，过渡期间逐帧复用，不再每帧求字形区域与路径差集。
  */
 private fun Modifier.dictationConfirmBlur(
     range: () -> Pair<Int, Int>?,
@@ -843,6 +847,9 @@ private fun Modifier.dictationConfirmBlur(
 ): Modifier = drawWithCache {
     val layer = obtainGraphicsLayer()
     val blurMax = 2.dp.toPx()
+    var cachedKey: Any? = null
+    var rangePath: androidx.compose.ui.graphics.Path? = null
+    var restPath: androidx.compose.ui.graphics.Path? = null
     onDrawWithContent {
         val p = progress()
         val confirming = range()
@@ -858,15 +865,21 @@ private fun Modifier.dictationConfirmBlur(
             drawContent()
             return@onDrawWithContent
         }
-        val rangePath = result.getPathForRange(start, end).apply {
-            translate(androidx.compose.ui.geometry.Offset(0f, -scroll().toFloat()))
+        val offsetY = scroll()
+        val key = listOf(start, end, offsetY, result, size)
+        if (key != cachedKey) {
+            val segment = result.getPathForRange(start, end).apply {
+                translate(androidx.compose.ui.geometry.Offset(0f, -offsetY.toFloat()))
+            }
+            val everything = androidx.compose.ui.graphics.Path().apply {
+                addRect(androidx.compose.ui.geometry.Rect(androidx.compose.ui.geometry.Offset.Zero, size))
+            }
+            rangePath = segment
+            restPath = androidx.compose.ui.graphics.Path.combine(androidx.compose.ui.graphics.PathOperation.Difference, everything, segment)
+            cachedKey = key
         }
-        val everything = androidx.compose.ui.graphics.Path().apply {
-            addRect(androidx.compose.ui.geometry.Rect(androidx.compose.ui.geometry.Offset.Zero, size))
-        }
-        val rest = androidx.compose.ui.graphics.Path.combine(androidx.compose.ui.graphics.PathOperation.Difference, everything, rangePath)
         val content = this
-        clipPath(rest) { content.drawContent() }
+        clipPath(restPath!!) { content.drawContent() }
         val radius = blurMax * (1f - p)
         layer.renderEffect = if (radius > 0.05f) {
             androidx.compose.ui.graphics.BlurEffect(radius, radius, androidx.compose.ui.graphics.TileMode.Decal)
@@ -878,7 +891,7 @@ private fun Modifier.dictationConfirmBlur(
             androidx.compose.ui.graphics.BlendMode.SrcIn,
         )
         layer.record { content.drawContent() }
-        clipPath(rangePath) { drawLayer(layer) }
+        clipPath(rangePath!!) { drawLayer(layer) }
     }
 }
 

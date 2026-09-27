@@ -8,7 +8,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,17 +36,18 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.BlurEffect
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import io.github.fartown.movo.R
 import io.github.fartown.movo.ui.components.movo.MovoOrb
@@ -72,6 +72,10 @@ import io.github.fartown.movo.ui.theme.MovoTypography
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.roundToInt
+import kotlin.math.sqrt
 import top.yukonga.miuix.kmp.basic.Text
 
 /** 「全部能力 ›」打开工具能力目录；由 App 根提供（对话浮层里为 null，不显示该入口）。 */
@@ -337,32 +341,144 @@ private fun EntranceItem(step: Int, content: @Composable () -> Unit) {
 
 /**
  * 背景光晕（Figma `atmosphere`）：左上丁香、右上蜜桃两团径向柔光，模糊 60；首页与会话页都有，位置不动。
+ *
+ * 光晕是静态的：按尺寸先在 1/6 分辨率上画好并做一次高斯模糊（[atmosphereImage]），之后只按原尺寸双线性放大绘制。
+ * 原来用 60 的 `BlurEffect` 实时模糊整块 520 高的图层：图层被提升为离屏层，每次重画（屏幕一次、顶栏磨砂取景一次）
+ * 都可能重新跑一遍大半径模糊。柔光只有低频变化，低分辨率模糊后放大与原效果一致。
  */
 @Composable
 internal fun MovoAtmosphere(modifier: Modifier = Modifier) {
-    val density = androidx.compose.ui.platform.LocalDensity.current
-    val blur = with(density) { 60.dp.toPx() }
-    Canvas(
+    Spacer(
         modifier = modifier
             .fillMaxWidth()
             .height(520.dp)
-            .graphicsLayer { renderEffect = BlurEffect(blur, blur, TileMode.Decal) },
-    ) {
-        val unit = size.width / 412f
-        fun haze(x: Float, y: Float, w: Float, h: Float, color: Color) {
-            val topLeft = Offset(x * unit, y * unit)
-            val ovalSize = Size(w * unit, h * unit)
-            drawOval(
-                brush = Brush.radialGradient(
-                    colors = listOf(color.copy(alpha = 0.55f), color.copy(alpha = 0f)),
-                    center = Offset(topLeft.x + ovalSize.width / 2, topLeft.y + ovalSize.height / 2),
-                    radius = maxOf(ovalSize.width, ovalSize.height) / 2,
-                ),
-                topLeft = topLeft,
-                size = ovalSize,
-            )
-        }
-        haze(-140f, -40f, 360f, 300f, Color(0xFFC9B8FF))
-        haze(150f, -120f, 300f, 240f, Color(0xFFFFD3BF))
+            .drawWithCache {
+                val width = size.width.roundToInt()
+                val height = size.height.roundToInt()
+                val image = atmosphereImage(width, height, blurRadius = 60.dp.toPx())
+                onDrawBehind {
+                    if (image != null) {
+                        drawImage(image, dstSize = IntSize(width, height), filterQuality = FilterQuality.Low)
+                    }
+                }
+            },
+    )
+}
+
+/** 上一次生成的光晕（按像素尺寸与模糊半径复用）：欢迎页每次重新出现不必重算。 */
+private var atmosphereCache: Triple<Int, Int, Float>? = null
+private var atmosphereCacheImage: ImageBitmap? = null
+
+/**
+ * 生成光晕位图：与原实现同样的两团径向渐变（设计宽 412 等比缩放），再按 `BlurEffect(60)` 的等效 sigma
+ * （Android 换算 0.57735 × 半径 + 0.5）做高斯模糊。模糊用三次盒式模糊近似，画布外按透明处理（同 `TileMode.Decal`）。
+ */
+private fun atmosphereImage(width: Int, height: Int, blurRadius: Float): ImageBitmap? {
+    if (width <= 0 || height <= 0) return null
+    val key = Triple(width, height, blurRadius)
+    if (key == atmosphereCache) return atmosphereCacheImage
+    val w = ceil(width * ATMOSPHERE_SCALE).toInt().coerceAtLeast(1)
+    val h = ceil(height * ATMOSPHERE_SCALE).toInt().coerceAtLeast(1)
+    val bitmap = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    canvas.scale(w.toFloat() / width, h.toFloat() / height)
+    val unit = width / 412f
+    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    fun haze(x: Float, y: Float, ovalW: Float, ovalH: Float, color: Color) {
+        val left = x * unit
+        val top = y * unit
+        val right = left + ovalW * unit
+        val bottom = top + ovalH * unit
+        paint.shader = android.graphics.RadialGradient(
+            (left + right) / 2f,
+            (top + bottom) / 2f,
+            maxOf(ovalW, ovalH) * unit / 2f,
+            intArrayOf(color.copy(alpha = 0.55f).toArgb(), color.copy(alpha = 0f).toArgb()),
+            null,
+            android.graphics.Shader.TileMode.CLAMP,
+        )
+        canvas.drawOval(left, top, right, bottom, paint)
+    }
+    haze(-140f, -40f, 360f, 300f, Color(0xFFC9B8FF))
+    haze(150f, -120f, 300f, 240f, Color(0xFFFFD3BF))
+    val sigma = (0.57735f * blurRadius + 0.5f) * (w.toFloat() / width)
+    gaussianBlurDecal(bitmap, sigma)
+    return bitmap.asImageBitmap().also {
+        atmosphereCache = key
+        atmosphereCacheImage = it
     }
 }
+
+/** 就地高斯模糊（三次盒式模糊近似，预乘透明度下计算，画布外视为透明）。位图很小（约 180 × 330），只算一次。 */
+private fun gaussianBlurDecal(bitmap: android.graphics.Bitmap, sigma: Float) {
+    val w = bitmap.width
+    val h = bitmap.height
+    val pixels = IntArray(w * h)
+    bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
+    // 0 = 透明度，1–3 = 预乘后的 R G B。
+    val channels = Array(4) { FloatArray(w * h) }
+    for (i in pixels.indices) {
+        val c = pixels[i]
+        val a = (c ushr 24) / 255f
+        channels[0][i] = a
+        channels[1][i] = ((c shr 16) and 0xFF) / 255f * a
+        channels[2][i] = ((c shr 8) and 0xFF) / 255f * a
+        channels[3][i] = (c and 0xFF) / 255f * a
+    }
+    val scratch = FloatArray(w * h)
+    for (box in boxSizesForGauss(sigma, passes = 3)) {
+        val r = (box - 1) / 2
+        if (r <= 0) continue
+        for (channel in channels) {
+            boxBlurPass(channel, scratch, w, h, r, horizontal = true)
+            boxBlurPass(scratch, channel, w, h, r, horizontal = false)
+        }
+    }
+    for (i in pixels.indices) {
+        val a = channels[0][i].coerceIn(0f, 1f)
+        pixels[i] = if (a <= 0f) {
+            0
+        } else {
+            val r = (channels[1][i] / a).coerceIn(0f, 1f)
+            val g = (channels[2][i] / a).coerceIn(0f, 1f)
+            val b = (channels[3][i] / a).coerceIn(0f, 1f)
+            ((a * 255f + 0.5f).toInt() shl 24) or ((r * 255f + 0.5f).toInt() shl 16) or
+                ((g * 255f + 0.5f).toInt() shl 8) or (b * 255f + 0.5f).toInt()
+        }
+    }
+    bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
+}
+
+/** 一维盒式模糊（滑动窗口，窗口外按 0 计，分母恒为窗口宽度，等同透明边缘）。 */
+private fun boxBlurPass(src: FloatArray, dst: FloatArray, w: Int, h: Int, r: Int, horizontal: Boolean) {
+    val lines = if (horizontal) h else w
+    val length = if (horizontal) w else h
+    val stride = if (horizontal) 1 else w
+    val window = (2 * r + 1).toFloat()
+    for (line in 0 until lines) {
+        val base = if (horizontal) line * w else line
+        var sum = 0f
+        for (k in 0..minOf(r, length - 1)) sum += src[base + k * stride]
+        for (i in 0 until length) {
+            dst[base + i * stride] = sum / window
+            val add = i + r + 1
+            val remove = i - r
+            if (add < length) sum += src[base + add * stride]
+            if (remove >= 0) sum -= src[base + remove * stride]
+        }
+    }
+}
+
+/** 用 [passes] 次盒式模糊逼近给定 sigma 的高斯模糊时各次的窗口宽度（奇数）。 */
+private fun boxSizesForGauss(sigma: Float, passes: Int): IntArray {
+    if (sigma <= 0f) return IntArray(passes) { 1 }
+    val ideal = sqrt(12f * sigma * sigma / passes + 1f)
+    var lower = floor(ideal).toInt()
+    if (lower % 2 == 0) lower--
+    val upper = lower + 2
+    val m = ((12f * sigma * sigma - passes * lower * lower - 4f * passes * lower - 3f * passes) / (-4f * lower - 4f)).roundToInt()
+    return IntArray(passes) { if (it < m) lower else upper }
+}
+
+/** 光晕位图相对屏幕像素的分辨率。 */
+private const val ATMOSPHERE_SCALE = 1f / 6f
