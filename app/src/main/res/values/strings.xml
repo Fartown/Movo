@@ -1332,4 +1332,5 @@
     <item quantity="one">%d</item>
     <item quantity="other">%d</item>
   </plurals>
+  <string name="provider_models_fetching">Fetching…</string>
 </resources>

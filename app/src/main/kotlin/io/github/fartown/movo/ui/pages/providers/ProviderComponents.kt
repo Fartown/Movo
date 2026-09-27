@@ -46,12 +46,14 @@ import top.yukonga.miuix.kmp.basic.Text
 internal fun ProviderSection(
     title: String?,
     modifier: Modifier = Modifier,
-    animateHeight: Boolean = false,
+    /** 标题右侧补充（三级色，变化时交叉淡化），例如模型列表的增删结果。 */
+    trailing: String? = null,
+    animateHeight: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     MovoCard(modifier = modifier, animateHeight = animateHeight) {
         if (title != null) {
-            CardTitle(title)
+            CardTitle(title, trailing = trailing)
         }
         content()
     }

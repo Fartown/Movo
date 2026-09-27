@@ -205,12 +205,12 @@
   <string name="movo_run_view_log">查看日志</string>
   <string name="movo_copy">复制</string>
   <string name="movo_overlay_step">第 %1$d 步·%2$s</string>
-  <string name="movo_overlay_paused_step">已暂停·第 %1$d 步</string>
   <string name="movo_overlay_preparing">正在准备</string>
   <string name="movo_overlay_done">已完成·点开查看</string>
   <string name="movo_overlay_failed">没有完成·点开查看</string>
   <string name="movo_overlay_pause">暂停</string>
   <string name="movo_overlay_resume">继续</string>
+  <string name="movo_overlay_paused">已暂停</string>
   <string name="movo_overlay_type">打字补充</string>
   <string name="movo_overlay_orb">Movo</string>
   <string name="movo_overlay_voice_context">第 %1$d 步·说的话会补充到当前任务</string>

@@ -19,6 +19,8 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
@@ -37,8 +39,8 @@ import io.github.fartown.movo.ui.theme.MovoSize
 
 /**
  * Lazy 列表项的增删与高度变化：新增淡入 `fast`，删除淡出 120ms，其余项移位 `standard`；
- * [contentSize] 为 true 时列表项自身高度变化也按 `standard` 过渡；它会按动画高度裁切，卡片请改用
- * `MovoCard(animateHeight = true)`，否则过渡期间卡片底部圆角被裁成直角。
+ * [contentSize] 为 true 时列表项自身高度变化也按 `standard` 过渡；它会按动画高度裁切，卡片不要用它——
+ * `MovoCard` 默认在底色里面做高度过渡（否则过渡期间卡片底部圆角被裁成直角）。
  * 上方有卡片正在按 [contentSize] 长高 / 缩短时，下方各项传 [placement] = false：位置每帧直接跟着卡片的实际高度走，
  * 天然同步；否则移位动画每帧重新起跑、落后于卡片，会与卡片叠在一起。
  * 减少动画时只淡入淡出，位置与高度直接到位。
@@ -161,22 +163,32 @@ internal class MovoListResize {
 
 internal val LocalMovoListResize = androidx.compose.runtime.staticCompositionLocalOf<MovoListResize?> { null }
 
+/** 所在 [MovoCard] 的「卡内正在变高」信号：卡内展开区过渡期间，卡片的高度动画直接跟随，不再叠一层。 */
+internal val LocalMovoCardResize = androidx.compose.runtime.staticCompositionLocalOf<MovoListResize?> { null }
+
 @Composable
 internal fun ProvideMovoListResize(content: @Composable () -> Unit) {
     val resize = remember { MovoListResize() }
     androidx.compose.runtime.CompositionLocalProvider(LocalMovoListResize provides resize, content = content)
 }
 
-/** 展开状态 [key] 变化（不含首次出现）时，在高度过渡期间通知所在列表。 */
+/** 展开状态 [key] 变化（不含首次出现）时，在高度过渡期间通知所在列表与所在卡片。 */
 @Composable
 internal fun ReportMovoListResize(key: Any?) {
-    val resize = LocalMovoListResize.current ?: return
+    val resize = LocalMovoListResize.current
+    val card = LocalMovoCardResize.current
+    if (resize == null && card == null) return
     // 首次组合（页面打开时已展开 / 已收起）不算一次过渡；之后每次 [key] 变化才在高度过渡期间通知列表。
     val initial = remember { key }
     val changed = remember { booleanArrayOf(false) }
     if (key != initial) changed[0] = true
     if (!changed[0]) return
-    LaunchedEffect(key) { resize.hold() }
+    LaunchedEffect(key) {
+        coroutineScope {
+            if (card != null) launch { card.hold() }
+            if (resize != null) launch { resize.hold() }
+        }
+    }
 }
 
 /** 过渡结束后再多等一两帧才恢复移位动画。 */

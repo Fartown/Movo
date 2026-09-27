@@ -1,5 +1,17 @@
 package io.github.fartown.movo.ui.components.movo
 
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.snap
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
+import io.github.fartown.movo.ui.theme.LocalReducedMotion
+import io.github.fartown.movo.ui.theme.MovoMotion
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -12,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -69,20 +82,58 @@ internal fun MovoCard(
     elevation: MovoElevation = MovoElevation.E0,
     bottomPadding: androidx.compose.ui.unit.Dp = MovoSpacing.xs,
     /**
-     * 卡内行增删、说明出现时卡片高度按 `standard` 过渡（9.3「展开 / 收起」）。高度动画挂在卡片底色里面：
-     * 挂在外层（传进 [modifier]）时会按动画高度裁掉卡片自己的底边，过渡期间底部圆角变成直角。
+     * 卡内行增删、说明出现时卡片高度按 `standard` 过渡（9.3「展开 / 收起」，默认开：卡片高度不能跳变）。
+     * 高度动画挂在卡片底色里面：挂在外层（传进 [modifier]）时会按动画高度裁掉卡片自己的底边，过渡期间底部圆角变成直角。
+     * 高度变化时通知所在 Lazy 列表（[MovoListResize]），下方各项跟着卡片的实际高度走，不落后、不重叠；
+     * 卡内有展开区（[MovoExpandable]）正在长高 / 收起时，卡片直接跟随它的每一帧，不再叠一层自己的过渡。
      */
-    animateHeight: Boolean = false,
+    animateHeight: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val reduced = LocalReducedMotion.current
+    val animate = animateHeight && !reduced
+    val inner = remember { MovoListResize() }
+    val listResize = LocalMovoListResize.current
+    val scope = rememberCoroutineScope()
+    val report = remember { MovoCardHeightReport() }
     Column(
         modifier = modifier
             .fillMaxWidth()
             .movoSurface(elevation = elevation)
-            .then(if (animateHeight) Modifier.movoAnimateContentSize() else Modifier)
+            .then(
+                if (animate) {
+                    Modifier.animateContentSize(if (inner.active) snap() else MovoMotion.standard<IntSize>())
+                } else {
+                    Modifier
+                },
+            )
+            // 在高度动画内侧量内容的目标高度：只在目标变化时回调一次，不逐帧。
+            .then(
+                if (animate && listResize != null) {
+                    Modifier.onSizeChanged { size -> report.onTargetHeight(size.height, inner.active, scope, listResize) }
+                } else {
+                    Modifier
+                },
+            )
             .padding(bottom = bottomPadding),
-        content = content,
-    )
+    ) {
+        CompositionLocalProvider(LocalMovoCardResize provides inner) { content() }
+    }
+}
+
+/** 记录卡片内容的目标高度；变化时让所在列表在一次高度过渡的时长里跟随（重新计时，不叠加）。 */
+private class MovoCardHeightReport {
+    private var lastHeight = -1
+    private var hold: Job? = null
+
+    fun onTargetHeight(height: Int, innerActive: Boolean, scope: CoroutineScope, list: MovoListResize) {
+        val previous = lastHeight
+        lastHeight = height
+        // 首次排版不算变化；卡内展开区在动时由它自己通知列表。
+        if (previous < 0 || previous == height || innerActive) return
+        hold?.cancel()
+        hold = scope.launch { list.hold() }
+    }
 }
 
 /** `Card/Title` 卡内标题：13 Medium 次要色，左右 16，上 16、下 4；右侧可放补充（三级色）。 */
@@ -106,9 +157,24 @@ internal fun CardTitle(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        if (trailing != null) {
-            Spacer(Modifier.width(MovoSpacing.sm))
-            Text(trailing, style = MovoTypography.labelRegular, color = MovoColors.textTertiary, maxLines = 1)
+        // 右侧补充变化（出现、换字、消失）交叉淡化 `fast`（9.3「值变化」），单行过长省略，不挤动标题所在行的高度。
+        androidx.compose.animation.Crossfade(
+            targetState = trailing,
+            animationSpec = MovoMotion.fast(),
+            label = "cardTitleTrailing",
+        ) { value ->
+            if (value != null) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.widthIn(max = CardTitleTrailingMax)) {
+                    Spacer(Modifier.width(MovoSpacing.sm))
+                    Text(
+                        value,
+                        style = MovoTypography.labelRegular,
+                        color = MovoColors.textTertiary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
     }
 }
@@ -184,3 +250,6 @@ internal fun MovoSectionHeader(
         }
     }
 }
+
+/** 卡内标题右侧补充的最大宽度：再长就省略，不挤掉标题。 */
+private val CardTitleTrailingMax = 200.dp

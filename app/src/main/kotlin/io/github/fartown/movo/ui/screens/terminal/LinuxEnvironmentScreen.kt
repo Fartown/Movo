@@ -365,7 +365,7 @@ internal fun LinuxEnvironmentScreen(
             )
         }
         item(key = "files-card") {
-            MovoCard(modifier = movoAnimateItem(), animateHeight = true) {
+            MovoCard(modifier = movoAnimateItem()) {
                 CardTitle(stringResource(R.string.linux_environment_files))
                 SettingsRow(
                     title = stringResource(R.string.capability_workspace),
@@ -391,7 +391,7 @@ internal fun LinuxEnvironmentScreen(
 
         if (selectedToolsReady) {
             item(key = "optional-tools-card") {
-                MovoCard(modifier = movoAnimateItem(), animateHeight = true) {
+                MovoCard(modifier = movoAnimateItem()) {
                     CardTitle(stringResource(R.string.ui_optional_tools_3097d6))
                     packageProfileUis.forEach { profileUi ->
                         val ready = profileReady[profileUi.target] == true

@@ -163,6 +163,7 @@ import io.github.fartown.movo.ui.model.ToolActivityMessageUi
 import io.github.fartown.movo.ui.model.ToolActivityStatusUi
 import io.github.fartown.movo.ui.model.ToolSummaryMessageUi
 import io.github.fartown.movo.ui.model.UserMessageUi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filter
@@ -772,11 +773,6 @@ internal fun AgentWorkProcess(
     }
 }
 
-/** 思考步骤「两行预览 ↔ 全文」的错开时长（见 WorkThinkingStep）。 */
-private const val THINKING_EXPAND_OUT_MS = 50
-private const val THINKING_EXPAND_IN_DELAY_MS = 16
-private const val THINKING_COLLAPSE_OUT_MS = 100
-private const val THINKING_COLLAPSE_IN_MS = 40
 
 /** 执行中步骤超过这个数时折叠较早的步骤（规范 8.1「工作过程 · 展开」）。 */
 private const val WORK_FOLD_THRESHOLD = 6
@@ -866,12 +862,13 @@ private fun ThinkingLiveSeconds(key: String) {
 }
 
 /**
- * 思考中的滚动预览（规范 8.1，Figma「14-0」）：高度固定两行（`Label/Regular` 行高 18 × 2），显示最新写出的内容：
+ * 思考中的滚动预览（规范 8.1，Figma「14-0」）：高度固定两行（`Label/Regular`，行高与思考正文同为 20 × 2），显示最新写出的内容：
  * 文字按底部对齐排版、超出的往上推出视口，上沿 14 渐隐；新字只会让文字上移，高度不变，不随段落切换跳动。
  */
 @Composable
 private fun ThinkingTicker(content: String, modifier: Modifier = Modifier) {
-    val style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular
+    // 与思考正文同一行高（13 / 20）：思考结束换成全文前两行时高度不变（C3）。
+    val style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular.copy(lineHeight = THINKING_BODY_LINE_HEIGHT)
     // 只排最后一段文字：预览只露两行，全文重排没有意义。
     val tail = remember(content) { content.takeLast(THINKING_TICKER_CHARS).plainPreview() }
     val fadePx = with(androidx.compose.ui.platform.LocalDensity.current) { 14.dp.toPx() }
@@ -2083,8 +2080,8 @@ private fun chatMarkdownTypography(tone: ChatMarkdownTone) = markdownTypography(
     bullet = chatMarkdownBodyStyle(tone),
     list = chatMarkdownBodyStyle(tone),
     quote = MiuixTheme.textStyles.body2.copy(
-        fontSize = if (tone == ChatMarkdownTone.Answer) 15.sp else 14.sp,
-        lineHeight = if (tone == ChatMarkdownTone.Answer) 24.sp else 22.sp,
+        fontSize = if (tone == ChatMarkdownTone.Answer) 15.sp else 13.sp,
+        lineHeight = if (tone == ChatMarkdownTone.Answer) 24.sp else 20.sp,
         color = chatMarkdownTextColor(ChatMarkdownTone.Thinking),
     ),
     code = TextStyle(
@@ -2141,7 +2138,8 @@ private fun chatMarkdownTextColor(tone: ChatMarkdownTone): Color =
     if (tone == ChatMarkdownTone.Answer) {
         MiuixTheme.colorScheme.onSurface
     } else {
-        MiuixTheme.colorScheme.onSurfaceVariantSummary
+        // 思考正文三级色（规范 8.1「思考」；折叠态两行与展开后全文同一份排版，C3）。
+        io.github.fartown.movo.ui.theme.MovoColors.textTertiary
     }
 
 @Composable
@@ -3475,64 +3473,131 @@ private fun WorkThinkingStep(
             }
         }
         if (message.content.isNotBlank()) {
-            // 展开 / 收起（规范 9.3）：高度 `standard`。两行预览（纯文本 13 三级色）与全文（Markdown 14 次要色）排版不同，
-            // 同时半透明就会叠字，所以按「先出后进」错开：
-            // 展开：预览 50ms 内快速淡出，全文 16ms 起快速淡入——重叠只有一两帧且预览已很淡，新长出的区域也不空；
-            // 收起：全文陪着高度收完，最后 100ms 才快速淡出，两行预览在最后 40ms 淡入，几乎不重叠。
-            AnimatedContent(
-                targetState = expanded,
-                transitionSpec = {
-                    val motion = io.github.fartown.movo.ui.theme.MovoMotion
-                    if (targetState) {
-                        fadeIn(tween(motion.FAST, delayMillis = THINKING_EXPAND_IN_DELAY_MS, easing = motion.EasingEnter))
-                            .togetherWith(fadeOut(tween(THINKING_EXPAND_OUT_MS, easing = motion.EasingEnter)))
-                    } else {
-                        fadeIn(tween(THINKING_COLLAPSE_IN_MS, delayMillis = motion.STANDARD - THINKING_COLLAPSE_IN_MS, easing = motion.EasingEnter))
-                            .togetherWith(
-                                fadeOut(tween(THINKING_COLLAPSE_OUT_MS, delayMillis = motion.STANDARD - THINKING_COLLAPSE_OUT_MS, easing = motion.EasingEnter)),
-                            )
-                    }.using(androidx.compose.animation.SizeTransform { _, _ -> motion.standard() })
-                },
-                contentAlignment = Alignment.TopStart,
-                label = "thinkingStepContent",
-            ) { showFull ->
-                ReportWorkCardInnerResize()
-                val contentModifier = Modifier.fillMaxWidth().padding(start = 28.dp, top = 2.dp)
-                if (!showFull && message.isStreaming) {
-                    // 思考中：固定两行高的滚动预览，显示最新写出的内容，不随段落换行跳高（2026-09-27 定）。
+            // 思考中且没点开：固定两行高的滚动预览（最新写出的内容，2026-09-27 定）。
+            // 其余情况（思考完、或思考中点开）用同一段思考正文，只裁切可见高度（C3，见 [ThinkingFoldableBody]）；
+            // 思考结束时预览换成全文前两行一次（交叉淡化 `fast`，两者同为两行高、同字号，不跳）。
+            val tickerMode = message.isStreaming && !expanded
+            var tickerShown by remember(message.id) { mutableStateOf(false) }
+            if (tickerMode) tickerShown = true
+            val contentModifier = Modifier.fillMaxWidth().padding(start = 28.dp, top = 2.dp)
+            androidx.compose.animation.Crossfade(
+                targetState = tickerMode,
+                animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
+                label = "thinkingStepMode",
+            ) { ticker ->
+                if (ticker) {
                     ThinkingTicker(message.content, modifier = contentModifier)
-                } else if (!showFull) {
-                    Text(
-                        // 思考完：整段开头两行，末尾省略。
-                        text = remember(message.content) { message.content.plainPreview() },
-                        style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular,
-                        color = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = contentModifier,
-                    )
-                } else if (streamingState != null && (message.isStreaming || completedMarkdownState == null)) {
-                    StreamingMarkdown(
-                        state = streamingState,
-                        content = message.content,
-                        isStreaming = message.isStreaming,
-                        onRevealCompleteChange = {},
-                        tone = ChatMarkdownTone.Thinking,
-                        modifier = contentModifier,
-                    )
                 } else {
-                    StableMarkdown(
-                        content = message.content,
-                        tone = ChatMarkdownTone.Thinking,
-                        markdownState = stableMarkdownState,
-                        parsedState = completedMarkdownState,
+                    ThinkingFoldableBody(
+                        expanded = expanded,
+                        startCollapsed = tickerShown,
                         modifier = contentModifier,
-                    )
+                    ) {
+                        if (streamingState != null && (message.isStreaming || completedMarkdownState == null)) {
+                            StreamingMarkdown(
+                                state = streamingState,
+                                content = message.content,
+                                isStreaming = message.isStreaming,
+                                onRevealCompleteChange = {},
+                                tone = ChatMarkdownTone.Thinking,
+                            )
+                        } else {
+                            StableMarkdown(
+                                content = message.content,
+                                tone = ChatMarkdownTone.Thinking,
+                                markdownState = stableMarkdownState,
+                                parsedState = completedMarkdownState,
+                            )
+                        }
+                    }
                 }
             }
         }
     }
 }
+
+/**
+ * 思考正文的折叠 / 展开（Figma 候选「动效全集」C3，2026-09-27 定）：折叠态显示的就是同一段正文的前两行，
+ * 第二行底部渐隐（不用省略号）；展开 / 收起只改变可见高度——裁切区平滑长高 / 收回 `standard`，
+ * 底部渐隐同步淡出 / 淡入。文字始终是同一份排版，不替换、不交叉淡化，所以不会叠影。
+ *
+ * 正文按不限高度只测量一次，动画期间每帧只在本节点的排版阶段改可见高度，子项不重新测量；
+ * 高度变化期间让执行卡外层跟随（[LocalWorkCardInnerResize]），整张卡只有这一层高度动画。
+ * [startCollapsed]：从滚动预览切过来时（思考中点开、思考结束）从两行高开始过渡，而不是直接到位。
+ */
+@Composable
+private fun ThinkingFoldableBody(
+    expanded: Boolean,
+    startCollapsed: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val reduced = io.github.fartown.movo.ui.theme.LocalReducedMotion.current
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val collapsedPx = with(density) { (THINKING_BODY_LINE_HEIGHT * 2).roundToPx() }
+    val fadePx = with(density) { THINKING_BODY_LINE_HEIGHT.toPx() }
+    val target = if (expanded) 1f else 0f
+    val progress = remember { androidx.compose.animation.core.Animatable(if (startCollapsed) 0f else target) }
+    val resize = LocalWorkCardInnerResize.current
+    val firstRun = remember { booleanArrayOf(true) }
+    LaunchedEffect(target) {
+        val initial = firstRun[0]
+        firstRun[0] = false
+        if (progress.value == target) return@LaunchedEffect
+        if (reduced) {
+            progress.snapTo(target)
+            return@LaunchedEffect
+        }
+        if (!initial || startCollapsed) {
+            kotlinx.coroutines.coroutineScope {
+                launch { resize?.holdFor(io.github.fartown.movo.ui.theme.MovoMotion.STANDARD.toLong() + WORK_CARD_RESIZE_SLACK_MS) }
+                progress.animateTo(target, io.github.fartown.movo.ui.theme.MovoMotion.standard())
+            }
+        } else {
+            progress.snapTo(target)
+        }
+    }
+    // 正文是否超出两行：只有超出时才画底部渐隐（在排版阶段写入，绘制阶段读取）。
+    val overflows = remember { booleanArrayOf(false) }
+    Box(
+        modifier = modifier
+            .layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints.copy(minHeight = 0, maxHeight = androidx.compose.ui.unit.Constraints.Infinity))
+                val collapsed = minOf(collapsedPx, placeable.height)
+                overflows[0] = placeable.height > collapsedPx
+                val height = collapsed + ((placeable.height - collapsed) * progress.value).toInt()
+                layout(placeable.width, height) { placeable.place(0, 0) }
+            }
+            .clipToBounds()
+            .graphicsLayer {
+                compositingStrategy = if (progress.value < 1f && overflows[0]) {
+                    androidx.compose.ui.graphics.CompositingStrategy.Offscreen
+                } else {
+                    androidx.compose.ui.graphics.CompositingStrategy.Auto
+                }
+            }
+            .drawWithContent {
+                drawContent()
+                val fade = 1f - progress.value
+                if (fade > 0f && overflows[0]) {
+                    drawRect(
+                        brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                            0f to androidx.compose.ui.graphics.Color.Black,
+                            1f to androidx.compose.ui.graphics.Color.Black.copy(alpha = 1f - fade),
+                            startY = size.height - fadePx,
+                            endY = size.height,
+                        ),
+                        blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
+                    )
+                }
+            },
+    ) {
+        content()
+    }
+}
+
+/** 思考正文行高（[chatMarkdownBodyStyle] Thinking：13 / 20）；折叠态露出两行。 */
+private val THINKING_BODY_LINE_HEIGHT = 20.sp
 
 /** 展开（规范 9.3「展开 / 收起」）：高度 `standard`，内容与高度同时开始淡入 `fast`（不等待，第一帧就有内容）。 */
 private fun expandContentEnter(): androidx.compose.animation.EnterTransition = fadeIn(

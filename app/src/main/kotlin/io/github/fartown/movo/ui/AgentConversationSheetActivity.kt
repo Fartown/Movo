@@ -49,6 +49,7 @@ import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
@@ -126,8 +127,13 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
     private var sheetOffset by mutableFloatStateOf(0f)
     /** 后方遮罩 `overlay/scrim` 的显示比例 0–1。 */
     private var scrimFraction by mutableFloatStateOf(0f)
-    /** 浮层本身的透明度（Q4 球 ↔ 浮层前 30% 淡入）；不影响遮罩。 */
+    /** 浮层整体透明度：从球展开前隐藏（裁切起点就位前不露出整块浮层）；不影响遮罩。 */
     private var sheetAlpha by mutableFloatStateOf(1f)
+    /**
+     * 浮层内容的透明度（Q4 球 ↔ 浮层，Figma 候选「动效全集」A5b）：容器（浮层底色）从球心揭开时始终不透明，
+     * 只有内容 0.2 → 1 淡入；收起时内容在末段淡出。只在绘制阶段读取。
+     */
+    private var sheetContentAlpha by mutableFloatStateOf(1f)
     /** Q4 球 ↔ 浮层：起点（悬浮球玻璃圆，浮层自身坐标）；为 null 时不做轮廓裁切。 */
     private var orbMorphStart by mutableStateOf<android.graphics.RectF?>(null)
     private var orbMorphProgress by mutableFloatStateOf(1f)
@@ -243,6 +249,7 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                         BackHandler { dismissAnimated() }
                         val pane = agentState.conversationPaneState
                         val statusBars = WindowInsets.statusBars
+                        val sheetSurface = io.github.fartown.movo.ui.theme.MovoColors.bgCanvas
                         // Miuix 弹出菜单挂在 Scaffold 上：Scaffold 放在铺满窗口的根上，菜单按窗口坐标定位，不被浮层裁切。
                         top.yukonga.miuix.kmp.basic.Scaffold(
                             modifier = Modifier.fillMaxSize(),
@@ -282,27 +289,31 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                                                 clip = false
                                             }
                                         }
+                                        // 揭开期间容器本身不透明（内容另有透明度）：裁切区里先铺一层浮层底色。
+                                        .drawBehind { if (orbMorphStart != null) drawRect(sheetSurface) }
                                         // 浮层本身拦下触摸，空白处不落到下面的遮罩上（遮罩点一下会关闭浮层）。
                                         .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(requireUnconsumed = false) } },
                                 ) {
                                     val title = pane.conversations.firstOrNull { it.id == pane.selectedConversationId }?.title
                                         ?.takeUnless { keyguardGate.locked }
                                         ?: getString(R.string.app_name)
-                                    AgentConversationSheet(
-                                        title = headerNotice ?: title,
-                                        titleIsNotice = headerNotice != null,
-                                        onDrag = ::drag,
-                                        onDragStopped = ::endDrag,
-                                        onOpenConversation = ::expandIntoApp,
-                                        onClose = ::dismissAnimated,
-                                        expandProgress = { expandProgress },
-                                        // 原来窗口只盖住下半屏、收不到状态栏 insets；现在窗口全屏，浮层顶边碰到状态栏时才让出重叠部分。
-                                        topInset = {
-                                            val root = rootHeight
-                                            if (root <= 0) 0 else (statusBars.getTop(density) - (root - windowHeight).coerceAtLeast(0)).coerceAtLeast(0)
-                                        },
-                                    ) {
-                                        SheetBody()
+                                    Box(Modifier.fillMaxSize().graphicsLayer { alpha = sheetContentAlpha }) {
+                                        AgentConversationSheet(
+                                            title = headerNotice ?: title,
+                                            titleIsNotice = headerNotice != null,
+                                            onDrag = ::drag,
+                                            onDragStopped = ::endDrag,
+                                            onOpenConversation = ::expandIntoApp,
+                                            onClose = ::dismissAnimated,
+                                            expandProgress = { expandProgress },
+                                            // 原来窗口只盖住下半屏、收不到状态栏 insets；现在窗口全屏，浮层顶边碰到状态栏时才让出重叠部分。
+                                            topInset = {
+                                                val root = rootHeight
+                                                if (root <= 0) 0 else (statusBars.getTop(density) - (root - windowHeight).coerceAtLeast(0)).coerceAtLeast(0)
+                                            },
+                                        ) {
+                                            SheetBody()
+                                        }
                                     }
                                 }
                             }
@@ -513,8 +524,11 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
     }
 
     /**
-     * Q4 球 ↔ 浮层（规范 9.3.2 / 9.5）：浮层轮廓在悬浮球玻璃圆（圆角 16）与浮层（顶部圆角 28）之间插值，
-     * `slow` + `standard`；浮层在前 30% 淡入（收起时后 30% 淡出），遮罩同步。[orb] 为屏幕坐标。
+     * Q4 球 ↔ 浮层（规范 9.3.2 / 9.5，Figma 候选「动效全集」A5b，与悬浮球展开卡 A1 同一套「从球里揭开」）：
+     * 裁切轮廓从悬浮球玻璃圆（圆角 16）长成浮层（顶部圆角 28）。浮层内容按最终布局原位绘制、不缩放不位移，
+     * 随容器边缘露出；容器底色从第一帧起不透明，只有内容淡入。[orb] 为屏幕坐标。
+     * - 展开：轮廓 `slow` + `standard`；内容 0.2 → 1，240ms + `enter`；遮罩 240ms `standard` 淡入。
+     * - 收起：轮廓 250ms + `exit` 原路缩回球心；内容在末段淡出（80ms 后开始，结束前 30ms 淡完）；遮罩 170ms + `exit` 淡出。
      * 轮廓、透明度、遮罩都是 Compose 图层属性，只在绘制阶段读取，不改窗口。
      */
     private fun morphWithOrb(orb: android.graphics.Rect, expand: Boolean, onEnd: () -> Unit) {
@@ -527,15 +541,27 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
             offset(-windowOnScreen[0].toFloat(), -(windowOnScreen[1] + sheetTop).toFloat())
         }
         sheetOffset = 0f
+        // 裁切起点已就位：浮层可以露出（之前为了不闪出整块浮层一直隐藏）。
+        sheetAlpha = 1f
         orbMorphProgress = if (expand) 0f else 1f
+        val duration = if (expand) MovoMotion.SLOW.toLong() else MovoMotion.SLOW_EXIT.toLong()
+        sheetContentAlpha = if (expand) ORB_CONTENT_START_ALPHA else 1f
         sheetAnimator = ValueAnimator.ofFloat(orbMorphProgress, if (expand) 1f else 0f).apply {
-            duration = MovoMotion.SLOW.toLong()
-            interpolator = EASE_STANDARD
+            this.duration = duration
+            interpolator = if (expand) EASE_STANDARD else EASE_EXIT
             addUpdateListener {
-                val progress = it.animatedValue as Float
-                orbMorphProgress = progress
-                sheetAlpha = (progress / 0.3f).coerceIn(0f, 1f)
-                setScrim(progress)
+                orbMorphProgress = it.animatedValue as Float
+                val elapsed = it.currentPlayTime.toFloat()
+                if (expand) {
+                    val fade = (elapsed / MovoMotion.STANDARD).coerceIn(0f, 1f)
+                    sheetContentAlpha = ORB_CONTENT_START_ALPHA + (1f - ORB_CONTENT_START_ALPHA) * EASE_ENTER.getInterpolation(fade)
+                    setScrim(EASE_STANDARD.getInterpolation(fade))
+                } else {
+                    val fadeSpan = (duration - ORB_CONTENT_FADE_OUT_DELAY_MS - ORB_CONTENT_FADE_OUT_TAIL_MS).coerceAtLeast(1L)
+                    val fade = ((elapsed - ORB_CONTENT_FADE_OUT_DELAY_MS) / fadeSpan).coerceIn(0f, 1f)
+                    sheetContentAlpha = 1f - EASE_EXIT.getInterpolation(fade)
+                    setScrim(1f - EASE_EXIT.getInterpolation((elapsed / MovoMotion.STANDARD_EXIT).coerceIn(0f, 1f)))
+                }
             }
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 private var cancelled = false
@@ -553,6 +579,7 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         orbMorphStart = null
         orbMorphProgress = 1f
         sheetAlpha = 1f
+        sheetContentAlpha = 1f
     }
 
     /**
@@ -782,6 +809,11 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
             orbOrigin = null
             return origin?.takeIf { android.os.SystemClock.uptimeMillis() - orbOriginAt <= ORB_ORIGIN_TTL_MS }
         }
+        /** 从球揭开时内容的起始透明度（A5b：内容从 20% 淡入，一开始就能看出是对话）。 */
+        private const val ORB_CONTENT_START_ALPHA = 0.2f
+        /** 收回球里时内容淡出的起点与收尾（相对收起开始 / 结束）。 */
+        private const val ORB_CONTENT_FADE_OUT_DELAY_MS = 80L
+        private const val ORB_CONTENT_FADE_OUT_TAIL_MS = 30L
         private val EASE_ENTER = android.view.animation.PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
         private val EASE_EXIT = android.view.animation.PathInterpolator(0.3f, 0f, 0.8f, 0.15f)
         private val EASE_STANDARD = android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f)

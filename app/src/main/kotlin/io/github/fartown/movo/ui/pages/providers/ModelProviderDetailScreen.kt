@@ -441,8 +441,9 @@ private fun ProviderConfigTab(
         }
 
         item(key = "actions") {
+            // 按钮下方的保存 / 测试结果说明出现时整组高度 `standard` 过渡（不是卡片，没有圆角可裁，直接用列表项的高度动画）。
             Column(
-                modifier = movoAnimateItem().fillMaxWidth(),
+                modifier = movoAnimateItem(contentSize = true).fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(MovoSpacing.md),
             ) {
                 MovoBlockButton(

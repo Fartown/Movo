@@ -206,12 +206,12 @@
   <string name="movo_run_view_log">View log</string>
   <string name="movo_copy">Copy</string>
   <string name="movo_overlay_step">Step %1$d · %2$s</string>
-  <string name="movo_overlay_paused_step">Paused · step %1$d</string>
   <string name="movo_overlay_preparing">Getting ready</string>
   <string name="movo_overlay_done">Done · tap to view</string>
   <string name="movo_overlay_failed">Didn\'t finish · tap to view</string>
   <string name="movo_overlay_pause">Pause</string>
   <string name="movo_overlay_resume">Continue</string>
+  <string name="movo_overlay_paused">Paused</string>
   <string name="movo_overlay_type">Type a follow-up</string>
   <string name="movo_overlay_orb">Movo</string>
   <string name="movo_overlay_voice_context">Step %1$d · What you say is added to the task</string>

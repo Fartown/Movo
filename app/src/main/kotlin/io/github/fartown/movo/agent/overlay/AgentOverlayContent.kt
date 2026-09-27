@@ -3,6 +3,7 @@ package io.github.fartown.movo.agent.overlay
 import android.graphics.BlurMaskFilter
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateContentSize
@@ -59,7 +60,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.dropShadow
-import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.semantics.liveRegion
 import android.view.MotionEvent
 import androidx.compose.ui.input.pointer.pointerInteropFilter
@@ -76,7 +77,6 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -650,11 +650,15 @@ internal fun AgentOverlayBubble(
 
     AnimatedVisibility(
         visible = entered && visible,
-        enter = fadeIn(if (reduced) MovoMotion.fast() else tween(PANEL_MORPH_IN_MS / 3)),
-        exit = fadeOut(if (reduced) MovoMotion.fastExit() else tween(PANEL_MORPH_OUT_MS, easing = MovoMotion.EasingExit)),
+        // 进场不整体淡入：起点就是与球重合的玻璃圆（球在上层盖着），由下面的揭开过渡负责；
+        // 退场等揭开缩回球心后再移除。减少动画时只淡入淡出。
+        enter = if (reduced) fadeIn(MovoMotion.fast()) else EnterTransition.None,
+        // 退场期间整层保持不透明（容器缩回球心、内容在末段淡出由下面两个过渡负责），缩完那一刻才移除。
+        exit = if (reduced) fadeOut(MovoMotion.fastExit()) else fadeOut(tween(durationMillis = 1, delayMillis = PANEL_MORPH_OUT_MS)),
     ) {
-        // 球 ↔ 卡片的形变进度：0 = 与悬浮球重合的 32 圆，1 = 卡片。
-        val morph by transition.animateFloat(
+        // 规范 9.5「展开卡」/ Figma 候选「动效全集」A1「揭开」：圆角容器（玻璃底 + 阴影）从球心 32 圆长到卡片边界，
+        // 卡片内容按最终布局原位绘制、不缩放不位移，随容器边缘露出。0 = 与球重合的 32 圆，1 = 卡片。
+        val reveal = transition.animateFloat(
             transitionSpec = {
                 if (targetState == androidx.compose.animation.EnterExitState.Visible) {
                     tween(PANEL_MORPH_IN_MS, easing = MovoMotion.EasingStandard)
@@ -662,11 +666,22 @@ internal fun AgentOverlayBubble(
                     tween(PANEL_MORPH_OUT_MS, easing = MovoMotion.EasingExit)
                 }
             },
-            label = "panelMorph",
+            label = "panelReveal",
         ) { if (it == androidx.compose.animation.EnterExitState.Visible || reduced) 1f else 0f }
-        val shape = RoundedCornerShape(16.dp)
+        // 内容透明度：展开时从 0.2 起 240ms `enter` 到 1；收起时在收起末段淡到 0。
+        val contentFade = transition.animateFloat(
+            transitionSpec = {
+                if (targetState == androidx.compose.animation.EnterExitState.Visible) {
+                    tween(MovoMotion.STANDARD, easing = MovoMotion.EasingEnter)
+                } else {
+                    tween(PANEL_MORPH_OUT_MS, easing = MovoMotion.EasingExit)
+                }
+            },
+            label = "panelContentFade",
+        ) { if (it == androidx.compose.animation.EnterExitState.Visible || reduced) 1f else 0f }
+        val entering = transition.targetState == androidx.compose.animation.EnterExitState.Visible
         // 展开卡窗口在球那一侧多留一条与球重叠的通道（PANEL_ORB_LANE，AgentRuntimeService.bubbleLayoutParams）：
-        // 形变从球心开始，起点必须落在本窗口里，否则前几帧被窗口边缘裁掉，看起来是从边缘冒出来。
+        // 容器从球心开始长，起点必须落在本窗口里，否则前几帧被窗口边缘裁掉，看起来是从边缘冒出来。
         // 通道盖住了悬浮球，点它等同点球（收起）。
         Box {
             Column(
@@ -678,22 +693,14 @@ internal fun AgentOverlayBubble(
                         bottom = 12.dp,
                     )
                     .width(224.dp)
-                    .orbMorph(progress = { morph }, anchorEnd = anchorEnd)
-                    // 卡片高度随内容动画变化：用硬件阴影（RenderNode 按轮廓实时算），不再每帧重画 32 模糊的位图阴影（审查 A10）。
-                    // 色调取规范第 7 章暖灰阴影色；系统会再乘主题的 ambient / spot 透明度，spot 取一半使主阴影接近 `0 12 32 −8 / 10%`。
-                    .shadow(
-                        elevation = 12.dp,
-                        shape = shape,
-                        clip = false,
-                        ambientColor = MovoColors.shadow,
-                        spotColor = MovoColors.shadow.copy(alpha = 0.5f),
-                    )
-                    .clip(shape)
-                    .background(GlassSurface)
-                    .border(0.5.dp, MovoColors.borderHairline, shape)
+                    // 容器的裁切、阴影、玻璃底与描边都按当前揭开矩形画，只在绘制阶段读进度，不重组。
+                    // 阴影用硬件阴影（RenderNode 按轮廓实时算），跟随揭开形状，过渡中不丢阴影、不出方角（审查 A10）。
+                    .orbReveal(progress = { reveal.value }, anchorEnd = anchorEnd)
                     .padding(4.dp)
-                    // 内容在形变 30%–100% 淡入：前段只有玻璃底色从球里长出来。
-                    .graphicsLayer { alpha = ((morph - 0.45f) / 0.55f).coerceIn(0f, 1f) },
+                    .graphicsLayer {
+                        val f = contentFade.value
+                        alpha = if (entering) PANEL_CONTENT_START_ALPHA + (1f - PANEL_CONTENT_START_ALPHA) * f else f
+                    },
             ) {
                 val voiceMode = voice.active && !supplementMode
                 Crossfade(
@@ -781,7 +788,7 @@ private fun PanelHeader(state: AgentOverlayState) {
     ) {
         val title = when {
             state.phase == AgentOverlayPhase.FAILED -> state.status.localizedText()
-            paused && stepCount > 0 -> stringResource(R.string.movo_overlay_paused_step, stepCount)
+            // 暂停时标题不变（2026-09-27 定，防跳闪）：只把右侧计时原位换成「已暂停」。
             current != null -> stringResource(R.string.movo_overlay_step, stepCount, current.title)
             else -> state.status.localizedText()
         }
@@ -807,11 +814,23 @@ private fun PanelHeader(state: AgentOverlayState) {
         state.elapsedMillis(clock)?.let { elapsed ->
             Spacer(Modifier.width(8.dp))
             val seconds = elapsed / 1000
-            Text(
-                String.format(java.util.Locale.ROOT, "%02d:%02d", seconds / 60, seconds % 60),
-                style = MovoTypography.numericLabel,
-                color = MovoColors.textSecondary,
-            )
+            // 计时 ↔「已暂停」原位交叉淡化 `fast`：两段文字叠在同一格里，格宽取两者较宽的一个，暂停 / 继续时标题不被挤动。
+            val pausedLabel = animateFloatAsState(if (paused) 1f else 0f, MovoMotion.fast(), label = "panelPausedLabel")
+            Box(contentAlignment = Alignment.CenterEnd) {
+                Text(
+                    String.format(java.util.Locale.ROOT, "%02d:%02d", seconds / 60, seconds % 60),
+                    style = MovoTypography.numericLabel,
+                    color = MovoColors.textSecondary,
+                    modifier = Modifier.graphicsLayer { alpha = 1f - pausedLabel.value },
+                )
+                Text(
+                    stringResource(R.string.movo_overlay_paused),
+                    style = MovoTypography.labelMedium,
+                    color = MovoColors.textSecondary,
+                    maxLines = 1,
+                    modifier = Modifier.graphicsLayer { alpha = pausedLabel.value },
+                )
+            }
         }
     }
 }
@@ -865,7 +884,17 @@ private fun RecentSteps(state: AgentOverlayState) {
                             else -> StepIcon.FAILED
                         }
                         // 状态图标交叉淡化 `fast`（加载圈 → ✓ / ✕ / ‖）。
-                        Crossfade(targetState = icon, animationSpec = MovoMotion.fast(), modifier = Modifier.size(12.dp), label = "panelStepIcon") { current ->
+                        // 图标状态切换：交叉淡化 + 缩放 0.72 ↔ 1 `fast`（规范 9.3.1「图标状态切换」）。
+                        AnimatedContent(
+                            targetState = icon,
+                            transitionSpec = {
+                                (fadeIn(MovoMotion.fast()) + scaleIn(MovoMotion.fast(), initialScale = 0.72f)) togetherWith
+                                    (fadeOut(MovoMotion.fastExit()) + scaleOut(MovoMotion.fastExit(), targetScale = 0.72f))
+                            },
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.size(12.dp),
+                            label = "panelStepIcon",
+                        ) { current ->
                             Box(Modifier.size(12.dp), contentAlignment = Alignment.Center) {
                                 when (current) {
                                     StepIcon.PAUSED -> MovoIcon(MovoIcons.Pause, null, size = 12.dp, tint = MovoColors.textSecondary)
@@ -943,15 +972,10 @@ private fun PanelActions(
             CompactCircle(MovoIcons.AudioLines, stringResource(R.string.movo_voice_conversation), onStartVoice)
         }
         Spacer(Modifier.weight(1f))
-        Crossfade(targetState = phase == AgentOverlayPhase.PAUSED, animationSpec = MovoMotion.fast(), label = "panelActions") { paused ->
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (paused) {
-                    CompactPill(null, stringResource(R.string.movo_work_end_task), primary = false, onClick = onStop)
-                    CompactPill(MovoIcons.Play, stringResource(R.string.movo_overlay_resume), primary = true, onClick = onResume)
-                } else {
-                    CompactPill(MovoIcons.Pause, stringResource(R.string.movo_overlay_pause), primary = false, onClick = onPause)
-                }
-            }
+        // 执行中与暂停时始终两个胶囊（2026-09-27 定，防跳闪）：「结束任务」+ 状态胶囊；暂停只让状态胶囊原位变化。
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            CompactPill(null, stringResource(R.string.movo_work_end_task), primary = false, onClick = onStop)
+            PauseResumePill(paused = phase == AgentOverlayPhase.PAUSED, onPause = onPause, onResume = onResume)
         }
     }
     }
@@ -1131,6 +1155,72 @@ private fun CompactPill(icon: MovoIconData?, label: String, primary: Boolean, on
     }
 }
 
+/**
+ * 状态胶囊：「‖ 暂停」↔「▶ 继续」原位变化（规范 9.5「展开卡暂停 / 继续」，Figma A4）。
+ * 底色 `glass/fill` ↔ `action/primary-bg` 过渡 `standard`；图标交叉淡化 + 缩放 0.72 ↔ 1、文字交叉淡化，都是 `fast`。
+ * 两段文字叠在同一格里，胶囊宽度取两者较宽的一个，切换时不变宽、不挤动左边的「结束任务」。
+ */
+@Composable
+private fun PauseResumePill(paused: Boolean, onPause: () -> Unit, onResume: () -> Unit) {
+    val shape = RoundedCornerShape(12.dp)
+    val bg = animateColorAsState(
+        if (paused) MovoColors.actionPrimaryBg else MovoColors.glassFill,
+        MovoMotion.standard(),
+        label = "pauseResumeBg",
+    )
+    val toResume = animateFloatAsState(if (paused) 1f else 0f, MovoMotion.fast(), label = "pauseResumeLabel")
+    Box(
+        modifier = Modifier
+            .height(32.dp)
+            .movoClickable(PressKind.Solid, shape = shape, onClick = if (paused) onResume else onPause),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            modifier = Modifier
+                .height(24.dp)
+                .clip(shape)
+                .drawBehind { drawRect(bg.value) }
+                .padding(start = 8.dp, end = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AnimatedContent(
+                targetState = paused,
+                transitionSpec = {
+                    (fadeIn(MovoMotion.fast()) + scaleIn(MovoMotion.fast(), initialScale = 0.72f)) togetherWith
+                        (fadeOut(MovoMotion.fastExit()) + scaleOut(MovoMotion.fastExit(), targetScale = 0.72f))
+                },
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.size(12.dp),
+                label = "pauseResumeIcon",
+            ) { resume ->
+                MovoIcon(
+                    if (resume) MovoIcons.Play else MovoIcons.Pause,
+                    null,
+                    size = 12.dp,
+                    tint = if (resume) MovoColors.actionPrimaryFg else MovoColors.textPrimary,
+                )
+            }
+            Spacer(Modifier.width(4.dp))
+            Box(contentAlignment = Alignment.CenterStart) {
+                Text(
+                    stringResource(R.string.movo_overlay_pause),
+                    style = MovoTypography.microMedium,
+                    color = MovoColors.textPrimary,
+                    maxLines = 1,
+                    modifier = Modifier.graphicsLayer { alpha = 1f - toResume.value },
+                )
+                Text(
+                    stringResource(R.string.movo_overlay_resume),
+                    style = MovoTypography.microMedium,
+                    color = MovoColors.actionPrimaryFg,
+                    maxLines = 1,
+                    modifier = Modifier.graphicsLayer { alpha = toResume.value },
+                )
+            }
+        }
+    }
+}
+
 /** 补充输入：最多 4 行；「取消」「发送」。窗口在此期间可获焦以弹出键盘。 */
 @Composable
 private fun SupplementInput(
@@ -1207,49 +1297,77 @@ private fun SupplementInput(
     }
 }
 
-/** 展开卡从悬浮球长出 / 缩回的时长（规范 9.5「悬浮球 → 展开卡」）。收起须短于窗口移除的延迟（BUBBLE_EXIT_MS 150）。 */
+/**
+ * 展开卡从悬浮球长出 / 缩回的时长（规范 9.5「悬浮球 → 展开卡」，Figma A1）：展开 `slow`，收起 `slow` 退场档 250。
+ * 收起须不长于窗口移除的延迟（AgentRuntimeService.BUBBLE_EXIT_MS）。
+ */
 private const val PANEL_MORPH_IN_MS = MovoMotion.SLOW
-private const val PANEL_MORPH_OUT_MS = 140
+internal const val PANEL_MORPH_OUT_MS = MovoMotion.SLOW_EXIT
 
 /** 卡片与窗口球侧边缘之间的通道：球窗口 44 + 卡片与球间距 8，正好盖住悬浮球（这一侧的阴影余量落在通道里）。 */
 internal val PANEL_ORB_LANE = 52.dp
 
+/** 展开时内容的起始透明度（Figma A1：从 20% 淡入）。 */
+private const val PANEL_CONTENT_START_ALPHA = 0.2f
+
 /**
- * 以悬浮球球心为锚点，把卡片从与球重合的 32 圆放大到自身大小。卡片与球的相对位置由窗口摆放决定
- * （AgentRuntimeService.bubbleLayoutParams）：卡片在球朝屏幕中心的一侧、间距 8；卡片底边比球窗口底边高 6，
- * 球窗口 44、球心在窗口中央。所以球心在卡片外侧 8 + 22、卡片底边上方 22 − 6。
- * 形变只在绘制阶段读取进度；形变期间按椭圆 → 圆角 16 裁切（缩放后起点正好是正圆），结束后不裁切，保留卡片阴影。
+ * 揭开容器：圆角矩形从与悬浮球重合的 32 圆（圆角 16）长到卡片边界（圆角 16），卡片内容不缩放、不位移。
+ * 卡片与球的相对位置由窗口摆放决定（AgentRuntimeService.bubbleLayoutParams）：卡片在球朝屏幕中心的一侧、间距 8；
+ * 卡片底边比球窗口底边高 6，球窗口 44、球心在窗口中央。所以球心在卡片外侧 8 + 22、卡片底边上方 22 − 6。
+ * 揭开矩形在起点时有一部分落在卡片外（球那一侧的通道里）：裁切只按轮廓（不裁到卡片边界），玻璃底也按矩形画，
+ * 所以第一帧就是一个完整的玻璃圆，不会从卡片边缘冒出来。
  */
-private fun Modifier.orbMorph(progress: () -> Float, anchorEnd: Boolean): Modifier = graphicsLayer {
-    val p = progress()
-    if (p >= 1f) return@graphicsLayer
-    val w = size.width
-    val h = size.height
-    if (w <= 0f || h <= 0f) return@graphicsLayer
-    val disc = 32.dp.toPx()
-    val sideGap = (8 + 22).dp.toPx()
-    val originX = if (anchorEnd) w + sideGap else -sideGap
-    val originY = h - (22 - 6).dp.toPx()
-    val sx = disc / w + (1f - disc / w) * p
-    val sy = disc / h + (1f - disc / h) * p
-    transformOrigin = TransformOrigin(originX / w, originY / h)
-    scaleX = sx
-    scaleY = sy
-    // 以球心为锚点缩放后，卡片中心离球心还差一段：起点平移到正好盖在球上，随进度归零。
-    translationX = -((w / 2f - originX) * (disc / w)) * (1f - p)
-    translationY = -((h / 2f - originY) * (disc / h)) * (1f - p)
-    val r = 16.dp.toPx()
-    val rx = w / 2f + (r - w / 2f) * p
-    val ry = h / 2f + (r - h / 2f) * p
-    shape = object : androidx.compose.ui.graphics.Shape {
-        override fun createOutline(
-            size: androidx.compose.ui.geometry.Size,
-            layoutDirection: androidx.compose.ui.unit.LayoutDirection,
-            density: androidx.compose.ui.unit.Density,
-        ) = androidx.compose.ui.graphics.Outline.Rounded(
-            androidx.compose.ui.geometry.RoundRect(0f, 0f, size.width, size.height, androidx.compose.ui.geometry.CornerRadius(rx, ry)),
+private fun Modifier.orbReveal(progress: () -> Float, anchorEnd: Boolean): Modifier = this
+    .graphicsLayer {
+        val rect = orbRevealRect(size, progress(), anchorEnd, density)
+        val r = 16.dp.toPx()
+        shape = object : androidx.compose.ui.graphics.Shape {
+            override fun createOutline(
+                size: androidx.compose.ui.geometry.Size,
+                layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+                density: androidx.compose.ui.unit.Density,
+            ) = androidx.compose.ui.graphics.Outline.Rounded(
+                androidx.compose.ui.geometry.RoundRect(rect, androidx.compose.ui.geometry.CornerRadius(r, r)),
+            )
+        }
+        clip = true
+        // 色调取规范第 7 章暖灰阴影色；系统会再乘主题的 ambient / spot 透明度，spot 取一半使主阴影接近 `0 12 32 −8 / 10%`。
+        shadowElevation = 12.dp.toPx()
+        ambientShadowColor = MovoColors.shadow
+        spotShadowColor = MovoColors.shadow.copy(alpha = 0.5f)
+    }
+    .drawBehind {
+        val rect = orbRevealRect(size, progress(), anchorEnd, density)
+        val r = androidx.compose.ui.geometry.CornerRadius(16.dp.toPx())
+        drawRoundRect(GlassSurface, topLeft = rect.topLeft, size = rect.size, cornerRadius = r)
+        val stroke = 0.5.dp.toPx()
+        drawRoundRect(
+            MovoColors.borderHairline,
+            topLeft = androidx.compose.ui.geometry.Offset(rect.left + stroke / 2f, rect.top + stroke / 2f),
+            size = androidx.compose.ui.geometry.Size(rect.width - stroke, rect.height - stroke),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(r.x - stroke / 2f),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(stroke),
         )
     }
-    clip = true
+
+/** 揭开进度 [p] 时容器在卡片坐标里的矩形：球心处 32 圆 → 卡片边界，四边各自线性插值。 */
+private fun orbRevealRect(
+    size: androidx.compose.ui.geometry.Size,
+    p: Float,
+    anchorEnd: Boolean,
+    density: Float,
+): androidx.compose.ui.geometry.Rect {
+    if (p >= 1f) return androidx.compose.ui.geometry.Rect(0f, 0f, size.width, size.height)
+    val half = 16f * density
+    val sideGap = (8 + 22) * density
+    val cx = if (anchorEnd) size.width + sideGap else -sideGap
+    val cy = size.height - (22 - 6) * density
+    fun lerp(a: Float, b: Float) = a + (b - a) * p
+    return androidx.compose.ui.geometry.Rect(
+        lerp(cx - half, 0f),
+        lerp(cy - half, 0f),
+        lerp(cx + half, size.width),
+        lerp(cy + half, size.height),
+    )
 }
 

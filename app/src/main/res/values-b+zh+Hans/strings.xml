@@ -1314,4 +1314,5 @@
   <plurals name="provider_mine_count">
     <item quantity="other">%d 个</item>
   </plurals>
+  <string name="provider_models_fetching">正在拉取…</string>
 </resources>

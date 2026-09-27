@@ -95,7 +95,7 @@ internal fun LinuxEnvironmentStatusCard(
     onAction: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    MovoCard(modifier = modifier, bottomPadding = 0.dp, animateHeight = true) {
+    MovoCard(modifier = modifier, bottomPadding = 0.dp) {
         Column(
             modifier = Modifier.padding(MovoSpacing.lg),
             verticalArrangement = Arrangement.spacedBy(MovoSpacing.md),
@@ -182,7 +182,7 @@ internal fun LinuxEnvironmentConfiguration(
     var showBackendDialog by remember { mutableStateOf(false) }
     val backendSelectable = rootGranted || backend == LinuxExecutionBackend.CHROOT
 
-    MovoCard(modifier = modifier, animateHeight = true) {
+    MovoCard(modifier = modifier) {
         CardTitle(stringResource(R.string.linux_environment_configuration))
         SettingsRow(
             title = stringResource(R.string.linux_distribution_title),

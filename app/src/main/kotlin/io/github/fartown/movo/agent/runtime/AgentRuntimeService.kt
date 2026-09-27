@@ -1248,7 +1248,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         scheduleBubbleAutoCollapse()
     }
 
-    /** 收起：先让展开卡播退场（120ms），再移除窗口。 */
+    /** 收起：先让展开卡缩回球心（250ms），再移除窗口。 */
     private fun collapseBubble() {
         val wasOpen = !collapsed.value
         collapsed.value = true
@@ -1996,7 +1996,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         const val ORB_WINDOW_DP = 44
         const val ORB_EDGE_DP = 8
         const val PANEL_SHADOW_DP = 12
-        const val BUBBLE_EXIT_MS = 150L
+        /** 展开卡先播完缩回球心（PANEL_MORPH_OUT_MS 250）再移除窗口；多留一帧余量。 */
+        const val BUBBLE_EXIT_MS = io.github.fartown.movo.agent.overlay.PANEL_MORPH_OUT_MS + 20L
 
         /** 任务在其他 App 里结束后，悬浮球保留 ✓ / ! 的时长。 */
         const val RESULT_ORB_HOLD_MS = 3_000L

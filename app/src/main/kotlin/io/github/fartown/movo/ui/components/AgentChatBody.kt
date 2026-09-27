@@ -182,13 +182,21 @@ internal fun AgentChatBody(
         latestContextUsage(messages, modelPickerState.selectedModel)
     }
 
-    val visibleMessages = remember(messages, messageEdit?.targetMessageId, messageEdit?.preserveFollowingMessages, isStreaming) {
-        AgentConversationRevisionReducer.visibleMessagesForEdit(
-            messages = messages,
-            targetMessageId = messageEdit?.takeUnless { it.preserveFollowingMessages }?.targetMessageId,
-        ).filterNot { message ->
+    // 编辑某条消息时，它后面的消息在预览里被「隐藏」（提交后才真正删除）。
+    // 时间线保留这些消息、只把它们收起（淡出 + 高度收起，取消编辑时反向展开，规范 9.3「列表增删」），
+    // 不从列表里拿掉——拿掉会一帧消失。其余逻辑（滚动、推荐追问、浏览器入口等）仍按隐藏后的列表计算。
+    val editHiddenTargetId = messageEdit?.takeUnless { it.preserveFollowingMessages }?.targetMessageId
+    val timelineMessages = remember(messages, isStreaming) {
+        messages.filterNot { message ->
             message is AgentMessageUi && message.content.isBlank()
         }.let { AgentFollowUpSuggestions.visible(it, isStreaming) }
+    }
+    val editHiddenIds = remember(messages, editHiddenTargetId) {
+        val kept = AgentConversationRevisionReducer.visibleMessagesForEdit(messages, editHiddenTargetId)
+        if (kept.size == messages.size) emptySet() else messages.drop(kept.size).mapTo(HashSet()) { it.id }
+    }
+    val visibleMessages = remember(timelineMessages, editHiddenIds) {
+        if (editHiddenIds.isEmpty()) timelineMessages else timelineMessages.filterNot { it.id in editHiddenIds }
     }
     // Initial result presentation starts at the latest turn. Window resizing and onResume do
     // not restart this effect, so a reader's position remains untouched afterwards.
@@ -260,6 +268,8 @@ internal fun AgentChatBody(
 
     AgentChatScaffold(
         visibleMessages = visibleMessages,
+        timelineMessages = timelineMessages,
+        editHiddenIds = editHiddenIds,
         hasMessages = visibleMessages.isNotEmpty(),
         scrollState = scrollState,
         input = input,
@@ -316,6 +326,9 @@ internal fun AgentChatBody(
 @OptIn(ExperimentalLayoutApi::class)
 private fun AgentChatScaffold(
     visibleMessages: List<AgentChatMessageUi>,
+    /** 时间线实际排出的消息：含编辑预览里被收起的后续消息（见 [editHiddenIds]）。 */
+    timelineMessages: List<AgentChatMessageUi>,
+    editHiddenIds: Set<String>,
     hasMessages: Boolean,
     scrollState: LazyListState,
     input: String,
@@ -442,7 +455,8 @@ private fun AgentChatScaffold(
         ) {
         if (hasMessages) {
             AgentConversationMessages(
-                visibleMessages = visibleMessages,
+                visibleMessages = timelineMessages,
+                editHiddenIds = editHiddenIds,
                 scrollState = scrollState,
                 isStreaming = isStreaming,
                 bottomInset = bottomPadding,
@@ -523,6 +537,8 @@ internal fun AgentConversationMessages(
     messageActionsEnabled: Boolean = false,
     editTargetMessageId: String? = null,
     currentBrowserMessageId: String? = null,
+    /** 编辑预览里被收起的消息（仍在时间线上，收起显示；取消编辑时展开回来）。 */
+    editHiddenIds: Set<String> = emptySet(),
     modifier: Modifier = Modifier,
 ) {
     val timelineEntries = remember(visibleMessages) { visibleMessages.toTimelineEntries() }
@@ -775,35 +791,37 @@ internal fun AgentConversationMessages(
                         val message = entry.message
                         // 删除 / 重新生成：内容先淡出 120ms，随后高度收起 `standard`，下方各行跟随上移（规范 9.3「列表增删」、9.4），
                         // 播完才真正改动列表，避免旧消息的退场与同位置的新流式消息重叠。
-                        LeavingItem(leaving = message.id in LocalLeavingMessages.current, modifier = itemModifier) {
-                        ChatMessageItem(
-                            message = message,
-                            retainedStreamingState = (message as? AgentMessageUi)
-                                ?.takeIf { it.isStreaming || streamingMarkdownStates.containsKey(it.id) }
-                                ?.let { agentMessage ->
-                                    streamingMarkdownStates.getOrPut(agentMessage.id) {
-                                        StreamingMarkdownState()
-                                    }
-                                },
-                            onSuggestionClick = onSuggestionClick,
-                            onRunTraceClick = onRunTraceClick,
-                            onOpenBrowser = onOpenBrowser,
-                            showBrowserShortcut = message is ToolActivityMessageUi &&
-                                message.toolName == "browser_use" &&
-                                message.id == currentBrowserMessageId,
-                            showCopyAction = message !is AgentMessageUi ||
-                                message.characterEditable || message.id in finalResultMessageIds,
-                            showMessageActions = message.id in finalResultMessageIds ||
-                                (message is AgentMessageUi && message.characterEditable),
-                            messageActionsEnabled = messageActionsEnabled,
-                            isEditing = message.id == editTargetMessageId,
-                            onEditMessage = onEditMessage,
-                            onDeleteMessage = onDeleteMessage,
-                            onRegenerateMessage = onRegenerateMessage,
-                            onSelectReplyCandidate = onSelectReplyCandidate,
-                            noticeActive = message.id == activeNoticeId,
-                            stoppedWithoutWork = message.id in stoppedWithoutWork,
-                        )
+                        EditHiddenItem(hidden = message.id in editHiddenIds, modifier = itemModifier) {
+                            LeavingItem(leaving = message.id in LocalLeavingMessages.current) {
+                                ChatMessageItem(
+                                    message = message,
+                                    retainedStreamingState = (message as? AgentMessageUi)
+                                        ?.takeIf { it.isStreaming || streamingMarkdownStates.containsKey(it.id) }
+                                        ?.let { agentMessage ->
+                                            streamingMarkdownStates.getOrPut(agentMessage.id) {
+                                                StreamingMarkdownState()
+                                            }
+                                        },
+                                    onSuggestionClick = onSuggestionClick,
+                                    onRunTraceClick = onRunTraceClick,
+                                    onOpenBrowser = onOpenBrowser,
+                                    showBrowserShortcut = message is ToolActivityMessageUi &&
+                                        message.toolName == "browser_use" &&
+                                        message.id == currentBrowserMessageId,
+                                    showCopyAction = message !is AgentMessageUi ||
+                                        message.characterEditable || message.id in finalResultMessageIds,
+                                    showMessageActions = message.id in finalResultMessageIds ||
+                                        (message is AgentMessageUi && message.characterEditable),
+                                    messageActionsEnabled = messageActionsEnabled,
+                                    isEditing = message.id == editTargetMessageId,
+                                    onEditMessage = onEditMessage,
+                                    onDeleteMessage = onDeleteMessage,
+                                    onRegenerateMessage = onRegenerateMessage,
+                                    onSelectReplyCandidate = onSelectReplyCandidate,
+                                    noticeActive = message.id == activeNoticeId,
+                                    stoppedWithoutWork = message.id in stoppedWithoutWork,
+                                )
+                            }
                         }
                     }
 
@@ -815,22 +833,26 @@ internal fun AgentConversationMessages(
                                 }
                             }
                         }
-                        AgentWorkProcess(
-                            id = entry.key,
-                            messages = entry.messages,
-                            // 本轮仍在进行：模型在两步之间思考时步骤都已完成，但执行卡不能当作完成收起。
-                            runActive = isStreaming && entry.key == lastWorkKey,
-                            answerStarted = entry.key in answeredWorkKeys,
-                            stepOffset = workStepOffsets[entry.key] ?: 0,
-                            outcome = workOutcomes[entry.key],
-                            onOpenBrowser = onOpenBrowser,
-                            currentBrowserMessageId = currentBrowserMessageId,
-                            retainedStreamingStates = streamingMarkdownStates,
-                            actionsEnabled = messageActionsEnabled,
-                            onEditMessage = onEditMessage,
-                            onDeleteMessage = onDeleteMessage,
+                        EditHiddenItem(
+                            hidden = editHiddenIds.isNotEmpty() && entry.messages.all { it.id in editHiddenIds },
                             modifier = itemModifier,
-                        )
+                        ) {
+                            AgentWorkProcess(
+                                id = entry.key,
+                                messages = entry.messages,
+                                // 本轮仍在进行：模型在两步之间思考时步骤都已完成，但执行卡不能当作完成收起。
+                                runActive = isStreaming && entry.key == lastWorkKey,
+                                answerStarted = entry.key in answeredWorkKeys,
+                                stepOffset = workStepOffsets[entry.key] ?: 0,
+                                outcome = workOutcomes[entry.key],
+                                onOpenBrowser = onOpenBrowser,
+                                currentBrowserMessageId = currentBrowserMessageId,
+                                retainedStreamingStates = streamingMarkdownStates,
+                                actionsEnabled = messageActionsEnabled,
+                                onEditMessage = onEditMessage,
+                                onDeleteMessage = onDeleteMessage,
+                            )
+                        }
                     }
                 }
             }
@@ -1426,6 +1448,39 @@ private fun LeavingItem(
                     delayMillis = io.github.fartown.movo.ui.theme.MovoMotion.FAST_EXIT,
                     easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard,
                 ),
+            ),
+    ) {
+        content()
+    }
+}
+
+/**
+ * 编辑预览里被收起的消息（规范 9.3「列表增删」）：进入编辑时内容先淡出 120ms，随后高度收起 `standard`，
+ * 下方跟随；取消编辑时高度展开 `standard`、内容同时淡入 `fast`。首次组合就处于收起状态时不播放。
+ * 提交编辑后这些消息才被真正删除，那时它们已经收起，删除本身不可见（真正删除仍立即退出，见列表项注释）。
+ */
+@androidx.compose.runtime.Composable
+private fun EditHiddenItem(
+    hidden: Boolean,
+    modifier: Modifier = Modifier,
+    content: @androidx.compose.runtime.Composable () -> Unit,
+) {
+    AnimatedVisibility(
+        visible = !hidden,
+        modifier = modifier,
+        enter = fadeIn(io.github.fartown.movo.ui.theme.MovoMotion.fast()) +
+            androidx.compose.animation.expandVertically(
+                io.github.fartown.movo.ui.theme.MovoMotion.standard(),
+                expandFrom = androidx.compose.ui.Alignment.Top,
+            ),
+        exit = fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) +
+            androidx.compose.animation.shrinkVertically(
+                tween(
+                    io.github.fartown.movo.ui.theme.MovoMotion.STANDARD,
+                    delayMillis = io.github.fartown.movo.ui.theme.MovoMotion.FAST_EXIT,
+                    easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard,
+                ),
+                shrinkTowards = androidx.compose.ui.Alignment.Top,
             ),
     ) {
         content()

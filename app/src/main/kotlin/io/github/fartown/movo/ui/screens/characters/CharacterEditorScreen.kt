@@ -1,7 +1,6 @@
 package io.github.fartown.movo.ui.screens.characters
 
 import androidx.compose.foundation.layout.Box
-import io.github.fartown.movo.ui.components.movo.movoAnimateContentSize
 import io.github.fartown.movo.ui.components.movo.movoAnimateItem
 import io.github.fartown.movo.ui.components.movo.MovoInlineError
 import io.github.fartown.movo.ui.components.movo.MovoExpandable
@@ -82,7 +81,7 @@ internal fun CharacterEditorScreen(
         }
         item(key = "greetings") {
             // 增删备用开场白：卡片高度 `standard` 过渡（9.3「列表增删」）。
-            MovoCard(modifier = Modifier.movoAnimateContentSize(), bottomPadding = MovoSpacing.md) {
+            MovoCard(bottomPadding = MovoSpacing.md) {
                 CardTitle("开场白")
                 CharacterTextField("默认开场白", card.firstMessage, { value -> store.updateDraft { it.withEdits(firstMessage = value) } }, !store.busy)
                 card.alternateGreetings.forEachIndexed { index, value ->

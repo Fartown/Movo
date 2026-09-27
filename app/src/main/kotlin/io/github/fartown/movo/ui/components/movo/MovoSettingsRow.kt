@@ -81,6 +81,8 @@ internal fun SettingsRow(
     enabled: Boolean = true,
     attention: Boolean = false,
     onLongClick: (() -> Unit)? = null,
+    /** 自定义说明位（与 [subtitle] 同一位置、同一最小行高）：说明要原位换字、限一行时用，例如拉取模型的状态。 */
+    subtitleContent: (@Composable () -> Unit)? = null,
     onClick: (() -> Unit)? = null,
 ) {
     val switch = trailing as? RowTrailing.Switch
@@ -131,7 +133,7 @@ internal fun SettingsRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = if (subtitle != null) 68.dp else 56.dp)
+                .heightIn(min = if (subtitle != null || subtitleContent != null) 68.dp else 56.dp)
                 .padding(horizontal = MovoSpacing.lg, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -157,7 +159,9 @@ internal fun SettingsRow(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (subtitle != null) {
+                if (subtitleContent != null) {
+                    subtitleContent()
+                } else if (subtitle != null) {
                     Text(subtitle, style = MovoTypography.labelRegular, color = MovoColors.textSecondary)
                 }
             }

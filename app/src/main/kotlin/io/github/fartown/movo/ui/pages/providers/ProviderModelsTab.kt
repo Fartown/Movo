@@ -32,6 +32,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -200,7 +202,9 @@ internal fun ProviderModelsTab(
     val selectedModelId by remember { RuntimeConfigRepository.selectedModelIdFlow() }.collectAsState(initial = null)
     var isFetching by remember { mutableStateOf(false) }
     var isMutatingModel by remember { mutableStateOf(false) }
-    var message by remember { mutableStateOf<String?>(null) }
+    // 拉取结果写在「从远端自动拉取」行的说明位，增删改结果写在模型列表标题右侧：都在原位换字，卡片高度不变（C6，防跳闪）。
+    var fetchStatus by remember { mutableStateOf<String?>(null) }
+    var listStatus by remember { mutableStateOf<String?>(null) }
     var editingModel by remember { mutableStateOf<Model?>(null) }
     var isCreatingModel by remember { mutableStateOf(false) }
     var editorError by remember { mutableStateOf<String?>(null) }
@@ -220,14 +224,6 @@ internal fun ProviderModelsTab(
     // 拉取期间不置灰整页：远端很快返回时整列表先变灰再恢复，看起来就是一闪；拉取行自身换加载圈并忽略重复点击，
     // 模型的增删改与同步都经 ModelRepository 的互斥锁串行，不会互相覆盖。
     val actionsEnabled = !isMutatingModel
-    // 拉取中（列表可能随同步刷新）到结果说明的高度过渡结束：下面各项位置跟随顶部卡片，不做移位动画。
-    var headerResizing by remember { mutableStateOf(false) }
-    LaunchedEffect(message) {
-        headerResizing = true
-        delay(MovoMotion.STANDARD.toLong() + HEADER_SETTLE_SLACK_MS)
-        headerResizing = false
-    }
-    val followHeader = isFetching || headerResizing
 
     val selectionBackState = rememberNavigationEventState(NavigationEventInfo.None)
     NavigationBackHandler(
@@ -256,15 +252,21 @@ internal fun ProviderModelsTab(
             overscrollEffect = null,
         ) {
             item(key = "actions", contentType = "section") {
-                // 结果说明出现 / 更换时卡片高度按 `standard` 过渡；这段时间下面各项不做移位动画，直接跟着卡片走（见 followHeader）。
+                // 「模型管理」卡片高度全程不变（规范「服务商详情 · 从远端拉取模型」）：拉取状态与结果都在这一行的说明位原位替换。
                 ProviderSection(
                     title = stringResource(R.string.ui_model_management_183414),
                     modifier = movoAnimateItem(),
-                    animateHeight = true,
                 ) {
+                    val endpointSummary = stringResource(R.string.provider_models_endpoint_summary, provider.baseUrl)
+                    val fetchingText = stringResource(R.string.provider_models_fetching)
                     SettingsRow(
                         title = context.getString(R.string.page_automatically_pull_from_remote_f883d0),
-                        subtitle = stringResource(R.string.provider_models_endpoint_summary, provider.baseUrl),
+                        subtitleContent = {
+                            FetchStatusText(
+                                text = if (isFetching) fetchingText else fetchStatus ?: endpointSummary,
+                                isError = !isFetching && fetchStatus?.startsWith(failPrefix) == true,
+                            )
+                        },
                         enabled = actionsEnabled,
                         trailing = RowTrailing.Custom {
                             // 下载图标 ↔ 加载圈交叉淡化 `fast`；标题与行状态不变，避免整行闪。
@@ -285,11 +287,10 @@ internal fun ProviderModelsTab(
                         onClick = onClick@{
                             if (isFetching) return@onClick
                             scope.launch {
-                                // 上一次的结果说明留到新结果出来再替换，不先清空（清空会让卡片先缩再涨）。
                                 isFetching = true
                                 try {
                                     val models = RemoteModelFetcher.fetch(provider).getOrElse { throwable ->
-                                        message = context.getString(
+                                        fetchStatus = context.getString(
                                             R.string.provider_error,
                                             throwable.message ?: throwable.javaClass.simpleName,
                                         )
@@ -305,7 +306,7 @@ internal fun ProviderModelsTab(
                                         RuntimeConfigRepository.syncToRemotePreferences(MovoApp.serviceInstance)
                                     }
                                     val filteredCount = models.size - chatModels.size
-                                    message = if (!sync.applied) {
+                                    fetchStatus = if (!sync.applied) {
                                         context.getString(R.string.page_the_remote_end_did_not_return_a_usable_conversation__781487)
                                     } else if (filteredCount > 0) {
                                         context.getString(
@@ -323,7 +324,7 @@ internal fun ProviderModelsTab(
                                 } catch (cancelled: CancellationException) {
                                     throw cancelled
                                 } catch (throwable: Throwable) {
-                                    message = context.getString(
+                                    fetchStatus = context.getString(
                                         R.string.provider_error,
                                         throwable.message ?: context.getString(R.string.provider_sync_failed),
                                     )
@@ -337,7 +338,7 @@ internal fun ProviderModelsTab(
                         title = stringResource(R.string.ui_add_custom_model_a5ddc0),
                         subtitle = stringResource(R.string.ui_manually_fill_in_the_display_name_and_model_id_077a7b),
                         enabled = actionsEnabled,
-                        showDivider = message != null,
+                        showDivider = false,
                         trailing = RowTrailing.Custom {
                             MovoIcon(MovoIcons.Plus, null, size = MovoSize.iconMedium, tint = MovoColors.textSecondary)
                         },
@@ -351,13 +352,6 @@ internal fun ProviderModelsTab(
                             )
                         },
                     )
-                    message?.let {
-                        ProviderStatusLine(
-                            message = it,
-                            isError = it.startsWith(failPrefix),
-                            modifier = Modifier.padding(horizontal = MovoSpacing.lg, vertical = MovoSpacing.md),
-                        )
-                    }
                 }
             }
 
@@ -366,7 +360,7 @@ internal fun ProviderModelsTab(
                     query = modelSearchQuery,
                     onQueryChange = { modelSearchQuery = it },
                     placeholder = stringResource(R.string.ui_search_model_df5586),
-                    modifier = movoAnimateItem(placement = !followHeader).padding(top = MovoSpacing.lg),
+                    modifier = movoAnimateItem().padding(top = MovoSpacing.lg),
                 )
             }
 
@@ -383,7 +377,8 @@ internal fun ProviderModelsTab(
                 item(key = "models_empty", contentType = "empty") {
                     ProviderSection(
                         title = modelListTitle,
-                        modifier = movoAnimateItem(placement = !followHeader).padding(top = MovoSpacing.lg),
+                        trailing = listStatus,
+                        modifier = movoAnimateItem().padding(top = MovoSpacing.lg),
                     ) {
                         Text(
                             text = if (provider.models.isEmpty()) {
@@ -401,7 +396,8 @@ internal fun ProviderModelsTab(
                 item(key = "models_title", contentType = "section_title") {
                     CardTitle(
                         text = modelListTitle,
-                        modifier = movoAnimateItem(placement = !followHeader)
+                        trailing = listStatus,
+                        modifier = movoAnimateItem()
                             .padding(top = MovoSpacing.lg)
                             .movoCardSegment(CardSegment.Top),
                     )
@@ -442,7 +438,7 @@ internal fun ProviderModelsTab(
                             }
                         },
                         // 列表增删（B7）：新增淡入、删除淡出，其余行移位 `standard`。
-                        modifier = movoAnimateItem(placement = !followHeader)
+                        modifier = movoAnimateItem()
                             .movoCardSegment(if (isLast) CardSegment.Bottom else CardSegment.Middle)
                             .padding(bottom = if (isLast) MovoSpacing.xs else 0.dp),
                     )
@@ -495,7 +491,7 @@ internal fun ProviderModelsTab(
                         val saved = ModelRepository.saveModel(provider.id, updated)
                         RuntimeConfigRepository.syncToRemotePreferences(MovoApp.serviceInstance)
                         editingModel = null
-                        message = context.getString(R.string.provider_model_saved, saved.displayName)
+                        listStatus = context.getString(R.string.provider_model_saved, saved.displayName)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (throwable: Throwable) {
@@ -530,12 +526,12 @@ internal fun ProviderModelsTab(
                 try {
                     ModelRepository.deleteModel(provider.id, model.id)
                     RuntimeConfigRepository.syncToRemotePreferences(MovoApp.serviceInstance)
-                    message = context.getString(R.string.provider_model_deleted, model.displayName)
+                    listStatus = context.getString(R.string.provider_model_deleted, model.displayName)
                     modelPendingDelete = null
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (throwable: Throwable) {
-                    message = context.getString(
+                    listStatus = context.getString(
                         R.string.provider_error,
                         throwable.message ?: context.getString(R.string.provider_delete_failed),
                     )
@@ -567,7 +563,7 @@ internal fun ProviderModelsTab(
                 try {
                     ModelRepository.deleteModels(provider.id, selectedModelIds)
                     RuntimeConfigRepository.syncToRemotePreferences(MovoApp.serviceInstance)
-                    message = context.resources.getQuantityString(
+                    listStatus = context.resources.getQuantityString(
                         R.plurals.provider_models_deleted,
                         deletedCount,
                         deletedCount,
@@ -578,7 +574,7 @@ internal fun ProviderModelsTab(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (throwable: Throwable) {
-                    message = context.getString(
+                    listStatus = context.getString(
                         R.string.provider_error,
                         throwable.message ?: context.getString(R.string.provider_delete_failed),
                     )
@@ -1070,5 +1066,26 @@ private fun capabilityTags(model: Model): List<String> {
     }
 }
 
-/** 结果说明高度过渡（`standard`）结束后再多等一两帧，才恢复下方各项的移位动画。 */
-private const val HEADER_SETTLE_SLACK_MS = 32L
+/** 「从远端自动拉取」行的说明：单行过长省略，内容变化时原位换字（旧字 120 快速淡出，新字 40ms 后 `fast` 淡入）。 */
+@Composable
+private fun FetchStatusText(text: String, isError: Boolean) {
+    androidx.compose.animation.AnimatedContent(
+        targetState = text to isError,
+        transitionSpec = {
+            // 旧字一开始就快速淡下去（standard），新字稍后淡入：两段文字几乎不同时可见，也不留空档。
+            fadeIn(tween(MovoMotion.FAST, delayMillis = MovoMotion.FAST_EXIT / 3, easing = MovoMotion.EasingEnter)) togetherWith
+                fadeOut(tween(MovoMotion.FAST_EXIT, easing = MovoMotion.EasingStandard))
+        },
+        contentAlignment = Alignment.CenterStart,
+        label = "fetchStatus",
+    ) { (value, error) ->
+        Text(
+            text = value,
+            style = MovoTypography.labelRegular,
+            color = if (error) MovoColors.textPrimary else MovoColors.textSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
