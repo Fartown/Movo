@@ -590,6 +590,7 @@ internal fun AgentWorkProcess(
         } ?: 0L
     }
     val glint = sawRunning && !running && !paused && failedIndex < 0 && outcome == null && runMillis >= 10_000L
+    val innerResize = remember { WorkCardInnerResize() }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -598,8 +599,19 @@ internal fun AgentWorkProcess(
             .workCardSurface { corner.value }
             // 只在执行中（步骤不断增加）时让卡片高度跟着过渡；收起 / 展开由下面的 AnimatedVisibility 直接驱动高度，
             // 两个一起用时外层过渡总慢半拍，收起后下面拖着一段空白（真机）。
-            .then(if (running || paused) Modifier.animateContentSize(io.github.fartown.movo.ui.theme.MovoMotion.standard()) else Modifier),
+            // 卡里有一层自己在做高度过渡（点开步骤结果、思考步骤展开、执行中手动收起卡片）时，外层不再叠一层过渡：
+            // 直接跟着里层每帧的高度走（snap），整张卡只有一层高度动画，也不会每帧两层都重新测量、外层落后半拍。
+            .then(
+                if (running || paused) {
+                    Modifier.animateContentSize(
+                        if (innerResize.active) androidx.compose.animation.core.snap() else io.github.fartown.movo.ui.theme.MovoMotion.standard(),
+                    )
+                } else {
+                    Modifier
+                },
+            ),
     ) {
+    androidx.compose.runtime.CompositionLocalProvider(LocalWorkCardInnerResize provides innerResize) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -715,6 +727,7 @@ internal fun AgentWorkProcess(
             exit = fadeOut(tween(io.github.fartown.movo.ui.theme.MovoMotion.STANDARD, easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingExit)) +
                 shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard()),
         ) {
+            ReportWorkCardInnerResize()
             Column {
                 Box(
                     modifier = Modifier
@@ -756,6 +769,7 @@ internal fun AgentWorkProcess(
                 }
             }
         }
+    }
     }
 }
 
@@ -3472,6 +3486,7 @@ private fun WorkThinkingStep(
                 contentAlignment = Alignment.TopStart,
                 label = "thinkingStepContent",
             ) { showFull ->
+                ReportWorkCardInnerResize()
                 val contentModifier = Modifier.fillMaxWidth().padding(start = 28.dp, top = 2.dp)
                 if (!showFull && message.isStreaming) {
                     // 思考中：固定两行高的滚动预览，显示最新写出的内容，不随段落换行跳高（2026-09-27 定）。
@@ -3522,6 +3537,40 @@ private fun expandContentEnter(): androidx.compose.animation.EnterTransition = f
 private fun expandContentExit(): androidx.compose.animation.ExitTransition =
     fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) +
         shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard())
+
+/**
+ * 执行卡里正在做高度过渡的里层数量（步骤结果展开、思考步骤展开 / 收起、执行中手动收起卡片）。
+ * 大于 0 时卡片外层的高度过渡改为直接跟随，避免两层高度动画叠在一起（见 [AgentWorkProcess]）。
+ */
+@androidx.compose.runtime.Stable
+internal class WorkCardInnerResize {
+    private var count by androidx.compose.runtime.mutableIntStateOf(0)
+    val active: Boolean get() = count > 0
+
+    suspend fun holdFor(millis: Long) {
+        count++
+        try {
+            kotlinx.coroutines.delay(millis)
+        } finally {
+            count--
+        }
+    }
+}
+
+internal val LocalWorkCardInnerResize = androidx.compose.runtime.staticCompositionLocalOf<WorkCardInnerResize?> { null }
+
+/**
+ * 放在执行卡里层 AnimatedVisibility / AnimatedContent 的内容开头：本层的进出目标一变，就在一次高度过渡
+ * （`standard`，再多留两帧）期间让卡片外层跟随，不再自己过渡。卡片外（历史消息、思考行）不起作用。
+ */
+@Composable
+private fun androidx.compose.animation.AnimatedVisibilityScope.ReportWorkCardInnerResize() {
+    val resize = LocalWorkCardInnerResize.current ?: return
+    val target = transition.targetState
+    LaunchedEffect(target) { resize.holdFor(io.github.fartown.movo.ui.theme.MovoMotion.STANDARD.toLong() + WORK_CARD_RESIZE_SLACK_MS) }
+}
+
+private const val WORK_CARD_RESIZE_SLACK_MS = 32L
 
 /** 思考摘要：去掉常见 Markdown 标记后折叠空白。 */
 private fun String.plainPreview(): String =
@@ -3621,6 +3670,7 @@ private fun WorkToolStep(
             exit = fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) +
                 shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard()),
         ) {
+            ReportWorkCardInnerResize()
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
