@@ -577,7 +577,8 @@ internal fun AgentOverlayRemoveZone(visible: Boolean) {
  * 左 = 打字补充（键盘）、语音对话（声波）；右 = 运行中「‖ 暂停」，暂停后「结束任务」+「▶ 继续」。同一时刻只出现一种「停」。
  * 暂停态：标题「已暂停·第 N 步」、计时冻结改次要色、当前步图标换成 ‖。
  * 进场从悬浮球里长出来（2026-09-27 定）：卡片先是与悬浮球重合的 32 圆，以球心为锚点放大成卡片，圆角由圆过渡到 16，
- * 内容在 30%–100% 淡入（`standard` + `enter`）；收起反向缩回球里（140ms + `exit`）。减少动画时只淡入淡出。
+ * 内容在 45%–100% 淡入（`slow` + `standard`，前后匀速，看得出从球里长出来）；收起反向缩回球里（140ms + `exit`）。
+ * 减少动画时只淡入淡出。
  * 语音对话进行中（[voice] active）切到语音模式（Figma「展开卡（语音模式）」）：状态行 → 字幕（最多 3 行，顶部淡出）→
  * 上下文 → 操作行（左「切回文字」，右不变）；内容区交叉淡化、高度同步 `standard`，操作行原位不动。
  */
@@ -645,7 +646,6 @@ internal fun AgentOverlayBubble(
         }
     }
 
-    StickyWindowHeight(maxHeight = PANEL_WINDOW_MAX_HEIGHT) {
     AnimatedVisibility(
         visible = entered && visible,
         enter = fadeIn(if (reduced) MovoMotion.fast() else tween(PANEL_MORPH_IN_MS / 3)),
@@ -655,7 +655,7 @@ internal fun AgentOverlayBubble(
         val morph by transition.animateFloat(
             transitionSpec = {
                 if (targetState == androidx.compose.animation.EnterExitState.Visible) {
-                    tween(PANEL_MORPH_IN_MS, easing = MovoMotion.EasingEnter)
+                    tween(PANEL_MORPH_IN_MS, easing = MovoMotion.EasingStandard)
                 } else {
                     tween(PANEL_MORPH_OUT_MS, easing = MovoMotion.EasingExit)
                 }
@@ -682,7 +682,7 @@ internal fun AgentOverlayBubble(
                 .border(0.5.dp, MovoColors.borderHairline, shape)
                 .padding(4.dp)
                 // 内容在形变 30%–100% 淡入：前段只有玻璃底色从球里长出来。
-                .graphicsLayer { alpha = ((morph - 0.3f) / 0.7f).coerceIn(0f, 1f) },
+                .graphicsLayer { alpha = ((morph - 0.45f) / 0.55f).coerceIn(0f, 1f) },
         ) {
             val voiceMode = voice.active && !supplementMode
             Crossfade(
@@ -741,7 +741,6 @@ internal fun AgentOverlayBubble(
                 }
             }
         }
-    }
     }
 }
 
@@ -1190,7 +1189,7 @@ private fun SupplementInput(
 }
 
 /** 展开卡从悬浮球长出 / 缩回的时长（规范 9.5「悬浮球 → 展开卡」）。收起须短于窗口移除的延迟（BUBBLE_EXIT_MS 150）。 */
-private const val PANEL_MORPH_IN_MS = MovoMotion.STANDARD
+private const val PANEL_MORPH_IN_MS = MovoMotion.SLOW
 private const val PANEL_MORPH_OUT_MS = 140
 
 /**
@@ -1232,40 +1231,3 @@ private fun Modifier.orbMorph(progress: () -> Float, anchorEnd: Boolean): Modifi
     clip = true
 }
 
-/** 展开卡窗口在高度动画期间临时撑到的高度（卡片最高的语音模式 + 补充输入 + 阴影余量）。 */
-private val PANEL_WINDOW_MAX_HEIGHT = 380.dp
-
-/**
- * 悬浮窗的窗口大小跟内容走（WRAP_CONTENT）：卡片高度逐帧过渡时，系统每帧都要重新摆放窗口，真机明显卡顿。
- * 内容高度一开始变化，就把上报给窗口的高度一次撑到 [maxHeight]，卡片贴底在里面做动画；高度连续约 4 帧不再变化后
- * 再按实际高度上报一次。一次动画窗口只变两三次。撑开期间卡片上方的透明区域会短暂接住触摸（不到半秒）。
- * 窗口底边对齐悬浮球（Gravity.BOTTOM），所以贴底放置时卡片位置不变。
- */
-@Composable
-private fun StickyWindowHeight(maxHeight: androidx.compose.ui.unit.Dp, content: @Composable () -> Unit) {
-    var holding by remember { mutableStateOf(false) }
-    val lastHeight = remember { intArrayOf(-1) }
-    val changes = remember { kotlinx.coroutines.flow.MutableSharedFlow<Int>(extraBufferCapacity = 64) }
-    LaunchedEffect(Unit) {
-        changes.collectLatest {
-            delay(STICKY_SETTLE_MS)
-            holding = false
-        }
-    }
-    androidx.compose.ui.layout.Layout(content) { measurables, constraints ->
-        val placeables = measurables.map { it.measure(constraints.copy(minHeight = 0)) }
-        val width = placeables.maxOfOrNull { it.width } ?: 0
-        val height = placeables.maxOfOrNull { it.height } ?: 0
-        if (lastHeight[0] >= 0 && height != lastHeight[0]) {
-            holding = true
-            changes.tryEmit(height)
-        }
-        lastHeight[0] = height
-        val reported = if (holding) maxOf(height, maxHeight.roundToPx()) else height
-        layout(width, reported) {
-            placeables.forEach { it.place(0, reported - it.height) }
-        }
-    }
-}
-
-private const val STICKY_SETTLE_MS = 70L

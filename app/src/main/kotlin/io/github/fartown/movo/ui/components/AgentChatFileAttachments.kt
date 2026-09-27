@@ -106,7 +106,8 @@ internal fun AgentAttachmentPickerButton(
         io.github.fartown.movo.ui.components.movo.MovoCircleButton(
             icon = MovoIcons.Plus,
             contentDescription = stringResource(R.string.ui_add_attachment_dba9e8),
-            onClick = { showPopup = true },
+            // 菜单开着时再点按钮是关闭（点按钮本身不算「点外面」，菜单不会自己关）。
+            onClick = { showPopup = !showPopup },
         )
         // 附件菜单（`Popover/Menu`，出现在输入框上方）：点一项即关闭菜单并打开对应的选择器（规范 9.3.1「松手即执行」）。
         MovoPopover(

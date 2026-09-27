@@ -1035,8 +1035,9 @@ private fun ThinkingEffortChip(
                     shape = chipShape,
                     enabled = menuEnabled,
                     onClick = {
+                        // 菜单开着时再点芯片是关闭（点芯片本身不算「点外面」，菜单不会自己关）。
                         pendingEffort = null
-                        showPopup = true
+                        showPopup = !showPopup
                     },
                 )
                 .clip(chipShape)

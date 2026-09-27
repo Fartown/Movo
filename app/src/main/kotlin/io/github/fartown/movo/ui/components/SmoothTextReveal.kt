@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.MeasureResult
@@ -323,6 +324,7 @@ internal class SmoothTextRevealNode(
     private var state: SmoothTextRevealState,
 ) : Modifier.Node(), DrawModifierNode, LayoutModifierNode {
     private var cachedLayoutResult: TextLayoutResult? = null
+    private var cachedSettledStart = -1
     private var cachedSettledEnd = -1
     private var cachedSettledPath: Path? = null
     private var cachedVisibleHeight = -1
@@ -385,10 +387,20 @@ internal class SmoothTextRevealNode(
         val textLength = layout.layoutInput.text.length
         fun offsetOf(index: Int): Int = snapshot.boundaries[index.coerceIn(0, targetCount)].coerceIn(0, textLength)
 
-        // 已显现完的部分：从开头到第一段正在显现的块（没有则到已提交处）。
+        // 已显现完的部分：从开头到第一段正在显现的块（没有则到已提交处）。整行用矩形裁切（几乎不花钱），
+        // 只有最后没满的那一行用一小段路径裁切；原来整段用一条路径裁切，回答越长路径越复杂，每帧绘制越慢。
         val settledCount = chunks.firstOrNull()?.from ?: floor(snapshot.progress).toInt()
-        settledPath(layout, offsetOf(settledCount))?.let { path ->
-            clipPath(path) { contentScope.drawContent() }
+        val settledEnd = offsetOf(settledCount)
+        if (settledEnd > 0) {
+            val line = layout.getLineForOffset(settledEnd)
+            val lineTop = layout.getLineTop(line)
+            if (lineTop > 0f) clipRect(0f, 0f, size.width, lineTop) { contentScope.drawContent() }
+            val lineStart = layout.getLineStart(line)
+            if (settledEnd > lineStart) {
+                settledPath(layout, lineStart, settledEnd)?.let { path ->
+                    clipPath(path) { contentScope.drawContent() }
+                }
+            }
         }
 
         // 正在显现的块：淡入 + 模糊 4 → 0（`fast` + `enter`）。每块只在范围变化时录一次、只录这一块的范围
@@ -459,12 +471,13 @@ internal class SmoothTextRevealNode(
         chunkLayers.clear()
     }
 
-    private fun settledPath(layoutResult: TextLayoutResult, end: Int): Path? {
-        if (end <= 0) return null
-        if (cachedLayoutResult === layoutResult && cachedSettledEnd == end) return cachedSettledPath
+    private fun settledPath(layoutResult: TextLayoutResult, start: Int, end: Int): Path? {
+        if (end <= start) return null
+        if (cachedLayoutResult === layoutResult && cachedSettledStart == start && cachedSettledEnd == end) return cachedSettledPath
         cachedLayoutResult = layoutResult
+        cachedSettledStart = start
         cachedSettledEnd = end
-        cachedSettledPath = layoutResult.getPathForRange(0, end)
+        cachedSettledPath = layoutResult.getPathForRange(start, end)
         return cachedSettledPath
     }
 

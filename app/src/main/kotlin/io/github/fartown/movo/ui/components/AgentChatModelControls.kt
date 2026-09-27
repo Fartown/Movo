@@ -120,9 +120,12 @@ internal fun AgentModelPickerButton(
                     shape = CircleShape,
                     enabled = enabled,
                     onClick = {
-                        pendingModelId = null
-                        expandedProviderIds = defaultExpandedModelProviderIds(state.selectedModel)
-                        showPopup = true
+                        // 菜单开着时再点按钮是关闭（点按钮本身不算「点外面」，菜单不会自己关）。
+                        if (!showPopup) {
+                            pendingModelId = null
+                            expandedProviderIds = defaultExpandedModelProviderIds(state.selectedModel)
+                        }
+                        showPopup = !showPopup
                     },
                 )
                 // 没有可用模型（7.3）：按禁用态整体 40%，由输入框上方的提示条引导去配置。
@@ -303,7 +306,7 @@ internal fun AgentContextUsageButton(
                 .movoClickable(
                     PressKind.Solid,
                     shape = CircleShape,
-                    onClick = { showPopover = true },
+                    onClick = { showPopover = !showPopover },
                 )
                 .clip(CircleShape)
                 .background(MovoColors.bgSurfaceMuted)
