@@ -11,11 +11,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import io.github.fartown.movo.diagnostics.MemoryDiagnostics
 import io.github.fartown.movo.ui.screens.diagnostics.DiagnosticsFormat
 import io.github.fartown.movo.ui.screens.diagnostics.LocalRunLogOpener
 import io.github.fartown.movo.ui.components.movo.movoClickable
-import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -27,14 +27,14 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 @Composable
 internal fun RunStallNotice(messageIds: List<String>, modifier: Modifier = Modifier) {
     val open = LocalRunLogOpener.current ?: return
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     var stall by remember { mutableStateOf<Pair<String, Long>?>(null) }
-    LaunchedEffect(messageIds) {
-        while (true) {
+    LaunchedEffect(messageIds, lifecycle) {
+        lifecycle.pollWhileStarted(intervalMillis = { 1_000L }) {
             stall = MemoryDiagnostics.boundRuns().entries.firstNotNullOfOrNull { (wire, run) ->
                 if (messageIds.none { it.contains(wire) }) return@firstNotNullOfOrNull null
                 MemoryDiagnostics.silenceMs(run)?.takeIf { it >= DiagnosticsFormat.STALL_MS }?.let { run to it }
             }
-            delay(1_000)
         }
     }
     val (run, silence) = stall ?: return

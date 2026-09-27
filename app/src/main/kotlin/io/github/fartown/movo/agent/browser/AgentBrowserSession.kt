@@ -95,6 +95,10 @@ internal object AgentBrowserSession {
     private const val PREVIEW_QUALITY = 60
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val idleController = BrowserIdleController(mainHandler, ::setWebViewPausedOnMain)
+    @Volatile private var webViewPaused = false
+    private var navigationUse: AutoCloseable? = null
+    private var navigationUrl: String? = null
     private val operationLock = ReentrantLock()
     private val interrupted = AtomicBoolean(false)
     private val operationEpoch = AtomicLong(0L)
@@ -169,6 +173,35 @@ internal object AgentBrowserSession {
                 if (appContext == null) appContext = context.applicationContext
             }
         }
+    }
+
+    /**
+     * 整轮 Agent 执行或可见浏览器表面持有的使用权，不创建 WebView，也不持有 CPU 唤醒锁。
+     * 最后一个使用者释放后延迟暂停；新任务和新窗口会先恢复页面，再继续操作。
+     */
+    fun keepActive(): AutoCloseable = callOnMain(onDiscard = { it.close() }) {
+        idleController.acquire()
+    }
+
+    private fun setWebViewPausedOnMain(paused: Boolean) {
+        val view = webView ?: return
+        if (webViewPaused == paused) return
+        if (paused) {
+            view.onPause()
+            // 当前进程只有这一处 WebView。以后新增实例时必须共享使用权，
+            // pauseTimers 是进程级状态，不能按单个页面独立管理。
+            view.pauseTimers()
+        } else {
+            view.resumeTimers()
+            view.onResume()
+        }
+        webViewPaused = paused
+    }
+
+    private fun releaseNavigationOnMain() {
+        navigationUse?.close()
+        navigationUse = null
+        navigationUrl = null
     }
 
     fun execute(
@@ -256,6 +289,7 @@ internal object AgentBrowserSession {
         currentLoadWaiter?.complete(LoadOutcome(false, "CANCELLED", "操作已取消"))
         mainHandler.post {
             runCatching { webView?.stopLoading() }
+            releaseNavigationOnMain()
             currentLoading = false
             currentPageVisible = committedMainFrameUrl.isNotBlank()
             publishSnapshotOnMain()
@@ -299,7 +333,8 @@ internal object AgentBrowserSession {
     fun capturePreview(): BrowserImage? {
         if (Looper.myLooper() == Looper.getMainLooper()) return null
         val view = webView ?: return null
-        if (currentUrl.isBlank()) return null
+        // 显示方在 STARTED 期间持有使用权；迟到的后台截图不能把闲置页面重新唤醒。
+        if (currentUrl.isBlank() || webViewPaused) return null
         return runCatching {
             val captured = captureViewport(
                 view,
@@ -352,38 +387,43 @@ internal object AgentBrowserSession {
                     status = "blocked",
                 )
             }
-            interrupted.set(false)
-            val epoch = operationEpoch.incrementAndGet()
-            activeOperationEpoch = epoch
-            activeActionIsUserInitiated = userInitiated
-            activeAgentRunId = agentRunId.takeUnless { userInitiated }
-            callOnMain {
-                currentError = null
-                publishSnapshotOnMain()
-            }
+            val browserUse = keepActive()
             try {
-                runCatching {
-                    when (action) {
-                        "navigate" -> navigate(args)
-                        "get_readable" -> readPage(args, readable = true)
-                        "get_text" -> readPage(args, readable = false)
-                        "find_elements" -> findElements(args)
-                        "click" -> click(args)
-                        "type" -> type(args)
-                        "scroll" -> scroll(args)
-                        "screenshot" -> screenshot(args)
-                        "get_page_info" -> pageInfo()
-                        "go_back" -> historyNavigation(action, backwards = true)
-                        "go_forward" -> historyNavigation(action, backwards = false)
-                        "reload" -> reload()
-                        "wait_for_selector" -> waitForSelector(args)
-                        else -> throw BrowserFailure("INVALID_ACTION", "浏览器 action 无效")
-                    }
-                }.getOrElse { throwable -> failureResult(action, throwable) }
+                interrupted.set(false)
+                val epoch = operationEpoch.incrementAndGet()
+                activeOperationEpoch = epoch
+                activeActionIsUserInitiated = userInitiated
+                activeAgentRunId = agentRunId.takeUnless { userInitiated }
+                callOnMain {
+                    currentError = null
+                    publishSnapshotOnMain()
+                }
+                try {
+                    runCatching {
+                        when (action) {
+                            "navigate" -> navigate(args)
+                            "get_readable" -> readPage(args, readable = true)
+                            "get_text" -> readPage(args, readable = false)
+                            "find_elements" -> findElements(args)
+                            "click" -> click(args)
+                            "type" -> type(args)
+                            "scroll" -> scroll(args)
+                            "screenshot" -> screenshot(args)
+                            "get_page_info" -> pageInfo()
+                            "go_back" -> historyNavigation(action, backwards = true)
+                            "go_forward" -> historyNavigation(action, backwards = false)
+                            "reload" -> reload()
+                            "wait_for_selector" -> waitForSelector(args)
+                            else -> throw BrowserFailure("INVALID_ACTION", "浏览器 action 无效")
+                        }
+                    }.getOrElse { throwable -> failureResult(action, throwable) }
+                } finally {
+                    if (activeOperationEpoch == epoch) activeOperationEpoch = 0L
+                    activeActionIsUserInitiated = false
+                    if (activeAgentRunId == agentRunId) activeAgentRunId = null
+                }
             } finally {
-                if (activeOperationEpoch == epoch) activeOperationEpoch = 0L
-                activeActionIsUserInitiated = false
-                if (activeAgentRunId == agentRunId) activeAgentRunId = null
+                browserUse.close()
             }
         }
     }
@@ -419,6 +459,7 @@ internal object AgentBrowserSession {
                 navigationGeneration.incrementAndGet()
                 callOnMain {
                     view.stopLoading()
+                    releaseNavigationOnMain()
                     currentLoading = false
                     currentPageVisible = committedMainFrameUrl.isNotBlank()
                     currentError = "页面加载超时"
@@ -736,7 +777,13 @@ internal object AgentBrowserSession {
     }
 
     private fun destroyWebViewOnMain() {
+        releaseNavigationOnMain()
         val view = webView ?: return
+        // 销毁实例不能把进程级 timers 留在暂停状态，后续创建的新实例仍需正常加载。
+        if (webViewPaused) {
+            runCatching { view.resumeTimers() }
+            webViewPaused = false
+        }
         (view.parent as? ViewGroup)?.removeView(view)
         runCatching { view.stopLoading() }
         runCatching { view.clearHistory() }
@@ -957,6 +1004,7 @@ internal object AgentBrowserSession {
 
     private fun setNavigationErrorOnMain(code: String, message: String) {
         navigationGeneration.incrementAndGet()
+        releaseNavigationOnMain()
         currentLoading = false
         currentPageVisible = committedMainFrameUrl.isNotBlank()
         currentError = message
@@ -964,12 +1012,13 @@ internal object AgentBrowserSession {
         publishSnapshotOnMain()
     }
 
-    private fun <T> callOnMain(block: () -> T): T {
+    private fun <T> callOnMain(onDiscard: (T) -> Unit = {}, block: () -> T): T {
         if (Looper.myLooper() == Looper.getMainLooper()) return block()
         val future = CompletableFuture<T>()
         mainHandler.post {
+            if (future.isCancelled) return@post
             runCatching(block)
-                .onSuccess(future::complete)
+                .onSuccess { result -> if (!future.complete(result)) onDiscard(result) }
                 .onFailure(future::completeExceptionally)
         }
         return try {
@@ -977,6 +1026,10 @@ internal object AgentBrowserSession {
         } catch (_: TimeoutException) {
             future.cancel(true)
             throw BrowserFailure("MAIN_THREAD_TIMEOUT", "浏览器主线程响应超时", "timeout")
+        } catch (error: InterruptedException) {
+            future.cancel(true)
+            Thread.currentThread().interrupt()
+            throw error
         } catch (error: ExecutionException) {
             throw error.cause ?: error
         }
@@ -988,6 +1041,10 @@ internal object AgentBrowserSession {
 
     private class BrowserClient : WebViewClient() {
         override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+            // 页面内点击也会导航，不一定经过 executeInternal。加载期间仍是实际工作，
+            // 不能仅因宿主进入后台就暂停；重定向继续使用同一份使用权。
+            if (navigationUse == null) navigationUse = idleController.acquire()
+            navigationUrl = url
             currentUrl = url.orEmpty()
             currentHost = hostOf(currentUrl)
             currentTitle = view.title.orEmpty()
@@ -1000,6 +1057,8 @@ internal object AgentBrowserSession {
         }
 
         override fun onPageFinished(view: WebView, url: String?) {
+            // 重定向后迟到的旧 URL 完成事件不能释放新页面的使用权。
+            if (url == navigationUrl) releaseNavigationOnMain()
             currentUrl = url.orEmpty()
             currentHost = hostOf(currentUrl)
             committedMainFrameUrl = currentUrl

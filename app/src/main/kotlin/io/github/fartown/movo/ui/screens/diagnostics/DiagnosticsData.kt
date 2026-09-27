@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import io.github.fartown.movo.BuildConfig
 import io.github.fartown.movo.agent.overlay.toolDisplayNameResource
 import io.github.fartown.movo.data.db.MovoDatabase
@@ -62,6 +63,7 @@ import io.github.fartown.movo.diagnostics.field
 import io.github.fartown.movo.ui.components.movo.PressKind
 import io.github.fartown.movo.ui.components.movo.movoClickable
 import io.github.fartown.movo.ui.components.movo.movoSurface
+import io.github.fartown.movo.ui.components.pollWhileStarted
 import io.github.fartown.movo.ui.theme.LocalReducedMotion
 import io.github.fartown.movo.ui.theme.MovoColors
 import io.github.fartown.movo.ui.theme.MovoElevation
@@ -74,7 +76,6 @@ import io.github.fartown.movo.ui.theme.MovoSize
 import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.theme.MovoTypography
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Text
@@ -90,25 +91,27 @@ internal data class DiagnosticsLive(
 
 /** 只有页面可见时轮询；记录没变就不重建任务视图。 */
 @Composable
-internal fun rememberDiagnosticsLive(): DiagnosticsLive? = produceState<DiagnosticsLive?>(null) {
-    var key: Pair<Int, Long?>? = null
-    var trace: DiagnosticTrace? = null
-    var entries: List<DiagnosticEntry> = emptyList()
-    while (true) {
-        val snapshot = MemoryDiagnostics.buffer.snapshot()
-        val nextKey = snapshot.entries.size to snapshot.entries.lastOrNull()?.sequence
-        if (nextKey != key || trace == null) {
-            entries = snapshot.entries
-            trace = withContext(Dispatchers.Default) { DiagnosticTraceBuilder.build(entries) }
-            key = nextKey
+internal fun rememberDiagnosticsLive(): DiagnosticsLive? {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    return produceState<DiagnosticsLive?>(null, lifecycle) {
+        var key: Pair<Int, Long?>? = null
+        var trace: DiagnosticTrace? = null
+        var entries: List<DiagnosticEntry> = emptyList()
+        lifecycle.pollWhileStarted(intervalMillis = { 1_000L }) {
+            val snapshot = MemoryDiagnostics.buffer.snapshot()
+            val nextKey = snapshot.entries.size to snapshot.entries.lastOrNull()?.sequence
+            if (nextKey != key || trace == null) {
+                entries = snapshot.entries
+                trace = withContext(Dispatchers.Default) { DiagnosticTraceBuilder.build(entries) }
+                key = nextKey
+            }
+            val silence = trace!!.runs.filter { it.status == TraceStatus.RUNNING }
+                .mapNotNull { run -> MemoryDiagnostics.silenceMs(run.id)?.let { run.id to it } }
+                .toMap()
+            value = DiagnosticsLive(trace!!, entries, MemoryDiagnostics.elapsedClock(), silence)
         }
-        val silence = trace!!.runs.filter { it.status == TraceStatus.RUNNING }
-            .mapNotNull { run -> MemoryDiagnostics.silenceMs(run.id)?.let { run.id to it } }
-            .toMap()
-        value = DiagnosticsLive(trace!!, entries, MemoryDiagnostics.elapsedClock(), silence)
-        delay(1_000)
-    }
-}.value
+    }.value
+}
 
 @Composable
 internal fun rememberDiagnosticsFormat(): DiagnosticsFormat {

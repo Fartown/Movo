@@ -564,12 +564,22 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
 
         if (fromResultCard) ensureOverlayVisible()
-        thread(name = "agent-runtime") {
-            try {
-                executeRun(session, request)
-            } finally {
-                AgentExecutionService.release("run:${request.runId}")
+        // 在主线程取得独立使用权，覆盖工具调用之间的模型等待；旧 run 的 finally
+        // 只释放自己的使用权，不会暂停刚开始的新 run。没有浏览器时也不会创建 WebView。
+        val browserUse = io.github.fartown.movo.agent.browser.AgentBrowserSession.keepActive()
+        try {
+            thread(name = "agent-runtime") {
+                try {
+                    executeRun(session, request)
+                } finally {
+                    browserUse.close()
+                    AgentExecutionService.release("run:${request.runId}")
+                }
             }
+        } catch (error: Throwable) {
+            browserUse.close()
+            AgentExecutionService.release("run:${request.runId}")
+            throw error
         }
     }
 

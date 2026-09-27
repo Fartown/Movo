@@ -56,6 +56,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.net.toUri
+import androidx.lifecycle.compose.LifecycleStartEffect
 import io.github.fartown.movo.R
 import io.github.fartown.movo.agent.browser.AgentBrowserSession
 import io.github.fartown.movo.agent.browser.BrowserSessionSnapshot
@@ -651,6 +652,11 @@ private fun BrowserWebViewHost(
     DisposableEffect(container, context) {
         AgentBrowserSession.attachTo(container, context)
         onDispose { AgentBrowserSession.detachFrom(container) }
+    }
+    // 用户接管归属保留到页面退出；可见性单独决定是否让网页继续运行。
+    LifecycleStartEffect(container) {
+        val browserUse = AgentBrowserSession.keepActive()
+        onStopOrDispose { browserUse.close() }
     }
     LaunchedEffect(container, initialUrl) {
         val url = initialUrl ?: return@LaunchedEffect

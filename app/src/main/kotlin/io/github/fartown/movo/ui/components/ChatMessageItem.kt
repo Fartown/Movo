@@ -113,7 +113,10 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.takeOrElse
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import com.mikepenz.markdown.annotator.annotatorSettings
 import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
 import com.mikepenz.markdown.compose.LocalMarkdownA11yLabels
@@ -3804,13 +3807,18 @@ private fun BrowserPagePreview(
     modifier: Modifier = Modifier,
 ) {
     var preview by remember(snapshot.url) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(snapshot.url, snapshot.isLoading) {
-        while (true) {
-            val image = withContext(Dispatchers.IO) {
-                AgentBrowserSession.capturePreview()?.let { decodeDataUrlBitmap(it.dataUrl) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(snapshot.url, snapshot.isLoading, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            AgentBrowserSession.keepActive().use {
+                while (true) {
+                    val image = withContext(Dispatchers.IO) {
+                        AgentBrowserSession.capturePreview()?.let { decodeDataUrlBitmap(it.dataUrl) }
+                    }
+                    if (image != null) preview = image
+                    delay(if (snapshot.isLoading) 1_200L else 4_000L)
+                }
             }
-            if (image != null) preview = image
-            delay(if (snapshot.isLoading) 1_200L else 4_000L)
         }
     }
 
