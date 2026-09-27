@@ -35,11 +35,14 @@ import io.github.fartown.movo.ui.theme.MovoSize
 
 /**
  * Lazy 列表项的增删与高度变化：新增淡入 `fast`，删除淡出 120ms，其余项移位 `standard`；
- * [contentSize] 为 true 时卡片自身高度变化（卡内行增删、说明出现）也按 `standard` 过渡。
+ * [contentSize] 为 true 时列表项自身高度变化也按 `standard` 过渡；它会按动画高度裁切，卡片请改用
+ * `MovoCard(animateHeight = true)`，否则过渡期间卡片底部圆角被裁成直角。
+ * 上方有卡片正在按 [contentSize] 长高 / 缩短时，下方各项传 [placement] = false：位置每帧直接跟着卡片的实际高度走，
+ * 天然同步；否则移位动画每帧重新起跑、落后于卡片，会与卡片叠在一起。
  * 减少动画时只淡入淡出，位置与高度直接到位。
  */
 @Composable
-internal fun LazyItemScope.movoAnimateItem(contentSize: Boolean = false): Modifier {
+internal fun LazyItemScope.movoAnimateItem(contentSize: Boolean = false, placement: Boolean = true): Modifier {
     val reduced = LocalReducedMotion.current
     return if (reduced) {
         Modifier.animateItem(fadeInSpec = MovoMotion.fast(), placementSpec = null, fadeOutSpec = MovoMotion.fastExit())
@@ -47,7 +50,7 @@ internal fun LazyItemScope.movoAnimateItem(contentSize: Boolean = false): Modifi
         Modifier
             .animateItem(
                 fadeInSpec = MovoMotion.fast(),
-                placementSpec = MovoMotion.standard(),
+                placementSpec = if (placement) MovoMotion.standard() else null,
                 fadeOutSpec = MovoMotion.fastExit(),
             )
             .then(if (contentSize) Modifier.animateContentSize(MovoMotion.standard<IntSize>()) else Modifier)

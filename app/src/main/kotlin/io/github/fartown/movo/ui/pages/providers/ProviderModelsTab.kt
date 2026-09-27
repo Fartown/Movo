@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -66,6 +67,8 @@ import io.github.fartown.movo.data.model.ReasoningEffort
 import io.github.fartown.movo.data.repository.ModelRepository
 import io.github.fartown.movo.data.repository.RemoteModelFetcher
 import io.github.fartown.movo.data.repository.RuntimeConfigRepository
+import io.github.fartown.movo.data.model.ProviderSourceTypes
+import io.github.fartown.movo.data.provider.ProviderSourceRegistry
 import io.github.fartown.movo.ui.components.movo.BlockTone
 import io.github.fartown.movo.ui.components.movo.CardTitle
 import io.github.fartown.movo.ui.components.movo.MovoBlockButton
@@ -76,6 +79,7 @@ import io.github.fartown.movo.ui.components.movo.MovoDialogHost
 import io.github.fartown.movo.ui.components.movo.MovoDivider
 import io.github.fartown.movo.ui.components.movo.MovoIconButton
 import io.github.fartown.movo.ui.components.movo.MovoPillButton
+import io.github.fartown.movo.ui.components.movo.MovoSpinner
 import io.github.fartown.movo.ui.components.movo.PressKind
 import io.github.fartown.movo.ui.components.movo.RowTrailing
 import io.github.fartown.movo.ui.components.movo.SettingsRow
@@ -95,6 +99,7 @@ import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.theme.MovoTypography
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Text
 import io.github.fartown.movo.ui.components.movo.TextField
@@ -212,7 +217,17 @@ internal fun ProviderModelsTab(
     }
     val failPrefix = stringResource(R.string.page_fail_3e3c80)
     val navigation = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val actionsEnabled = !isFetching && !isMutatingModel
+    // 拉取期间不置灰整页：远端很快返回时整列表先变灰再恢复，看起来就是一闪；拉取行自身换加载圈并忽略重复点击，
+    // 模型的增删改与同步都经 ModelRepository 的互斥锁串行，不会互相覆盖。
+    val actionsEnabled = !isMutatingModel
+    // 拉取中（列表可能随同步刷新）到结果说明的高度过渡结束：下面各项位置跟随顶部卡片，不做移位动画。
+    var headerResizing by remember { mutableStateOf(false) }
+    LaunchedEffect(message) {
+        headerResizing = true
+        delay(MovoMotion.STANDARD.toLong() + HEADER_SETTLE_SLACK_MS)
+        headerResizing = false
+    }
+    val followHeader = isFetching || headerResizing
 
     val selectionBackState = rememberNavigationEventState(NavigationEventInfo.None)
     NavigationBackHandler(
@@ -241,18 +256,37 @@ internal fun ProviderModelsTab(
             overscrollEffect = null,
         ) {
             item(key = "actions", contentType = "section") {
-                ProviderSection(title = stringResource(R.string.ui_model_management_183414), modifier = movoAnimateItem()) {
+                // 结果说明出现 / 更换时卡片高度按 `standard` 过渡；这段时间下面各项不做移位动画，直接跟着卡片走（见 followHeader）。
+                ProviderSection(
+                    title = stringResource(R.string.ui_model_management_183414),
+                    modifier = movoAnimateItem(),
+                    animateHeight = true,
+                ) {
                     SettingsRow(
-                        title = if (isFetching) context.getString(R.string.page_retrieving_a880c9) else context.getString(R.string.page_automatically_pull_from_remote_f883d0),
+                        title = context.getString(R.string.page_automatically_pull_from_remote_f883d0),
                         subtitle = stringResource(R.string.provider_models_endpoint_summary, provider.baseUrl),
                         enabled = actionsEnabled,
                         trailing = RowTrailing.Custom {
-                            MovoIcon(MovoIcons.Download, null, size = MovoSize.iconMedium, tint = MovoColors.textSecondary)
+                            // 下载图标 ↔ 加载圈交叉淡化 `fast`；标题与行状态不变，避免整行闪。
+                            androidx.compose.animation.Crossfade(
+                                targetState = isFetching,
+                                animationSpec = MovoMotion.fast(),
+                                label = "fetchIndicator",
+                            ) { fetching ->
+                                Box(Modifier.size(MovoSize.iconMedium), contentAlignment = Alignment.Center) {
+                                    if (fetching) {
+                                        MovoSpinner(size = MovoSize.iconMedium, color = MovoColors.textSecondary)
+                                    } else {
+                                        MovoIcon(MovoIcons.Download, null, size = MovoSize.iconMedium, tint = MovoColors.textSecondary)
+                                    }
+                                }
+                            }
                         },
-                        onClick = {
+                        onClick = onClick@{
+                            if (isFetching) return@onClick
                             scope.launch {
+                                // 上一次的结果说明留到新结果出来再替换，不先清空（清空会让卡片先缩再涨）。
                                 isFetching = true
-                                message = null
                                 try {
                                     val models = RemoteModelFetcher.fetch(provider).getOrElse { throwable ->
                                         message = context.getString(
@@ -262,7 +296,11 @@ internal fun ProviderModelsTab(
                                         return@launch
                                     }
                                     val chatModels = models.filter(RemoteModelFetcher::isChatCapableModel)
-                                    val sync = ModelRepository.syncRemoteModels(provider.id, chatModels)
+                                    val sync = ModelRepository.syncRemoteModels(
+                                        provider.id,
+                                        chatModels,
+                                        authoritative = ProviderSourceRegistry.resolve(provider) == ProviderSourceTypes.CHATGPT,
+                                    )
                                     if (sync.applied) {
                                         RuntimeConfigRepository.syncToRemotePreferences(MovoApp.serviceInstance)
                                     }
@@ -328,7 +366,7 @@ internal fun ProviderModelsTab(
                     query = modelSearchQuery,
                     onQueryChange = { modelSearchQuery = it },
                     placeholder = stringResource(R.string.ui_search_model_df5586),
-                    modifier = Modifier.padding(top = MovoSpacing.lg),
+                    modifier = movoAnimateItem(placement = !followHeader).padding(top = MovoSpacing.lg),
                 )
             }
 
@@ -345,7 +383,7 @@ internal fun ProviderModelsTab(
                 item(key = "models_empty", contentType = "empty") {
                     ProviderSection(
                         title = modelListTitle,
-                        modifier = movoAnimateItem().padding(top = MovoSpacing.lg),
+                        modifier = movoAnimateItem(placement = !followHeader).padding(top = MovoSpacing.lg),
                     ) {
                         Text(
                             text = if (provider.models.isEmpty()) {
@@ -363,7 +401,7 @@ internal fun ProviderModelsTab(
                 item(key = "models_title", contentType = "section_title") {
                     CardTitle(
                         text = modelListTitle,
-                        modifier = movoAnimateItem(contentSize = false)
+                        modifier = movoAnimateItem(placement = !followHeader)
                             .padding(top = MovoSpacing.lg)
                             .movoCardSegment(CardSegment.Top),
                     )
@@ -404,7 +442,7 @@ internal fun ProviderModelsTab(
                             }
                         },
                         // 列表增删（B7）：新增淡入、删除淡出，其余行移位 `standard`。
-                        modifier = movoAnimateItem(contentSize = false)
+                        modifier = movoAnimateItem(placement = !followHeader)
                             .movoCardSegment(if (isLast) CardSegment.Bottom else CardSegment.Middle)
                             .padding(bottom = if (isLast) MovoSpacing.xs else 0.dp),
                     )
@@ -1031,3 +1069,6 @@ private fun capabilityTags(model: Model): List<String> {
     if (model.supportsReasoning) add(context.getString(R.string.page_support_thinking_5b9e4c))
     }
 }
+
+/** 结果说明高度过渡（`standard`）结束后再多等一两帧，才恢复下方各项的移位动画。 */
+private const val HEADER_SETTLE_SLACK_MS = 32L

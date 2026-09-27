@@ -68,12 +68,18 @@ internal fun MovoCard(
     modifier: Modifier = Modifier,
     elevation: MovoElevation = MovoElevation.E0,
     bottomPadding: androidx.compose.ui.unit.Dp = MovoSpacing.xs,
+    /**
+     * 卡内行增删、说明出现时卡片高度按 `standard` 过渡（9.3「展开 / 收起」）。高度动画挂在卡片底色里面：
+     * 挂在外层（传进 [modifier]）时会按动画高度裁掉卡片自己的底边，过渡期间底部圆角变成直角。
+     */
+    animateHeight: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
         modifier = modifier
             .fillMaxWidth()
             .movoSurface(elevation = elevation)
+            .then(if (animateHeight) Modifier.movoAnimateContentSize() else Modifier)
             .padding(bottom = bottomPadding),
         content = content,
     )

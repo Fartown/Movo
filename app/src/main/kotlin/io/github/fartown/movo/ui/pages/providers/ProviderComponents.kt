@@ -46,9 +46,10 @@ import top.yukonga.miuix.kmp.basic.Text
 internal fun ProviderSection(
     title: String?,
     modifier: Modifier = Modifier,
+    animateHeight: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    MovoCard(modifier = modifier) {
+    MovoCard(modifier = modifier, animateHeight = animateHeight) {
         if (title != null) {
             CardTitle(title)
         }

@@ -305,7 +305,7 @@ internal fun LinuxEnvironmentScreen(
             }
             LinuxEnvironmentStatusCard(
                 // 状态切换（安装中 → 完成等）：卡片高度 `standard` 过渡、位置平滑移动（B10）。
-                modifier = movoAnimateItem(contentSize = true),
+                modifier = movoAnimateItem(),
                 title = listOfNotNull(selectedDistribution.displayName(), version?.takeIf { it.isNotBlank() })
                     .joinToString(" "),
                 mode = backend.displayName(),
@@ -341,7 +341,7 @@ internal fun LinuxEnvironmentScreen(
         }
         item(key = "configuration-card") {
             LinuxEnvironmentConfiguration(
-                modifier = movoAnimateItem(contentSize = true),
+                modifier = movoAnimateItem(),
                 distribution = selectedDistribution,
                 backend = backend,
                 rootGranted = capabilities.root.isGranted,
@@ -365,7 +365,7 @@ internal fun LinuxEnvironmentScreen(
             )
         }
         item(key = "files-card") {
-            MovoCard(modifier = movoAnimateItem(contentSize = true)) {
+            MovoCard(modifier = movoAnimateItem(), animateHeight = true) {
                 CardTitle(stringResource(R.string.linux_environment_files))
                 SettingsRow(
                     title = stringResource(R.string.capability_workspace),
@@ -391,7 +391,7 @@ internal fun LinuxEnvironmentScreen(
 
         if (selectedToolsReady) {
             item(key = "optional-tools-card") {
-                MovoCard(modifier = movoAnimateItem(contentSize = true)) {
+                MovoCard(modifier = movoAnimateItem(), animateHeight = true) {
                     CardTitle(stringResource(R.string.ui_optional_tools_3097d6))
                     packageProfileUis.forEach { profileUi ->
                         val ready = profileReady[profileUi.target] == true
