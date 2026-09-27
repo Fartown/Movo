@@ -257,9 +257,12 @@ internal fun AgentAppRoot(
     }
 
     fun popRoute() {
-        if (!navigator.pop()) {
-            (context as? Activity)?.finish()
-        }
+        if (navigator.pop()) return
+        // 已经回到首页时不再关闭界面：返回动画期间，正在退场的二级页顶栏返回键仍能接到第二次点击，
+        // 真机上「返回后 0.1 秒内再点左上角」会把 MainActivity 关掉（首页的左上角是菜单，同一个位置）。
+        // 只有栈里唯一一页不是首页（外部直接打开的二级页）时，返回才关闭界面。
+        if (navigator.current() is AppRoute.Home) return
+        (context as? Activity)?.finish()
     }
 
     fun selectConversation(conversationId: String) {
