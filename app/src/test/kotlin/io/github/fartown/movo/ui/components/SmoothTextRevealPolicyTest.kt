@@ -7,6 +7,7 @@ import org.intellij.markdown.flavours.gfm.GFMElementTypes
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class SmoothTextRevealPolicyTest {
@@ -257,5 +258,13 @@ class SmoothTextRevealPolicyTest {
 
     private companion object {
         const val FLOAT_TOLERANCE = 0.0001f
+    }
+
+    @Test
+    fun rightToLeftCheckOnlyLooksAtTheRange() {
+        val text = "你好 hello مرحبا"
+        assertFalse(text.hasRightToLeft(0, 8))
+        assertTrue(text.hasRightToLeft(0, text.length))
+        assertFalse(text.hasRightToLeft(9, 5))
     }
 }

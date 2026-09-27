@@ -8,7 +8,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.BlurEffect
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
@@ -184,6 +183,8 @@ internal class SmoothTextRevealCoordinator {
         }
         ordered.forEachIndexed { index, record ->
             if (record.node == null || record.layoutResult == null) return@forEachIndexed
+            // 只有这一帧有提交或正在显现的块才重画；已显现完的块不再每帧失效重录（长回答有几十个段落块）。
+            var changed = record.chunks.isNotEmpty()
             if (record.textChanged) {
                 record.textChanged = false
                 record.lastChangeNanos = frameNanos
@@ -202,6 +203,7 @@ internal class SmoothTextRevealCoordinator {
                 // 同一块里最多两段同时显现；更早的直接完成。
                 while (record.chunks.size > MAX_ACTIVE_CHUNKS) record.chunks.removeAt(0)
                 if (record.key !in startedState.value) newlyStarted += record.key
+                changed = true
             }
             if (record.chunks.isNotEmpty()) {
                 record.chunks.forEach { chunk ->
@@ -209,7 +211,7 @@ internal class SmoothTextRevealCoordinator {
                 }
                 record.chunks.removeAll { it.fraction >= 1f }
             }
-            record.node?.onRevealDataChanged()
+            if (changed) record.node?.onRevealDataChanged()
         }
         if (newlyStarted.isNotEmpty()) startedState.value = startedState.value + newlyStarted
     }
@@ -323,10 +325,11 @@ private data class SmoothTextRevealElement(
 internal class SmoothTextRevealNode(
     private var state: SmoothTextRevealState,
 ) : Modifier.Node(), DrawModifierNode, LayoutModifierNode {
-    private var cachedLayoutResult: TextLayoutResult? = null
-    private var cachedSettledStart = -1
-    private var cachedSettledEnd = -1
-    private var cachedSettledPath: Path? = null
+    /** 已显现完的部分录成的图层，及录制时的排版、终点与尺寸。 */
+    private var settledLayer: GraphicsLayer? = null
+    private var settledLayout: TextLayoutResult? = null
+    private var settledRecordedEnd = -1
+    private var settledSize = androidx.compose.ui.geometry.Size.Zero
     private var cachedVisibleHeight = -1
     /** 正在显现的块各用一个图层承载透明度与模糊（最多 [MAX_ACTIVE_CHUNKS] 个）。 */
     private val chunkLayers = ArrayList<GraphicsLayer>(MAX_ACTIVE_CHUNKS)
@@ -387,24 +390,24 @@ internal class SmoothTextRevealNode(
         val textLength = layout.layoutInput.text.length
         fun offsetOf(index: Int): Int = snapshot.boundaries[index.coerceIn(0, targetCount)].coerceIn(0, textLength)
 
-        // 已显现完的部分：从开头到第一段正在显现的块（没有则到已提交处）。整行用矩形裁切（几乎不花钱），
-        // 只有最后没满的那一行用一小段路径裁切；原来整段用一条路径裁切，回答越长路径越复杂，每帧绘制越慢。
+        // 已显现完的部分：从开头到第一段正在显现的块（没有则到已提交处）。只在范围变化时录进一个图层，
+        // 之后每帧只画这个图层：流式期间这一块每帧都要重画，不能每帧把整段文字重录一遍。
         val settledCount = chunks.firstOrNull()?.from ?: floor(snapshot.progress).toInt()
         val settledEnd = offsetOf(settledCount)
         if (settledEnd > 0) {
-            val line = layout.getLineForOffset(settledEnd)
-            val lineTop = layout.getLineTop(line)
-            if (lineTop > 0f) clipRect(0f, 0f, size.width, lineTop) { contentScope.drawContent() }
-            val lineStart = layout.getLineStart(line)
-            if (settledEnd > lineStart) {
-                settledPath(layout, lineStart, settledEnd)?.let { path ->
-                    clipPath(path) { contentScope.drawContent() }
-                }
+            val layer = settledLayer ?: requireGraphicsContext().createGraphicsLayer().also { settledLayer = it }
+            if (settledLayout !== layout || settledRecordedEnd != settledEnd || settledSize != size) {
+                settledLayout = layout
+                settledRecordedEnd = settledEnd
+                settledSize = size
+                layer.record { drawTextRange(contentScope, layout, 0, settledEnd) }
             }
+            drawLayer(layer)
         }
 
-        // 正在显现的块：淡入 + 模糊 4 → 0（`fast` + `enter`）。每块只在范围变化时录一次、只录这一块的范围
-        // （模糊只作用在块上，不是整段）；之后每帧只改图层的透明度与模糊半径，不重录、不重算路径。
+        // 正在显现的块：淡入 + 模糊 4 → 0（`fast` + `enter`）。每块只在范围变化时录一次、只录这一块的范围，
+        // 裁切也录在图层里（模糊只作用在块上，不是整段）；之后每帧只改图层的透明度与模糊半径：
+        // 带模糊的图层内容由系统缓存成离屏纹理，每帧只做一次模糊合成，不重放文字、不做路径裁切蒙版。
         val blurMax = BLUR_START.toPx()
         chunks.forEachIndexed { index, chunk ->
             val start = offsetOf(chunk.from)
@@ -418,16 +421,15 @@ internal class SmoothTextRevealNode(
                 cache.start = start
                 cache.end = end
                 cache.size = size
-                val path = layout.getPathForRange(start, end)
-                cache.path = path
-                val bounds = path.getBounds().inflate(blurMax).intersect(Rect(Offset.Zero, size))
+                val bounds = layout.getPathForRange(start, end).getBounds().inflate(blurMax)
+                    .intersect(Rect(Offset.Zero, size))
                 val left = floor(bounds.left).toInt()
                 val top = floor(bounds.top).toInt()
                 val width = (ceil(bounds.right).toInt() - left).coerceAtLeast(1)
                 val height = (ceil(bounds.bottom).toInt() - top).coerceAtLeast(1)
                 layer.topLeft = androidx.compose.ui.unit.IntOffset(left, top)
                 layer.record(size = androidx.compose.ui.unit.IntSize(width, height)) {
-                    translate(-left.toFloat(), -top.toFloat()) { contentScope.drawContent() }
+                    translate(-left.toFloat(), -top.toFloat()) { drawTextRange(contentScope, layout, start, end) }
                 }
             }
             layer.alpha = eased
@@ -437,8 +439,42 @@ internal class SmoothTextRevealNode(
                 cache.blurRadius = radius
                 layer.renderEffect = if (radius > 0.05f) BlurEffect(radius, radius, TileMode.Decal) else null
             }
-            clipPath(checkNotNull(cache.path)) { drawLayer(layer) }
+            drawLayer(layer)
         }
+    }
+
+    /**
+     * 只画文字 [start, end) 这一段：横排（左到右）文字按行用矩形裁切——首行从起点到行尾、中间整行、末行从行首到终点，
+     * 最多三个矩形，矩形裁切几乎不花钱；含从右到左文字时横向位置不连续，退回按字形路径裁切。
+     */
+    private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTextRange(
+        contentScope: ContentDrawScope,
+        layout: TextLayoutResult,
+        start: Int,
+        end: Int,
+    ) {
+        if (end <= start) return
+        val text = layout.layoutInput.text.text
+        if (text.hasRightToLeft(start, end)) {
+            clipPath(layout.getPathForRange(start, end)) { contentScope.drawContent() }
+            return
+        }
+        val width = size.width
+        val startLine = layout.getLineForOffset(start)
+        val endLine = layout.getLineForOffset(end)
+        // 终点正好落在下一行行首时，末行没有要画的字。
+        val lastLine = if (endLine > startLine && end <= layout.getLineStart(endLine)) endLine - 1 else endLine
+        val startX = layout.getHorizontalPosition(start, usePrimaryDirection = true)
+        val endX = if (lastLine == endLine) layout.getHorizontalPosition(end, usePrimaryDirection = true) else width
+        if (lastLine == startLine) {
+            clipRect(startX, layout.getLineTop(startLine), endX, layout.getLineBottom(startLine)) { contentScope.drawContent() }
+            return
+        }
+        clipRect(startX, layout.getLineTop(startLine), width, layout.getLineBottom(startLine)) { contentScope.drawContent() }
+        if (lastLine - startLine > 1) {
+            clipRect(0f, layout.getLineTop(startLine + 1), width, layout.getLineBottom(lastLine - 1)) { contentScope.drawContent() }
+        }
+        clipRect(0f, layout.getLineTop(lastLine), endX, layout.getLineBottom(lastLine)) { contentScope.drawContent() }
     }
 
     private fun chunkLayer(index: Int): GraphicsLayer {
@@ -452,7 +488,6 @@ internal class SmoothTextRevealNode(
         var start = -1
         var end = -1
         var size = androidx.compose.ui.geometry.Size.Zero
-        var path: Path? = null
         var blurRadius = -1f
     }
 
@@ -465,27 +500,19 @@ internal class SmoothTextRevealNode(
 
     private fun releaseLayers() {
         chunkCaches.clear()
-        if (chunkLayers.isEmpty()) return
         val context = requireGraphicsContext()
+        settledLayer?.let(context::releaseGraphicsLayer)
+        settledLayer = null
+        settledLayout = null
+        if (chunkLayers.isEmpty()) return
         chunkLayers.forEach(context::releaseGraphicsLayer)
         chunkLayers.clear()
     }
 
-    private fun settledPath(layoutResult: TextLayoutResult, start: Int, end: Int): Path? {
-        if (end <= start) return null
-        if (cachedLayoutResult === layoutResult && cachedSettledStart == start && cachedSettledEnd == end) return cachedSettledPath
-        cachedLayoutResult = layoutResult
-        cachedSettledStart = start
-        cachedSettledEnd = end
-        cachedSettledPath = layoutResult.getPathForRange(start, end)
-        return cachedSettledPath
-    }
-
     private fun clearPathCache() {
         chunkCaches.forEach { it.layout = null }
-        cachedLayoutResult = null
-        cachedSettledEnd = -1
-        cachedSettledPath = null
+        settledLayout = null
+        settledRecordedEnd = -1
     }
 }
 
@@ -547,6 +574,21 @@ internal fun sentenceCommitCount(text: String, boundaries: IntArray): Int {
 }
 
 private const val SENTENCE_ENDS = "。！？!?；;…\n"
+
+/** [start, end) 里是否有从右到左书写的字符（阿拉伯文、希伯来文等）。 */
+internal fun CharSequence.hasRightToLeft(start: Int, end: Int): Boolean {
+    for (index in start until end.coerceAtMost(length)) {
+        when (Character.getDirectionality(this[index])) {
+            Character.DIRECTIONALITY_RIGHT_TO_LEFT,
+            Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC,
+            Character.DIRECTIONALITY_RIGHT_TO_LEFT_EMBEDDING,
+            Character.DIRECTIONALITY_RIGHT_TO_LEFT_OVERRIDE,
+            Character.DIRECTIONALITY_RIGHT_TO_LEFT_ISOLATE,
+            -> return true
+        }
+    }
+    return false
+}
 private const val SENTENCE_CLOSERS = "」』”’）)】》\"'"
 
 private fun SmoothTextRevealState.visibleHeightPx(): Int {

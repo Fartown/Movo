@@ -10,11 +10,11 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.layout
 import io.github.fartown.movo.ui.theme.MovoMotion
 import androidx.compose.animation.togetherWith
 import androidx.compose.ui.graphics.graphicsLayer
@@ -92,9 +92,17 @@ internal fun SettingsRow(
     val textStart = if (leading != null) 48.dp else MovoSpacing.lg
     // 开关行：整行按下时开关同步拉长。
     val rowInteraction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val valueCap = remember { RowValueCap() }
     Box(
         modifier = modifier
             .fillMaxWidth()
+            // 记下行宽给右侧值算上限（布局阶段读写，不重组）。原来用 BoxWithConstraints：每行一个子组合，
+            // 进二级页的第一帧要在测量阶段现组合整页十几行，拖慢页面切换。
+            .layout { measurable, constraints ->
+                valueCap.rowWidthPx = if (constraints.hasBoundedWidth) constraints.maxWidth else 0
+                val placeable = measurable.measure(constraints)
+                layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+            }
             .then(
                 if (clickAction != null) {
                     Modifier.movoClickable(
@@ -120,8 +128,6 @@ internal fun SettingsRow(
             ),
     ) {
         // 右侧值最多占行宽 40%（且不超过 160），标题优先完整显示：长的是值（模型名等），不能把标题挤成「Mo…」。
-        androidx.compose.foundation.layout.BoxWithConstraints {
-        val valueMaxWidth = (maxWidth * 0.4f).coerceAtMost(160.dp)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -155,8 +161,7 @@ internal fun SettingsRow(
                     Text(subtitle, style = MovoTypography.labelRegular, color = MovoColors.textSecondary)
                 }
             }
-            RowTrailingContent(trailing, attention, enabled, rowInteraction, valueMaxWidth)
-        }
+            RowTrailingContent(trailing, attention, enabled, rowInteraction, valueCap)
         }
         if (showDivider) {
             MovoDivider(modifier = Modifier.align(Alignment.BottomStart), start = textStart)
@@ -170,20 +175,20 @@ private fun RowTrailingContent(
     attention: Boolean,
     enabled: Boolean,
     interaction: androidx.compose.foundation.interaction.MutableInteractionSource? = null,
-    valueMaxWidth: androidx.compose.ui.unit.Dp = 160.dp,
+    valueCap: RowValueCap = RowValueCap(),
 ) {
     when (trailing) {
         is RowTrailing.Arrow -> {
-            RowValue(trailing.value, attention, maxWidth = valueMaxWidth)
+            RowValue(trailing.value, attention, cap = valueCap)
             MovoIcon(MovoIcons.ChevronRight, null, size = MovoSize.iconSmall, tint = MovoColors.textTertiary)
         }
         is RowTrailing.External -> {
-            RowValue(trailing.value, attention, maxWidth = valueMaxWidth)
+            RowValue(trailing.value, attention, cap = valueCap)
             MovoIcon(MovoIcons.ExternalLink, null, size = MovoSize.iconSmall, tint = MovoColors.textTertiary)
         }
         is RowTrailing.Value -> {
             Spacer(Modifier.width(MovoSpacing.sm))
-            RowValue(trailing.value, attention, gap = false, maxWidth = valueMaxWidth)
+            RowValue(trailing.value, attention, gap = false, cap = valueCap)
         }
         is RowTrailing.Switch -> {
             Spacer(Modifier.width(MovoSpacing.md))
@@ -203,7 +208,7 @@ private fun RowValue(
     value: String?,
     attention: Boolean,
     gap: Boolean = true,
-    maxWidth: androidx.compose.ui.unit.Dp = 160.dp,
+    cap: RowValueCap = RowValueCap(),
 ) {
     // 值变化：交叉淡化 `fast`，宽度变化同步 `standard`（规范 9.3「值变化」）；值从无到有（读取完成）同样淡入，
     // 不直接蹦出。null 渲染为空，间距与状态点一起放进过渡内容里，宽度一并过渡。
@@ -229,9 +234,23 @@ private fun RowValue(
                 color = MovoColors.textSecondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = maxWidth),
+                modifier = Modifier.layout { measurable, constraints ->
+                    val maxWidth = minOf(constraints.maxWidth, cap.maxWidthPx(this)).coerceAtLeast(constraints.minWidth)
+                    val placeable = measurable.measure(constraints.copy(maxWidth = maxWidth))
+                    layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+                },
             )
             if (gap) Spacer(Modifier.width(MovoSpacing.xs))
         }
+    }
+}
+
+/** 设置行右侧值的宽度上限：行宽 40%，且不超过 160（行宽由行本身在布局阶段写入）。 */
+private class RowValueCap {
+    var rowWidthPx = 0
+
+    fun maxWidthPx(density: androidx.compose.ui.unit.Density): Int {
+        val limit = with(density) { 160.dp.roundToPx() }
+        return if (rowWidthPx > 0) minOf((rowWidthPx * 0.4f).toInt(), limit) else limit
     }
 }

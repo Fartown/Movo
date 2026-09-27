@@ -71,6 +71,7 @@ internal fun MovoTopBar(
         },
         label = "topBarChrome",
     )
+    val showBlur by remember { derivedStateOf { chrome > 0f } }
     Box(modifier = modifier.fillMaxWidth()) {
         // 滚动态底色：有模糊能力时用顶栏背景模糊，否则 bg/canvas 90%。
         Box(
@@ -78,7 +79,9 @@ internal fun MovoTopBar(
                 .matchParentSize()
                 .graphicsLayer { alpha = chrome },
         ) {
-            if (backdrop != null) {
+            // 顶栏背景模糊只在滚动态（底色可见）时组合：未滚动时它整层透明却仍要组合、录制和准备模糊，
+            // 每次进二级页的第一帧都白付这份开销。
+            if (backdrop != null && showBlur) {
                 Box(
                     Modifier.matchParentSize().progressiveTextureBlur(
                         backdrop = backdrop,
