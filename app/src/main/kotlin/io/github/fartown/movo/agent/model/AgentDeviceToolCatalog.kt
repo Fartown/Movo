@@ -21,7 +21,7 @@ internal object AgentDeviceToolCatalog {
             .put(
                 function(
                     "set_alarm",
-                    "直接创建系统闹钟，不要用 GUI。涉及相对日期时先用 get_current_context 换算；hour/minute 使用设备本地时间。系统不接受直达操作时可能只打开时钟页面。",
+                    "直接创建系统闹钟，优先于 GUI。涉及相对日期时先用 get_current_context 换算；hour/minute 使用设备本地时间。只有返回 ok=true 且 verified=true 才算设好；ok=false（如 CLOCK_ACTION_UNVERIFIED）时不得告诉用户已设置，按 next_step 到时钟界面核实或完成。",
                     properties(
                         "hour" to integer("0 到 23", 0, 23),
                         "minute" to integer("0 到 59", 0, 59),
@@ -38,7 +38,7 @@ internal object AgentDeviceToolCatalog {
             .put(
                 function(
                     "set_timer",
-                    "直接创建系统计时器，不要用 GUI。duration_seconds 必须是 1 到 86400 秒。",
+                    "直接创建并开始系统计时器，优先于 GUI。duration_seconds 必须是 1 到 86400 秒。只有返回 ok=true 且 verified=true 才算设好；ok=false（如 CLOCK_ACTION_UNVERIFIED）时不得告诉用户已设置，按 next_step 到时钟界面核实或完成。",
                     properties(
                         "duration_seconds" to integer("计时秒数", 1, 86_400),
                         "label" to string("计时器标签，最多 100 字", 100),
