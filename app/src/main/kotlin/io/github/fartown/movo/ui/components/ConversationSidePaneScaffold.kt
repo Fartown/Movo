@@ -292,7 +292,15 @@ fun ConversationSidePaneScaffold(
             withFrameNanos { }
             warmingUp = false
         }
-        ConversationPanePanel(
+        // 回到首页（从设置返回、切换页面）那一帧不组合会话列表：抽屉关着时推迟两帧再组合，
+        // 真机 trace 里整张列表的首次组合占了返回首页那一帧的一大块。抽屉要打开时立即组合。
+        var panelComposed by remember { mutableStateOf(visible) }
+        LaunchedEffect(Unit) {
+            withFrameNanos { }
+            withFrameNanos { }
+            panelComposed = true
+        }
+        if (panelComposed || visible || paneShowing) ConversationPanePanel(
             state = state,
             width = paneWidth,
             paneVisible = { paneShowing },

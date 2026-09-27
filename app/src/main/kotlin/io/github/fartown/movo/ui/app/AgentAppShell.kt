@@ -36,7 +36,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.pluralStringResource
@@ -70,11 +69,8 @@ import io.github.fartown.movo.ui.theme.MovoSize
 import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.theme.MovoTypography
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.blur.BlendColorEntry
-import top.yukonga.miuix.kmp.blur.BlurColors
 import top.yukonga.miuix.kmp.blur.LayerBackdrop
-import top.yukonga.miuix.kmp.blur.ProgressiveBlur
-import top.yukonga.miuix.kmp.blur.progressiveTextureBlur
+import io.github.fartown.movo.ui.components.movo.movoTopBarBlur
 
 /**
  * Agent App 统一壳层（首页 / 会话页、浏览器、终端）。
@@ -222,13 +218,7 @@ private fun HomeTopBar(
         Box(modifier = Modifier.matchParentSize().graphicsLayer { alpha = chrome }) {
             if (backdrop != null) {
                 Box(
-                    Modifier.matchParentSize().progressiveTextureBlur(
-                        backdrop = backdrop,
-                        shape = RectangleShape,
-                        gradient = ProgressiveBlur.Top,
-                        blurRadius = 16f,
-                        colors = BlurColors(blendColors = listOf(BlendColorEntry(MovoColors.bgCanvas.copy(alpha = 0.9f)))),
-                    ),
+                    Modifier.matchParentSize().movoTopBarBlur(backdrop),
                 )
             }
             // Q7 底色整条 90%（渐进模糊的混合色向下变淡，单靠它消息会和标题叠在一起）。

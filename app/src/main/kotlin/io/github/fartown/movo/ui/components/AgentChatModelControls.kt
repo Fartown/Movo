@@ -190,15 +190,26 @@ private fun rememberModelPopoverWidth(state: AgentModelPickerUiState): Dp {
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     return remember(state.providerGroups, density) {
-        val widestPx = state.providerGroups
-            .flatMap { group -> group.models.map { it.displayName } }
-            .maxOfOrNull { name -> measurer.measure(name, MovoTypography.bodyRegular, maxLines = 1).size.width }
-            ?: 0
-        // 文字 + 行内边距 12 × 2 + ✓ 20 与间距 8 + 菜单内边距 8 × 2。
-        val chrome = MovoSpacing.md * 2 + MovoSize.iconMedium + MovoSpacing.sm + MovoSpacing.sm * 2
-        (with(density) { widestPx.toDp() } + chrome).coerceIn(ModelPopoverMinWidth, ModelPopoverMaxWidth)
+        val names = state.providerGroups.flatMap { group -> group.models.map { it.displayName } }
+        // 首页每次重建（从设置返回、切换会话）都会走到这里；服务商拉取后可能有上百个模型名，
+        // 逐个排版量宽要几毫秒（真机 trace：返回首页那一帧里占 3ms+）。同一批名字在进程内只量一次。
+        val key = ModelPopoverWidthKey(names, density.density, density.fontScale)
+        modelPopoverWidthCache?.takeIf { it.first == key }?.second ?: run {
+            val widestPx = names.maxOfOrNull { name ->
+                measurer.measure(name, MovoTypography.bodyRegular, maxLines = 1).size.width
+            } ?: 0
+            // 文字 + 行内边距 12 × 2 + ✓ 20 与间距 8 + 菜单内边距 8 × 2。
+            val chrome = MovoSpacing.md * 2 + MovoSize.iconMedium + MovoSpacing.sm + MovoSpacing.sm * 2
+            (with(density) { widestPx.toDp() } + chrome).coerceIn(ModelPopoverMinWidth, ModelPopoverMaxWidth)
+                .also { modelPopoverWidthCache = key to it }
+        }
     }
 }
+
+private data class ModelPopoverWidthKey(val names: List<String>, val density: Float, val fontScale: Float)
+
+/** 上一次量出的模型菜单宽度（主线程读写）。 */
+private var modelPopoverWidthCache: Pair<ModelPopoverWidthKey, Dp>? = null
 
 private val ModelPopoverMinWidth = 236.dp
 private val ModelPopoverMaxWidth = 320.dp

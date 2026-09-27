@@ -41,11 +41,10 @@ import io.github.fartown.movo.ui.theme.MovoSize
 import io.github.fartown.movo.ui.theme.MovoTypography
 import top.yukonga.miuix.kmp.basic.Text
 import androidx.compose.ui.graphics.RectangleShape
-import top.yukonga.miuix.kmp.blur.BlendColorEntry
-import top.yukonga.miuix.kmp.blur.BlurColors
 import top.yukonga.miuix.kmp.blur.LayerBackdrop
 import top.yukonga.miuix.kmp.blur.ProgressiveBlur
-import top.yukonga.miuix.kmp.blur.progressiveTextureBlur
+import top.yukonga.miuix.kmp.blur.drawBackdrop
+import top.yukonga.miuix.kmp.blur.progressiveTextureBlurEffect
 
 /**
  * `TopBar/Secondary` 二级页顶栏（规范 8.7）：高 56；左侧返回（chevron-left 24，热区 44，字形左缘对齐 20，左内边距 1）；
@@ -83,13 +82,7 @@ internal fun MovoTopBar(
             // 每次进二级页的第一帧都白付这份开销。
             if (backdrop != null && showBlur) {
                 Box(
-                    Modifier.matchParentSize().progressiveTextureBlur(
-                        backdrop = backdrop,
-                        shape = RectangleShape,
-                        gradient = ProgressiveBlur.Top,
-                        blurRadius = 16f,
-                        colors = BlurColors(blendColors = listOf(BlendColorEntry(MovoColors.bgCanvas.copy(alpha = 0.9f)))),
-                    ),
+                    Modifier.matchParentSize().movoTopBarBlur(backdrop),
                 )
             }
             // Q7 的底色是整条 90%：渐进模糊的混合色随模糊一起向下变淡，单靠它顶栏下半部分几乎透明，
@@ -162,3 +155,24 @@ internal class ScrolledDetector : NestedScrollConnection {
         return Offset.Zero
     }
 }
+
+/**
+ * 顶栏滚动态的背景模糊（规范 Q7「渐进模糊 上 16 → 下 0」）。
+ *
+ * 用 `drawBackdrop` 单次降采样的渐进模糊，不传 `progressiveGradient`：Miuix 的 `progressiveTextureBlur`
+ * 会走多级合成，并为了让清晰端像素级锐利每帧再补一个全分辨率覆盖 pass。顶栏上面还盖着整条 90% 底色，
+ * 清晰端锐不锐利看不出来，这份开销却是每帧都付——流式回答时内容一直在动，真机 A/B：模糊开 GPU p50 4–5ms，
+ * 关掉 2ms，卡顿帧翻倍。
+ * 不在模糊里再混 90% 底色：单次渐进模糊的混色是整条均匀的（多级合成里它随模糊淡出），再叠上方那层 90% 底色就成了
+ * 99% 遮盖，下面的内容完全看不出来（真机对照 fix25）。底色只由调用方那层 90% 提供，与原来观感一致。
+ */
+internal fun Modifier.movoTopBarBlur(backdrop: LayerBackdrop): Modifier = drawBackdrop(
+    backdrop = backdrop,
+    shape = { RectangleShape },
+    effects = {
+        progressiveTextureBlurEffect(
+            blurRadiusX = 16f,
+            gradient = ProgressiveBlur.Top,
+        )
+    },
+)
