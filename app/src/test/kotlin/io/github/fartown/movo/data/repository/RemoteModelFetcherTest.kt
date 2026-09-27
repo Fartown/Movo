@@ -407,4 +407,31 @@ class RemoteModelFetcherTest {
 
     private fun modelWithId(modelId: String): Model =
         Model(id = modelId, modelId = modelId, displayName = modelId)
+
+    @Test
+    fun parsesCodexModelCatalogKeepingOnlyPickerModelsByPriority() {
+        val models = RemoteModelFetcher.parseChatGptModels(
+            """
+            {"models":[
+              {"slug":"gpt-6-luna","display_name":"GPT-6 Luna","visibility":"list","priority":3,"context_window":400000,
+               "supported_reasoning_levels":[{"effort":"low","description":""},{"effort":"high","description":""}],
+               "default_reasoning_level":"low","input_modalities":["text"]},
+              {"slug":"gpt-6-sol","display_name":"GPT-6 Sol","visibility":"list","priority":1,
+               "supported_reasoning_levels":[{"effort":"none","description":""},{"effort":"medium","description":""}]},
+              {"slug":"codex-auto-review","display_name":"Auto review","visibility":"hide","priority":0,"supported_reasoning_levels":[]}
+            ]}
+            """.trimIndent(),
+        )
+
+        assertEquals(listOf("gpt-6-sol", "gpt-6-luna"), models.map { it.modelId })
+        val sol = models[0]
+        assertEquals("GPT-6 Sol", sol.displayName)
+        assertEquals(true, sol.reasoningCapabilities?.canDisable)
+        assertEquals(listOf(ReasoningEffort.MEDIUM), sol.reasoningCapabilities?.supportedEfforts)
+        val luna = models[1]
+        assertEquals(400_000, luna.contextWindow)
+        assertEquals(listOf("text"), luna.inputModalities)
+        assertEquals(ReasoningEffort.LOW, luna.reasoningCapabilities?.defaultEffort)
+        assertEquals(false, luna.reasoningCapabilities?.canDisable)
+    }
 }

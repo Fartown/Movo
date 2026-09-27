@@ -29,6 +29,10 @@ internal object ChatGptCodexRequest {
         }
     }
 
+    /** Codex 模型目录：与 responses 同一个 `/codex` 前缀。 */
+    fun modelsUrl(baseUrl: String, clientVersion: String): String =
+        responsesUrl(baseUrl).removeSuffix("/responses") + "/models?client_version=$clientVersion"
+
     fun applyBody(body: JSONObject, sessionId: String) {
         body.put("store", false)
         body.put("stream", true)

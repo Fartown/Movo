@@ -92,7 +92,15 @@ internal object ModelRepository {
         }
     }
 
-    suspend fun syncRemoteModels(providerId: String, fetched: List<Model>): RemoteModelSyncResult =
+    /**
+     * [authoritative] 为 true 时远端目录就是该服务商可用模型的全集（ChatGPT 订阅）：
+     * 内置目录里远端已不再提供的模型一并移除，手动添加的保留。
+     */
+    suspend fun syncRemoteModels(
+        providerId: String,
+        fetched: List<Model>,
+        authoritative: Boolean = false,
+    ): RemoteModelSyncResult =
         mutationMutex.withLock {
             val remoteByKey = fetched
                 .asSequence()
@@ -113,10 +121,28 @@ internal object ModelRepository {
                         remote != null -> {
                             consumed += key
                             add(
+                                // 远端只给了 id 的字段（多数 OpenAI 兼容平台的 /models 没有显示名、上下文、能力）
+                                // 不能把已有的内置目录 / 手动填写的信息覆盖成「未知」。
                                 remote.copy(
                                     id = stored.id,
                                     modelId = remote.modelId.trim(),
-                                    displayName = remote.displayName.trim().ifBlank { remote.modelId.trim() },
+                                    displayName = remote.displayName.trim()
+                                        .takeUnless { it.isBlank() || it.equals(remote.modelId.trim(), ignoreCase = true) }
+                                        ?: stored.displayName.ifBlank { remote.modelId.trim() },
+                                    ownedBy = remote.ownedBy ?: stored.ownedBy,
+                                    contextWindow = remote.contextWindow ?: stored.contextWindow,
+                                    inputModalities = if (remote.inputModalities == listOf(Model.TEXT_MODALITY) && remote.attachment == null) {
+                                        stored.inputModalities
+                                    } else {
+                                        remote.inputModalities
+                                    },
+                                    outputModalities = remote.outputModalities.ifEmpty { stored.outputModalities },
+                                    attachment = remote.attachment ?: stored.attachment,
+                                    toolCall = remote.toolCall ?: stored.toolCall,
+                                    reasoning = remote.reasoning ?: stored.reasoning,
+                                    reasoningCapabilities = remote.reasoningCapabilities ?: stored.reasoningCapabilities,
+                                    structuredOutput = remote.structuredOutput ?: stored.structuredOutput,
+                                    supportsTemperature = remote.supportsTemperature ?: stored.supportsTemperature,
                                     isEnabled = stored.isEnabled,
                                     isBuiltIn = stored.isBuiltIn || remote.isBuiltIn,
                                     customHeaders = stored.customHeaders,
@@ -129,7 +155,8 @@ internal object ModelRepository {
                                 )
                             )
                         }
-                        stored.source != ModelSource.REMOTE -> add(stored)
+                        stored.source == ModelSource.MANUAL -> add(stored)
+                        stored.source == ModelSource.CATALOG && !authoritative -> add(stored)
                     }
                 }
                 remoteByKey.forEach { (key, remote) ->
@@ -153,10 +180,7 @@ internal object ModelRepository {
                 applied = true,
                 fetchedCount = remoteByKey.size,
                 addedCount = merged.count { model -> existing.none { it.id == model.id } },
-                removedCount = existing.count { stored ->
-                    stored.source == ModelSource.REMOTE &&
-                        stored.modelId.normalizedModelId() !in remoteByKey
-                },
+                removedCount = existing.count { stored -> merged.none { it.id == stored.id } },
             )
         }
 

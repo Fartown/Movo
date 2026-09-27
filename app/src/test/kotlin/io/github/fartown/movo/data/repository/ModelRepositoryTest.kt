@@ -158,6 +158,33 @@ class ModelRepositoryTest {
     }
 
     @Test
+    fun authoritativeSyncDropsDelistedCatalogModelsButKeepsManualOnes() = runBlocking {
+        ProviderRepository.replaceModels(
+            PROVIDER_ID,
+            listOf(
+                Model(id = "manual-id", modelId = "my-model", displayName = "Mine", source = ModelSource.MANUAL),
+                Model(id = "old-id", modelId = "gpt-5.6-sol", displayName = "GPT-5.6 Sol", source = ModelSource.CATALOG, isBuiltIn = true),
+                Model(id = "kept-id", modelId = "gpt-5.5", displayName = "GPT-5.5", source = ModelSource.CATALOG, isBuiltIn = true),
+            ),
+        )
+
+        val result = ModelRepository.syncRemoteModels(
+            PROVIDER_ID,
+            listOf(
+                Model(id = "r1", modelId = "gpt-6-sol", displayName = "GPT-6 Sol", source = ModelSource.REMOTE),
+                Model(id = "r2", modelId = "gpt-5.5", displayName = "GPT-5.5", source = ModelSource.REMOTE),
+            ),
+            authoritative = true,
+        )
+
+        assertTrue(result.applied)
+        assertEquals(1, result.removedCount)
+        val restored = ModelRepository.modelsByProvider(PROVIDER_ID).associateBy { it.modelId }
+        assertEquals(setOf("my-model", "gpt-5.5", "gpt-6-sol"), restored.keys)
+        assertEquals("kept-id", restored.getValue("gpt-5.5").id)
+    }
+
+    @Test
     fun providerConfigSaveDoesNotOverwriteModelsAddedFromAnotherDraft() = runBlocking {
         addEmptyProvider()
         val staleProviderDraft = ProviderRepository.providerById(PROVIDER_ID)!!
@@ -189,5 +216,34 @@ class ModelRepositoryTest {
 
     private companion object {
         const val PROVIDER_ID = "provider-test"
+    }
+
+    @Test
+    fun remoteEntryWithOnlyAnIdKeepsStoredNameAndContext() = runBlocking {
+        ProviderRepository.replaceModels(
+            PROVIDER_ID,
+            listOf(
+                Model(
+                    id = "flash-id",
+                    modelId = "deepseek-v4-1-flash",
+                    displayName = "DeepSeek-v4.1-Flash",
+                    contextWindow = 1_050_000,
+                    toolCall = true,
+                    source = ModelSource.CATALOG,
+                    isBuiltIn = true,
+                ),
+            ),
+        )
+
+        ModelRepository.syncRemoteModels(
+            PROVIDER_ID,
+            listOf(Model(id = "r", modelId = "deepseek-v4-1-flash", displayName = "deepseek-v4-1-flash", source = ModelSource.REMOTE)),
+        )
+
+        val synced = ModelRepository.modelsByProvider(PROVIDER_ID).single()
+        assertEquals("flash-id", synced.id)
+        assertEquals("DeepSeek-v4.1-Flash", synced.displayName)
+        assertEquals(1_050_000, synced.contextWindow)
+        assertEquals(true, synced.toolCall)
     }
 }

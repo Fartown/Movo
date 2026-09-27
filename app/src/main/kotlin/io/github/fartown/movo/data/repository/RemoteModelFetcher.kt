@@ -1,10 +1,12 @@
 package io.github.fartown.movo.data.repository
 
 import io.github.fartown.movo.agent.model.AgentHttpClient
+import io.github.fartown.movo.agent.model.ChatGptCodexRequest
 import io.github.fartown.movo.agent.model.ProviderRequestHeaders
 import io.github.fartown.movo.agent.model.ProviderUrls
 import io.github.fartown.movo.data.auth.ChatGptAuth
 import io.github.fartown.movo.data.auth.ChatGptAuthException
+import io.github.fartown.movo.data.auth.ChatGptCredentials
 import io.github.fartown.movo.data.model.AnthropicProviderSetting
 import io.github.fartown.movo.data.model.Model
 import io.github.fartown.movo.data.model.ModelReasoningCapabilities
@@ -31,6 +33,8 @@ import okhttp3.Request
 
 internal object RemoteModelFetcher {
     private const val MAX_ERROR_CHARS = 600
+    /** Codex CLI 当前正式版（openai/codex rust-v0.157.1，2026-09-26）；模型目录按它过滤可见模型。 */
+    private const val CODEX_CLIENT_VERSION = "0.157.1"
     private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun fetch(provider: ProviderSetting): Result<List<Model>> =
@@ -86,15 +90,82 @@ internal object RemoteModelFetcher {
     }
 
     /**
-     * ChatGPT 订阅没有公开的模型列表接口：先确认登录可用（必要时刷新令牌），再返回内置目录。
+     * ChatGPT 订阅读 Codex 后端的模型目录 `GET {baseUrl}/codex/models?client_version=…`（与 Codex CLI 同一接口）。
+     * 目录按 `minimal_client_version` 过滤，版本号过旧时最新模型会被静默略去，所以版本号跟随 Codex 当前正式版；
+     * 只保留 `visibility=list`（Codex 选择器里显示的）并按 `priority` 排序。令牌过期时刷新一次再请求。
      */
     private fun fetchChatGpt(provider: ProviderSetting): List<Model> {
-        try {
-            ChatGptAuth.requireCredentials()
+        val body = try {
+            requestChatGptModels(provider, ChatGptAuth.requireCredentials()).let { (code, text) ->
+                if (code == 401) requestChatGptModels(provider, ChatGptAuth.requireCredentials(forceRefresh = true)) else code to text
+            }.let { (code, text) ->
+                if (code !in 200..299) error("拉取 ChatGPT 模型失败 HTTP $code: ${text.compactError()}")
+                text
+            }
         } catch (failure: ChatGptAuthException) {
             error(failure.message.orEmpty())
         }
-        return OfficialModelCatalog.modelsForProvider(provider)
+        return OfficialModelCatalog.enrich(provider, parseChatGptModels(body))
+    }
+
+    private fun requestChatGptModels(provider: ProviderSetting, credentials: ChatGptCredentials): Pair<Int, String> {
+        val headers = okhttp3.Headers.Builder().add("Accept", "application/json")
+        ChatGptCodexRequest.applyHeaders(headers, credentials, UUID.randomUUID().toString())
+        val request = Request.Builder()
+            .url(ChatGptCodexRequest.modelsUrl(provider.baseUrl, CODEX_CLIENT_VERSION))
+            .headers(headers.build())
+            .get()
+            .build()
+        return AgentHttpClient.client.newCall(request).execute().use { response -> response.code to response.body.string() }
+    }
+
+    internal fun parseChatGptModels(body: String): List<Model> {
+        val entries = json.parseToJsonElement(body)
+            .jsonObjectOrNull()
+            ?.get("models")
+            ?.jsonArrayOrNull()
+            ?: return emptyList()
+        return entries
+            .mapNotNull { it.jsonObjectOrNull() }
+            .filter { it.string("visibility")?.lowercase() == "list" }
+            .sortedBy { it["priority"]?.let { value -> (value as? JsonPrimitive)?.intOrNull } ?: Int.MAX_VALUE }
+            .mapNotNull { it.toChatGptModel() }
+    }
+
+    private fun JsonObject.toChatGptModel(): Model? {
+        val slug = string("slug")?.trim().orEmpty()
+        if (slug.isBlank()) return null
+        val levels = this["supported_reasoning_levels"]?.jsonArrayOrNull().orEmpty()
+            .mapNotNull { level -> level.jsonObjectOrNull()?.string("effort") ?: (level as? JsonPrimitive)?.contentOrNull }
+            .map { it.lowercase() }
+        // Codex 用 `none` 表示可关闭推理，其余档位对应 Movo 的推理强度。
+        val canDisable = "none" in levels
+        val efforts = levels.mapNotNull { effort -> ReasoningEffort.entries.firstOrNull { it.wireValue == effort } }
+        val defaultEffort = string("default_reasoning_level")
+            ?.let { effort -> ReasoningEffort.entries.firstOrNull { it.wireValue == effort.lowercase() } }
+        val modalities = stringList("input_modalities") ?: listOf(Model.TEXT_MODALITY, Model.IMAGE_MODALITY)
+        return Model(
+            id = UUID.randomUUID().toString(),
+            modelId = slug,
+            displayName = string("display_name")?.trim().takeUnless { it.isNullOrBlank() } ?: slug,
+            source = ModelSource.REMOTE,
+            ownedBy = "openai",
+            contextWindow = positiveInt("context_window"),
+            inputModalities = modalities,
+            outputModalities = listOf(Model.TEXT_MODALITY),
+            attachment = Model.IMAGE_MODALITY in modalities,
+            toolCall = true,
+            reasoning = efforts.isNotEmpty(),
+            reasoningCapabilities = efforts.takeIf { it.isNotEmpty() }?.let {
+                ModelReasoningCapabilities(
+                    supportedEfforts = it,
+                    defaultEffort = defaultEffort,
+                    defaultEnabled = true,
+                    mandatory = !canDisable,
+                    canDisable = canDisable,
+                )
+            },
+        )
     }
 
     private fun fetchAnthropic(provider: AnthropicProviderSetting): List<Model> {
