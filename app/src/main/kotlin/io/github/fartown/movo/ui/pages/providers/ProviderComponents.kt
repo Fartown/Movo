@@ -22,6 +22,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.fartown.movo.data.model.CustomProviderSetting
 import io.github.fartown.movo.data.model.ProviderSetting
@@ -30,6 +31,7 @@ import io.github.fartown.movo.ui.components.movo.MovoCard
 import io.github.fartown.movo.ui.components.providerBrandLogoRes as sharedProviderBrandLogoRes
 import io.github.fartown.movo.ui.theme.MovoColors
 import io.github.fartown.movo.ui.theme.MovoIcon
+import io.github.fartown.movo.ui.theme.MovoIconData
 import io.github.fartown.movo.ui.theme.MovoIcons
 import io.github.fartown.movo.ui.theme.MovoRadius
 import io.github.fartown.movo.ui.theme.MovoSize
@@ -59,22 +61,24 @@ internal fun ProviderSection(
 internal fun ProviderBrandIcon(
     sourceType: String,
     modifier: Modifier = Modifier,
+    size: Dp = MovoSize.iconMedium,
 ) {
     val logo = providerBrandLogoRes(sourceType) ?: return
-    ProviderBrandImage(logo = logo, modifier = modifier)
+    ProviderBrandImage(logo = logo, modifier = modifier, size = size)
 }
 
 @Composable
 private fun ProviderBrandImage(
     @DrawableRes logo: Int,
     modifier: Modifier = Modifier,
+    size: Dp = MovoSize.iconMedium,
 ) {
     Image(
         painter = painterResource(logo),
         contentDescription = null,
         contentScale = ContentScale.Fit,
         modifier = modifier
-            .size(MovoSize.iconMedium)
+            .size(size)
             .clip(CircleShape)
             .border(MovoSize.hairline, MovoColors.borderHairline, CircleShape),
     )
@@ -88,24 +92,51 @@ internal fun providerBrandLogoRes(provider: ProviderSetting): Int? =
 internal fun providerBrandLogoRes(sourceType: String): Int? =
     sharedProviderBrandLogoRes(sourceType)
 
-/** 已知厂商使用品牌图标，未知来源继续按协议类型使用通用线条图标。 */
+/**
+ * 已知厂商使用品牌图标，未知来源继续按协议类型使用通用线条图标。
+ * [size] 大于 20（服务商页 28 / 40）时，兜底线条图标放进同尺寸的 `bg/surface-muted` 圆底里，与 Logo 对齐。
+ */
 @Composable
 internal fun ProviderIcon(
     provider: ProviderSetting,
     modifier: Modifier = Modifier,
+    size: Dp = MovoSize.iconMedium,
 ) {
     val logo = providerBrandLogoRes(provider)
     if (logo != null) {
-        ProviderBrandImage(logo = logo, modifier = modifier)
+        ProviderBrandImage(logo = logo, modifier = modifier, size = size)
         return
     }
-    MovoIcon(
-        icon = if (provider is CustomProviderSetting) MovoIcons.Database else MovoIcons.Globe,
-        contentDescription = null,
-        size = MovoSize.iconMedium,
-        tint = MovoColors.textPrimary,
-        modifier = modifier,
-    )
+    val icon = if (provider is CustomProviderSetting) MovoIcons.Database else MovoIcons.Globe
+    if (size <= MovoSize.iconMedium) {
+        MovoIcon(
+            icon = icon,
+            contentDescription = null,
+            size = size,
+            tint = MovoColors.textPrimary,
+            modifier = modifier,
+        )
+        return
+    }
+    ProviderIconTile(icon = icon, modifier = modifier, size = size)
+}
+
+/** 圆形浅灰底 + 16 线条图标（服务商页没有 Logo 的服务商、「更多服务商与自定义接口」等入口行）。 */
+@Composable
+internal fun ProviderIconTile(
+    icon: MovoIconData,
+    modifier: Modifier = Modifier,
+    size: Dp = 28.dp,
+) {
+    Box(
+        modifier = modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(MovoColors.bgSurfaceMuted),
+        contentAlignment = Alignment.Center,
+    ) {
+        MovoIcon(icon = icon, contentDescription = null, size = MovoSize.iconSmall, tint = MovoColors.textPrimary)
+    }
 }
 
 internal enum class TagChipTone { Normal, Emphasized }

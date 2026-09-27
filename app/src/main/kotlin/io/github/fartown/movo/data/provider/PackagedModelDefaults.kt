@@ -7,6 +7,9 @@ import io.github.fartown.movo.data.model.OpenAiEndpointMode
 
 /** A first-install seed. Once saved, the normal editable database owns this configuration. */
 internal object PackagedModelDefaults {
+    /** .env 打包进来的默认服务商 id：服务商页上挂「预置」标签，不能长按删除。 */
+    const val PROVIDER_ID = "packaged-default-provider"
+
     fun provider(): OpenAiCompatibleProviderSetting? = createProvider(
         name = BuildConfig.MOVO_DEFAULT_PROVIDER_NAME,
         baseUrl = BuildConfig.MOVO_DEFAULT_BASE_URL,
@@ -30,7 +33,7 @@ internal object PackagedModelDefaults {
     ): OpenAiCompatibleProviderSetting? {
         if (baseUrl.isBlank() || apiKey.isBlank() || modelId.isBlank()) return null
         return OpenAiCompatibleProviderSetting(
-            id = "packaged-default-provider",
+            id = PROVIDER_ID,
             name = name.trim().ifBlank { "默认模型" },
             baseUrl = baseUrl.trim().trimEnd('/'),
             apiKey = apiKey.trim(),

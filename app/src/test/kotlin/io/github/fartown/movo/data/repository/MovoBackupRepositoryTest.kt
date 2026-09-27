@@ -6,6 +6,10 @@ import io.github.fartown.movo.data.db.ConversationEntity
 import io.github.fartown.movo.data.db.ConversationMessageEntity
 import io.github.fartown.movo.data.db.ConversationStateEntity
 import io.github.fartown.movo.data.db.MovoDatabase
+import io.github.fartown.movo.data.db.ProviderWithModelsSeed
+import io.github.fartown.movo.data.db.toEntity
+import io.github.fartown.movo.data.db.toModelEntities
+import io.github.fartown.movo.data.provider.BuiltinProviders
 import io.github.fartown.movo.data.model.ModelSource
 import io.github.fartown.movo.data.model.withApiKey
 import io.github.fartown.movo.agent.roleplay.CharacterCardCodec
@@ -47,9 +51,15 @@ class MovoBackupRepositoryTest {
     @Test
     fun exportAndImportRestoresProvidersConversationsAndMemory() = runBlocking {
         ProviderRepository.ensureBuiltInsMerged(initialProvider = null)
-        val provider = ProviderRepository.allProviders().first().withApiKey("sk-backup-test")
-        ProviderRepository.updateProvider(provider)
+        val provider = ProviderRepository.addFromTemplate(
+            ProviderRepository.templateDraft(BuiltinProviders.OPENAI_ID)!!.withApiKey("sk-backup-test")
+        )
         SettingsDataStore.setSelection(provider.id, provider.models.first().id)
+        // 旧版本留下的无 Key 预设占位：恢复旧备份时同样清掉。
+        val legacyPlaceholder = BuiltinProviders.providerById(BuiltinProviders.DEEPSEEK_ID)!!
+        MovoDatabase.get(context).providerDao().insertProvidersWithModels(
+            listOf(ProviderWithModelsSeed(legacyPlaceholder.toEntity(), legacyPlaceholder.toModelEntities()))
+        )
         AgentMemoryRepository.replaceAll("# 核心记忆\n喜欢 Kotlin")
 
         val conversation = ConversationEntity(
@@ -109,6 +119,8 @@ class MovoBackupRepositoryTest {
         assertEquals(provider.models.first().id, restoredSettings.selectedModelId)
         assertEquals("sk-backup-test", ProviderRepository.providerById(provider.id)?.apiKey)
         assertEquals(ModelSource.CATALOG, ProviderRepository.providerById(provider.id)?.models?.first()?.source)
+        assertEquals(null, ProviderRepository.providerById(BuiltinProviders.DEEPSEEK_ID))
+        assertTrue(ProviderRepository.providerById(BuiltinProviders.CHATGPT_ID) != null)
     }
 
     @Test(expected = MovoBackupException::class)

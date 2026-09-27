@@ -107,6 +107,14 @@ sealed interface AppRoute : NavKey {
 
     @Serializable
     data class ModelProviderNew(val providerType: NewProviderType) : AppRoute
+
+    /** 从内置模板添加服务商：预填名称 / Base URL / 类型 / 官方模型，填 API Key 保存后才落库。 */
+    @Serializable
+    data class ModelProviderTemplate(val templateId: String) : AppRoute
+
+    /** 设置 · 模型 · 更多服务商：全部未添加的模板 + OpenAI / Anthropic 兼容接口。 */
+    @Serializable
+    data object ModelProviderMore : AppRoute
 }
 
 @Serializable

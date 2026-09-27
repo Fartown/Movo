@@ -135,6 +135,8 @@ internal object MovoBackupRepository {
                 providerId = document.selectedProviderId,
                 modelId = document.selectedModelId,
             )
+            // 旧备份里带着全部内置预设：没填 Key 的占位同样清掉（内置预设已改为模板），再补齐 ChatGPT 记录。
+            ProviderRepository.prunePresetPlaceholders()
             ProviderRepository.ensureBuiltInsMerged()
             ProviderRepository.repairSelection()
             document.summary()

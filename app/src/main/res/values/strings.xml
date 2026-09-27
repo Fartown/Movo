@@ -324,7 +324,6 @@
   <string name="ui_allow_reading_of_sensitive_device_information_feaec0">Allow reading of sensitive device information</string>
   <string name="ui_about_bed172">About</string>
   <string name="ui_after_closing_no_memory_will_be_injected_and_the_mod_db3d23">After closing, no memory will be injected, and the model will not be allowed to read or write; existing content will be retained.</string>
-  <string name="ui_built_in_09ceea">built-in</string>
   <string name="ui_built_in_skills_1ceedf">Built-in</string>
   <string name="ui_analyze_current_screen_ebf08f">Analyze current screen</string>
   <string name="ui_delete_3755f5">delete</string>
@@ -366,15 +365,9 @@
   <string name="ui_long_press_on_the_gesture_bar_triggers_a_circle_to_s_b80117">Touch and hold the gesture bar to start Circle to Search</string>
   <string name="ui_open_current_browser_58358e">Open current browser</string>
   <string name="ui_open_wechat_6b2c28">Open WeChat</string>
-  <string name="ui_search_provider_74e049">Search provider</string>
   <string name="ui_search_model_df5586">Search model</string>
-  <string name="ui_support_anthropic_claude_official_or_compatible_api_de3f80">Support Anthropic Claude official or compatible API</string>
-  <string name="ui_support_chatgpt_deepseek_kimi_glm_qwen_etc_b31d02">Support ChatGPT, DeepSeek, Kimi, GLM, Qwen, etc.</string>
   <string name="ui_supports_files_and_folders_under_internal_storage_or_520786">Supports files and folders at any local absolute path</string>
   <string name="ui_support_thinking_5b9e4c">Supports reasoning</string>
-  <string name="ui_new_anthropic_db6098">Add Anthropic provider</string>
-  <string name="ui_added_openai_compatible_6bd471">Add OpenAI-compatible provider</string>
-  <string name="ui_add_new_provider_74df54">Add new provider</string>
   <string name="ui_accessibility_enhancement_tools_8fd257">Accessibility enhancement tools</string>
   <string name="ui_no_skills_installed_yet_4e960f">No Skills installed yet</string>
   <string name="ui_replace_user_skills_250e98">Replace Skill?</string>
@@ -385,7 +378,6 @@
   <string name="ui_permission_health_3048bb">Permissions</string>
   <string name="ui_check_memory_pressure_2d9600">Check memory pressure</string>
   <string name="ui_core_memory_injection_budget_48b5d5">Core memory injection budget</string>
-  <string name="ui_model_provider_e8c7f5">Model providers</string>
   <string name="ui_model_management_183414">Model management</string>
   <string name="ui_test_connection_10b7d8">test connection</string>
   <string name="ui_the_browser_has_not_opened_the_web_page_yet_31e095">The browser has not opened the web page yet</string>
@@ -1046,18 +1038,10 @@
   <string name="status_cancelled">Cancelled</string>
   <string name="status_ready">Ready</string>
   <string name="status_needs_attention">Needs attention</string>
-  <plurals name="provider_configured_count">
-    <item quantity="one">Configured providers (%d)</item>
-    <item quantity="other">Configured providers (%d)</item>
-  </plurals>
-  <string name="provider_empty">No model providers yet. Add one to get started</string>
-  <string name="provider_no_matches">No matching providers</string>
   <plurals name="provider_models_count">
     <item quantity="one">%d model</item>
     <item quantity="other">%d models</item>
   </plurals>
-  <string name="provider_selected">Selected</string>
-  <string name="provider_set_current">Set as current</string>
   <string name="skills_checking_package">Checking skill package</string>
   <string name="skills_import_zip">Import from ZIP</string>
   <string name="skills_installing_package">Verifying and installing. Please wait</string>
@@ -1302,4 +1286,50 @@
   <string name="chatgpt_logged_out">Signed out of ChatGPT</string>
   <string name="chatgpt_open_browser_failed">Could not open a browser</string>
   <string name="chatgpt_login_exchanging">Finishing sign-in…</string>
+  <!-- 设置 → 模型（服务商页，Figma「15」） -->
+  <string name="provider_page_title">Models</string>
+  <string name="provider_more_title">More providers</string>
+  <string name="provider_tag_current">Current</string>
+  <string name="provider_tag_packaged">Preset</string>
+  <string name="provider_tag_recommended">Recommended</string>
+  <string name="provider_chatgpt_intro">Use your ChatGPT subscription, no API key needed</string>
+  <string name="provider_chatgpt_sign_in">Sign in to ChatGPT</string>
+  <string name="provider_in_use">Using %1$s</string>
+  <string name="provider_in_use_with_account">Using %1$s · %2$s</string>
+  <string name="provider_no_models">No models yet</string>
+  <string name="provider_mine_title">My providers</string>
+  <string name="provider_mine_empty">No providers added yet</string>
+  <string name="provider_available_title">Available to add</string>
+  <string name="provider_available_hint">Shows up above once you add an API key</string>
+  <string name="provider_add">Add</string>
+  <string name="provider_more_entry">More providers and custom endpoints</string>
+  <string name="provider_common_title">Popular providers</string>
+  <string name="provider_common_hint">Just add an API key</string>
+  <string name="provider_custom_title">Custom endpoints</string>
+  <string name="provider_custom_openai">OpenAI-compatible endpoint</string>
+  <string name="provider_custom_anthropic">Anthropic-compatible endpoint</string>
+  <string name="provider_custom_summary">Enter the Base URL, API key and models</string>
+  <string name="provider_api_key_required">Enter an API key</string>
+  <string name="provider_tagline_openai">GPT-5.5, o3</string>
+  <string name="provider_tagline_anthropic">Claude</string>
+  <string name="provider_tagline_deepseek">DeepSeek-V4</string>
+  <string name="provider_tagline_kimi">Kimi K2.6</string>
+  <string name="provider_tagline_bailian">Qwen</string>
+  <string name="provider_tagline_minimax">MiniMax-M2</string>
+  <string name="provider_tagline_siliconflow">Open-source models</string>
+  <string name="provider_tagline_openrouter">Models from many providers</string>
+  <string name="provider_tagline_stepfun">Step 3.7</string>
+  <string name="provider_tagline_mimo">MiMo V2.5</string>
+  <plurals name="provider_account_models">
+    <item quantity="one">%1$s · %2$d model</item>
+    <item quantity="other">%1$s · %2$d models</item>
+  </plurals>
+  <plurals name="provider_models_summary">
+    <item quantity="one">%1$s · %2$d model</item>
+    <item quantity="other">%1$s · %2$d models</item>
+  </plurals>
+  <plurals name="provider_mine_count">
+    <item quantity="one">%d</item>
+    <item quantity="other">%d</item>
+  </plurals>
 </resources>
