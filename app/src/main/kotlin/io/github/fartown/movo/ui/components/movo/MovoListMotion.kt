@@ -18,6 +18,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
@@ -104,13 +105,13 @@ internal fun MovoExpandable(
         enter = if (reduced) {
             fadeIn(MovoMotion.fast())
         } else {
-            expandVertically(MovoMotion.standard()) +
+            expandVertically(MovoMotion.standard(), expandFrom = Alignment.Top) +
                 fadeIn(tween(MovoMotion.FAST, delayMillis = MovoMotion.STAGGER, easing = MovoMotion.EasingStandard))
         },
         exit = if (reduced) {
             fadeOut(MovoMotion.fastExit())
         } else {
-            shrinkVertically(MovoMotion.standard()) + fadeOut(MovoMotion.fastExit())
+            shrinkVertically(MovoMotion.standard(), shrinkTowards = Alignment.Top) + fadeOut(MovoMotion.fastExit())
         },
     ) {
         Column(content = content)

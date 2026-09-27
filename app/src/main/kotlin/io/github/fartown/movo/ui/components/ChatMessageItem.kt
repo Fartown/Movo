@@ -722,10 +722,10 @@ internal fun AgentWorkProcess(
                     delayMillis = io.github.fartown.movo.ui.theme.MovoMotion.STAGGER,
                     easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard,
                 ),
-            ) + expandVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard()),
+            ) + expandVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), expandFrom = Alignment.Top),
             // 收起：内容淡出与高度收起同时进行、同样时长，卡片不会先空成一块白再缩（真机 fix12）。
             exit = fadeOut(tween(io.github.fartown.movo.ui.theme.MovoMotion.STANDARD, easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingExit)) +
-                shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard()),
+                shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), shrinkTowards = Alignment.Top),
         ) {
             ReportWorkCardInnerResize()
             Column {
@@ -3531,12 +3531,12 @@ private fun expandContentEnter(): androidx.compose.animation.EnterTransition = f
         delayMillis = io.github.fartown.movo.ui.theme.MovoMotion.STAGGER,
         easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard,
     ),
-) + expandVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard())
+) + expandVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), expandFrom = Alignment.Top)
 
 /** 收起：内容先淡出 120ms，高度同时收起 `standard`。 */
 private fun expandContentExit(): androidx.compose.animation.ExitTransition =
     fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) +
-        shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard())
+        shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), shrinkTowards = Alignment.Top)
 
 /**
  * 执行卡里正在做高度过渡的里层数量（步骤结果展开、思考步骤展开 / 收起、执行中手动收起卡片）。
@@ -3666,9 +3666,9 @@ private fun WorkToolStep(
                     delayMillis = io.github.fartown.movo.ui.theme.MovoMotion.STAGGER,
                     easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard,
                 ),
-            ) + expandVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard()),
+            ) + expandVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), expandFrom = Alignment.Top),
             exit = fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) +
-                shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard()),
+                shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), shrinkTowards = Alignment.Top),
         ) {
             ReportWorkCardInnerResize()
             Column(

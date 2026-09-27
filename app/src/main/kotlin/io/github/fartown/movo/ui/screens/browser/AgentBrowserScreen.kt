@@ -475,8 +475,8 @@ private fun ColumnScope.BrowserStatusBanner(snapshot: BrowserSessionSnapshot, no
     val isError = error != null
     AnimatedVisibility(
         visible = message != null,
-        enter = fadeIn(MovoMotion.fast()) + expandVertically(MovoMotion.standard()),
-        exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
+        enter = fadeIn(MovoMotion.fast()) + expandVertically(MovoMotion.standard(), expandFrom = Alignment.Top),
+        exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard(), shrinkTowards = Alignment.Top),
     ) {
         Column {
             Row(

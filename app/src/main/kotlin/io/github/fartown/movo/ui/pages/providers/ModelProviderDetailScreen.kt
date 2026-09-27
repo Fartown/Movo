@@ -194,10 +194,10 @@ internal fun ModelProviderDetailScreen(
                 enter = if (reduced) {
                     fadeIn(MovoMotion.fast())
                 } else {
-                    expandVertically(MovoMotion.standard()) +
+                    expandVertically(MovoMotion.standard(), expandFrom = Alignment.Top) +
                         fadeIn(tween(MovoMotion.FAST, delayMillis = MovoMotion.STAGGER, easing = MovoMotion.EasingStandard))
                 },
-                exit = if (reduced) fadeOut(MovoMotion.fastExit()) else shrinkVertically(MovoMotion.standard()) + fadeOut(MovoMotion.fastExit()),
+                exit = if (reduced) fadeOut(MovoMotion.fastExit()) else shrinkVertically(MovoMotion.standard(), shrinkTowards = Alignment.Top) + fadeOut(MovoMotion.fastExit()),
             ) {
                 MovoSegmentedTabs(
                     tabs = listOf(context.getString(R.string.page_configuration_d7d7ce), context.getString(R.string.page_model_98fd0c)),
