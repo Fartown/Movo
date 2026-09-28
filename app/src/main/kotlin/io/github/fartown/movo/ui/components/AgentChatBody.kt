@@ -1,5 +1,6 @@
 package io.github.fartown.movo.ui.components
 
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -59,6 +60,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
@@ -175,6 +177,8 @@ internal fun AgentChatBody(
     modifier: Modifier = Modifier,
 ) {
     val scrollState = rememberLazyListState()
+    // 列表末尾的临时留白（见 [ChatBottomReserve]），与滚动状态同级：推荐追问到达时的滚动也要用到。
+    val bottomReserve = remember { ChatBottomReserve() }
     val keyboard = LocalSoftwareKeyboardController.current
     val density = LocalDensity.current
     val imeBottomPx = WindowInsets.ime.getBottom(density)
@@ -249,10 +253,20 @@ internal fun AgentChatBody(
         val arrived = tailSuggestionId != null && tailSuggestionId != seenTailSuggestionId
         seenTailSuggestionId = tailSuggestionId
         if (arrived && keepBottomAnchored && !scrollState.isScrollInProgress) {
+            // 平滑滚到正文末尾（底部哨兵）：不滚过末尾的临时留白，也不一帧到位（真机 reserve2：4 帧上移 466px）。
             withFrameNanos { }
-            scrollState.animateScrollToItem(entryCount)
-            withFrameNanos { }
-            if (scrollState.canScrollForward) scrollState.scroll { scrollBy(Float.MAX_VALUE / 4) }
+            val info = scrollState.layoutInfo
+            val sentinel = info.visibleItemsInfo.firstOrNull { it.key == ChatBottomSentinelKey }
+            val viewportEnd = info.viewportEndOffset - info.afterContentPadding
+            if (sentinel != null) {
+                val overflow = (sentinel.offset + sentinel.size - viewportEnd).toFloat()
+                if (overflow > 0f) scrollState.animateScrollBy(overflow, io.github.fartown.movo.ui.theme.MovoMotion.standard())
+            } else {
+                // 底部不在屏幕上：直接到底。先清掉末尾留白（在屏幕外），否则会滚进留白，
+                // 推荐卡被顶到屏幕上方、下面一片空白（真机 reserve4：任务在后台结束后回到 Movo）。
+                bottomReserve.px = 0
+                scrollState.animateScrollToItem(entryCount)
+            }
         }
     }
 
@@ -275,6 +289,7 @@ internal fun AgentChatBody(
         editHiddenIds = editHiddenIds,
         hasMessages = visibleMessages.isNotEmpty(),
         scrollState = scrollState,
+        bottomReserve = bottomReserve,
         input = input,
         modelPickerState = modelPickerState,
         isCompacting = isCompacting,
@@ -334,6 +349,7 @@ private fun AgentChatScaffold(
     editHiddenIds: Set<String>,
     hasMessages: Boolean,
     scrollState: LazyListState,
+    bottomReserve: ChatBottomReserve,
     input: String,
     modelPickerState: AgentModelPickerUiState,
     isCompacting: Boolean,
@@ -461,6 +477,7 @@ private fun AgentChatScaffold(
                 visibleMessages = timelineMessages,
                 editHiddenIds = editHiddenIds,
                 scrollState = scrollState,
+                bottomReserve = bottomReserve,
                 isStreaming = isStreaming,
                 bottomInset = bottomPadding,
                 keepBottomAnchored = keepBottomAnchored,
@@ -526,6 +543,7 @@ private fun AgentChatScaffold(
 internal fun AgentConversationMessages(
     visibleMessages: List<AgentChatMessageUi>,
     scrollState: LazyListState,
+    bottomReserve: ChatBottomReserve,
     isStreaming: Boolean,
     bottomInset: Dp,
     keepBottomAnchored: Boolean,
@@ -545,6 +563,21 @@ internal fun AgentConversationMessages(
     modifier: Modifier = Modifier,
 ) {
     val timelineEntries = remember(visibleMessages) { visibleMessages.toTimelineEntries() }
+    // 任务进行中有条目被移除（如「模型请求重试」提示在重试成功后去掉）：按它上一帧的高度在末尾补留白，
+    // 列表停在底部时不会往回退、露出上一轮（真机 reserve：一次性下跳 183px 再滚回）。只在组合里写留白，排版阶段才读。
+    val lastEntryKeys = remember { arrayOf<Set<Any>>(emptySet()) }
+    remember(timelineEntries) {
+        val keys = timelineEntries.mapTo(HashSet<Any>()) { it.key }
+        if (isStreaming) {
+            val removed = lastEntryKeys[0] - keys
+            if (removed.isNotEmpty()) {
+                val removedHeight = scrollState.layoutInfo.visibleItemsInfo.filter { it.key in removed }.sumOf { it.size }
+                if (removedHeight > 0) bottomReserve.px += removedHeight
+            }
+        }
+        lastEntryKeys[0] = keys
+        keys
+    }
     val lastWorkKey = timelineEntries.lastOrNull { it is AgentTimelineEntry.WorkProcess }?.key
     val workOutcomes = remember(timelineEntries) { workOutcomes(timelineEntries) }
     val workTurnSpans = remember(timelineEntries) { workTurnSpans(timelineEntries) }
@@ -658,7 +691,13 @@ internal fun AgentConversationMessages(
                 isUserDragging = isUserDragging,
             )
         ) {
-            scrollState.requestScrollToItem(bottomItemIndex)
+            // 底部（哨兵）还在屏幕上时交给平滑跟随，不一帧跳到底：新条目（如回答开始）出现时直接跳会连末尾留白
+            // 一起滚过去，内容一帧上跳 200 多 px（真机 reserve3）。底部已不在屏幕上才直接跳，跳之前清掉留白。
+            val bottomVisible = scrollState.layoutInfo.visibleItemsInfo.any { it.key == ChatBottomSentinelKey }
+            if (!bottomVisible) {
+                bottomReserve.px = 0
+                scrollState.requestScrollToItem(bottomItemIndex)
+            }
         }
     }
 
@@ -678,6 +717,7 @@ internal fun AgentConversationMessages(
                 // 跟底目标应是 afterContentPadding 之前的正文边界。
                 viewportEnd = layoutInfo.viewportEndOffset - layoutInfo.afterContentPadding,
                 lastVisibleIndex = layoutInfo.visibleItemsInfo.lastOrNull()?.index,
+                lastVisibleBottom = layoutInfo.visibleItemsInfo.lastOrNull()?.let { it.offset + it.size },
             )
         }
             .distinctUntilChanged()
@@ -688,6 +728,7 @@ internal fun AgentConversationMessages(
                     sentinelBottom = layout.sentinelBottom,
                     viewportEnd = layout.viewportEnd,
                     lastVisibleIndex = layout.lastVisibleIndex,
+                    lastVisibleBottom = layout.lastVisibleBottom,
                 )
                 bottomFollowDecisions.trySend(decision)
             }
@@ -722,6 +763,8 @@ internal fun AgentConversationMessages(
             }
 
             requestIndex?.let { targetIndex ->
+                // 底部已不在屏幕上才会走到这里：先清掉末尾留白（在屏幕外），直接到底时不滚进留白。
+                bottomReserve.px = 0
                 scrollState.requestScrollToItem(targetIndex)
                 requestIndex = null
                 remainingDistancePx = 0f
@@ -781,9 +824,21 @@ internal fun AgentConversationMessages(
     Box(modifier = modifier.clipToBounds()) {
         // 从执行卡末尾点「收起」：卡片逐帧收起时把列表往回滚同样的距离，卡片底边与下面的回答不动（Figma 候选「执行卡长记录」方案 1）。
         val chatListScroll: (Float) -> Float = remember(scrollState) { { delta -> scrollState.dispatchRawDelta(delta) } }
+        // 列表末尾的临时留白（见 [ChatBottomReserve]）：看不见的部分在每次排版后收掉。
+        LaunchedEffect(scrollState, bottomReserve) {
+            snapshotFlow {
+                val info = scrollState.layoutInfo
+                val item = info.visibleItemsInfo.firstOrNull { it.key == ChatBottomReserveKey }
+                val visibleEnd = info.viewportEndOffset - info.afterContentPadding
+                if (item == null) 0 else (visibleEnd - item.offset).coerceAtLeast(0)
+            }.collect { visible ->
+                if (bottomReserve.px > visible) bottomReserve.px = visible
+            }
+        }
         androidx.compose.runtime.CompositionLocalProvider(
             io.github.fartown.movo.ui.components.movo.LocalVisibleViewportBottom provides visibleBottom,
             LocalChatListScroll provides chatListScroll,
+            LocalChatBottomReserve provides bottomReserve,
         ) {
         LazyColumn(
             state = scrollState,
@@ -910,6 +965,18 @@ internal fun AgentConversationMessages(
                         .height(1.dp),
                 )
             }
+            // 放在哨兵之后：跟底只追到正文末尾（哨兵），不追留白。高度只在排版阶段读取。
+            item(key = ChatBottomReserveKey) {
+                Spacer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .layout { measurable, constraints ->
+                            val height = bottomReserve.px
+                            val placeable = measurable.measure(constraints.copy(minHeight = height, maxHeight = height))
+                            layout(placeable.width, height) { placeable.place(0, 0) }
+                        },
+                )
+            }
         }
         }
 
@@ -956,6 +1023,7 @@ private data class BottomFollowLayout(
     val sentinelBottom: Int?,
     val viewportEnd: Int,
     val lastVisibleIndex: Int?,
+    val lastVisibleBottom: Int?,
 )
 
 internal data class BottomFollowDecision(
@@ -969,11 +1037,19 @@ internal fun resolveBottomFollowDecision(
     sentinelBottom: Int?,
     viewportEnd: Int,
     lastVisibleIndex: Int?,
+    lastVisibleBottom: Int? = null,
 ): BottomFollowDecision {
     if (!enabled) return BottomFollowDecision()
     val overflow = sentinelBottom?.minus(viewportEnd)
     return when {
         overflow != null && overflow > 0 -> BottomFollowDecision(scrollByPx = overflow)
+        // 哨兵只是被刚长出来的最后一项（回答）挤出了屏幕：按最后一项的底边平滑追，不一帧跳到底
+        // （真机 reserve4：回答出现时一帧上跳 956px）。离底部还差几项时才直接跳。
+        sentinelBottom == null &&
+            lastVisibleIndex != null &&
+            lastVisibleIndex >= bottomItemIndex - 1 &&
+            lastVisibleBottom != null &&
+            lastVisibleBottom > viewportEnd -> BottomFollowDecision(scrollByPx = lastVisibleBottom - viewportEnd)
         sentinelBottom == null &&
             lastVisibleIndex != null &&
             lastVisibleIndex < bottomItemIndex -> BottomFollowDecision(requestIndex = bottomItemIndex)
@@ -1431,6 +1507,7 @@ private val ChatBottomFrostHeight = 24.dp
 private const val FROST_RELEASE_DELAY_MILLIS = 1_000L
 
 private const val ChatBottomSentinelKey = "agent-chat-bottom-sentinel"
+private const val ChatBottomReserveKey = "agent-chat-bottom-reserve"
 private const val BOTTOM_FOLLOW_RESPONSE_SECONDS = 0.085f
 private const val BOTTOM_FOLLOW_MAX_FRAME_SECONDS = 0.05f
 private const val BOTTOM_FOLLOW_MAX_SPEED_DP_PER_SECOND = 720f
@@ -1500,6 +1577,18 @@ private fun LeavingItem(
         content()
     }
 }
+
+/**
+ * 对话列表末尾的临时留白（像素）。回答开始、本轮执行卡自动收起时，卡片每帧收起多少就在末尾补多少：
+ * 列表停在底部时内容总高不变，不会先退回露出上一轮、再随回答往下滚（真机 turntime case4）。
+ * 回答往下长会把留白推出可见区，看不见的部分每次排版后收掉。
+ */
+@androidx.compose.runtime.Stable
+internal class ChatBottomReserve {
+    var px by androidx.compose.runtime.mutableIntStateOf(0)
+}
+
+internal val LocalChatBottomReserve = androidx.compose.runtime.staticCompositionLocalOf<ChatBottomReserve?> { null }
 
 /** 直接滚动对话列表（像素，正数向后）：执行卡从末尾收起时逐帧补偿高度变化，见 [AgentWorkProcess]。 */
 internal val LocalChatListScroll = androidx.compose.runtime.staticCompositionLocalOf<((Float) -> Float)?> { null }

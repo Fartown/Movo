@@ -207,6 +207,12 @@ private const val LIST_RESIZE_SLACK_MS = 32L
 internal fun <T> MovoAnimatedRows(
     items: List<T>,
     key: (T) -> Any,
+    /** false 时新增行直接出现（如展开历史记录时分批补上的行，不逐行播放）。 */
+    animateEnter: Boolean = true,
+    /** 替换默认进场（行内自己做淡入等时只给高度展开）；为 null 用默认的展开 + 淡入。 */
+    enter: androidx.compose.animation.EnterTransition? = null,
+    /** 替换默认退场（先淡出 120ms 再收起）；为 null 用默认。 */
+    exit: androidx.compose.animation.ExitTransition? = null,
     content: @Composable (T) -> Unit,
 ) {
     val reduced = LocalReducedMotion.current
@@ -225,7 +231,7 @@ internal fun <T> MovoAnimatedRows(
             existing.state.targetState = true
             existing
         } else {
-            AnimatedRow(k, item, androidx.compose.animation.core.MutableTransitionState(firstComposition[0] || reduced).apply { targetState = true })
+            AnimatedRow(k, item, androidx.compose.animation.core.MutableTransitionState(firstComposition[0] || reduced || !animateEnter).apply { targetState = true })
         }
     }
     for (row in rows) {
@@ -253,9 +259,12 @@ internal fun <T> MovoAnimatedRows(
         androidx.compose.runtime.key(row.key) {
             AnimatedVisibility(
                 visibleState = row.state,
-                enter = if (reduced) fadeIn(MovoMotion.fast()) else fadeIn(MovoMotion.fast()) +
-                    expandVertically(MovoMotion.standard(), expandFrom = Alignment.Top),
-                exit = if (reduced) fadeOut(MovoMotion.fastExit()) else fadeOut(MovoMotion.fastExit()) +
+                enter = when {
+                    reduced -> fadeIn(MovoMotion.fast())
+                    enter != null -> enter
+                    else -> fadeIn(MovoMotion.fast()) + expandVertically(MovoMotion.standard(), expandFrom = Alignment.Top)
+                },
+                exit = if (reduced) fadeOut(MovoMotion.fastExit()) else exit ?: fadeOut(MovoMotion.fastExit()) +
                     shrinkVertically(
                         tween(MovoMotion.STANDARD, delayMillis = MovoMotion.FAST_EXIT, easing = MovoMotion.EasingStandard),
                         shrinkTowards = Alignment.Top,

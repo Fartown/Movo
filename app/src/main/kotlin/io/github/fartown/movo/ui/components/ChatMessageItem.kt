@@ -611,6 +611,8 @@ internal fun AgentWorkProcess(
     val footerCollapse = remember { androidx.compose.animation.core.Animatable(0f) }
     val footerFade = remember { androidx.compose.animation.core.Animatable(1f) }
     var footerCollapsing by remember { mutableStateOf(false) }
+    // 钳制时内容的对齐：从末尾「收起」贴底边（手指下的末尾内容原地淡出）；回答开始自动收起贴顶（向头部收拢）。
+    var clampAlignBottom by remember { mutableStateOf(true) }
     val stepsFullHeight = remember { intArrayOf(0) }
     val listScroll = LocalChatListScroll.current
     val cardScope = androidx.compose.runtime.rememberCoroutineScope()
@@ -624,6 +626,7 @@ internal fun AgentWorkProcess(
             return
         }
         footerCollapsing = true
+        clampAlignBottom = true
         cardScope.launch {
             // 屏幕顶以上的那段先一次收掉（看不见），可见的部分再按 `standard` 收：与展开按可见高度封顶同一做法。
             val start = minOf(full, (stepsCap.bottomPx ?: full.toInt()).toFloat().coerceAtLeast(0f))
@@ -644,13 +647,76 @@ internal fun AgentWorkProcess(
     fun resetFooterCollapse() {
         if (!footerCollapsing) return
         footerCollapsing = false
+        clampAlignBottom = true
         cardScope.launch {
             footerCollapse.snapTo(0f)
             footerFade.snapTo(1f)
         }
     }
+    // 回答开始、本轮执行卡自动收起（8.1「回答开始后收成一行」）：同样由这里逐帧驱动高度（内容贴顶、从下往上收），
+    // 每帧收起多少就在列表末尾补多少留白（[ChatBottomReserve]）。列表停在底部时内容总高不变，
+    // 不会先退回露出上一轮、再随回答往下滚（真机 turntime case4）。
+    val bottomReserve = LocalChatBottomReserve.current
+    val lastShownExpanded = remember { booleanArrayOf(shownExpanded) }
+    val autoCollapseStarting = lastShownExpanded[0] && !shownExpanded && answerStarted && !manuallyExpanded &&
+        runActive && bottomReserve != null && !reducedMotion && !footerCollapsing
+    var autoCollapsing by remember { mutableStateOf(false) }
+    SideEffect {
+        if (autoCollapseStarting) autoCollapsing = true
+        lastShownExpanded[0] = shownExpanded
+    }
+    LaunchedEffect(autoCollapsing) {
+        if (!autoCollapsing || bottomReserve == null) return@LaunchedEffect
+        val full = stepsFullHeight[0].toFloat()
+        if (full <= 0f) {
+            autoCollapsing = false
+            return@LaunchedEffect
+        }
+        // 可见区以外那段先一次收掉（看不见），留白同步补上；可见的部分再按 `standard` 收。
+        val start = minOf(full, stepsCap.remainingPx().toFloat())
+        clampAlignBottom = false
+        footerCollapse.snapTo(start)
+        footerFade.snapTo(1f)
+        footerCollapsing = true
+        bottomReserve.px += (full - start).toInt()
+        launch { footerFade.animateTo(0f, io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) }
+        var previous = start
+        footerCollapse.animateTo(
+            0f,
+            tween(io.github.fartown.movo.ui.theme.MovoMotion.STANDARD, easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard),
+        ) {
+            val shrunk = (previous - value).toInt()
+            if (shrunk > 0) {
+                bottomReserve.px += shrunk
+                previous -= shrunk
+            }
+        }
+        autoCollapsing = false
+    }
+    // 执行中卡片高度只增不减（多出的留白在卡片下方、列表末尾）：较早步骤收进「前面 N 步」时新步骤往往还很矮，
+    // 卡片先变矮、列表退回，等新步骤长出来又滚回去（真机 stepfold2：先下移约 65px 再回来）。留白由新内容先填上；
+    // 执行结束时把剩下的留白原样交给列表末尾留白（[ChatBottomReserve]），由回答接着填，不在结束那一下退回。
+    val ratchetOn = (running || paused) && bottomReserve != null && !reducedMotion
+    val heightFloor = remember { intArrayOf(0, 0) } // [0] 最高高度，[1] 上一帧内容高度
+    SideEffect {
+        if (!ratchetOn && heightFloor[0] > 0) {
+            val extra = heightFloor[0] - heightFloor[1]
+            if (extra > 0) bottomReserve?.let { it.px += extra }
+            heightFloor[0] = 0
+        }
+    }
     Column(
         modifier = modifier
+            .layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints)
+                heightFloor[1] = placeable.height
+                val height = if (ratchetOn) {
+                    maxOf(placeable.height, heightFloor[0]).also { heightFloor[0] = it }
+                } else {
+                    placeable.height
+                }
+                layout(placeable.width, height) { placeable.place(0, 0) }
+            }
             .fillMaxWidth()
             .padding(horizontal = 20.dp, vertical = 8.dp)
             .completionGlint(glint) { corner.value }
@@ -735,20 +801,29 @@ internal fun AgentWorkProcess(
                 runUnfinished -> WorkPhase.Unfinished
                 else -> WorkPhase.Done
             }
+            // 「第 N 步」按整轮计（回答把一轮分成几张卡时接着前面的数），与悬浮球展开卡一致。
+            val phaseText: @Composable (WorkPhase) -> String = { shownPhase ->
+                when (shownPhase) {
+                    WorkPhase.Paused -> if (toolCount > 0) stringResource(R.string.movo_work_paused_step, stepOffset + toolCount) else stringResource(R.string.movo_work_paused)
+                    WorkPhase.Running -> if (toolCount > 0) stringResource(R.string.movo_work_running_step, stepOffset + toolCount) else stringResource(R.string.movo_work_analyzing)
+                    WorkPhase.Stopped -> stringResource(R.string.movo_work_stopped_steps, turnSteps)
+                    WorkPhase.Failed -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
+                    WorkPhase.Unfinished -> stringResource(R.string.movo_work_unfinished_steps, turnSteps)
+                    WorkPhase.Done -> if (toolCount > 0) stringResource(R.string.movo_work_done_steps, toolCount) else stringResource(R.string.movo_work_done)
+                }
+            }
+            val targetPhaseText = phaseText(phase)
             StatusWithTimer(
+                // 计时写法按将要显示的状态文字决定：交叉淡化时新旧两段同时在测量里，按较宽的算会让计时
+                // 在切换那一下退成「0:41」再换回「用时 41 秒」（真机 reserve）。
+                statusForWidth = {
+                    Text(targetPhaseText, style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium, maxLines = 1, softWrap = false)
+                },
                 status = {
                     // 状态切换（执行中 → 已完成等）交叉淡化 `fast`；同一状态里的「第 N 步」直接换数字，不做过渡。
                     WorkPhaseCrossfade(phase) { shownPhase ->
                         io.github.fartown.movo.ui.components.movo.MovoShimmerText(
-                            text = when (shownPhase) {
-                                // 「第 N 步」按整轮计（回答把一轮分成几张卡时接着前面的数），与悬浮球展开卡一致。
-                                WorkPhase.Paused -> if (toolCount > 0) stringResource(R.string.movo_work_paused_step, stepOffset + toolCount) else stringResource(R.string.movo_work_paused)
-                                WorkPhase.Running -> if (toolCount > 0) stringResource(R.string.movo_work_running_step, stepOffset + toolCount) else stringResource(R.string.movo_work_analyzing)
-                                WorkPhase.Stopped -> stringResource(R.string.movo_work_stopped_steps, turnSteps)
-                                WorkPhase.Failed -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
-                                WorkPhase.Unfinished -> stringResource(R.string.movo_work_unfinished_steps, turnSteps)
-                                WorkPhase.Done -> if (toolCount > 0) stringResource(R.string.movo_work_done_steps, toolCount) else stringResource(R.string.movo_work_done)
-                            },
+                            text = phaseText(shownPhase),
                             style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
                             color = if (shownPhase == WorkPhase.Running || shownPhase == WorkPhase.Paused) {
                                 io.github.fartown.movo.ui.theme.MovoColors.textPrimary
@@ -761,6 +836,7 @@ internal fun AgentWorkProcess(
                 },
                 timer = timerText,
                 compactTimer = compactTimer,
+                timerKind = running,
                 timerColor = if (running) io.github.fartown.movo.ui.theme.MovoColors.textSecondary else io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
                 modifier = Modifier.weight(1f),
             )
@@ -781,7 +857,7 @@ internal fun AgentWorkProcess(
 
         // 展开：高度 `standard`，内容与高度同时开始淡入 `fast`（不等待，第一帧就有内容）（规范 9.3「展开 / 收起」）。
         AnimatedVisibility(
-            visible = shownExpanded,
+            visible = shownExpanded || autoCollapsing || autoCollapseStarting,
             modifier = Modifier.trackVisibleHeightCap(stepsCap),
             enter = fadeIn(
                 tween(
@@ -808,7 +884,7 @@ internal fun AgentWorkProcess(
                         }
                         // 从末尾收起时内容贴着底边：手指下的末尾内容原地淡出，只有卡片顶边往下收；
                         // 顶对齐时，屏幕外那段一次收掉的那一帧，可见内容会从末尾换成开头（真机 footer2）。
-                        val y = if (footerCollapsing) height - placeable.height else 0
+                        val y = if (footerCollapsing && clampAlignBottom) height - placeable.height else 0
                         layout(placeable.width, height) { placeable.place(0, y) }
                     }
                     .graphicsLayer { alpha = if (footerCollapsing) footerFade.value else 1f },
@@ -822,14 +898,30 @@ internal fun AgentWorkProcess(
                 )
                 // 不看是否执行中：自动收起的过程中仍保持折叠，不在收起前把全部步骤铺开。
                 val folded = !showAllSteps && messages.size > WORK_FOLD_THRESHOLD
-                if (folded) {
-                    // 「前面 N 步」只数被折叠的工具步骤，与头部「第 N 步」同一口径（思考不算一步）。
-                    val hidden = messages.dropLast(WORK_FOLD_VISIBLE)
+                // 「前面 N 步」第一次出现（步骤刚超过阈值）时从顶部展开并淡入，与被收进去的行同时进行；
+                // 直接插在顶部会把下面的步骤一帧往下推一行（真机 stepfold3：106px）。
+                val hidden = messages.dropLast(WORK_FOLD_VISIBLE)
+                // 「前面 N 步」只数被折叠的工具步骤，与头部「第 N 步」同一口径（思考不算一步）。
+                val hiddenCount = hidden.count { it is ToolActivityMessageUi }.takeIf { it > 0 } ?: hidden.size
+                val lastHiddenCount = remember { intArrayOf(hiddenCount) }
+                if (folded) lastHiddenCount[0] = hiddenCount
+                AnimatedVisibility(
+                    visible = folded,
+                    enter = fadeIn(io.github.fartown.movo.ui.theme.MovoMotion.fast()) +
+                        expandVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), expandFrom = Alignment.Top),
+                    exit = fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) +
+                        shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), shrinkTowards = Alignment.Top),
+                ) {
                     WorkEarlierSteps(
-                        count = hidden.count { it is ToolActivityMessageUi }.takeIf { it > 0 } ?: hidden.size,
+                        count = if (folded) hiddenCount else lastHiddenCount[0],
                         onClick = { showAllSteps = true },
                     )
                 }
+                val stepsTopPadding by androidx.compose.animation.core.animateDpAsState(
+                    targetValue = if (folded) 0.dp else 6.dp,
+                    animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.standard(),
+                    label = "workStepsTop",
+                )
                 WorkSteps(
                     messages = (if (folded) messages.takeLast(WORK_FOLD_VISIBLE) else messages).take(stepLimit),
                     running = running,
@@ -839,7 +931,7 @@ internal fun AgentWorkProcess(
                     actionsEnabled = actionsEnabled,
                     onEditMessage = onEditMessage,
                     onDeleteMessage = onDeleteMessage,
-                    modifier = Modifier.padding(top = if (folded) 0.dp else 6.dp, bottom = 6.dp),
+                    modifier = Modifier.padding(top = stepsTopPadding, bottom = 6.dp),
                 )
                 // 结束后点开：末尾一行，左侧起止时间「15:02 开始·15:03 结束」（Figma「05e」），右侧「日志」「收起 ⌃」
                 // （2026-09-27 定稿方案 1）：长记录滑到末尾不用回到头部就能收起；执行中不出这一行（头部即可收起）。
@@ -1332,12 +1424,36 @@ internal fun WorkSteps(
         ),
     ) { mutableSetOf() }
     val reduced = io.github.fartown.movo.ui.theme.LocalReducedMotion.current
+    // 步骤增删（执行中较早的步骤收进「前面 N 步」、新步骤出现）：离场的行先淡出再收起高度，下面的行跟着平滑上移，
+    // 不一帧跳（真机 reserve5：一帧 304px）；执行中新增的行高度从顶部展开（淡入上移 6 仍由 MovoEntrance 做）。
+    // 变化期间卡片外框直接跟随里层高度（[WorkCardInnerResize]），不叠两层高度动画。
+    val innerResize = LocalWorkCardInnerResize.current
+    val stepIds = remember(messages) { messages.map { it.id } }
+    val lastStepIds = remember { arrayOf(stepIds) }
+    LaunchedEffect(stepIds) {
+        val changed = lastStepIds[0] != stepIds
+        lastStepIds[0] = stepIds
+        if (changed && running) {
+            innerResize?.holdFor(
+                (io.github.fartown.movo.ui.theme.MovoMotion.FAST_EXIT + io.github.fartown.movo.ui.theme.MovoMotion.STANDARD).toLong() +
+                    WORK_CARD_RESIZE_SLACK_MS,
+            )
+        }
+    }
     Column(modifier = modifier) {
-        messages.forEachIndexed { index, message ->
-            androidx.compose.runtime.key(message.id) {
-            val playEntrance = remember { running && message.id !in seenSteps }
-            SideEffect { seenSteps += message.id }
-            val hasNext = index < messages.lastIndex
+        io.github.fartown.movo.ui.components.movo.MovoAnimatedRows(
+            items = messages,
+            key = { it.id },
+            animateEnter = running,
+            enter = expandVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), expandFrom = Alignment.Top),
+            // 较早的步骤收进「前面 N 步」时，底部往往同时出现新步骤：离场行的收起与新行的展开同时开始、同一曲线，
+            // 卡片总高基本不变，列表不会先被新行顶上去、再因旧行收起退回来（真机 stepfold：先上移约 120px 再回落）。
+            exit = fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) +
+                shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), shrinkTowards = Alignment.Top),
+        ) { message ->
+            val index = messages.indexOfFirst { it.id == message.id }
+            val playEntrance = remember { running && message.id !in seenSteps }            // 正在离场的行（已不在列表里）下面仍有行。
+            val hasNext = index < 0 || index < messages.lastIndex
             val connector = remember { androidx.compose.animation.core.Animatable(if (hasNext || !playEntrance && !running) 1f else 0f) }
             LaunchedEffect(hasNext) {
                 when {
@@ -1383,7 +1499,6 @@ internal fun WorkSteps(
                 }
             }
             }
-            }
         }
     }
 }
@@ -1403,23 +1518,44 @@ internal fun StatusWithTimer(
     compactTimer: String?,
     timerColor: androidx.compose.ui.graphics.Color,
     modifier: Modifier = Modifier,
+    statusForWidth: (@Composable () -> Unit)? = null,
+    timerKind: Any? = null,
 ) {
     val timerStyle = io.github.fartown.movo.ui.theme.MovoTypography.numericLabel
+    // 计时写法换了（执行中「00:51」→ 结束「用时 51 秒」）时与状态文字一起交叉淡化；同一写法里数字变化直接换。
+    val timerText: @Composable (String) -> Unit = { text ->
+        androidx.compose.animation.AnimatedContent(
+            targetState = timerKind to text,
+            contentKey = { it.first },
+            transitionSpec = {
+                // 宽度一次到位、只做淡变：计时靠右摆放，宽度过渡会让文字往左漂（真机 reserve3）。
+                fadeIn(io.github.fartown.movo.ui.theme.MovoMotion.fast())
+                    .togetherWith(fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()))
+                    .using(androidx.compose.animation.SizeTransform(clip = false) { _, _ -> androidx.compose.animation.core.snap() })
+            },
+            contentAlignment = Alignment.CenterEnd,
+            label = "workTimer",
+        ) { (_, shown) ->
+            Text(shown, style = timerStyle, color = timerColor, maxLines = 1, softWrap = false)
+        }
+    }
     androidx.compose.ui.layout.Layout(
         contents = listOf(
             status,
-            { if (timer != null) Text(timer, style = timerStyle, color = timerColor, maxLines = 1, softWrap = false) },
-            { if (compactTimer != null) Text(compactTimer, style = timerStyle, color = timerColor, maxLines = 1, softWrap = false) },
+            { if (timer != null) timerText(timer) },
+            { if (compactTimer != null) timerText(compactTimer) },
+            { if (statusForWidth != null) statusForWidth() },
         ),
         modifier = modifier,
-    ) { (statusMeasurables, fullMeasurables, compactMeasurables), constraints ->
+    ) { (statusMeasurables, fullMeasurables, compactMeasurables, widthMeasurables), constraints ->
         val gap = 8.dp.roundToPx()
         val tightGap = 4.dp.roundToPx()
         val loose = constraints.copy(minWidth = 0)
         val full = fullMeasurables.firstOrNull()?.measure(loose.copy(maxWidth = androidx.compose.ui.unit.Constraints.Infinity))
         val compact = compactMeasurables.firstOrNull()?.measure(loose.copy(maxWidth = androidx.compose.ui.unit.Constraints.Infinity))
         val statusMeasurable = statusMeasurables.first()
-        val statusWanted = statusMeasurable.maxIntrinsicWidth(constraints.maxHeight).coerceAtMost(constraints.maxWidth)
+        val statusWanted = (widthMeasurables.firstOrNull() ?: statusMeasurable)
+            .maxIntrinsicWidth(constraints.maxHeight).coerceAtMost(constraints.maxWidth)
         val room = constraints.maxWidth - statusWanted
         // 选中的计时与它两侧的间距（状态 → 计时、计时 → 箭头）。
         val (chosen, sideGap) = when {

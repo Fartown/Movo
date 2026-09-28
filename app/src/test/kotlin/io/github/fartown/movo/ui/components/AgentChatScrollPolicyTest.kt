@@ -148,6 +148,21 @@ class AgentChatScrollPolicyTest {
     }
 
     @Test
+    fun tailItemPushingSentinelOffscreenFollowsSmoothlyInsteadOfJumping() {
+        assertEquals(
+            BottomFollowDecision(scrollByPx = 956),
+            resolveBottomFollowDecision(
+                enabled = true,
+                bottomItemIndex = 8,
+                sentinelBottom = null,
+                viewportEnd = 1000,
+                lastVisibleIndex = 7,
+                lastVisibleBottom = 1956,
+            ),
+        )
+    }
+
+    @Test
     fun disabledFollowingNeverMovesTheList() {
         assertEquals(
             BottomFollowDecision(),
