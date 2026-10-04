@@ -1,33 +1,17 @@
 package io.github.fartown.movo.agent.runtime
 
 import android.content.Context
-import io.github.fartown.movo.agent.accessibility.AgentAccessibilityKeeper
-import io.github.fartown.movo.agent.model.AgentConversationCodec
-import io.github.fartown.movo.agent.model.AgentConversationToolCatalog
-import io.github.fartown.movo.agent.tool.ConversationHistoryTool
 import io.github.fartown.movo.data.db.MovoDatabase
 import io.github.fartown.movo.agent.model.AgentModelClient
 import io.github.fartown.movo.agent.model.AgentModelExecutionException
 import io.github.fartown.movo.agent.model.AgentModelFailure
-import io.github.fartown.movo.agent.model.AgentHttpClient
 import io.github.fartown.movo.agent.memory.AgentMemoryContext
 import io.github.fartown.movo.agent.memory.AgentMemoryContextBuilder
-import io.github.fartown.movo.agent.roleplay.CharacterMemoryTools
 import io.github.fartown.movo.agent.roleplay.RoleplayRunContext
-import io.github.fartown.movo.agent.mcp.McpRunSnapshot
-import io.github.fartown.movo.agent.mcp.McpToolExecutor
-import io.github.fartown.movo.agent.mcp.RoutingToolExecutor
-import io.github.fartown.movo.agent.overlay.AgentOverlayVisibilityPolicy
 import io.github.fartown.movo.agent.skill.SkillCompatibilityChecker
 import io.github.fartown.movo.agent.skill.SkillContext
 import io.github.fartown.movo.agent.skill.SkillRuntime
-import io.github.fartown.movo.agent.skill.PublicGitHubSkillSource
-import io.github.fartown.movo.agent.tool.AgentLocalTools
-import io.github.fartown.movo.agent.tool.AgentToolRequirements
 import io.github.fartown.movo.agent.tool.AgentToolCapabilities
-import io.github.fartown.movo.agent.tool.PendingSkillConflictCapabilityParser
-import io.github.fartown.movo.agent.tool.ToolExecutionDecision
-import io.github.fartown.movo.agent.tools.AgentToolFeatureFlags
 import io.github.fartown.movo.agent.tools.AgentToolSubsystem
 import io.github.fartown.movo.agent.tools.GuiReadinessGuard
 import io.github.fartown.movo.agent.tools.ToolServices
@@ -111,13 +95,6 @@ internal class AgentRuntimeRunExecutor(
                 },
             )
             val skillIndexService = SkillRuntime.createIndexService(appContext)
-            val skillLoader = SkillRuntime.createLoader(appContext)
-            val skillResourceReader = SkillRuntime.createResourceReader(appContext)
-            val skillPackageInstaller = SkillRuntime.createPackageInstaller(appContext)
-            val githubSkillSource = PublicGitHubSkillSource(
-                cacheRoot = appContext.cacheDir,
-                baseClient = AgentHttpClient.client,
-            )
             val skillContext = SkillContext(
                 installedSkills = skillIndexService.listInstalledSkills()
                     .filter { SkillCompatibilityChecker.evaluate(it).available },
@@ -139,11 +116,6 @@ internal class AgentRuntimeRunExecutor(
                     MovoDatabase.get(appContext).conversationDao().hasAssistantMessage(conversationId, target)
                 }) { "角色回复目标不存在或不属于当前会话" }
             }
-            val characterMemoryTools = roleplayContext?.let { roleplay ->
-                CharacterMemoryTools(appContext, roleplay.characterId) {
-                    runBlocking { AgentMemoryRepository.isEnabled() }
-                }
-            }
             val memoryContext = if (memoryEnabled) {
                 runCatching {
                     AgentMemoryContextBuilder.build(
@@ -159,177 +131,72 @@ internal class AgentRuntimeRunExecutor(
             } else {
                 AgentMemoryContext.DISABLED
             }
-            val pendingSkillConflict = PendingSkillConflictCapabilityParser.parse(request.history)
-            val mcpSnapshot = runBlocking {
-                runCatching { McpRunSnapshot.load() }.getOrElse { throwable ->
-                    AndroidAgentLogger.warnThrottled("agent_mcp_snapshot_failed") {
-                        "MCP tool snapshot unavailable: type=${throwable.safeLogType()}"
-                    }
-                    McpRunSnapshot.EMPTY
-                }
-            }
-            val mcpTools = JSONArray().also(mcpSnapshot::appendModelTools)
-            val executor = AgentLocalTools(
-                context = appContext,
-                logger = AndroidAgentLogger,
-                browserRunId = request.runId,
-                browserToolsEnabled = {
-                    request.config.browserTools && currentPermissions().browserTools
-                },
-                terminalToolsEnabled = {
-                    request.config.terminalTools && currentPermissions().terminalTools
-                },
-                deviceDirectToolsEnabled = {
-                    request.config.deviceDirectTools && currentPermissions().deviceDirectTools
-                },
-                deviceSensitiveReadToolsEnabled = {
-                    request.config.deviceSensitiveReadTools &&
-                        currentPermissions().deviceSensitiveReadTools
-                },
-                deviceSensitiveActionToolsEnabled = {
-                    request.config.deviceSensitiveActionTools &&
-                        currentPermissions().deviceSensitiveActionTools
-                },
-                memoryToolsEnabled = {
-                    runBlocking { AgentMemoryRepository.isEnabled() }
-                },
-                memoryWritable = roleplayContext == null,
-                screenshotExcludedPackages = {
-                    entrySurfaceGuard?.consumeScreenshotExcludedPackages().orEmpty()
-                },
-                beforeToolExecution = { toolName ->
-                    val requiresAccessibility =
-                        AgentToolRequirements.requiresAccessibility(toolName)
-                    if (
-                        !requiresAccessibility &&
-                        !AgentOverlayVisibilityPolicy.requiresEntrySurfaceDismissal(toolName)
-                    ) {
-                        ToolExecutionDecision.Allow
-                    } else {
-                        val accessibility = if (requiresAccessibility) {
-                            AgentAccessibilityKeeper.ensureEnabledForGuiOperation(appContext)
-                        } else {
-                            null
-                        }
-                        when {
-                            accessibility != null && !accessibility.available ->
-                                ToolExecutionDecision.Reject(
-                                    code = accessibility.code,
-                                    message = accessibility.message,
-                                )
-                            entrySurfaceGuard?.dismissOnce() == false ->
-                                ToolExecutionDecision.Reject(
-                                    code = "ENTRY_SURFACE_NOT_READY",
-                                    message = "入口窗口关闭未完成；本次工具未执行，请勿在当前任务中重复调用",
-                                )
-                            else -> ToolExecutionDecision.Allow
-                        }
-                    }
-                },
-                skillIndexService = skillIndexService,
-                skillLoader = skillLoader,
-                skillResourceReader = skillResourceReader,
-                githubSkillSource = githubSkillSource,
-                skillPackageInstaller = skillPackageInstaller,
-                runAvailableSkillIds = skillContext.installedSkills.mapTo(mutableSetOf()) { it.id },
-                pendingSkillConflict = pendingSkillConflict,
-            )
-            val routingExecutor = RoutingToolExecutor(
-                local = executor,
-                mcp = McpToolExecutor(mcpSnapshot),
-            )
-            toolExecutor = routingExecutor
-            toolsBinding = runController.register(routingExecutor::close)
             timing.preparationFinished(skillContext.installedSkills.size)
-            val historyTool = conversationId?.let { id ->
-                ConversationHistoryTool {
-                    val checkpoint = runBlocking { MovoDatabase.get(appContext).conversationDao().contextCheckpoint(id) }
-                    val journal = AgentConversationCodec.decodeTranscript(checkpoint?.journalJson)
-                        .ifEmpty { AgentConversationCodec.decodeTranscript(checkpoint?.historyJson) }
-                    journal + session.transcript
+            // 类型化工具子系统：目录、系统提示分节、执行、审批、投影统一出口。提问/审批经交互通道（broker）
+            // 投为 AgentEvent.InteractionRequested，界面作答经 wire 消息 19（或跨应用悬浮卡本进程）回传。
+            val interactionBroker = AgentInteractionBroker()
+            val dispatchInteractionEvent: (AgentEvent) -> Unit = { ev ->
+                runCatching {
+                    acceptEvent(session, ev, archivedEvents, entrySurfaceGuard, checkpointRecorder)
                 }
             }
-            val runTools = JSONArray(mcpTools.toString()).also { tools ->
-                if (historyTool != null) tools.put(AgentConversationToolCatalog.schema())
-                if (characterMemoryTools != null && memoryEnabled) CharacterMemoryTools.appendSchemas(tools)
-            }
-            val runToolExecutor = AgentModelClient.ToolExecutor { call ->
-                if (call.name == AgentConversationToolCatalog.READ_HISTORY && historyTool != null) {
-                    historyTool.execute(call)
-                } else if (call.name in CharacterMemoryTools.NAMES && characterMemoryTools != null) {
-                    characterMemoryTools.execute(call)
-                } else routingExecutor.execute(call)
-            }
-            // S4/S5 接线（默认关闭，见 AgentToolFeatureFlags）：打开后改用类型化工具子系统的目录与执行器，
-            // 提问/审批经交互通道（broker）投为 AgentEvent.InteractionRequested，界面作答经 wire 消息 19 回传。
-            val typedSubsystem = if (AgentToolFeatureFlags.useTypedSubsystem) {
-                val interactionBroker = AgentInteractionBroker()
-                val dispatchInteractionEvent: (AgentEvent) -> Unit = { ev ->
-                    runCatching {
-                        acceptEvent(session, ev, archivedEvents, entrySurfaceGuard, checkpointRecorder)
-                    }
-                }
-                AgentInteractionRegistry.register(request.runId, interactionBroker)
-                AgentToolSubsystem(
-                    services = ToolServices(appContext, AndroidAgentLogger, request.runId),
-                    environment = {
-                        AgentToolCapabilities.capture(appContext).toToolEnvironment(
-                            switches = ToolSwitches(
-                                browser = request.config.browserTools,
-                                deviceDirect = request.config.deviceDirectTools,
-                                terminal = request.config.terminalTools,
-                                sensitiveRead = request.config.deviceSensitiveReadTools,
-                                sensitiveAction = request.config.deviceSensitiveActionTools,
+            AgentInteractionRegistry.register(request.runId, interactionBroker)
+            val typedSubsystem = AgentToolSubsystem(
+                services = ToolServices(appContext, AndroidAgentLogger, request.runId),
+                environment = {
+                    AgentToolCapabilities.capture(appContext).toToolEnvironment(
+                        switches = ToolSwitches(
+                            browser = request.config.browserTools,
+                            deviceDirect = request.config.deviceDirectTools,
+                            terminal = request.config.terminalTools,
+                            sensitiveRead = request.config.deviceSensitiveReadTools,
+                            sensitiveAction = request.config.deviceSensitiveActionTools,
+                        ),
+                        linuxReady = false,
+                        memoryScope = when {
+                            !memoryEnabled -> MemoryScope.DISABLED
+                            roleplayContext != null -> MemoryScope.CHARACTER
+                            else -> MemoryScope.REAL
+                        },
+                        conversationBound = conversationId != null,
+                        interactive = true,
+                        modelInputs = setOf(ModelInput.TEXT, ModelInput.IMAGE),
+                    )
+                },
+                interaction = BrokeredUserInteraction(
+                    broker = interactionBroker,
+                    emit = { prompt ->
+                        dispatchInteractionEvent(
+                            AgentEvent.InteractionRequested(
+                                requestId = prompt.requestId,
+                                kind = prompt.kind.name.lowercase(),
+                                title = prompt.title,
+                                detail = prompt.detail,
+                                options = prompt.options,
+                                allowFreeText = prompt.allowFreeText,
+                                rememberLabel = prompt.rememberLabel,
+                                reason = prompt.reason,
                             ),
-                            linuxReady = false,
-                            memoryScope = when {
-                                !memoryEnabled -> MemoryScope.DISABLED
-                                roleplayContext != null -> MemoryScope.CHARACTER
-                                else -> MemoryScope.REAL
-                            },
-                            conversationBound = conversationId != null,
-                            interactive = true,
-                            modelInputs = setOf(ModelInput.TEXT, ModelInput.IMAGE),
                         )
                     },
-                    interaction = BrokeredUserInteraction(
-                        broker = interactionBroker,
-                        emit = { prompt ->
-                            dispatchInteractionEvent(
-                                AgentEvent.InteractionRequested(
-                                    requestId = prompt.requestId,
-                                    kind = prompt.kind.name.lowercase(),
-                                    title = prompt.title,
-                                    detail = prompt.detail,
-                                    options = prompt.options,
-                                    allowFreeText = prompt.allowFreeText,
-                                    rememberLabel = prompt.rememberLabel,
-                                    reason = prompt.reason,
-                                ),
-                            )
-                        },
-                        cancelled = { runController.isCancelled },
-                        onResolved = { requestId ->
-                            dispatchInteractionEvent(AgentEvent.InteractionResolved(requestId))
-                        },
-                    ),
                     cancelled = { runController.isCancelled },
-                    characterId = { roleplayContext?.characterId },
-                    conversationLoader = { request.history },
-                    // GUI 就绪守卫：UI 工具执行前关入口窗口 + 保活无障碍（移植旧 beforeToolExecution）。
-                    guards = listOf(GuiReadinessGuard(appContext) { entrySurfaceGuard }),
-                ).also { built ->
-                    toolExecutor = AutoCloseable {
-                        AgentInteractionRegistry.unregister(request.runId)
-                        built.close()
-                    }
+                    onResolved = { requestId ->
+                        dispatchInteractionEvent(AgentEvent.InteractionResolved(requestId))
+                    },
+                ),
+                cancelled = { runController.isCancelled },
+                characterId = { roleplayContext?.characterId },
+                conversationLoader = { request.history },
+                // GUI 就绪守卫：UI 工具执行前关入口窗口 + 保活无障碍。
+                guards = listOf(GuiReadinessGuard(appContext) { entrySurfaceGuard }),
+            ).also { built ->
+                toolExecutor = AutoCloseable {
+                    AgentInteractionRegistry.unregister(request.runId)
+                    built.close()
                 }
-            } else {
-                null
             }
-            val effectiveExecutor = typedSubsystem?.pipeline ?: runToolExecutor
-            val typedCatalog: ((AgentToolCapabilities) -> org.json.JSONArray)? =
-                typedSubsystem?.let { sub -> { _ -> sub.pipeline.catalog() } }
+            val effectiveExecutor = typedSubsystem.pipeline
+            val typedCatalog: (AgentToolCapabilities) -> org.json.JSONArray = { _ -> typedSubsystem.pipeline.catalog() }
             val completedResponse = AgentModelClient.complete(
                 config = request.config,
                 sessionId = request.effectiveModelSessionId,
@@ -358,7 +225,6 @@ internal class AgentRuntimeRunExecutor(
                 runController = runController,
                 skillContext = skillContext,
                 memoryContext = memoryContext,
-                additionalTools = runTools,
             ) { event ->
                 timing.accept(event)
                 acceptEvent(

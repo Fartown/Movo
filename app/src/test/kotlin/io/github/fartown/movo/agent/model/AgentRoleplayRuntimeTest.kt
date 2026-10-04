@@ -2,7 +2,6 @@ package io.github.fartown.movo.agent.model
 
 import io.github.fartown.movo.agent.memory.AgentMemoryContextBuilder
 import io.github.fartown.movo.agent.roleplay.CharacterCardCodec
-import io.github.fartown.movo.agent.roleplay.CharacterMemoryTools
 import io.github.fartown.movo.agent.roleplay.RoleplayRunContext
 import io.github.fartown.movo.agent.runtime.AgentRunController
 import org.json.JSONArray
@@ -46,34 +45,6 @@ class AgentRoleplayRuntimeTest {
             runController = controller, provider = provider, toolExecutor = { error("无需工具") },
         )
         assertEquals("user-next-supplement-8", result.transcript.first().messageId)
-    }
-
-    @Test
-    fun characterReplacesIdentityButKeepsAgentToolsAndRealMemoryReadOnly() {
-        val context = roleplay()
-        val provider = provider { request ->
-            val text = request.messages.toString()
-            assertTrue(text.contains("林舟"))
-            assertTrue(text.contains("工具合同"))
-            assertFalse(text.contains("你是 Movo。"))
-            assertFalse(text.contains("PROVIDER_IDENTITY"))
-            val names = (0 until request.tools.length()).map {
-                request.tools.getJSONObject(it).getJSONObject("function").getString("name")
-            }
-            assertTrue("observe_screen" in names)
-            assertTrue("memory_get" in names)
-            assertFalse("memory_write" in names)
-            assertTrue(CharacterMemoryTools.WRITE in names)
-            reply("我们走吧。")
-        }
-        val response = AgentModelClient.complete(
-            config = config(), prompt = "同行", roleplayContext = context,
-            memoryContext = AgentMemoryContextBuilder.empty(null),
-            additionalTools = JSONArray().also(CharacterMemoryTools::appendSchemas),
-            provider = provider, toolExecutor = { error("本次不应执行工具") },
-            sessionId = "conversation", operationId = "run-one",
-        )
-        assertEquals("assistant-run-one-1", response.transcript.single().messageId)
     }
 
     @Test
