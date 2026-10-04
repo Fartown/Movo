@@ -6,10 +6,14 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
 import android.os.PersistableBundle
+import io.github.fartown.movo.agent.accessibility.AgentAccessibilityService
+import io.github.fartown.movo.agent.device.RootShellDeviceController
 import io.github.fartown.movo.agent.tools.core.InjectionBackend
 import io.github.fartown.movo.agent.tools.core.ToolEnvironment
 import io.github.fartown.movo.core.AgentLogger
+import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 屏幕 UI 领域真实后端。
@@ -69,15 +73,22 @@ internal class RealClipboardWriteBackend(
 }
 
 // ---------------------------------------------------------------------------
-// 屏幕观察 + 注入（登记表真实，观察/注入留 TODO 占位）
+// 屏幕观察 + 注入：委托 RootShellDeviceController（无障碍 + root 兜底 + settle）
 // ---------------------------------------------------------------------------
 
-/** 一次观察的登记条目。 */
-private data class ObservationEntry(val gen: Long, val packageName: String?)
+/** 一次观察的登记条目：代际、包名，以及回放动作所需的元素观察 / 快照 / 坐标空间。 */
+private data class ObservationEntry(
+    val gen: Long,
+    val packageName: String?,
+    val elementObservation: RootShellDeviceController.ElementObservation?,
+    val snapshot: AgentAccessibilityService.NodeSnapshot?,
+    val coordinateSpace: RootShellDeviceController.CoordinateSpace?,
+)
 
 /**
  * 同一对象实现 [UiObserveBackend] 与 [UiActionBackend]：观察登记与动作共享代际状态。
- * Provider 用它接通 ui_observe 与所有动作工具。
+ * 实际观察/注入委托 [RootShellDeviceController]（它已组合无障碍服务 + root uiautomator 兜底 + 动作后 settle），
+ * 本类负责把控制器的结果翻译成类型化契约结果，并维护「观察 id → 代际」的新鲜度校验。
  */
 internal class RealUiScreenBackend(
     private val context: Context,
@@ -87,19 +98,25 @@ internal class RealUiScreenBackend(
 
     override val selfPackage: String = context.packageName
 
+    private val controller = RootShellDeviceController(logger, rootAvailable = rootAvailable)
     private val observations = ConcurrentHashMap<String, ObservationEntry>()
+    private val genCounter = AtomicLong(0L)
     @Volatile private var latest: ObservationRef? = null
+    @Volatile private var latestCoordinateSpace: RootShellDeviceController.CoordinateSpace? = null
 
     // ---- UiObservationRegistry ----
 
-    override fun genOf(observationId: String): Long? = observations[observationId]?.gen
+    /** 代际校验：有无障碍快照时返回窗口当前代际（变了/服务换了→与绑定代际不符或 null→STALE）；root 观察无窗口代际，返回登记值。 */
+    override fun genOf(observationId: String): Long? {
+        val entry = observations[observationId] ?: return null
+        val snapshot = entry.snapshot ?: return entry.gen
+        return AgentAccessibilityService.current()?.currentGenerationOf(snapshot)
+    }
 
     override fun latest(): ObservationRef? = latest
 
-    override fun foregroundPackage(): String? {
-        // TODO(ui)：从无障碍焦点窗取前台包（AgentAccessibilityService）；读不到返回 null → 中央确认。
-        return null
-    }
+    override fun foregroundPackage(): String? =
+        AgentAccessibilityService.current()?.currentPackageName()?.takeIf { it.isNotBlank() }
 
     override fun observationPackage(observationId: String): String? = observations[observationId]?.packageName
 
@@ -107,12 +124,52 @@ internal class RealUiScreenBackend(
 
     override fun observe(request: UiObserveRequest, env: ToolEnvironment): UiObserveResult {
         if (!env.accessibilityUsable && !env.rootAvailable) return UiObserveResult.PermissionRequired
-        // TODO(ui)：接 AgentAccessibilityService 读无障碍树；代际 gen 绑窗口指纹（serviceToken/windowId/
-        // package/contentGeneration，AS:160-168）+ 方向；坐标空间按服务商固定缩放（AgentModelImageEncoder 要改）；
-        // root 下用 uiautomator 读非无障碍树须显式声明并计入“不可信内容”污点；截图用 images() 附图。
-        logger.debug { "ui_observe TODO: 观察后端尚未接线" }
-        return UiObserveResult.PermissionRequired
+        val obs = controller.observe(
+            includeScreenshot = request.screenshot,
+            includeUiTree = request.nodes,
+            maxNodes = request.maxNodes,
+        )
+        val element = obs.elementObservation
+        val coord = obs.coordinateSpace
+        val snapshot = element?.accessibilitySnapshot
+        val gen = snapshot?.contentGeneration ?: genCounter.incrementAndGet()
+        val observationId = element?.id ?: "obs-${genCounter.incrementAndGet()}"
+        val pkg = element?.packageName?.takeIf { it.isNotBlank() }
+        observations[observationId] = ObservationEntry(gen, pkg, element, snapshot, coord)
+        latest = ObservationRef(observationId, gen)
+        latestCoordinateSpace = coord
+        val screen = runCatching { controller.screenDimensions() }.getOrNull()
+        return UiObserveResult.Observed(
+            observationId = observationId,
+            gen = gen,
+            packageName = pkg,
+            coordWidth = coord?.screenshotWidth ?: screen?.first ?: 0,
+            coordHeight = coord?.screenshotHeight ?: screen?.second ?: 0,
+            focusedIndex = element?.nodes?.firstOrNull { it.focused }?.index,
+            nodes = element?.nodes.orEmpty().map { it.toObservedNode() },
+            nodesTruncated = element?.truncated ?: false,
+            screenshotAttached = obs.image != null,
+            screenshotQuality = if (obs.image != null) "default" else null,
+            screenshot = obs.image,
+        )
     }
+
+    private fun RootShellDeviceController.UiNode.toObservedNode(): UiObservedNode = UiObservedNode(
+        index = index,
+        text = text.ifBlank { null },
+        desc = desc.ifBlank { null },
+        role = className.ifBlank { null },
+        viewId = viewId.ifBlank { null },
+        bounds = listOf(bounds.left, bounds.top, bounds.right, bounds.bottom),
+        editable = editable,
+        password = password,
+        enabled = enabled,
+        actions = buildList {
+            if (clickable) add("click")
+            if (longClickable) add("long_click")
+            if (scrollable) add("scroll")
+        },
+    )
 
     // ---- UiActionBackend ----
 
@@ -123,45 +180,164 @@ internal class RealUiScreenBackend(
     }
 
     override fun readableNodeAtPoint(x: Double, y: Double): UiNodeProbe? {
-        // TODO(ui)：实时抓树命中覆盖该点最深可点击节点（提交点识别）；读不到返回 null → readableTarget=false。
+        // 坐标点的提交点识别需实时抓树命中最深可点击节点；控制器未暴露该探针，暂返回 null（readableTarget=false → 中央确认）。
         return null
     }
 
     override fun tap(request: UiTapRequest, env: ToolEnvironment): UiInjectResult {
-        // TODO(ui)：ACCESSIBILITY 走 performAction(ACTION_CLICK)/dispatchGesture；ROOT_INPUT 走 input tap。
-        return UiInjectResult.OutcomeUnknown
+        if (backend(env) == InjectionBackend.NONE) return UiInjectResult.PermissionRequired
+        val before = foregroundPackage()
+        val json = when (val target = request.target) {
+            is UiTarget.Element -> {
+                val eo = observations[target.observationId]?.elementObservation
+                    ?: return UiInjectResult.NotActionable("观察已失效，重新 ui_observe")
+                if (request.holdMs > 0) controller.longPressElement(eo, target.index, request.holdMs)
+                else controller.tapElement(eo, target.index)
+            }
+            is UiTarget.Point -> screenPoint(target.x, target.y).let { (sx, sy) ->
+                if (request.holdMs > 0) controller.longPress(sx, sy, request.holdMs) else controller.tap(sx, sy)
+            }
+            is UiTarget.Area -> screenPoint(target.centerX, target.centerY).let { (sx, sy) ->
+                if (request.holdMs > 0) controller.longPress(sx, sy, request.holdMs) else controller.tap(sx, sy)
+            }
+        }
+        return injectResult(json, methodFallback = if (request.holdMs > 0) "long_click" else "click", before = before)
     }
 
     override fun swipe(request: UiSwipeRequest, env: ToolEnvironment): UiInjectResult {
-        // TODO(ui)：dispatchGesture 轨迹 / input swipe。
-        return UiInjectResult.OutcomeUnknown
+        if (backend(env) == InjectionBackend.NONE) return UiInjectResult.PermissionRequired
+        val before = foregroundPackage()
+        val (x1, y1) = screenPoint(request.x, request.y)
+        val (x2, y2) = screenPoint(request.x2, request.y2)
+        val json = controller.swipe(x1, y1, x2, y2, request.durationMs)
+        return injectResult(json, methodFallback = "gesture", before = before)
     }
 
     override fun scroll(request: UiScrollRequest, env: ToolEnvironment): UiScrollResult {
-        // TODO(ui)：performAction(ACTION_SCROLL_*) 或手势，读 moved/at_boundary/direction_mismatch。
-        return UiScrollResult.OutcomeUnknown
+        if (backend(env) == InjectionBackend.NONE) return UiScrollResult.PermissionRequired
+        val before = foregroundPackage()
+        val direction = request.direction.name.lowercase()
+        val json = if (request.element != null) {
+            val eo = observations[request.element.observationId]?.elementObservation
+                ?: return UiScrollResult.NotActionable("观察已失效，重新 ui_observe")
+            controller.scrollElement(eo, request.element.index, direction)
+        } else {
+            controller.scroll(direction)
+        }
+        val obj = parse(json) ?: return UiScrollResult.OutcomeUnknown
+        if (obj.optBoolean("ok", false)) {
+            val atBoundary = if (obj.isNull("at_boundary")) null else obj.optBoolean("at_boundary")
+            return UiScrollResult.Finished(
+                moved = obj.optBoolean("moved", false),
+                atBoundary = atBoundary,
+                afterPackage = foregroundPackage() ?: before,
+            )
+        }
+        val code = obj.optString("code")
+        return when {
+            code.contains("MISMATCH") -> UiScrollResult.DirectionMismatch
+            code == "ACTION_OUTCOME_UNKNOWN" -> UiScrollResult.OutcomeUnknown
+            else -> UiScrollResult.NotActionable(obj.optString("message").ifBlank { code.ifBlank { "滚动未生效" } })
+        }
     }
 
     override fun input(request: UiInputRequest, env: ToolEnvironment): UiInputResult {
-        // TODO(ui)：ACTION_SET_TEXT / 粘贴，回读焦点文字判断一致；append 无法插入返回 NotActionable。
-        return UiInputResult.OutcomeUnknown
+        if (backend(env) == InjectionBackend.NONE) return UiInputResult.PermissionRequired
+        val before = foregroundPackage()
+        val eo = request.element?.let { observations[it.observationId]?.elementObservation }
+        val json = when (request.mode) {
+            UiInputMode.REPLACE -> controller.replaceText(request.text, request.element?.index, eo)
+            UiInputMode.APPEND -> controller.inputText(request.text)
+        }
+        val obj = parse(json) ?: return UiInputResult.OutcomeUnknown
+        if (!obj.optBoolean("ok", false)) {
+            val code = obj.optString("code")
+            return if (code == "ACTION_OUTCOME_UNKNOWN") UiInputResult.OutcomeUnknown
+            else UiInputResult.NotActionable(obj.optString("message").ifBlank { code.ifBlank { "无法写入" } })
+        }
+        var submitted = false
+        if (request.submit) {
+            submitted = parse(controller.pressKey("ENTER"))?.optBoolean("ok", false) ?: false
+        }
+        val after = foregroundPackage()
+        return UiInputResult.Written(
+            method = obj.optString("method").ifBlank { "set_text" },
+            readbackMatches = obj.optBoolean("verified", true),
+            readbackLength = request.text.length,
+            submitted = submitted,
+            afterPackage = after ?: before,
+            windowChanged = after != null && after != before,
+        )
     }
 
     override fun key(request: UiKeyRequest, env: ToolEnvironment): UiInjectResult {
-        // TODO(ui)：GLOBAL_ACTION_* / keyevent；enter 无焦点返回 NotActionable。
-        return UiInjectResult.OutcomeUnknown
+        if (backend(env) == InjectionBackend.NONE) return UiInjectResult.PermissionRequired
+        val button = when (request.key) {
+            UiKeyCode.BACK -> "BACK"
+            UiKeyCode.HOME -> "HOME"
+            UiKeyCode.RECENTS -> "RECENTS"
+            UiKeyCode.ENTER -> "ENTER"
+            UiKeyCode.NOTIFICATIONS -> "NOTIFICATIONS"
+            UiKeyCode.QUICK_SETTINGS -> "QUICK_SETTINGS"
+            // 控制器 pressKey 暂不支持这些系统动作，保守返回不可执行（不冒领 ok）。
+            UiKeyCode.LOCK_SCREEN, UiKeyCode.SCREENSHOT, UiKeyCode.DISMISS_NOTIFICATIONS ->
+                return UiInjectResult.NotActionable("该系统键暂不支持")
+        }
+        val before = foregroundPackage()
+        return injectResult(controller.pressKey(button), methodFallback = "key", before = before)
     }
 
     override fun waitFor(request: UiWaitRequest, env: ToolEnvironment): UiWaitResult {
         if (request.durationMs != null) {
-            // 只等时长：真实可实现（sleep 到时长或 timeout 的较小者）。
             val waitMs = minOf(request.durationMs, request.timeoutMs).toLong().coerceAtLeast(0)
             val start = System.currentTimeMillis()
             runCatching { Thread.sleep(waitMs) }
             return UiWaitResult.Finished(matched = true, elapsedMs = System.currentTimeMillis() - start, node = null)
         }
         if (!env.accessibilityUsable && !env.rootAvailable) return UiWaitResult.PermissionRequired
-        // TODO(ui)：轮询无障碍树等 text 出现/消失或 package 到前台；超时返回 matched=false（不是错误）。
-        return UiWaitResult.Finished(matched = false, elapsedMs = request.timeoutMs.toLong(), node = null)
+        val start = System.currentTimeMillis()
+        val json = when {
+            request.text != null -> controller.waitForText(
+                request.text, request.timeoutMs, includeDesc = true, matchMode = request.match.name.lowercase(),
+            )
+            request.packageName != null -> controller.waitForPackage(request.packageName, request.timeoutMs)
+            else -> return UiWaitResult.Finished(matched = false, elapsedMs = 0, node = null)
+        }
+        val obj = parse(json)
+        val matched = obj?.optBoolean("ok", false) == true && obj.optBoolean("matched", true)
+        return UiWaitResult.Finished(matched = matched, elapsedMs = System.currentTimeMillis() - start, node = null)
+    }
+
+    // ---- 工具 ----
+
+    /** 把目标坐标（最近一次观察的坐标空间，通常是截图像素）换算为真实屏幕坐标。 */
+    private fun screenPoint(x: Double, y: Double): Pair<Int, Int> {
+        val cs = latestCoordinateSpace
+        if (cs != null) {
+            val p = runCatching { cs.fromScreenshot(x.toInt(), y.toInt()) }.getOrNull()
+            if (p != null) return p.x to p.y
+        }
+        return x.toInt() to y.toInt()
+    }
+
+    private fun parse(json: String): JSONObject? = runCatching { JSONObject(json) }.getOrNull()
+
+    private fun injectResult(json: String, methodFallback: String, before: String?): UiInjectResult {
+        val obj = parse(json) ?: return UiInjectResult.OutcomeUnknown
+        if (obj.optBoolean("ok", false)) {
+            val after = foregroundPackage()
+            return UiInjectResult.Dispatched(
+                method = obj.optString("method").ifBlank { methodFallback },
+                afterPackage = after ?: before,
+                windowChanged = after != null && after != before,
+            )
+        }
+        val code = obj.optString("code")
+        return when {
+            code == "ACTION_OUTCOME_UNKNOWN" -> UiInjectResult.OutcomeUnknown
+            code == "ACCESSIBILITY_UNAVAILABLE" || code == "PERMISSION_REQUIRED" -> UiInjectResult.PermissionRequired
+            code == "SYSTEM_REJECTED" -> UiInjectResult.SystemRejected
+            else -> UiInjectResult.NotActionable(obj.optString("message").ifBlank { code.ifBlank { "未执行" } })
+        }
     }
 }

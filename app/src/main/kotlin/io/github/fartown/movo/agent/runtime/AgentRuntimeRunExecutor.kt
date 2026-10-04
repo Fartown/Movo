@@ -29,6 +29,7 @@ import io.github.fartown.movo.agent.tool.PendingSkillConflictCapabilityParser
 import io.github.fartown.movo.agent.tool.ToolExecutionDecision
 import io.github.fartown.movo.agent.tools.AgentToolFeatureFlags
 import io.github.fartown.movo.agent.tools.AgentToolSubsystem
+import io.github.fartown.movo.agent.tools.GuiReadinessGuard
 import io.github.fartown.movo.agent.tools.ToolServices
 import io.github.fartown.movo.agent.tools.toToolEnvironment
 import io.github.fartown.movo.agent.tools.core.MemoryScope
@@ -315,6 +316,8 @@ internal class AgentRuntimeRunExecutor(
                     cancelled = { runController.isCancelled },
                     characterId = { roleplayContext?.characterId },
                     conversationLoader = { request.history },
+                    // GUI 就绪守卫：UI 工具执行前关入口窗口 + 保活无障碍（移植旧 beforeToolExecution）。
+                    guards = listOf(GuiReadinessGuard(appContext) { entrySurfaceGuard }),
                 ).also { built ->
                     toolExecutor = AutoCloseable {
                         AgentInteractionRegistry.unregister(request.runId)

@@ -183,6 +183,13 @@ class AgentAccessibilityService : AccessibilityService() {
     fun currentPackageName(): String? =
         rootInActiveWindow?.packageName?.toString()
 
+    /**
+     * 该快照所属窗口的当前内容代际，用于校验观察是否仍新鲜（类型化子系统 ui_* 代际绑定）。
+     * 快照来自已被替换的服务实例（serviceToken 不符）时返回 null → 调用方按观察失效处理。
+     */
+    fun currentGenerationOf(snapshot: NodeSnapshot): Long? =
+        if (snapshot.serviceToken != serviceToken) null else windowContentGeneration(snapshot.windowId)
+
     fun displaySize(): Pair<Int, Int>? = runCatching {
         val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val point = Point()

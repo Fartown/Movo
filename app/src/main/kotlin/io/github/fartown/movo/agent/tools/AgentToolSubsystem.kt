@@ -7,6 +7,7 @@ import io.github.fartown.movo.agent.tools.conversation.ConversationToolProvider
 import io.github.fartown.movo.agent.tools.core.ApprovalRuleStore
 import io.github.fartown.movo.agent.tools.core.ToolEnvironment
 import io.github.fartown.movo.agent.tools.core.ToolPipeline
+import io.github.fartown.movo.agent.tools.core.ToolGuard
 import io.github.fartown.movo.agent.tools.core.ToolProvider
 import io.github.fartown.movo.agent.tools.core.ToolRegistry
 import io.github.fartown.movo.agent.tools.core.UserInteraction
@@ -37,6 +38,7 @@ internal class AgentToolSubsystem(
     characterId: () -> String? = { null },
     conversationLoader: () -> List<AgentModelClient.ConversationMessage> = { emptyList() },
     approvalRules: ApprovalRuleStore = ApprovalRuleStore.IN_MEMORY,
+    guards: List<ToolGuard> = emptyList(),
 ) : AutoCloseable {
     private val meta = MetaToolProvider()
 
@@ -55,6 +57,7 @@ internal class AgentToolSubsystem(
         cancelled = cancelled,
         interaction = interaction,
         approvalRules = approvalRules,
+        guards = guards,
     ).also { meta.pipeline = it }
 
     private fun buildProviders(
