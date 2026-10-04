@@ -180,8 +180,26 @@ internal class RealUiScreenBackend(
     }
 
     override fun readableNodeAtPoint(x: Double, y: Double): UiNodeProbe? {
-        // 坐标点的提交点识别需实时抓树命中最深可点击节点；控制器未暴露该探针，暂返回 null（readableTarget=false → 中央确认）。
-        return null
+        // 实时抓一棵树，命中覆盖该点、面积最小（最深）的可点击节点；读不到返回 null → readableTarget=false → 中央确认。
+        val (sx, sy) = screenPoint(x, y)
+        val obs = runCatching {
+            controller.observe(includeScreenshot = false, includeUiTree = true, maxNodes = 120)
+        }.getOrNull() ?: return null
+        val nodes = obs.elementObservation?.nodes.orEmpty()
+        val hit = nodes
+            .filter { it.clickable && it.bounds.contains(sx, sy) }
+            .minByOrNull { it.bounds.width().toLong() * it.bounds.height() }
+            ?: nodes
+                .filter { it.bounds.contains(sx, sy) }
+                .minByOrNull { it.bounds.width().toLong() * it.bounds.height() }
+            ?: return null
+        return UiNodeProbe(
+            text = hit.text.ifBlank { null },
+            desc = hit.desc.ifBlank { null },
+            role = hit.className.ifBlank { null },
+            bounds = listOf(hit.bounds.left, hit.bounds.top, hit.bounds.right, hit.bounds.bottom),
+            clickable = hit.clickable,
+        )
     }
 
     override fun tap(request: UiTapRequest, env: ToolEnvironment): UiInjectResult {
