@@ -237,6 +237,10 @@ private fun AgentOverlayState.reduce(event: AgentEvent): AgentOverlayState = whe
     AgentEvent.RunPaused -> markPaused()
 
     AgentEvent.RunResumed -> if (phase == AgentOverlayPhase.PAUSED) markResumed() else this
+
+    // 交互卡由应用内会话面渲染，悬浮球状态保持不变（卡片自身承载提问/审批）。
+    is AgentEvent.InteractionRequested -> this
+    is AgentEvent.InteractionResolved -> this
 }
 
 private const val MaxStreamingPreviewChars = 320

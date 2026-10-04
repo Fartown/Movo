@@ -7,6 +7,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.Message
 import android.os.Messenger
+import io.github.fartown.movo.agent.tools.interaction.InteractionReply
 import io.github.fartown.movo.core.AgentLogger
 import io.github.fartown.movo.core.safeLogType
 import java.util.concurrent.CountDownLatch
@@ -153,6 +154,16 @@ internal class AgentRuntimeClient(
         withRuntimeMessenger(Unit) { serviceMessenger ->
             val msg = Message.obtain(null, AgentRuntimeWire.MSG_RESUME)
             msg.data = AgentRuntimeWire.ackBundle(runId)
+            serviceMessenger.send(msg)
+        }
+    }
+
+    /** 把界面上提问卡/确认卡的作答回传给正在等待的 [runId]（按 [requestId] 关联，交互通道 §6.1）。 */
+    fun sendInteractionReply(runId: String, requestId: String, reply: InteractionReply) {
+        if (runId.isBlank() || requestId.isBlank()) return
+        withRuntimeMessenger(Unit) { serviceMessenger ->
+            val msg = Message.obtain(null, AgentRuntimeWire.MSG_INTERACTION_REPLY)
+            msg.data = AgentRuntimeWire.interactionReplyBundle(runId, requestId, reply)
             serviceMessenger.send(msg)
         }
     }

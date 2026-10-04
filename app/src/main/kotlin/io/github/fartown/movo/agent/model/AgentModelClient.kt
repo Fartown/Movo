@@ -93,6 +93,8 @@ internal object AgentModelClient {
         memoryContext: AgentMemoryContext = AgentMemoryContext.DISABLED,
         additionalTools: JSONArray = JSONArray(),
         capabilitiesProvider: () -> AgentToolCapabilities = { AgentToolCapabilities(rootAvailable = false) },
+        // S4 非 UI 接线（默认 null=走旧目录组装）：非空时每轮用类型化工具子系统的目录，toolExecutor 由调用方传子系统 pipeline。
+        typedCatalog: ((AgentToolCapabilities) -> JSONArray)? = null,
         sessionId: String = java.util.UUID.randomUUID().toString(),
         compactOnly: Boolean = false,
         operationId: String = sessionId,
@@ -135,6 +137,7 @@ internal object AgentModelClient {
         ).length()
         fun toolsFor(capabilities: AgentToolCapabilities): JSONArray {
             if (rewriteReply) return JSONArray()
+            typedCatalog?.let { return it(capabilities) }   // S4 类型化子系统目录（flag 开时注入）
             val tools = AgentToolCatalog.build(
                 terminalTools = config.terminalTools,
                 browserTools = config.browserTools,
@@ -314,7 +317,17 @@ internal object AgentModelClient {
          * 最终 assistant 自己组织的答复不受此标记影响。
          */
         val sensitive: Boolean = false,
-    )
+        /** ok / error / unknown（见 tools.core.ToolStatus）。 */
+        val status: String = "ok",
+        /** 统一错误码（tools.core.ToolErrorCode），成功时为空。 */
+        val errorCode: String? = null,
+        /** 结构化结果，供界面与日志使用；不发送给模型。 */
+        val outcome: io.github.fartown.movo.agent.tools.core.ToolOutcome? = null,
+        /** 工具所在领域，供界面兜底展示。 */
+        val domain: String? = null,
+    ) {
+        val isError: Boolean get() = status == "error"
+    }
 
     /** 图片引用：入口侧可为本地 URI/路径，进入模型协议前必须解析为远程 URL 或 data URL。 */
     data class ModelImage(

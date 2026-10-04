@@ -27,6 +27,16 @@ import io.github.fartown.movo.agent.tool.AgentToolRequirements
 import io.github.fartown.movo.agent.tool.AgentToolCapabilities
 import io.github.fartown.movo.agent.tool.PendingSkillConflictCapabilityParser
 import io.github.fartown.movo.agent.tool.ToolExecutionDecision
+import io.github.fartown.movo.agent.tools.AgentToolFeatureFlags
+import io.github.fartown.movo.agent.tools.AgentToolSubsystem
+import io.github.fartown.movo.agent.tools.ToolServices
+import io.github.fartown.movo.agent.tools.toToolEnvironment
+import io.github.fartown.movo.agent.tools.core.MemoryScope
+import io.github.fartown.movo.agent.tools.core.ModelInput
+import io.github.fartown.movo.agent.tools.core.ToolSwitches
+import io.github.fartown.movo.agent.tools.interaction.AgentInteractionBroker
+import io.github.fartown.movo.agent.tools.interaction.AgentInteractionRegistry
+import io.github.fartown.movo.agent.tools.interaction.BrokeredUserInteraction
 import io.github.fartown.movo.agent.voice.MovoAssistantVoiceService
 import io.github.fartown.movo.core.AndroidAgentLogger
 import io.github.fartown.movo.core.safeLogType
@@ -249,6 +259,74 @@ internal class AgentRuntimeRunExecutor(
                     characterMemoryTools.execute(call)
                 } else routingExecutor.execute(call)
             }
+            // S4/S5 接线（默认关闭，见 AgentToolFeatureFlags）：打开后改用类型化工具子系统的目录与执行器，
+            // 提问/审批经交互通道（broker）投为 AgentEvent.InteractionRequested，界面作答经 wire 消息 19 回传。
+            val typedSubsystem = if (AgentToolFeatureFlags.useTypedSubsystem) {
+                val interactionBroker = AgentInteractionBroker()
+                val dispatchInteractionEvent: (AgentEvent) -> Unit = { ev ->
+                    runCatching {
+                        acceptEvent(session, ev, archivedEvents, entrySurfaceGuard, checkpointRecorder)
+                    }
+                }
+                AgentInteractionRegistry.register(request.runId, interactionBroker)
+                AgentToolSubsystem(
+                    services = ToolServices(appContext, AndroidAgentLogger, request.runId),
+                    environment = {
+                        AgentToolCapabilities.capture(appContext).toToolEnvironment(
+                            switches = ToolSwitches(
+                                browser = request.config.browserTools,
+                                deviceDirect = request.config.deviceDirectTools,
+                                terminal = request.config.terminalTools,
+                                sensitiveRead = request.config.deviceSensitiveReadTools,
+                                sensitiveAction = request.config.deviceSensitiveActionTools,
+                            ),
+                            linuxReady = false,
+                            memoryScope = when {
+                                !memoryEnabled -> MemoryScope.DISABLED
+                                roleplayContext != null -> MemoryScope.CHARACTER
+                                else -> MemoryScope.REAL
+                            },
+                            conversationBound = conversationId != null,
+                            interactive = true,
+                            modelInputs = setOf(ModelInput.TEXT, ModelInput.IMAGE),
+                        )
+                    },
+                    interaction = BrokeredUserInteraction(
+                        broker = interactionBroker,
+                        emit = { prompt ->
+                            dispatchInteractionEvent(
+                                AgentEvent.InteractionRequested(
+                                    requestId = prompt.requestId,
+                                    kind = prompt.kind.name.lowercase(),
+                                    title = prompt.title,
+                                    detail = prompt.detail,
+                                    options = prompt.options,
+                                    allowFreeText = prompt.allowFreeText,
+                                    rememberLabel = prompt.rememberLabel,
+                                    reason = prompt.reason,
+                                ),
+                            )
+                        },
+                        cancelled = { runController.isCancelled },
+                        onResolved = { requestId ->
+                            dispatchInteractionEvent(AgentEvent.InteractionResolved(requestId))
+                        },
+                    ),
+                    cancelled = { runController.isCancelled },
+                    characterId = { roleplayContext?.characterId },
+                    conversationLoader = { request.history },
+                ).also { built ->
+                    toolExecutor = AutoCloseable {
+                        AgentInteractionRegistry.unregister(request.runId)
+                        built.close()
+                    }
+                }
+            } else {
+                null
+            }
+            val effectiveExecutor = typedSubsystem?.pipeline ?: runToolExecutor
+            val typedCatalog: ((AgentToolCapabilities) -> org.json.JSONArray)? =
+                typedSubsystem?.let { sub -> { _ -> sub.pipeline.catalog() } }
             val completedResponse = AgentModelClient.complete(
                 config = request.config,
                 sessionId = request.effectiveModelSessionId,
@@ -270,7 +348,8 @@ internal class AgentRuntimeRunExecutor(
                 },
                 capabilitiesProvider = { AgentToolCapabilities.capture(appContext) },
                 prompt = request.prompt,
-                toolExecutor = runToolExecutor,
+                toolExecutor = effectiveExecutor,
+                typedCatalog = typedCatalog,
                 images = request.images,
                 history = request.history,
                 runController = runController,

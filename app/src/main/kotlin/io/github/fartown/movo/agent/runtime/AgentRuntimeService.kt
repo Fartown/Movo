@@ -64,9 +64,11 @@ import io.github.fartown.movo.agent.overlay.AgentOverlayStatus
 import io.github.fartown.movo.agent.overlay.AgentOverlayVisibilityPolicy
 import io.github.fartown.movo.agent.overlay.applyEvent
 import io.github.fartown.movo.config.Prefs
+import io.github.fartown.movo.agent.tools.interaction.AgentInteractionRegistry
 import io.github.fartown.movo.core.AndroidAgentLogger
 import io.github.fartown.movo.core.ModuleConfig
 import io.github.fartown.movo.core.safeLogType
+import io.github.fartown.movo.core.toSafeLogToken
 import io.github.fartown.movo.data.repository.RuntimeConfigRepository
 import io.github.fartown.movo.ui.AgentConversationSheetActivity
 import io.github.fartown.movo.ui.markdown.InAppBrowserUriHandler
@@ -406,6 +408,15 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                             },
                         )
                     }
+                }
+
+                AgentRuntimeWire.MSG_INTERACTION_REPLY -> {
+                    val (runId, requestId, reply) =
+                        AgentRuntimeWire.interactionReplyFromBundle(msg.data ?: return) ?: return
+                    val delivered = AgentInteractionRegistry.deliver(runId, requestId, reply)
+                    AndroidAgentLogger.info(
+                        "Agent runtime interaction reply: delivered=$delivered, request=${requestId.toSafeLogToken()}"
+                    )
                 }
             }
         }

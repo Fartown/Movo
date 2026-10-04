@@ -247,6 +247,33 @@ internal sealed interface AgentEvent {
     data object RunResumed : AgentEvent {
         override fun toLogLine(): String = "run_resumed"
     }
+
+    /**
+     * 运行线程发起一次同步交互（提问或审批，实施方案 §6.1 交互通道）。界面据此渲染提问卡/确认卡，
+     * 用户作答后经 wire 消息回传、按 [requestId] 投递给运行线程。标题/正文可能含个人数据，日志只记类型与计数。
+     */
+    data class InteractionRequested(
+        val requestId: String,
+        val kind: String,
+        val title: String,
+        val detail: String,
+        val options: List<String> = emptyList(),
+        val allowFreeText: Boolean = true,
+        val rememberLabel: String? = null,
+        val reason: String? = null,
+    ) : AgentEvent {
+        override fun toLogLine(): String =
+            "interaction_requested kind=${kind.toSafeLogToken()}, request=${requestId.toSafeLogToken()}, " +
+                "options=${options.size}, free_text=$allowFreeText, remember=${rememberLabel != null}"
+    }
+
+    /** 一次交互结束（已作答 / 取消 / 超时），界面据此收起对应的提问卡/确认卡。 */
+    data class InteractionResolved(
+        val requestId: String,
+    ) : AgentEvent {
+        override fun toLogLine(): String =
+            "interaction_resolved request=${requestId.toSafeLogToken()}"
+    }
 }
 
 internal fun modelFailureHint(code: String): String = when {

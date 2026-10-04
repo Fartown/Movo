@@ -9,6 +9,7 @@ import android.os.Parcel
 import android.os.ParcelFileDescriptor
 import io.github.fartown.movo.agent.model.AgentConversationCodec
 import io.github.fartown.movo.agent.model.AgentModelClient
+import io.github.fartown.movo.agent.tools.interaction.InteractionReply
 import io.github.fartown.movo.data.model.CustomBody
 import io.github.fartown.movo.data.model.CustomHeader
 import io.github.fartown.movo.data.model.ModelReasoningCapabilities
@@ -92,6 +93,12 @@ internal object AgentRuntimeWire {
 
     /** client -> service：继续一个已暂停的 run（App 内主按钮 ▶，规范 8.2）。 */
     const val MSG_RESUME = 18
+
+    /**
+     * client -> service：把界面上提问卡/确认卡的作答回传给正在执行的 run（实施方案 §6.1 交互通道）。
+     * 按 run_id + interaction_request_id 关联，service 侧投递给 [AgentInteractionRegistry]。
+     */
+    const val MSG_INTERACTION_REPLY = 19
 
     private const val MODULE_PACKAGE = "io.github.fartown.movo"
     private const val SERVICE_CLASS = "io.github.fartown.movo.agent.runtime.AgentRuntimeService"
@@ -611,6 +618,53 @@ internal object AgentRuntimeWire {
 
     fun steerAccepted(bundle: Bundle): Boolean = bundle.getBoolean(KEY_OK)
 
+    private const val KEY_INTERACTION_REQUEST_ID = "interaction_request_id"
+    private const val KEY_INTERACTION_REPLY_KIND = "interaction_reply_kind"
+    private const val KEY_INTERACTION_ANSWER_TEXT = "interaction_answer_text"
+    private const val KEY_INTERACTION_ANSWER_OPTION = "interaction_answer_option"
+    private const val KEY_INTERACTION_APPROVED = "interaction_approved"
+    private const val KEY_INTERACTION_REMEMBER = "interaction_remember"
+    private const val MAX_INTERACTION_ANSWER_CHARS = 8_000
+
+    /** 把界面作答打包为回传消息体。 */
+    fun interactionReplyBundle(runId: String, requestId: String, reply: InteractionReply): Bundle = Bundle().apply {
+        putString(KEY_RUN_ID, runId)
+        putString(KEY_INTERACTION_REQUEST_ID, requestId)
+        when (reply) {
+            is InteractionReply.Answer -> {
+                putString(KEY_INTERACTION_REPLY_KIND, "answer")
+                putString(KEY_INTERACTION_ANSWER_TEXT, reply.text.boundedText(MAX_INTERACTION_ANSWER_CHARS))
+                putInt(KEY_INTERACTION_ANSWER_OPTION, reply.optionIndex ?: -1)
+            }
+            is InteractionReply.Approval -> {
+                putString(KEY_INTERACTION_REPLY_KIND, "approval")
+                putBoolean(KEY_INTERACTION_APPROVED, reply.approved)
+                putBoolean(KEY_INTERACTION_REMEMBER, reply.remember)
+            }
+            InteractionReply.Cancelled -> putString(KEY_INTERACTION_REPLY_KIND, "cancelled")
+        }
+    }
+
+    /** 从回传消息体解析 (runId, requestId, reply)；格式无效时返回 null。 */
+    fun interactionReplyFromBundle(bundle: Bundle): Triple<String, String, InteractionReply>? {
+        val runId = bundle.getString(KEY_RUN_ID).orEmpty()
+        val requestId = bundle.getString(KEY_INTERACTION_REQUEST_ID).orEmpty()
+        if (runId.isBlank() || requestId.isBlank()) return null
+        val reply = when (bundle.getString(KEY_INTERACTION_REPLY_KIND)) {
+            "answer" -> InteractionReply.Answer(
+                text = bundle.getString(KEY_INTERACTION_ANSWER_TEXT).orEmpty(),
+                optionIndex = bundle.getInt(KEY_INTERACTION_ANSWER_OPTION, -1).takeIf { it >= 0 },
+            )
+            "approval" -> InteractionReply.Approval(
+                approved = bundle.getBoolean(KEY_INTERACTION_APPROVED),
+                remember = bundle.getBoolean(KEY_INTERACTION_REMEMBER),
+            )
+            "cancelled" -> InteractionReply.Cancelled
+            else -> return null
+        }
+        return Triple(runId, requestId, reply)
+    }
+
     /** 一句补充的上限；与普通输入同一量级，避免补充撑爆 Binder 事务。 */
     private const val MAX_STEER_CHARS = 8_000
 
@@ -786,6 +840,23 @@ internal object AgentRuntimeWire {
                 putString(KEY_TYPE, "run_failed")
                 putString("reason", event.reason)
             }
+
+            is AgentEvent.InteractionRequested -> {
+                putString(KEY_TYPE, "interaction_requested")
+                putString(KEY_INTERACTION_REQUEST_ID, event.requestId)
+                putString("interaction_kind", event.kind)
+                putString("interaction_title", event.title)
+                putString("interaction_detail", event.detail)
+                putStringArrayList("interaction_options", ArrayList(event.options))
+                putBoolean("interaction_allow_free_text", event.allowFreeText)
+                event.rememberLabel?.let { putString("interaction_remember_label", it) }
+                event.reason?.let { putString("interaction_reason", it) }
+            }
+
+            is AgentEvent.InteractionResolved -> {
+                putString(KEY_TYPE, "interaction_resolved")
+                putString(KEY_INTERACTION_REQUEST_ID, event.requestId)
+            }
         }
     }
 
@@ -926,6 +997,21 @@ internal object AgentRuntimeWire {
 
         "run_failed" -> AgentEvent.RunFailed(
             reason = bundle.getString("reason").orEmpty(),
+        )
+
+        "interaction_requested" -> AgentEvent.InteractionRequested(
+            requestId = bundle.getString(KEY_INTERACTION_REQUEST_ID).orEmpty(),
+            kind = bundle.getString("interaction_kind").orEmpty(),
+            title = bundle.getString("interaction_title").orEmpty(),
+            detail = bundle.getString("interaction_detail").orEmpty(),
+            options = bundle.getStringArrayList("interaction_options").orEmpty(),
+            allowFreeText = bundle.getBoolean("interaction_allow_free_text", true),
+            rememberLabel = bundle.getString("interaction_remember_label"),
+            reason = bundle.getString("interaction_reason"),
+        )
+
+        "interaction_resolved" -> AgentEvent.InteractionResolved(
+            requestId = bundle.getString(KEY_INTERACTION_REQUEST_ID).orEmpty(),
         )
 
         else -> null

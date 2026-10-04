@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Spacer
 import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.components.movo.rememberLastNonNull
 import io.github.fartown.movo.ui.components.movo.MovoFailureDialog
+import io.github.fartown.movo.ui.components.movo.AgentInteractionCard
 import io.github.fartown.movo.ui.components.movo.MovoConfirmDialog
 import android.Manifest
 import android.app.Activity
@@ -810,6 +811,15 @@ internal fun AgentAppRoot(
             agentState.deleteConversation(conversation.id)
             conversationDeleteTarget = null
         },
+    )
+
+    // 同步交互卡（提问 / 审批，实施方案 §6.1）：底部锚定、背景静止；作答经 AgentAppState 回传给等待中的 run。
+    AgentInteractionCard(
+        state = agentState.activeInteraction,
+        onApprove = { remember -> agentState.submitInteractionApproval(approved = true, remember = remember) },
+        onDecline = { agentState.submitInteractionApproval(approved = false, remember = false) },
+        onAnswer = { text, optionIndex -> agentState.submitInteractionAnswer(text, optionIndex) },
+        onCancel = { agentState.cancelInteraction() },
     )
 }
 

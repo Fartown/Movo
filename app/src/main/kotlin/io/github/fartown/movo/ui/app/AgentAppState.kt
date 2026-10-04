@@ -46,6 +46,7 @@ import io.github.fartown.movo.agent.roleplay.RoleplayMessageState
 import io.github.fartown.movo.data.auth.ChatGptAuth
 import io.github.fartown.movo.data.repository.CharacterRepository
 import io.github.fartown.movo.agent.runtime.AgentEvent
+import io.github.fartown.movo.agent.tools.interaction.InteractionReply
 import io.github.fartown.movo.agent.runtime.AgentConversationTarget
 import io.github.fartown.movo.agent.runtime.AgentExecutionService
 import io.github.fartown.movo.agent.runtime.AgentExternalArchivePayload
@@ -68,6 +69,7 @@ import io.github.fartown.movo.data.repository.ProviderRepository
 import io.github.fartown.movo.data.repository.RuntimeConfigRepository
 import io.github.fartown.movo.ui.model.AgentChatHomeUiState
 import io.github.fartown.movo.ui.model.AgentChatMessageUi
+import io.github.fartown.movo.ui.model.AgentInteractionUiState
 import io.github.fartown.movo.ui.model.AgentMemoryUiState
 import io.github.fartown.movo.ui.model.AgentMessageUi
 import io.github.fartown.movo.ui.model.AgentModelPickerProjector
@@ -241,6 +243,10 @@ internal class AgentAppState(
         private set
 
     var memoryState by mutableStateOf(AgentMemoryUiState())
+        private set
+
+    /** 当前待处理的提问卡 / 确认卡；为空表示没有待交互。由运行时交互事件投影，作答后回传并清空。 */
+    var activeInteraction: AgentInteractionUiState? by mutableStateOf(null)
         private set
 
     init {
@@ -2485,11 +2491,71 @@ internal class AgentAppState(
                     AgentRuntimeClient(appContext, AndroidAgentLogger).cancelRun(runId)
                 }
             }
+            is AgentEvent.InteractionRequested -> {
+                activeInteraction = AgentInteractionUiState(
+                    runId = runId,
+                    requestId = event.requestId,
+                    isApproval = event.kind == "approval",
+                    title = event.title,
+                    detail = event.detail,
+                    options = event.options,
+                    allowFreeText = event.allowFreeText,
+                    rememberLabel = event.rememberLabel,
+                    reason = event.reason,
+                )
+            }
+
+            is AgentEvent.InteractionResolved -> {
+                if (activeInteraction?.requestId == event.requestId) activeInteraction = null
+            }
+
             is AgentEvent.ProviderRequestStarted,
             is AgentEvent.ProviderResponseStarted,
             is AgentEvent.ToolImagesAttached,
             is AgentEvent.RoundStarted,
             -> Unit
+        }
+    }
+
+    /** 用户在确认卡上选择允许 / 拒绝（可带“一直允许”），回传给等待中的 run 并收起卡片。 */
+    fun submitInteractionApproval(approved: Boolean, remember: Boolean) {
+        val interaction = activeInteraction ?: return
+        activeInteraction = null
+        scope.launch(Dispatchers.IO) {
+            AgentRuntimeClient(appContext, AndroidAgentLogger)
+                .sendInteractionReply(
+                    interaction.runId,
+                    interaction.requestId,
+                    InteractionReply.Approval(approved, remember),
+                )
+        }
+    }
+
+    /** 用户在提问卡上作答（选了某个选项或填了自由文本），回传给等待中的 run 并收起卡片。 */
+    fun submitInteractionAnswer(text: String, optionIndex: Int?) {
+        val interaction = activeInteraction ?: return
+        activeInteraction = null
+        scope.launch(Dispatchers.IO) {
+            AgentRuntimeClient(appContext, AndroidAgentLogger)
+                .sendInteractionReply(
+                    interaction.runId,
+                    interaction.requestId,
+                    InteractionReply.Answer(text, optionIndex),
+                )
+        }
+    }
+
+    /** 用户取消当前交互（关闭卡片），按取消回传，运行时据此安全侧处理（审批=拒绝、提问=拒绝）。 */
+    fun cancelInteraction() {
+        val interaction = activeInteraction ?: return
+        activeInteraction = null
+        scope.launch(Dispatchers.IO) {
+            AgentRuntimeClient(appContext, AndroidAgentLogger)
+                .sendInteractionReply(
+                    interaction.runId,
+                    interaction.requestId,
+                    InteractionReply.Cancelled,
+                )
         }
     }
 

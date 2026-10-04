@@ -5,6 +5,7 @@ import android.os.Parcel
 import android.util.Base64
 import io.github.fartown.movo.agent.media.AgentImageCodec
 import io.github.fartown.movo.agent.model.AgentModelClient
+import io.github.fartown.movo.agent.tools.interaction.InteractionReply
 import io.github.fartown.movo.data.model.ModelReasoningCapabilities
 import io.github.fartown.movo.data.model.ReasoningEffort
 import java.io.File
@@ -631,5 +632,55 @@ class AgentRuntimeWireTest {
         val decoded = AgentRuntimeWire.eventFromBundle(AgentRuntimeWire.eventToBundle(started)) as AgentEvent.ToolStarted
         assertEquals(started, decoded)
         assertEquals(1_700_000_000_000L, decoded.atMillis)
+    }
+
+    @Test
+    fun interactionEventsSurviveIpcAndArchiveJson() {
+        val approval = AgentEvent.InteractionRequested(
+            requestId = "ix-1",
+            kind = "approval",
+            title = "给「妈妈（微信）」发送这条消息？",
+            detail = "妈妈 · 微信\n我周五晚上到家，不用等我吃饭。",
+            options = emptyList(),
+            allowFreeText = false,
+            rememberLabel = "微信",
+            reason = "DECLARED_EFFECT",
+        )
+        assertEquals(approval, AgentRuntimeWire.eventFromBundle(AgentRuntimeWire.eventToBundle(approval)))
+        assertEquals(approval, AgentEventJsonCodec.decode(AgentEventJsonCodec.encode(approval)))
+
+        val question = AgentEvent.InteractionRequested(
+            requestId = "ix-2",
+            kind = "question",
+            title = "你指的是哪个「王伟」？",
+            detail = "",
+            options = listOf("王伟 · 手机 138****2048", "王伟（同事）· 企业微信"),
+            allowFreeText = true,
+        )
+        assertEquals(question, AgentRuntimeWire.eventFromBundle(AgentRuntimeWire.eventToBundle(question)))
+        assertEquals(question, AgentEventJsonCodec.decode(AgentEventJsonCodec.encode(question)))
+
+        val resolved = AgentEvent.InteractionResolved("ix-1")
+        assertEquals(resolved, AgentRuntimeWire.eventFromBundle(AgentRuntimeWire.eventToBundle(resolved)))
+        assertEquals(resolved, AgentEventJsonCodec.decode(AgentEventJsonCodec.encode(resolved)))
+    }
+
+    @Test
+    fun interactionReplyBundleRoundTrips() {
+        listOf(
+            InteractionReply.Approval(approved = true, remember = true),
+            InteractionReply.Approval(approved = false, remember = false),
+            InteractionReply.Answer(text = "其他答案", optionIndex = null),
+            InteractionReply.Answer(text = "", optionIndex = 2),
+            InteractionReply.Cancelled,
+        ).forEach { reply ->
+            val bundle = AgentRuntimeWire.interactionReplyBundle("run-1", "ix-9", reply)
+            val decoded = AgentRuntimeWire.interactionReplyFromBundle(bundle)
+            assertEquals("run-1", decoded?.first)
+            assertEquals("ix-9", decoded?.second)
+            assertEquals(reply, decoded?.third)
+        }
+        // run_id / request_id 缺失时安全返回 null（不投递到错误的 run）。
+        assertNull(AgentRuntimeWire.interactionReplyFromBundle(android.os.Bundle()))
     }
 }
