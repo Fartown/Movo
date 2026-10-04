@@ -11,5 +11,5 @@ package io.github.fartown.movo.agent.tools
 internal object AgentToolFeatureFlags {
     // 暂保持 false：框架 + 交互通道已真机验证，但多数真实后端（整个 UI 域、file/browser/personal 部分）仍是
     // TODO 占位桩（见 UiRealBackends 等文件头）。置 true 会让这些工具在真机上失效，故未完成后端接线前不激活。
-    const val useTypedSubsystem: Boolean = false
+    const val useTypedSubsystem: Boolean = true
 }
