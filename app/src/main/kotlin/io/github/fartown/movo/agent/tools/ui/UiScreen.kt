@@ -329,6 +329,9 @@ internal fun buildUiActionResolution(
         packageAttributed = pkg != null,
         toolApproval = toolApproval,
         reject = reject,
+        // 界面点击/滑动/输入等是本地交互、本身不外发，污点不应逐个拦截它们（否则 ui_observe 打污点后每个动作都要确认，
+        // UI 自动化无法使用）。真正的外发/敏感风险由受保护应用名单、模型声明的 effect、自我保护三条定向防线兜底。
+        exfiltrates = false,
     )
 }
 

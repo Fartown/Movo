@@ -107,8 +107,11 @@ internal class AppOpenTool(
     }
 
     override fun resolve(input: AppOpenInput, env: ToolEnvironment): CallResolution =
-        // local；若本轮已有污点，中央 requiresApproval 会按 TAINTED 要求确认。
-        CallResolution(risk = Risk.LOCAL, sensitivity = Sensitivity.NORMAL, resources = emptySet())
+        // 仅本地切换前台应用，不外发也不持久化未信内容；读屏/读网页后不应被污点逐个拦（exfiltrates=false）。
+        // 打开应用后在其中的敏感操作由受保护应用名单 + 声明 effect 兜底。
+        CallResolution(
+            risk = Risk.LOCAL, sensitivity = Sensitivity.NORMAL, resources = emptySet(), exfiltrates = false,
+        )
 
     override fun execute(
         input: AppOpenInput,

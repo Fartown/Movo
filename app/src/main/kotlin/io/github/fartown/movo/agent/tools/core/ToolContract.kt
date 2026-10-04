@@ -133,8 +133,9 @@ internal data class CallResolution(
             !packageAttributed && hasTarget -> ApprovalNeed(
                 ApprovalReason.PROTECTED_APP, title = "", detail = "无法确认前台应用",
             )
-            // 污点确认只针对可外发的动作；纯只读不外发不拦（ui_observe/memory_read 等不被过度打扰），
-            // 但 READ 分类里确有外发通道（browser_open 带查询参数导航）会显式置 exfiltrates=true。
+            // 污点确认针对「外发 / 会持久化未信内容」的动作。默认 (risk != READ) 保守拦截；但纯本地、短暂、不持久的
+            // 动作（界面点击/滑动、切换应用等）显式置 exfiltrates=false——否则读屏后每个 UI 动作都要确认、UI 自动化
+            // 无法使用（真机实证）。memory_write 等会持久化未信内容的动作保持被拦（默认或显式 exfiltrates=true）。
             taintedExternal && (exfiltrates ?: (risk != Risk.READ)) ->
                 ApprovalNeed(ApprovalReason.TAINTED, title = "", detail = "")
             else -> null
