@@ -65,6 +65,9 @@ import io.github.fartown.movo.agent.overlay.AgentOverlayVisibilityPolicy
 import io.github.fartown.movo.agent.overlay.applyEvent
 import io.github.fartown.movo.config.Prefs
 import io.github.fartown.movo.agent.tools.interaction.AgentInteractionRegistry
+import io.github.fartown.movo.agent.tools.interaction.InteractionReply
+import io.github.fartown.movo.ui.components.movo.AgentInteractionOverlayContent
+import androidx.compose.runtime.collectAsState
 import io.github.fartown.movo.core.AndroidAgentLogger
 import io.github.fartown.movo.core.ModuleConfig
 import io.github.fartown.movo.core.safeLogType
@@ -129,6 +132,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private var glowParams: WindowManager.LayoutParams? = null
     private var orbParams: WindowManager.LayoutParams? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
+    // 跨应用审批卡悬浮宿主（实施方案 §6.1 + overlay-approval-card-plan）：Movo 不在前台时审批卡浮在目标应用上。
+    private var interactionView: ComposeView? = null
+    private var interactionParams: WindowManager.LayoutParams? = null
+    private val overlayInteraction = kotlinx.coroutines.flow.MutableStateFlow<io.github.fartown.movo.ui.model.AgentInteractionUiState?>(null)
+    /** 是否有 Movo 自己的 Activity 处于前台：前台时审批卡走应用内渲染，不弹悬浮卡。 */
+    @Volatile private var appForeground = false
     /** 展开卡的原始位置（距屏幕底部）；键盘补充时抬到键盘上方，键盘收起后回到这里。 */
     private var bubbleBaseY = 0
     private val resultConversationOpening = mutableStateOf(false)
@@ -182,10 +191,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     /** App 自己的页面进出前台时刷新待命悬浮球的显隐（前台判断用 [VoiceSurfaceTracker]，它从进程启动起就在计数）。 */
     private val appActivityCallbacks = object : android.app.Application.ActivityLifecycleCallbacks {
         override fun onActivityResumed(activity: android.app.Activity) {
+            appForeground = true
             mainHandler.removeCallbacksAndMessages(appLeaveToken)
             mainHandler.post(::updateStandbyOrbVisibility)
         }
         override fun onActivityPaused(activity: android.app.Activity) {
+            appForeground = false
             // 离开 Movo 的页面稍等再判断：Movo 页面之间切换（例如对话浮层「展开到 App」）时，旧页暂停到新页恢复之间有一段空档，
             // 立即判断会让悬浮球在全屏浮层上闪一下（真机约 10ms）。
             mainHandler.removeCallbacksAndMessages(appLeaveToken)
@@ -309,6 +320,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         orbView?.let { view -> runCatching { windowManager?.removeView(view) } }
         glowView?.let { view -> runCatching { windowManager?.removeView(view) } }
         removeZoneView?.let { view -> runCatching { windowManager?.removeView(view) } }
+        interactionView?.let { view -> runCatching { windowManager?.removeView(view) } }
         bubbleView = null
         orbView = null
         glowView = null
@@ -650,6 +662,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             runCatching {
                 val phaseBefore = state.value.phase
                 state.value = state.value.applyEvent(event)
+                handleInteractionOverlayEvent(event)
                 // ✓ / ! 可能先由事件流（RunFinished / RunFailed）点亮，早于终态交付：从这一刻起算 3 秒保留（常驻关闭时）。
                 val phaseAfter = state.value.phase
                 if (phaseAfter != phaseBefore &&
@@ -1469,6 +1482,94 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                     }
                 }
             }
+        }
+
+    /** 跨应用审批：Movo 不在前台时，把审批/提问卡渲染为悬浮窗浮在目标应用上；前台时交由应用内卡片处理。 */
+    private fun handleInteractionOverlayEvent(event: AgentEvent) {
+        when (event) {
+            is AgentEvent.InteractionRequested -> {
+                if (appForeground) return // 应用内由 AgentAppRoot 的卡片处理，不弹悬浮卡
+                overlayInteraction.value = io.github.fartown.movo.ui.model.AgentInteractionUiState(
+                    runId = activeSession?.runId.orEmpty(),
+                    requestId = event.requestId,
+                    isApproval = event.kind == "approval",
+                    title = event.title,
+                    detail = event.detail,
+                    options = event.options,
+                    allowFreeText = event.allowFreeText,
+                    rememberLabel = event.rememberLabel,
+                    reason = event.reason,
+                )
+                showInteractionOverlay()
+            }
+            is AgentEvent.InteractionResolved -> {
+                if (overlayInteraction.value?.requestId == event.requestId) {
+                    overlayInteraction.value = null
+                    removeInteractionOverlay()
+                }
+            }
+            else -> Unit
+        }
+    }
+
+    /** 作答经本进程直接投递给等待中的 run（执行器同进程，无需 IPC）。 */
+    private fun deliverOverlayInteraction(reply: InteractionReply) {
+        val interaction = overlayInteraction.value ?: return
+        overlayInteraction.value = null
+        runCatching { AgentInteractionRegistry.deliver(interaction.runId, interaction.requestId, reply) }
+        removeInteractionOverlay()
+    }
+
+    private fun showInteractionOverlay() {
+        if (interactionView != null) return
+        val wm = windowManager
+            ?: (getSystemService(Context.WINDOW_SERVICE) as? WindowManager)?.also { windowManager = it }
+            ?: return
+        val view = createOverlayComposeView {
+            val model = overlayInteraction.collectAsState().value
+            if (model != null) {
+                AgentInteractionOverlayContent(
+                    model = model,
+                    onApprove = { remember ->
+                        deliverOverlayInteraction(InteractionReply.Approval(approved = true, remember = remember))
+                    },
+                    onDecline = {
+                        deliverOverlayInteraction(InteractionReply.Approval(approved = false, remember = false))
+                    },
+                    onAnswer = { text, idx -> deliverOverlayInteraction(InteractionReply.Answer(text, idx)) },
+                    onCancel = { deliverOverlayInteraction(InteractionReply.Cancelled) },
+                )
+            }
+        }
+        val lp = interactionLayoutParams()
+        runCatching { wm.addView(view, lp) }.onFailure { throwable ->
+            AndroidAgentLogger.warnThrottled("runtime_interaction_overlay_add_failed") {
+                "Agent runtime interaction overlay addView failed: type=${throwable.safeLogType()}"
+            }
+            return
+        }
+        interactionView = view
+        interactionParams = lp
+    }
+
+    private fun removeInteractionOverlay() {
+        interactionView?.let { view -> runCatching { windowManager?.removeView(view) } }
+        interactionView = null
+        interactionParams = null
+    }
+
+    private fun interactionLayoutParams(): WindowManager.LayoutParams =
+        WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            // 可获焦（按钮/自由文本输入）；IME 弹出时缩放布局。
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+            windowAnimations = 0
         }
 
     /**

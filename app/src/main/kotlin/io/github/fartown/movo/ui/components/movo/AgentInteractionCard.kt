@@ -134,8 +134,45 @@ internal fun AgentInteractionCard(
     }
 }
 
+/**
+ * 悬浮态内容（系统悬浮窗里用，不走 Dialog）：轻度压暗遮罩（目标应用仍可见）+ 底部锚定的卡体（复用 [InteractionCardBody]）。
+ * 跨应用操作时由 Service 的悬浮窗宿主渲染；点遮罩=取消。背景（目标应用）不动。
+ */
 @Composable
-private fun InteractionCardBody(
+internal fun AgentInteractionOverlayContent(
+    model: AgentInteractionUiState,
+    onApprove: (remember: Boolean) -> Unit,
+    onDecline: () -> Unit,
+    onAnswer: (text: String, optionIndex: Int?) -> Unit,
+    onCancel: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            // 轻度压暗（用户定：目标应用仍清晰可见，区别于应用内的深色遮罩）。
+            .background(MovoColors.textPrimary.copy(alpha = 0.14f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onCancel,
+            ),
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        // 卡体区域吞掉点击，避免点卡片空白处穿透到遮罩触发取消。
+        Box(
+            modifier = Modifier.clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {},
+            ),
+        ) {
+            InteractionCardBody(model, onApprove, onDecline, onAnswer)
+        }
+    }
+}
+
+@Composable
+internal fun InteractionCardBody(
     model: AgentInteractionUiState,
     onApprove: (Boolean) -> Unit,
     onDecline: () -> Unit,
