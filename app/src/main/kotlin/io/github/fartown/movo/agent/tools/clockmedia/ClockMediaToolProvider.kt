@@ -24,7 +24,7 @@ internal class ClockMediaToolProvider(
     override val tools: List<AgentTool> = listOf(
         ContractTool(ClockCreateTool(RealClockCreateBackend(context, logger, root, rootAvailable))),
         ContractTool(ClockReadTool(RealClockReadBackend(context, root))),
-        ContractTool(MediaControlTool(RealMediaControlBackend(context))),
+        ContractTool(MediaControlTool(RealMediaControlBackend(context, root))),
         ContractTool(VolumeSetTool(RealVolumeSetBackend(context))),
     )
 

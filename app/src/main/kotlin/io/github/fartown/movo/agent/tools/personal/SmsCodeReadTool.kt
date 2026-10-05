@@ -38,6 +38,18 @@ internal object PersonalSecretPatterns {
         if (text.isNullOrEmpty() || !OTP_CONTEXT.containsMatchIn(text)) return text
         return OTP.replace(text) { "*".repeat(it.value.length) }
     }
+
+    /**
+     * 从一段短信/通知文本里抽取最可能的验证码：出现验证码语境词时，取离语境词最近的 4–8 位数字。
+     * 没有语境词或没有合适数字时返回 null。Root 读短信正文与无 Root 读短信通知两条路径共用此纯逻辑。
+     */
+    fun extractOtp(text: String?): String? {
+        if (text.isNullOrEmpty()) return null
+        val context = OTP_CONTEXT.find(text) ?: return null
+        return OTP.findAll(text)
+            .minByOrNull { kotlin.math.abs(it.range.first - context.range.first) }
+            ?.groupValues?.get(1)
+    }
 }
 
 internal data class SmsCodeReadInput(val maxAgeMinutes: Int) : ToolInput

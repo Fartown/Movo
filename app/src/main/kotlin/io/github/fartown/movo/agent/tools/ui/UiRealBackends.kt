@@ -36,10 +36,13 @@ internal class RealClipboardReadBackend(
     override fun read(): ClipboardReadResult {
         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
             ?: return ClipboardReadResult.Unavailable
-        // Android 10+ 仅前台应用可读剪贴板；非前台时系统返回 null。
-        // TODO(ui)：null 既可能是“空”也可能是“被拒”，需用前台状态区分（无障碍是否豁免后台限制未核实，§16）。
-        val clip = cm.primaryClip ?: return ClipboardReadResult.Empty
-        if (clip.itemCount == 0) return ClipboardReadResult.Empty
+        // Android 10+ 仅前台应用/IME/有焦点者可读剪贴板内容；非前台时 getPrimaryClip() 返回 null。
+        // 用 hasPrimaryClip() 区分「确实为空」与「有内容但读不到（后台受限）」，避免把被拒当成空、冒领结果。
+        val hasClip = runCatching { cm.hasPrimaryClip() }.getOrDefault(false)
+        val clip = cm.primaryClip
+        if (clip == null || clip.itemCount == 0) {
+            return if (hasClip) ClipboardReadResult.Unavailable else ClipboardReadResult.Empty
+        }
         val full = clip.getItemAt(0).coerceToText(context)?.toString().orEmpty()
         if (full.isEmpty()) return ClipboardReadResult.Empty
         val sensitive = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&

@@ -103,9 +103,22 @@ internal object AgentBrowserSession {
     private val interrupted = AtomicBoolean(false)
     private val operationEpoch = AtomicLong(0L)
     private val navigationGeneration = AtomicLong(0L)
+    private val blockedSchemeNavigations = AtomicLong(0L)
 
     private val mutableSnapshots = MutableStateFlow(BrowserSessionSnapshot())
     val snapshots: StateFlow<BrowserSessionSnapshot> = mutableSnapshots.asStateFlow()
+
+    /**
+     * 当前导航代际：每次成功导航 / go_back / go_forward / reload / 被打断 / reset 自增。
+     * 续读游标绑它，页面变化后旧游标即失效（STALE_OBSERVATION）。
+     */
+    fun navigationGeneration(): Long = navigationGeneration.get()
+
+    /** WebViewClient 已安装页面内协议守卫（见 [BrowserSchemeGuard]）。静态安装，恒为 true。 */
+    fun schemeGuardInstalled(): Boolean = true
+
+    /** 迄今被拦截的受限协议页面内跳转次数（诊断用）。 */
+    fun blockedSchemeNavigationCount(): Long = blockedSchemeNavigations.get()
 
     @Volatile
     private var appContext: Context? = null
@@ -405,6 +418,7 @@ internal object AgentBrowserSession {
                             "get_readable" -> readPage(args, readable = true)
                             "get_text" -> readPage(args, readable = false)
                             "find_elements" -> findElements(args)
+                            "inspect_target" -> inspectTarget(args)
                             "click" -> click(args)
                             "type" -> type(args)
                             "select" -> select(args)
@@ -512,6 +526,14 @@ internal object AgentBrowserSession {
         return toolResult(
             mergeValue(baseEnvelope("find_elements", true, "ok"), value)
         )
+    }
+
+    /** 只读目标探测：不改页面、不等加载，返回精确可编辑与提交点原始信号。 */
+    private fun inspectTarget(args: JSONObject): BrowserToolResult {
+        val view = requirePage()
+        val target = targetFrom(args)
+        val value = evaluateObject(view, BrowserDomScripts.inspectTarget(target.selector, target.x, target.y))
+        return toolResult(mergeValue(baseEnvelope("inspect_target", true, "ok"), value))
     }
 
     private fun click(args: JSONObject): BrowserToolResult {
@@ -1082,6 +1104,23 @@ internal object AgentBrowserSession {
     }
 
     private class BrowserClient : WebViewClient() {
+        /**
+         * 页面内跳转（点击、脚本改 location）的协议守卫：拦住 file/content/intent/javascript，
+         * 离屏浏览器不打开本地 / 危险协议。拦截后记录到 snapshot.error 并返回 true 阻止加载。
+         */
+        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+            val url = request.url?.toString().orEmpty()
+            if (BrowserSchemeGuard.isBlocked(url)) {
+                blockedSchemeNavigations.incrementAndGet()
+                mainHandler.post {
+                    currentError = "已拦截页面内的受限协议跳转"
+                    publishSnapshotOnMain()
+                }
+                return true
+            }
+            return false
+        }
+
         override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
             // 页面内点击也会导航，不一定经过 executeInternal。加载期间仍是实际工作，
             // 不能仅因宿主进入后台就暂停；重定向继续使用同一份使用权。
@@ -1221,6 +1260,7 @@ internal object AgentBrowserSession {
         "get_readable",
         "get_text",
         "find_elements",
+        "inspect_target",
         "click",
         "type",
         "select",

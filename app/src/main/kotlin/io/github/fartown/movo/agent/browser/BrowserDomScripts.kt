@@ -561,6 +561,7 @@ internal object BrowserDomScripts {
         return {
           viewport_width: window.innerWidth,
           viewport_height: window.innerHeight,
+          device_pixel_ratio: window.devicePixelRatio || 1,
           content_width: Math.min(200000, Math.max(document.body ? document.body.scrollWidth : 0, document.documentElement.scrollWidth)),
           content_height: Math.min(200000, Math.max(document.body ? document.body.scrollHeight : 0, document.documentElement.scrollHeight)),
           scroll_x: window.scrollX || 0,
@@ -579,6 +580,67 @@ internal object BrowserDomScripts {
         }
         return { found: !!target, visible: !!target, enabled: target ? enabled(target) : false };
         """.trimIndent()
+
+    /**
+     * 动作前的只读目标探测：精确可编辑（复用 editable()）+ 提交点原始信号。
+     * 坐标已在调用方换算为 CSS 像素。只抓 DOM 信号，提交点/搜索分类交给 Kotlin（可单测）。
+     */
+    fun inspectTarget(selector: String?, x: Int?, y: Int?): String {
+        val selectorLiteral = selector?.let(JSONObject::quote) ?: "null"
+        val xLiteral = x?.toString() ?: "null"
+        val yLiteral = y?.toString() ?: "null"
+        return """
+        var sel = $selectorLiteral;
+        var px = $xLiteral;
+        var py = $yLiteral;
+        var target = null;
+        if (sel) {
+          var matches = document.querySelectorAll(sel);
+          for (var i = 0; i < matches.length && i < 2000; i++) {
+            if (visible(matches[i])) { target = matches[i]; break; }
+          }
+          if (!target && matches.length) target = matches[0];
+        } else if (px !== null && py !== null) {
+          target = document.elementFromPoint(px, py);
+        }
+        if (!target || !(target instanceof Element)) {
+          return {
+            found: false, visible: false, enabled: false, editable: false,
+            submit_point: false, search_role: false, summary: ''
+          };
+        }
+        var tag = String(target.tagName || '').toLowerCase();
+        var type = String(target.getAttribute('type') || '').toLowerCase();
+        var role = cleanInline(target.getAttribute('role'), 48).toLowerCase();
+        var form = target.form || (target.closest ? target.closest('form') : null);
+        var formMethod = form ? String(form.getAttribute('method') || 'get').toLowerCase() : '';
+        var formRole = form ? cleanInline(form.getAttribute('role'), 48).toLowerCase() : '';
+        var inSearch = !!(target.closest && target.closest('[role="search"]'));
+        var isPassword = (tag === 'input' && type === 'password');
+        var isSubmitControl =
+          (tag === 'input' && (type === 'submit' || type === 'image')) ||
+          (tag === 'button' && (type === 'submit' || (type === '' && !!form)));
+        var buttonText = cleanInline(
+          (target.value || target.textContent || target.getAttribute('aria-label') || ''), 120);
+        return {
+          found: true,
+          visible: visible(target),
+          enabled: enabled(target),
+          editable: editable(target),
+          tag: tag,
+          type: type,
+          role: role,
+          form_present: !!form,
+          form_method: formMethod,
+          form_role: formRole,
+          in_search: inSearch,
+          is_password: isPassword,
+          is_submit_control: isSubmitControl,
+          button_text: buttonText,
+          summary: cleanInline((buttonText || selectorFor(target) || tag), 80)
+        };
+        """.trimIndent()
+    }
 
     private fun targeted(selector: String?, x: Int?, y: Int?): String {
         val selectorLiteral = selector?.let(JSONObject::quote) ?: "null"

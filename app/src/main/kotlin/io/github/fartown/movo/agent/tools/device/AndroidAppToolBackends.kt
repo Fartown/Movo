@@ -74,6 +74,8 @@ internal class AndroidAppSearchBackend(context: Context) : AppSearchBackend {
 /** app_open 真实后端：启动 + 回读前台包名（排除 Movo 浮层）。 */
 internal class AndroidAppOpenBackend(
     private val context: Context,
+    private val root: BoundedRootCommandExecutor,
+    private val rootAvailable: () -> Boolean = { RootAccess.isGranted },
 ) : AppOpenBackend {
     private val index = LauncherAppIndex(context)
 
@@ -121,12 +123,22 @@ internal class AndroidAppOpenBackend(
         return ForegroundOutcome(lastForeground, matched = false)
     }
 
-    /** 优先用无障碍前台包名，其次用 Root dumpsys window。都没有则 null。 */
+    /** 优先用无障碍前台包名，其次用 Root dumpsys 解析前台包。都没有则 null。 */
     private fun currentForeground(): String? {
         AgentAccessibilityService.current()?.currentPackageName()?.takeIf { it.isNotBlank() }?.let { return it }
-        if (!RootAccess.isGranted) return null
-        // TODO(后端)：此处未直连 Root 执行器读 dumpsys window；无障碍可用时已足够，纯 Root 场景前台回读待接线。
-        return null
+        if (!rootAvailable()) return null
+        // 无障碍不可用但有 Root：读 `dumpsys window` 的当前焦点，拿不到再读 `dumpsys activity activities` 的 resumed。
+        // 解析走纯函数 [DumpsysWindowParser]（见其单测）。
+        return foregroundViaRoot("dumpsys window") ?: foregroundViaRoot("dumpsys activity activities")
+    }
+
+    private fun foregroundViaRoot(command: String): String? {
+        val dump = runCatching { root.execute(command, maxOutputBytes = 512 * 1024) }
+            .getOrNull()
+            ?.takeIf { it.ok }
+            ?.stdout
+            ?: return null
+        return DumpsysWindowParser.parseForegroundPackage(dump)
     }
 
     private companion object {

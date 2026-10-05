@@ -38,7 +38,7 @@ import org.json.JSONObject
  * clock_create 真实后端（回读型，方案 a）。
  * 派发顺序：挂透明窗 → 派发 Intent → 按证据核实 → 撤窗。
  * 核实归因到本次创建：无 Root 用 AlarmManager.getNextAlarmClock() 匹配本次请求时刻；
- * 有 Root 本应再用 dumpsys alarm 做更精确的归因（见 [rootAttributed] 的 TODO）。
+ * 有 Root 再用 dumpsys alarm 做更精确的归因（见 [rootAttributed]），不被日历 0 点闹钟占住。
  */
 internal class RealClockCreateBackend(
     private val context: Context,
@@ -127,12 +127,25 @@ internal class RealClockCreateBackend(
     }
 
     /**
-     * TODO(真实实现)：有 Root 时用 `dumpsys alarm` 匹配本次请求 HH:MM/时长新出现的 ALARM_ALERT/TIMER_ALERT，
-     * 比 getNextAlarmClock 更能归因到本次创建（不被日历 0 点闹钟占住）。dumpsys alarm 的输出格式按机型差异大，
-     * 需要真机取证后再写解析，暂留桩返回 false，由 getNextAlarmClock 路径兜底。
+     * 有 Root 时用 `dumpsys alarm` 匹配本次请求 HH:MM/时长新出现的 ALARM_ALERT/TIMER_ALERT，
+     * 比 getNextAlarmClock 更能归因到本次创建（不被日历 0 点闹钟占住）。
+     * alarm 直接按请求 HH:MM 匹配；timer 把 expected 触发时刻折算成 HH:MM 再匹配。
+     * 解析用纯函数 [DumpsysAlarmParser]（见其单测）；dumpsys 执行失败或无命中都返回 false，由 getNextAlarmClock 兜底。
      */
-    @Suppress("UNUSED_PARAMETER")
-    private fun rootAttributed(input: ClockCreateInput, expected: Long): Boolean = false
+    private fun rootAttributed(input: ClockCreateInput, expected: Long): Boolean {
+        val dump = runCatching { root.execute("dumpsys alarm", maxOutputBytes = 512 * 1024) }
+            .getOrNull()
+            ?.takeIf { it.ok }
+            ?.stdout
+            ?: return false
+        return when (input.type) {
+            ClockType.ALARM -> DumpsysAlarmParser.hasAlarmAt(dump, input.hour, input.minute)
+            ClockType.TIMER -> {
+                val cal = Calendar.getInstance().apply { timeInMillis = expected }
+                DumpsysAlarmParser.hasTimerAt(dump, cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE))
+            }
+        }
+    }
 
     private companion object {
         const val COLOROS_CLOCK_PACKAGE = "com.coloros.alarmclock"
@@ -253,7 +266,7 @@ internal object ClockBackgroundAnchor {
 
 /**
  * clock_read 真实后端。ColorOS 走 [AgentPrivateDatabaseTools] 读 alarms.db；
- * 其他机型应 Root 下解析 dumpsys alarm（见下方 TODO），暂未实现时返回 Unavailable。
+ * 其他机型在私有库读不到时，Root 下解析 dumpsys alarm 作兜底（见 [readFromDumpsys]），仍拿不到才返回 Unavailable。
  */
 internal class RealClockReadBackend(
     private val context: Context,
@@ -281,11 +294,45 @@ internal class RealClockReadBackend(
         }
 
         if (items.length() == 0 && lastReason != null) {
-            // TODO(真实实现)：非 ColorOS 机型用 Root `dumpsys alarm` 解析（有时刻无标签）作为兜底来源，
-            // 格式按机型差异大，需真机取证后再写；暂直接把数据库不可用作为原因返回。
+            // 非 ColorOS 机型：ColorOS 私有库读不到时，用 Root `dumpsys alarm` 解析（有时刻无用户标签）作兜底来源。
+            // 解析走纯函数 [DumpsysAlarmParser]（见其单测）。拿不到任何时刻时仍如实把数据库不可用作为原因返回。
+            val fallback = readFromDumpsys(type, limit)
+            if (fallback.length() > 0) return ClockReadResult.Items(fallback)
             return ClockReadResult.Unavailable(lastReason)
         }
         return ClockReadResult.Items(items)
+    }
+
+    /** Root 下解析 `dumpsys alarm` 作为非 ColorOS 兜底：只给出触发时刻与类别，没有用户标签/开关态。 */
+    private fun readFromDumpsys(type: ClockType?, limit: Int): JSONArray {
+        val items = JSONArray()
+        val dump = runCatching { root.execute("dumpsys alarm", maxOutputBytes = 512 * 1024) }
+            .getOrNull()
+            ?.takeIf { it.ok }
+            ?.stdout
+            ?: return items
+        DumpsysAlarmParser.parse(dump)
+            .asSequence()
+            .filter { entry ->
+                when (type) {
+                    ClockType.ALARM -> entry.kind != ClockEntryKind.TIMER
+                    ClockType.TIMER -> entry.kind == ClockEntryKind.TIMER
+                    null -> true
+                }
+            }
+            .take(limit.coerceAtLeast(0))
+            .forEach { entry ->
+                items.put(
+                    JSONObject()
+                        .put("kind", if (entry.kind == ClockEntryKind.TIMER) "timer" else "alarm")
+                        .put("hour", entry.hour)
+                        .put("minute", entry.minute)
+                        .put("trigger_clock", "%02d:%02d".format(entry.hour, entry.minute))
+                        .put("source", "dumpsys_alarm")
+                        .put("label", JSONObject.NULL),
+                )
+            }
+        return items
     }
 
     private sealed interface Parsed {
@@ -308,26 +355,44 @@ internal class RealClockReadBackend(
 /** media_control 真实后端。 */
 internal class RealMediaControlBackend(
     private val context: Context,
+    private val root: BoundedRootCommandExecutor,
 ) : MediaControlBackend {
 
     override fun sessionState(env: ToolEnvironment): MediaSessionState {
-        // 仅在有通知使用权时才能用 MediaSessionManager 列会话；只有 Root 时的 dumpsys media_session 解析见 TODO。
-        if (!env.notificationAccess) {
-            // TODO(真实实现)：Root 下用 `dumpsys media_session` 解析当前活动会话与包名，无 Root 无通知权时无法检测。
-            return MediaSessionState.Unknown
+        // 有通知使用权时走 MediaSessionManager 列会话（最准）。
+        if (env.notificationAccess) {
+            val viaManager = runCatching {
+                val manager = context.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
+                val component = ComponentName(context, AgentNotificationHistoryService::class.java)
+                val sessions = manager.getActiveSessions(component)
+                if (sessions.isEmpty()) {
+                    MediaSessionState.None
+                } else {
+                    val playing = sessions.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+                        ?: sessions.first()
+                    MediaSessionState.Active(playing.packageName)
+                }
+            }.getOrDefault(MediaSessionState.Unknown)
+            if (viaManager != MediaSessionState.Unknown) return viaManager
         }
-        return runCatching {
-            val manager = context.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
-            val component = ComponentName(context, AgentNotificationHistoryService::class.java)
-            val sessions = manager.getActiveSessions(component)
-            if (sessions.isEmpty()) {
-                MediaSessionState.None
-            } else {
-                val playing = sessions.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
-                    ?: sessions.first()
-                MediaSessionState.Active(playing.packageName)
-            }
-        }.getOrDefault(MediaSessionState.Unknown)
+        // 无通知权但有 Root：用 `dumpsys media_session` 解析活动会话/包名（纯函数 DumpsysMediaSessionParser，见其单测）。
+        if (env.rootAvailable) {
+            return sessionStateViaRoot()
+        }
+        // 无通知权、无 Root：无法检测，如实返回 Unknown，不冒领。
+        return MediaSessionState.Unknown
+    }
+
+    private fun sessionStateViaRoot(): MediaSessionState {
+        val dump = runCatching { root.execute("dumpsys media_session", maxOutputBytes = 256 * 1024) }
+            .getOrNull()
+            ?.takeIf { it.ok }
+            ?.stdout
+            ?: return MediaSessionState.Unknown
+        val sessions = DumpsysMediaSessionParser.parse(dump)
+        // 命令成功执行：空列表即确实没有活动会话（不冒领）。
+        val active = DumpsysMediaSessionParser.activeSession(sessions) ?: return MediaSessionState.None
+        return MediaSessionState.Active(active.packageName)
     }
 
     override fun dispatch(action: MediaAction) {

@@ -1,6 +1,7 @@
 package io.github.fartown.movo.agent.tools.personal
 
 import android.content.Context
+import io.github.fartown.movo.agent.device.AgentNotificationHistoryService
 import io.github.fartown.movo.agent.device.BoundedRootCommandExecutor
 import io.github.fartown.movo.agent.device.RootAccess
 import io.github.fartown.movo.agent.tools.core.AgentTool
@@ -8,6 +9,7 @@ import io.github.fartown.movo.agent.tools.core.ContractTool
 import io.github.fartown.movo.agent.tools.core.PromptSection
 import io.github.fartown.movo.agent.tools.core.ToolDomain
 import io.github.fartown.movo.agent.tools.core.ToolProvider
+import io.github.fartown.movo.data.repository.NotificationHistoryRepository
 
 /**
  * 个人数据领域（domain=PERSONAL）的工具集合：
@@ -25,7 +27,16 @@ internal class PersonalToolProvider(
 
     override val tools: List<AgentTool> = listOf(
         ContractTool(PersonalSearchTool(AndroidPersonalSearchBackend(context, rootExecutor, rootAvailable))),
-        ContractTool(SmsCodeReadTool(AndroidSmsCodeBackend(rootExecutor, rootAvailable))),
+        ContractTool(
+            SmsCodeReadTool(
+                AndroidSmsCodeBackend(
+                    root = rootExecutor,
+                    rootAvailable = rootAvailable,
+                    notificationHistory = NotificationHistoryRepository(context),
+                    notificationAvailable = { AgentNotificationHistoryService.isEnabled(context) },
+                ),
+            ),
+        ),
         ContractTool(UsageReadTool(AndroidUsageReadBackend(context))),
         ContractTool(HealthReadTool(AndroidHealthReadBackend(context, rootExecutor, rootAvailable))),
         ContractTool(WifiPasswordReadTool(AndroidWifiPasswordReadBackend(rootExecutor))),

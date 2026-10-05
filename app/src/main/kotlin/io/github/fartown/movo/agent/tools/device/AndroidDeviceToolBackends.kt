@@ -1,9 +1,13 @@
 package io.github.fartown.movo.agent.tools.device
 
+import android.app.usage.StorageStatsManager
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.hardware.camera2.CameraManager
 import android.net.wifi.WifiManager
+import android.os.Environment
+import android.os.StatFs
+import android.os.storage.StorageManager
 import android.provider.Settings
 import io.github.fartown.movo.agent.device.BoundedRootCommandExecutor
 import io.github.fartown.movo.agent.device.RootAccess
@@ -135,6 +139,7 @@ internal class AndroidSettingBackend(
 
 /** device_diagnostics 真实后端：三类都走 Root。迁移自 SDT:389-461、581-598。 */
 internal class AndroidDeviceDiagnosticsBackend(
+    private val context: Context,
     private val root: BoundedRootCommandExecutor,
 ) : DeviceDiagnosticsBackend {
 
@@ -160,38 +165,65 @@ internal class AndroidDeviceDiagnosticsBackend(
     }
 
     override fun appStorage(limit: Int): DiagnosticsResult {
-        // TODO(未核实)：StorageStatsManager 可能免 Root；当前沿用 dumpsys diskstats（需 Root）。
+        // 设备总容量/可用：优先用免 Root 的 StorageStatsManager（拿不到再用 StatFs），作为 summary 一并返回。
+        val summary = storageSummary()
+        // 按应用的存储明细仍需 Root `dumpsys diskstats`；解析走纯函数 [DumpsysDiskstatsParser]（见其单测）。
         val result = root.execute("dumpsys diskstats", timeoutMillis = 20_000L, maxOutputBytes = 2 * 1024 * 1024)
-        if (!result.ok) return result.toFail()
-        val packages = parseJsonArrayLine(result.stdout, "Package Names:")
-        val appSizes = parseLongArrayLine(result.stdout, "App Sizes:")
-        val dataSizes = parseLongArrayLine(result.stdout, "App Data Sizes:")
-        val cacheSizes = parseLongArrayLine(result.stdout, "Cache Sizes:")
-        if (packages == null || appSizes == null || dataSizes == null || cacheSizes == null) {
-            return DiagnosticsResult.Fail(ToolErrorCode.SOURCE_UNAVAILABLE, "系统未返回可解析的应用存储统计")
-        }
-        data class Usage(val pkg: String, val app: Long, val data: Long, val cache: Long) {
-            val total get() = app + data + cache
-        }
-        val items = (0 until packages.length())
-            .mapNotNull { index ->
-                val pkg = packages.optString(index).takeIf(String::isNotBlank) ?: return@mapNotNull null
-                Usage(pkg, appSizes.getOrElse(index) { 0L }, dataSizes.getOrElse(index) { 0L }, cacheSizes.getOrElse(index) { 0L })
+        if (!result.ok) {
+            // 明细拿不到：若设备级 summary 可用（免 Root），仍回传 summary；否则按原错误码上报。
+            return if (summary != null) {
+                DiagnosticsResult.Ok(JSONObject().put("summary", summary).put("items", JSONArray()), false)
+            } else {
+                result.toFail()
             }
-            .sortedByDescending { it.total }
-            .take(limit)
-        val array = JSONArray()
-        items.forEach {
-            array.put(
-                JSONObject()
-                    .put("package_name", it.pkg)
-                    .put("total_bytes", it.total)
-                    .put("app_bytes", it.app)
-                    .put("data_bytes", it.data)
-                    .put("cache_bytes", it.cache),
-            )
         }
-        return DiagnosticsResult.Ok(JSONObject().put("items", array), false)
+        val parsed = DumpsysDiskstatsParser.parse(result.stdout)
+            ?: return if (summary != null) {
+                DiagnosticsResult.Ok(JSONObject().put("summary", summary).put("items", JSONArray()), false)
+            } else {
+                DiagnosticsResult.Fail(ToolErrorCode.SOURCE_UNAVAILABLE, "系统未返回可解析的应用存储统计")
+            }
+        val array = JSONArray()
+        parsed.sortedByDescending { it.totalBytes }
+            .take(limit)
+            .forEach {
+                array.put(
+                    JSONObject()
+                        .put("package_name", it.packageName)
+                        .put("total_bytes", it.totalBytes)
+                        .put("app_bytes", it.appBytes)
+                        .put("data_bytes", it.dataBytes)
+                        .put("cache_bytes", it.cacheBytes),
+                )
+            }
+        val data = JSONObject().put("items", array)
+        if (summary != null) data.put("summary", summary)
+        return DiagnosticsResult.Ok(data, false)
+    }
+
+    /**
+     * 设备级存储总量/可用。优先 [StorageStatsManager]（免 Root，API 26+，内置主存储 UUID），
+     * 失败回退 [StatFs]。两者都拿不到返回 null（不冒领）。
+     */
+    private fun storageSummary(): JSONObject? {
+        val viaStats = runCatching {
+            val ssm = context.getSystemService(Context.STORAGE_STATS_SERVICE) as StorageStatsManager
+            val uuid = StorageManager.UUID_DEFAULT
+            val total = ssm.getTotalBytes(uuid)
+            val free = ssm.getFreeBytes(uuid)
+            JSONObject()
+                .put("total_bytes", total)
+                .put("available_bytes", free)
+                .put("source", "storage_stats_manager")
+        }.getOrNull()
+        if (viaStats != null) return viaStats
+        return runCatching {
+            val stat = StatFs(Environment.getDataDirectory().absolutePath)
+            JSONObject()
+                .put("total_bytes", stat.totalBytes)
+                .put("available_bytes", stat.availableBytes)
+                .put("source", "statfs")
+        }.getOrNull()
     }
 
     override fun logcat(maxLines: Int, level: String?, packageName: String?, query: String?): DiagnosticsResult {
@@ -217,15 +249,5 @@ internal class AndroidDeviceDiagnosticsBackend(
             DiagnosticsResult.Fail(ToolErrorCode.ROOT_REQUIRED, "需要 Root 授权")
         timedOut -> DiagnosticsResult.Fail(ToolErrorCode.TIMEOUT, "诊断命令超时")
         else -> DiagnosticsResult.Fail(ToolErrorCode.SOURCE_UNAVAILABLE, "系统接口执行失败（exit=$exitCode）")
-    }
-
-    private fun parseJsonArrayLine(source: String, prefix: String): JSONArray? =
-        source.lineSequence().firstOrNull { it.startsWith(prefix) }
-            ?.substringAfter(prefix)?.trim()
-            ?.let { runCatching { JSONArray(it) }.getOrNull() }
-
-    private fun parseLongArrayLine(source: String, prefix: String): List<Long>? {
-        val array = parseJsonArrayLine(source, prefix) ?: return null
-        return (0 until array.length()).map { array.optLong(it) }
     }
 }

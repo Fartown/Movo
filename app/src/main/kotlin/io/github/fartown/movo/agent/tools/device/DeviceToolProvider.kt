@@ -26,9 +26,9 @@ internal class DeviceToolProvider(
         ContractTool(DeviceToggleTool(AndroidDeviceToggleBackend(context, root))),
         ContractTool(SettingReadTool(settingBackend)),
         ContractTool(SettingWriteTool(settingBackend)),
-        ContractTool(DeviceDiagnosticsTool(AndroidDeviceDiagnosticsBackend(root))),
+        ContractTool(DeviceDiagnosticsTool(AndroidDeviceDiagnosticsBackend(context, root))),
         ContractTool(AppSearchTool(AndroidAppSearchBackend(context))),
-        ContractTool(AppOpenTool(AndroidAppOpenBackend(context))),
+        ContractTool(AppOpenTool(AndroidAppOpenBackend(context, root, rootAvailable))),
         ContractTool(AppControlTool(AndroidAppControlBackend(context, root))),
     )
 }
