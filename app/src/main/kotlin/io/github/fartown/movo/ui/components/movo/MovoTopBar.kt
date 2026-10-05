@@ -9,6 +9,9 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyListState
@@ -57,7 +60,6 @@ internal fun MovoTopBar(
     onBack: (() -> Unit)?,
     scrolled: Boolean,
     modifier: Modifier = Modifier,
-    backdrop: LayerBackdrop? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     val reduced = LocalReducedMotion.current
@@ -70,25 +72,24 @@ internal fun MovoTopBar(
         },
         label = "topBarChrome",
     )
-    val showBlur by remember { derivedStateOf { chrome > 0f } }
     Box(modifier = modifier.fillMaxWidth()) {
-        // 滚动态底色：有模糊能力时用顶栏背景模糊，否则 bg/canvas 90%。
+        // 滚动列表会经过顶栏。底色在稳定状态必须完全不透明，避免上一行文字
+        // 长时间透过标题区；淡入进度仍由 chrome 控制。
         Box(
             modifier = Modifier
                 .matchParentSize()
-                .graphicsLayer { alpha = chrome },
-        ) {
-            // 顶栏背景模糊只在滚动态（底色可见）时组合：未滚动时它整层透明却仍要组合、录制和准备模糊，
-            // 每次进二级页的第一帧都白付这份开销。
-            if (backdrop != null && showBlur) {
-                Box(
-                    Modifier.matchParentSize().movoTopBarBlur(backdrop),
-                )
-            }
-            // Q7 的底色是整条 90%：渐进模糊的混合色随模糊一起向下变淡，单靠它顶栏下半部分几乎透明，
-            // 滚上来的内容会和标题叠在一起。
-            Box(Modifier.matchParentSize().background(MovoColors.bgCanvas.copy(alpha = 0.9f)))
-        }
+                .graphicsLayer { alpha = chrome }
+                .background(MovoColors.bgCanvas),
+        )
+        // The scrollable page extends behind the system status bar. Keep only the 56 dp
+        // toolbar translucent; otherwise off-screen list text stays faintly readable
+        // behind the clock after returning to a scrolled settings page.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(WindowInsets.statusBars.asPaddingValues().calculateTopPadding())
+                .background(MovoColors.bgCanvas),
+        )
         Box(
             modifier = Modifier
                 .fillMaxWidth()

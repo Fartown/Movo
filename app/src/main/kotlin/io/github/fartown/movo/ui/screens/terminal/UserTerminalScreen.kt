@@ -16,6 +16,8 @@ import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,6 +46,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ClipboardManager
@@ -84,6 +88,8 @@ import top.yukonga.miuix.kmp.basic.InfiniteProgressIndicator
 import top.yukonga.miuix.kmp.basic.Text
 import io.github.fartown.movo.ui.components.movo.TextField
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collect
 
 /**
  * 用户手动终端：块式输出（命令、输出、退出码），给人用；与 AI 工具调用的任务模型分开。
@@ -215,32 +221,68 @@ private fun BlockList(
     onReinput: (String) -> Unit,
 ) {
     val listState = rememberLazyListState()
-    val atBottom by remember {
-        derivedStateOf {
-            val layoutInfo = listState.layoutInfo
-            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: Int.MAX_VALUE
-            lastVisible >= layoutInfo.totalItemsCount - 1
-        }
+    val isDragging by listState.interactionSource.collectIsDraggedAsState()
+    val atBottom by remember { derivedStateOf { !listState.canScrollForward } }
+    var followOutput by remember { mutableStateOf(true) }
+    LaunchedEffect(isDragging) {
+        followOutput = terminalFollowAfterGesture(followOutput, isDragging, atBottom)
     }
-    // 输出增长只在用户本来就停留在底部时跟随，向上翻历史不被打断。
-    LaunchedEffect(blocks.size, blocks.lastOrNull()?.output?.length) {
-        if (atBottom && blocks.isNotEmpty()) {
-            listState.scrollToItem(blocks.lastIndex)
-        }
-    }
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+    // A block may be taller than the viewport. Its index addresses its beginning, so use
+    // the separate end item and finish scrolling after the newly grown block is measured.
+    LaunchedEffect(
+        blocks.size,
+        blocks.lastOrNull()?.output,
+        blocks.lastOrNull()?.running,
+        blocks.lastOrNull()?.exitCode,
+        followOutput,
+        isDragging,
     ) {
-        items(items = blocks, key = { it.id }) { block ->
-            if (block.isSystem) {
-                SystemBlock(block)
-            } else {
-                CommandBlock(block = block, onReinput = onReinput)
+        if (followOutput && !isDragging && blocks.isNotEmpty()) {
+            listState.scrollToItem(blocks.size)
+            repeat(3) {
+                withFrameNanos { }
+                if (!isDragging && listState.canScrollForward) listState.scroll { scrollBy(Float.MAX_VALUE / 4) }
             }
         }
     }
+    LaunchedEffect(followOutput, isDragging, blocks.size) {
+        if (followOutput && !isDragging && blocks.isNotEmpty()) {
+            snapshotFlow { listState.layoutInfo.viewportSize.height }
+                .distinctUntilChanged()
+                .collect { if (it > 0) listState.scrollToItem(blocks.size) }
+        }
+    }
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            items(items = blocks, key = { it.id }) { block ->
+                if (block.isSystem) SystemBlock(block)
+                else CommandBlock(block = block, onReinput = onReinput)
+            }
+            item(key = "terminal-output-end") { Spacer(Modifier.height(1.dp)) }
+        }
+        AnimatedVisibility(
+            visible = !followOutput && !atBottom,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
+            enter = fadeIn(MovoMotion.fast()),
+            exit = fadeOut(MovoMotion.fastExit()),
+        ) {
+            MovoCircleButton(
+                icon = MovoIcons.ArrowDown,
+                contentDescription = stringResource(R.string.ui_back_to_bottom_32282e),
+                onClick = { followOutput = true },
+            )
+        }
+    }
+}
+
+internal fun terminalFollowAfterGesture(current: Boolean, dragging: Boolean, atBottom: Boolean): Boolean = when {
+    dragging -> false
+    atBottom -> true
+    else -> current
 }
 
 @Composable

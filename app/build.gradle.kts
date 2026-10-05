@@ -73,6 +73,8 @@ android {
             "MOVO_DEFAULT_ENDPOINT_MODE" to "responses",
             "MOVO_DEFAULT_CONTEXT_WINDOW" to "",
             "MOVO_DEFAULT_HOSTED_WEB_SEARCH" to "false",
+            // 豆包语音默认 Api-Key：用户未保存可用凭据时回退使用。与上面一致，debug/release 都编入（APK 内密钥可被提取）。
+            "DOUBAO_VOICE_API_KEY" to "",
         ).forEach { (name, fallback) ->
             buildConfigField("String", name, javaStringLiteral(packagedModelValue(name, fallback)))
         }

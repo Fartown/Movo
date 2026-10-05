@@ -6,6 +6,8 @@
 
 首次安装且模型提供商数据为空时，App 自动创建并选中这组默认模型。它是普通的可编辑提供商：可在「模型提供商」中修改 Key、URL 和模型，也可删除。后续启动或覆盖安装保留已保存的配置，不覆盖用户编辑，不重新补回已删除的默认提供商。已安装 App 的现有配置优先。
 
+`DOUBAO_VOICE_API_KEY` 是豆包语音的默认 Api-Key，同样在 debug/release 中编入。用户未在语音设置里保存可用凭据时使用它；已保存的凭据优先。
+
 示例对应 Ark 的 Responses 接口；`MOVO_DEFAULT_BASE_URL` 填 API 根地址，不追加 `/responses`。`MOVO_DEFAULT_ENDPOINT_MODE` 支持 `responses`、`chat_completions`。上下文长度和托管搜索开关也可通过 `.env` 配置。
 
 构建方式与原工程一致：`./gradlew :app:assembleRelease`。正式签名仍使用 `MOVO_RELEASE_STORE_FILE`、`MOVO_RELEASE_STORE_PASSWORD`、`MOVO_RELEASE_KEY_ALIAS`、`MOVO_RELEASE_KEY_PASSWORD`；模型默认配置不改变签名方式。

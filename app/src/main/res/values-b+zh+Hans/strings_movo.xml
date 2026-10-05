@@ -188,10 +188,13 @@
   <string name="movo_voice_speaking">正在播报·说话即可打断</string>
   <string name="movo_voice_connecting">正在连接…</string>
   <string name="movo_voice_hint_listening">停顿后自动发送</string>
-  <string name="movo_voice_hint_busy">停顿后补充到当前任务</string>
+  <string name="movo_voice_hint_busy">任务执行中 · 退出不停止</string>
   <string name="movo_voice_hint_speaking">说「别念了」也能停</string>
   <string name="movo_voice_hint_connecting">最多等待 5 秒</string>
   <string name="movo_voice_back_to_text">切回文字</string>
+  <string name="movo_voice_exit">退出语音</string>
+  <string name="movo_voice_exit_short">退出</string>
+  <string name="movo_voice_temporary_keyboard_input">临时键盘输入</string>
   <string name="movo_main_stop_speaking">停止这次回答</string>
   <string name="movo_work_paused_step">已暂停·第 %1$d 步</string>
   <string name="movo_work_paused">已暂停</string>

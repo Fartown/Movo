@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -84,8 +85,11 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -107,6 +111,8 @@ import io.github.fartown.movo.ui.components.movo.MovoEntrance
 import io.github.fartown.movo.ui.components.movo.MovoOrb
 import io.github.fartown.movo.ui.components.movo.MovoSpinner
 import io.github.fartown.movo.ui.components.movo.PressKind
+import io.github.fartown.movo.ui.components.movo.VoiceModeSplitControl
+import io.github.fartown.movo.ui.components.movo.VoiceModeSplitControlSize
 import io.github.fartown.movo.ui.components.movo.movoClickable
 import io.github.fartown.movo.ui.theme.LocalReducedMotion
 import io.github.fartown.movo.ui.theme.MovoColors
@@ -276,6 +282,12 @@ internal fun AgentOverlayOrb(
     hearing: Boolean = false,
     longRun: Boolean = false,
     animateEntrance: Boolean = true,
+    /**
+     * 展开卡揭开时把真球淡出到 0；收起时揭开逆放到接近球位置时再淡回。这样看起来是**同一颗球在变形**，
+     * 而不是“真球 + 从真球后面钻出来一张卡”。
+     * `null`（默认）时全程按 [shown] 显示，不受揭开动画影响，保持旧行为兼容测试与预览。
+     */
+    hideForReveal: Boolean = false,
 ) {
     val reduced = LocalReducedMotion.current
     // Q8：看着它从执行中变为完成、且任务用时 ≥ 10 秒时，光球亮度 1 → 1.3 → 1（600ms），只播一次。
@@ -315,6 +327,18 @@ internal fun AgentOverlayOrb(
     val tapLabel = stringResource(R.string.movo_overlay_orb)
     val scope = rememberCoroutineScope()
     val gesture = remember { OrbGesture() }
+    // 展开卡揭开时让真球淡出；收起时先保持隐藏，等卡片缩到末段再淡回，避免“真球 + 残卡”双影。
+    val revealAlpha = remember { androidx.compose.animation.core.Animatable(1f) }
+    LaunchedEffect(hideForReveal, reduced) {
+        when {
+            reduced -> revealAlpha.snapTo(if (hideForReveal) 0f else 1f)
+            hideForReveal -> revealAlpha.animateTo(0f, tween(MovoMotion.FAST))
+            else -> {
+                delay(PANEL_MORPH_OUT_MS - 80L)
+                revealAlpha.animateTo(1f, tween(80))
+            }
+        }
+    }
     AnimatedVisibility(
         visible = entered && shown,
         enter = fadeIn(MovoMotion.fast()) + if (reduced) fadeIn(snap()) else scaleIn(MovoMotion.gentle(), initialScale = 0.5f),
@@ -325,7 +349,10 @@ internal fun AgentOverlayOrb(
         Box(
             modifier = Modifier
                 .size(44.dp)
-                .graphicsLayer { translationX = shake.value * density }
+                .graphicsLayer {
+                    translationX = shake.value * density
+                    alpha = revealAlpha.value
+                }
                 .semantics {
                     contentDescription = tapLabel
                     onClick { onTap(); true }
@@ -604,6 +631,11 @@ internal fun AgentOverlayBubble(
     onOpenResult: () -> Unit = {},
     /** 展开卡状态说明（规范 8.1 / 8.11：悬浮窗的失败提示写进展开卡，不用 Toast），例如缺麦克风权限、打不开对话。 */
     notice: String? = null,
+    /**
+     * 悬浮球在屏幕上的中心（px），揭开动画从这一点径向长成卡片。
+     * `null` 时按“球贴在卡片外沿正外侧”的默认几何近似。
+     */
+    orbCenterOnScreen: () -> Offset? = { null },
 ) {
     val reduced = LocalReducedMotion.current
     var entered by remember { mutableStateOf(false) }
@@ -616,6 +648,13 @@ internal fun AgentOverlayBubble(
 
     fun enterSupplementMode() {
         onInteraction()
+        onSupplementModeChange(true)
+        supplementMode = true
+    }
+
+    fun enterSupplementModeFromVoice() {
+        onInteraction()
+        onEndVoice()
         onSupplementModeChange(true)
         supplementMode = true
     }
@@ -661,28 +700,29 @@ internal fun AgentOverlayBubble(
         val reveal = transition.animateFloat(
             transitionSpec = {
                 if (targetState == androidx.compose.animation.EnterExitState.Visible) {
-                    tween(PANEL_MORPH_IN_MS, easing = MovoMotion.EasingStandard)
+                    tween(PANEL_MORPH_IN_MS, easing = MovoMotion.EasingLinear)
                 } else {
-                    tween(PANEL_MORPH_OUT_MS, easing = MovoMotion.EasingExit)
+                    tween(PANEL_MORPH_OUT_MS, easing = MovoMotion.EasingLinear)
                 }
             },
             label = "panelReveal",
-        ) { if (it == androidx.compose.animation.EnterExitState.Visible || reduced) 1f else 0f }
-        // 内容透明度：展开时从 0.2 起 240ms `enter` 到 1；收起时在收起末段淡到 0。
-        val contentFade = transition.animateFloat(
-            transitionSpec = {
-                if (targetState == androidx.compose.animation.EnterExitState.Visible) {
-                    tween(MovoMotion.STANDARD, easing = MovoMotion.EasingEnter)
-                } else {
-                    tween(PANEL_MORPH_OUT_MS, easing = MovoMotion.EasingExit)
-                }
-            },
-            label = "panelContentFade",
         ) { if (it == androidx.compose.animation.EnterExitState.Visible || reduced) 1f else 0f }
         val entering = transition.targetState == androidx.compose.animation.EnterExitState.Visible
         // 展开卡窗口在球那一侧多留一条与球重叠的通道（PANEL_ORB_LANE，AgentRuntimeService.bubbleLayoutParams）：
         // 容器从球心开始长，起点必须落在本窗口里，否则前几帧被窗口边缘裁掉，看起来是从边缘冒出来。
         // 通道盖住了悬浮球，点它等同点球（收起）。
+        // 追踪卡片在窗口坐标系里的位置：把 orbCenterOnScreen 换算到卡片自身坐标，作为揭开起点。
+        var cardOriginInWindow by remember { mutableStateOf<Offset?>(null) }
+        val hostView = LocalView.current
+        val orbCenterInCard: () -> Offset? = orbCenterInCard@{
+            val onScreen = orbCenterOnScreen() ?: return@orbCenterInCard null
+            val origin = cardOriginInWindow ?: return@orbCenterInCard null
+            val loc = IntArray(2).also(hostView::getLocationOnScreen)
+            Offset(
+                onScreen.x - loc[0] - origin.x,
+                onScreen.y - loc[1] - origin.y,
+            )
+        }
         Box {
             Column(
                 modifier = Modifier
@@ -692,14 +732,28 @@ internal fun AgentOverlayBubble(
                         top = 12.dp,
                         bottom = 12.dp,
                     )
-                    .width(224.dp)
+                    // 224dp is the visual baseline. Let the card grow for large system fonts so
+                    // the compact voice control and the two task actions never clip or collide.
+                    .widthIn(min = 224.dp, max = 280.dp)
+                    .onGloballyPositioned { cardOriginInWindow = it.positionInWindow() }
                     // 容器的裁切、阴影、玻璃底与描边都按当前揭开矩形画，只在绘制阶段读进度，不重组。
                     // 阴影用硬件阴影（RenderNode 按轮廓实时算），跟随揭开形状，过渡中不丢阴影、不出方角（审查 A10）。
-                    .orbReveal(progress = { reveal.value }, anchorEnd = anchorEnd)
+                    .orbReveal(
+                        progress = { reveal.value },
+                        anchorEnd = anchorEnd,
+                        orbCenter = orbCenterInCard,
+                    )
                     .padding(4.dp)
                     .graphicsLayer {
-                        val f = contentFade.value
-                        alpha = if (entering) PANEL_CONTENT_START_ALPHA + (1f - PANEL_CONTENT_START_ALPHA) * f else f
+                        // 先让玻璃形状从球边揭开，再淡入内容；收起一开始先淡出内容，避免末段文字跳闪。
+                        alpha = if (reduced) {
+                            1f
+                        } else if (entering) {
+                            ((reveal.value - PANEL_CONTENT_ENTER_START) /
+                                (PANEL_CONTENT_ENTER_END - PANEL_CONTENT_ENTER_START)).coerceIn(0f, 1f)
+                        } else {
+                            (reveal.value / PANEL_CONTENT_EXIT_END).coerceIn(0f, 1f)
+                        }
                     },
             ) {
                 val voiceMode = voice.active && !supplementMode
@@ -752,6 +806,7 @@ internal fun AgentOverlayBubble(
                             onType = ::enterSupplementMode,
                             onStartVoice = { onInteraction(); onStartVoice() },
                             onEndVoice = { onInteraction(); onEndVoice() },
+                            onVoiceKeyboard = ::enterSupplementModeFromVoice,
                             onPause = { onInteraction(); onPause() },
                             onResume = { onInteraction(); onResume() },
                             onStop = { onInteraction(); onStop() },
@@ -950,6 +1005,7 @@ private fun PanelActions(
     onType: () -> Unit,
     onStartVoice: () -> Unit,
     onEndVoice: () -> Unit,
+    onVoiceKeyboard: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onStop: () -> Unit,
@@ -964,9 +1020,13 @@ private fun PanelActions(
         modifier = Modifier.fillMaxWidth().padding(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 左 = 输入入口：打字补充（键盘）+ 语音对话（声波）；语音模式中只留「切回文字」（键盘，原位）。
+        // 左 = 输入入口：打字补充（键盘）+ 语音对话（声波）；语音模式中显示退出 / 临时键盘分段控件。
         if (voiceMode) {
-            CompactCircle(MovoIcons.Keyboard, stringResource(R.string.movo_voice_back_to_text), onEndVoice)
+            VoiceModeSplitControl(
+                onExitVoice = onEndVoice,
+                onKeyboardInput = onVoiceKeyboard,
+                size = VoiceModeSplitControlSize.Compact,
+            )
         } else {
             CompactCircle(MovoIcons.Keyboard, stringResource(R.string.movo_overlay_type), onType)
             CompactCircle(MovoIcons.AudioLines, stringResource(R.string.movo_voice_conversation), onStartVoice)
@@ -1307,28 +1367,74 @@ internal const val PANEL_MORPH_OUT_MS = MovoMotion.SLOW_EXIT
 /** 卡片与窗口球侧边缘之间的通道：球窗口 44 + 卡片与球间距 8，正好盖住悬浮球（这一侧的阴影余量落在通道里）。 */
 internal val PANEL_ORB_LANE = 52.dp
 
-/** 展开时内容的起始透明度（Figma A1：从 20% 淡入）。 */
-private const val PANEL_CONTENT_START_ALPHA = 0.2f
+/** 展开时内容在揭开 35% 后开始淡入，85% 时完全显示。 */
+private const val PANEL_CONTENT_ENTER_START = 0.35f
+private const val PANEL_CONTENT_ENTER_END = 0.85f
+
+/** 收起时内容在前 35% 的逆放过程中淡出。 */
+private const val PANEL_CONTENT_EXIT_END = 0.35f
 
 /**
- * 揭开容器：圆角矩形从与悬浮球重合的 32 圆（圆角 16）长到卡片边界（圆角 16），卡片内容不缩放、不位移。
- * 卡片与球的相对位置由窗口摆放决定（AgentRuntimeService.bubbleLayoutParams）：卡片在球朝屏幕中心的一侧、间距 8；
- * 卡片底边比球窗口底边高 6，球窗口 44、球心在窗口中央。所以球心在卡片外侧 8 + 22、卡片底边上方 22 − 6。
- * 揭开矩形在起点时有一部分落在卡片外（球那一侧的通道里）：裁切只按轮廓（不裁到卡片边界），玻璃底也按矩形画，
- * 所以第一帧就是一个完整的玻璃圆，不会从卡片边缘冒出来。
+ * 揭开容器：最终圆角卡在原位绘制，用“以球心为圆心的圆”和最终卡片做交集裁剪。
+ * 圆形半径在整个时长内线性增长；球心位于卡片角附近时，这比先快后慢的曲线更不容易一两帧就盖住整块卡片。
+ * 起点几何优先用 [orbCenter] 提供的球心（卡片自身坐标，px）；为 null 时按当前停靠几何近似。
  */
-private fun Modifier.orbReveal(progress: () -> Float, anchorEnd: Boolean): Modifier = this
+private fun Modifier.orbReveal(
+    progress: () -> Float,
+    anchorEnd: Boolean,
+    orbCenter: () -> Offset? = { null },
+): Modifier = this
     .graphicsLayer {
-        val rect = orbRevealRect(size, progress(), anchorEnd, density)
-        val r = 16.dp.toPx()
+        val p = progress()
         shape = object : androidx.compose.ui.graphics.Shape {
             override fun createOutline(
                 size: androidx.compose.ui.geometry.Size,
                 layoutDirection: androidx.compose.ui.unit.LayoutDirection,
                 density: androidx.compose.ui.unit.Density,
-            ) = androidx.compose.ui.graphics.Outline.Rounded(
-                androidx.compose.ui.geometry.RoundRect(rect, androidx.compose.ui.geometry.CornerRadius(r, r)),
-            )
+            ): androidx.compose.ui.graphics.Outline {
+                val cardCorner = 16f * density.density
+                val cardBounds = androidx.compose.ui.geometry.Rect(0f, 0f, size.width, size.height)
+                if (p >= 1f) {
+                    return androidx.compose.ui.graphics.Outline.Rounded(
+                        androidx.compose.ui.geometry.RoundRect(
+                            cardBounds,
+                            androidx.compose.ui.geometry.CornerRadius(cardCorner, cardCorner),
+                        ),
+                    )
+                }
+                if (p <= 0f) {
+                    return androidx.compose.ui.graphics.Outline.Rectangle(
+                        androidx.compose.ui.geometry.Rect(0f, 0f, 0f, 0f),
+                    )
+                }
+                val center = orbRevealCenter(size, density.density, anchorEnd, orbCenter())
+                val radius = orbRevealRadius(size, center, p, density.density)
+                val cardPath = androidx.compose.ui.graphics.Path().apply {
+                    addRoundRect(
+                        androidx.compose.ui.geometry.RoundRect(
+                            cardBounds,
+                            androidx.compose.ui.geometry.CornerRadius(cardCorner, cardCorner),
+                        ),
+                    )
+                }
+                val revealPath = androidx.compose.ui.graphics.Path().apply {
+                    addOval(
+                        androidx.compose.ui.geometry.Rect(
+                            center.x - radius,
+                            center.y - radius,
+                            center.x + radius,
+                            center.y + radius,
+                        ),
+                    )
+                }
+                return androidx.compose.ui.graphics.Outline.Generic(
+                    androidx.compose.ui.graphics.Path.combine(
+                        androidx.compose.ui.graphics.PathOperation.Intersect,
+                        cardPath,
+                        revealPath,
+                    ),
+                )
+            }
         }
         clip = true
         // 色调取规范第 7 章暖灰阴影色；系统会再乘主题的 ambient / spot 透明度，spot 取一半使主阴影接近 `0 12 32 −8 / 10%`。
@@ -1337,37 +1443,60 @@ private fun Modifier.orbReveal(progress: () -> Float, anchorEnd: Boolean): Modif
         spotShadowColor = MovoColors.shadow.copy(alpha = 0.5f)
     }
     .drawBehind {
-        val rect = orbRevealRect(size, progress(), anchorEnd, density)
-        val r = androidx.compose.ui.geometry.CornerRadius(16.dp.toPx())
-        drawRoundRect(GlassSurface, topLeft = rect.topLeft, size = rect.size, cornerRadius = r)
+        val p = progress()
+        val cardCorner = 16.dp.toPx()
+        drawRoundRect(
+            GlassSurface,
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(cardCorner, cardCorner),
+        )
         val stroke = 0.5.dp.toPx()
         drawRoundRect(
             MovoColors.borderHairline,
-            topLeft = androidx.compose.ui.geometry.Offset(rect.left + stroke / 2f, rect.top + stroke / 2f),
-            size = androidx.compose.ui.geometry.Size(rect.width - stroke, rect.height - stroke),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(r.x - stroke / 2f),
+            topLeft = Offset(stroke / 2f, stroke / 2f),
+            size = Size(size.width - stroke, size.height - stroke),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(
+                cardCorner - stroke / 2f,
+                cardCorner - stroke / 2f,
+            ),
             style = androidx.compose.ui.graphics.drawscope.Stroke(stroke),
         )
+        if (p in 0f..1f) {
+            val center = orbRevealCenter(size, density, anchorEnd, orbCenter())
+            val radius = orbRevealRadius(size, center, p, density)
+            drawCircle(
+                MovoColors.borderHairline,
+                radius = (radius - stroke / 2f).coerceAtLeast(0f),
+                center = center,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(stroke),
+            )
+        }
     }
 
-/** 揭开进度 [p] 时容器在卡片坐标里的矩形：球心处 32 圆 → 卡片边界，四边各自线性插值。 */
-private fun orbRevealRect(
+/** 揭开圆的中心：优先使用实时球心，否则按卡片与球的默认间距计算。 */
+private fun orbRevealCenter(
     size: androidx.compose.ui.geometry.Size,
-    p: Float,
-    anchorEnd: Boolean,
     density: Float,
-): androidx.compose.ui.geometry.Rect {
-    if (p >= 1f) return androidx.compose.ui.geometry.Rect(0f, 0f, size.width, size.height)
-    val half = 16f * density
+    anchorEnd: Boolean,
+    orbCenter: Offset?,
+): Offset {
     val sideGap = (8 + 22) * density
-    val cx = if (anchorEnd) size.width + sideGap else -sideGap
-    val cy = size.height - (22 - 6) * density
-    fun lerp(a: Float, b: Float) = a + (b - a) * p
-    return androidx.compose.ui.geometry.Rect(
-        lerp(cx - half, 0f),
-        lerp(cy - half, 0f),
-        lerp(cx + half, size.width),
-        lerp(cy + half, size.height),
-    )
+    val fallbackCx = if (anchorEnd) size.width + sideGap else -sideGap
+    val fallbackCy = size.height - (22 - 6) * density
+    return orbCenter ?: Offset(fallbackCx, fallbackCy)
+}
+
+/** 揭开圆半径：从 32dp 玻璃圆线性增加到足以覆盖整块卡片。 */
+private fun orbRevealRadius(
+    size: androidx.compose.ui.geometry.Size,
+    center: Offset,
+    p: Float,
+    density: Float,
+): Float {
+    val half = 16f * density
+    val target = kotlin.math.hypot(
+        maxOf(center.x, size.width - center.x).toDouble(),
+        maxOf(center.y, size.height - center.y).toDouble(),
+    ).toFloat() + density
+    return half + (target - half) * p.coerceIn(0f, 1f)
 }
 

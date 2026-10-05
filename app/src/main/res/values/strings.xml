@@ -1045,6 +1045,7 @@
   <string name="skills_checking_package">Checking skill package</string>
   <string name="skills_import_zip">Import from ZIP</string>
   <string name="skills_installing_package">Verifying and installing. Please wait</string>
+  <string name="skills_updating">Updating…</string>
   <string name="skills_choose_package">Choose a skill package containing SKILL.md</string>
   <string name="skills_choose_zip">Choose ZIP skill package</string>
   <string name="skills_replace_summary">A user skill named “%1$s” (%2$s) already exists. Replacing it will overwrite all of its current files.</string>

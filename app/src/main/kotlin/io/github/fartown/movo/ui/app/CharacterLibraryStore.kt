@@ -36,6 +36,27 @@ import kotlinx.coroutines.withContext
  */
 internal data class CharacterNotice(val title: String, val message: String)
 
+/** One retained editing session per character; null is the new-character session. */
+internal data class CharacterEditorSession(
+    val original: CharacterProfile?,
+    val card: CharacterCard,
+    val name: String,
+)
+
+internal class CharacterEditorDrafts {
+    private val sessions = mutableMapOf<String?, CharacterEditorSession>()
+
+    fun remember(id: String?, session: CharacterEditorSession) {
+        sessions[id] = session
+    }
+
+    fun find(id: String?): CharacterEditorSession? = sessions[id]
+
+    fun discard(id: String?) {
+        sessions.remove(id)
+    }
+}
+
 internal class CharacterLibraryViewModel(application: Application) : AndroidViewModel(application) {
     val store = CharacterLibraryStore(application, viewModelScope)
 }
@@ -83,6 +104,8 @@ internal class CharacterLibraryStore(
     private var pendingLoad: (() -> Unit)? = null
     private var editorKey: String? = null
     private var editorLoaded = false
+    private var editorOriginal: CharacterProfile? = null
+    private val editorDrafts = CharacterEditorDrafts()
     private var personaLoaded = false
     private var memoryCharacterId: String? = null
     private var memorySnapshot: AgentMemorySnapshot? = null
@@ -115,11 +138,27 @@ internal class CharacterLibraryStore(
 
     fun loadEditor(id: String?) {
         if (editorLoaded && editorKey == id) return
+        // Navigation may pop this screen without calling its toolbar callback (system or swipe back).
+        // Keep the current form before opening another character's editor.
+        if (editorLoaded) {
+            val currentCard = draft
+            if (currentCard != null) {
+                editorDrafts.remember(editorKey, CharacterEditorSession(editorOriginal, currentCard, draftName))
+            }
+        }
+        editorLoaded = false
+        draft = null
         runOperation("角色读取失败", "请稍后重试。", queueIfBusy = true) {
-            val profile = id?.let { io { CharacterRepository.get(it) } ?: error("CHARACTER_NOT_FOUND") }
-            selected = profile
-            draft = profile?.card ?: CharacterCardCodec.create("新角色")
-            draftName = profile?.card?.name.orEmpty()
+            val retained = editorDrafts.find(id)
+            val profile = retained?.original ?: id?.let { io { CharacterRepository.get(it) } ?: error("CHARACTER_NOT_FOUND") }
+            val session = retained ?: CharacterEditorSession(
+                original = profile,
+                card = profile?.card ?: CharacterCardCodec.create("新角色"),
+                name = profile?.card?.name.orEmpty(),
+            )
+            editorOriginal = session.original
+            draft = session.card
+            draftName = session.name
             nameError = null
             editorKey = id
             editorLoaded = true
@@ -127,9 +166,12 @@ internal class CharacterLibraryStore(
     }
 
     fun discardEditor() {
+        editorDrafts.discard(editorKey)
         editorLoaded = false
         editorKey = null
+        editorOriginal = null
         draft = null
+        draftName = ""
     }
 
     fun updateDraft(update: (CharacterCard) -> CharacterCard) {
@@ -174,7 +216,7 @@ internal class CharacterLibraryStore(
             return
         }
         val card = originalDraft.withEdits(name = draftName)
-        val original = selected
+        val original = editorOriginal
         runOperation("角色保存失败", "请稍后重试。") {
             val profile = io {
                 if (original == null) CharacterRepository.create(card)

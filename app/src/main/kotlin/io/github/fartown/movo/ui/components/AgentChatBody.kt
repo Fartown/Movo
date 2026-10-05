@@ -44,6 +44,7 @@ import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.RocketLaunch
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.staticCompositionLocalOf
 import io.github.fartown.movo.ui.components.movo.trackVisibleHeightCap
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -105,6 +106,7 @@ import io.github.fartown.movo.ui.model.SystemNoticeMessageUi
 import io.github.fartown.movo.ui.model.UserMessageUi
 import io.github.fartown.movo.ui.model.ToolActivityStatusUi
 import io.github.fartown.movo.ui.model.latestContextUsage
+import io.github.fartown.movo.ui.screens.chat.ChatLatestPositionRequests
 import kotlin.math.exp
 import kotlin.math.min
 import kotlinx.coroutines.CancellationException
@@ -114,6 +116,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Scaffold
@@ -129,6 +132,9 @@ import top.yukonga.miuix.kmp.blur.textureBlur
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.utils.scrollEndHaptic
+
+/** The sheet grows in place; keep its last message pinned while its viewport is resized. */
+internal val LocalChatKeepLatestOnResize = staticCompositionLocalOf { false }
 
 /**
  * 聊天主体：消息流 + 底部输入框。
@@ -172,6 +178,7 @@ internal fun AgentChatBody(
     characterName: String? = null,
     isDrawerOpen: Boolean = false,
     initiallyShowLatestMessage: Boolean = false,
+    latestPositionRequest: ChatLatestPositionRequests.Ticket? = null,
     /** 分享进来的新会话（规范 8.9.1）：空白处显示来源提示与快捷建议，代替首页问候与能力卡。 */
     shareIntro: io.github.fartown.movo.ui.share.ShareIntro? = null,
     modifier: Modifier = Modifier,
@@ -210,18 +217,33 @@ internal fun AgentChatBody(
     // 只在消息变化时重建时间线（流式中每次重组都重建会拖慢每一帧）。
     val entryCount = remember(visibleMessages) { visibleMessages.toTimelineEntries().size }
     val latestEntryCount by rememberUpdatedState(entryCount)
-    LaunchedEffect(Unit) {
-        if (initiallyShowLatestMessage) {
+    val keepLatestOnResize = LocalChatKeepLatestOnResize.current
+    var initialPositioned by remember { mutableStateOf(false) }
+    LaunchedEffect(latestPositionRequest) {
+        if (latestPositionRequest != null || (initiallyShowLatestMessage && !initialPositioned)) {
+            initialPositioned = true
             val count = kotlinx.coroutines.withTimeoutOrNull(INITIAL_LATEST_WAIT_MS) {
                 snapshotFlow { latestEntryCount }.first { it > 0 }
             } ?: latestEntryCount
-            scrollState.requestScrollToItem(count)
-            // 首次跳转时末尾几项（操作行、推荐追问）还没测量，停下的位置会离底部差一截（真机 66–181px）：
-            // 等排版稳定后把剩下的距离一次滚完。
-            repeat(3) {
+            if (count > 0) scrollState.requestScrollToItem(count)
+            // A long Markdown item can change size after the first measure. Keep the actual
+            // sentinel at the viewport end through the initial layout, rather than counting
+            // three frames and declaring the first (possibly provisional) layout finished.
+            var settledFrames = 0
+            repeat(45) { frame ->
                 withFrameNanos { }
-                if (scrollState.canScrollForward) scrollState.scroll { scrollBy(Float.MAX_VALUE / 4) }
+                if (scrollState.canScrollForward) {
+                    scrollState.scroll { scrollBy(Float.MAX_VALUE / 4) }
+                    settledFrames = 0
+                } else if (frame >= 12) {
+                    settledFrames++
+                }
+                if (settledFrames >= 4) {
+                    latestPositionRequest?.let(ChatLatestPositionRequests::complete)
+                    return@LaunchedEffect
+                }
             }
+            if (!scrollState.canScrollForward) latestPositionRequest?.let(ChatLatestPositionRequests::complete)
         }
     }
     val currentBrowserMessageId = remember(
@@ -304,6 +326,7 @@ internal fun AgentChatBody(
         characterName = characterName,
         shareIntro = shareIntro,
         keepBottomAnchored = keepBottomAnchored,
+        keepLatestOnResize = keepLatestOnResize || initiallyShowLatestMessage,
         onBottomAnchorChanged = { keepBottomAnchored = it },
         onSubmit = { text ->
             sentFromKeyboard = true
@@ -364,6 +387,7 @@ private fun AgentChatScaffold(
     characterName: String?,
     shareIntro: io.github.fartown.movo.ui.share.ShareIntro?,
     keepBottomAnchored: Boolean,
+    keepLatestOnResize: Boolean,
     onBottomAnchorChanged: (Boolean) -> Unit,
     onSubmit: (String) -> Unit,
     onReasoningEffortChange: (ReasoningEffort) -> Unit,
@@ -481,6 +505,7 @@ private fun AgentChatScaffold(
                 isStreaming = isStreaming,
                 bottomInset = bottomPadding,
                 keepBottomAnchored = keepBottomAnchored,
+                keepLatestOnResize = keepLatestOnResize,
                 onBottomAnchorChanged = onBottomAnchorChanged,
                 onSuggestionClick = onSuggestionClick,
                 onRunTraceClick = onRunTraceClick,
@@ -547,6 +572,7 @@ internal fun AgentConversationMessages(
     isStreaming: Boolean,
     bottomInset: Dp,
     keepBottomAnchored: Boolean,
+    keepLatestOnResize: Boolean = false,
     onBottomAnchorChanged: (Boolean) -> Unit,
     onSuggestionClick: (String) -> Unit = {},
     onRunTraceClick: () -> Unit = {},
@@ -668,7 +694,7 @@ internal fun AgentConversationMessages(
 
     val shouldFollowBottom by rememberUpdatedState(
         resolveBottomFollowEnabled(
-            isStreaming = isStreaming,
+            isStreaming = isStreaming || keepLatestOnResize,
             keepBottomAnchored = keepBottomAnchored,
             isUserDragging = isUserDragging,
             isBottomSettling = isBottomSettling,

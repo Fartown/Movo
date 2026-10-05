@@ -67,7 +67,6 @@ internal fun MovoListPage(
     topGap: Dp = MovoSpacing.md,
     content: LazyListScope.() -> Unit,
 ) {
-    val backdrop = rememberMovoBackdrop()
     val scrolled by listState.rememberIsScrolled()
     val barHeight = movoTopBarHeight()
     val navigation = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
@@ -78,7 +77,6 @@ internal fun MovoListPage(
                 modifier = Modifier
                     .fillMaxSize()
                     .horizontalCutoutPadding()
-                    .captureMovoBackdrop(backdrop)
                     .scrollEndHaptic()
                     .overScrollVertical(),
                 contentPadding = PaddingValues(
@@ -91,7 +89,7 @@ internal fun MovoListPage(
                 content = content,
             )
         } }
-        MovoTopBar(title = title, onBack = onBack, scrolled = scrolled, backdrop = backdrop, actions = actions)
+        MovoTopBar(title = title, onBack = onBack, scrolled = scrolled, actions = actions)
     }
 }
 
@@ -110,14 +108,12 @@ internal fun MovoPage(
     scrolled: Boolean? = null,
     content: @Composable (contentPadding: PaddingValues, sidePadding: Dp) -> Unit,
 ) {
-    val backdrop = rememberMovoBackdrop()
     val detector = remember { ScrolledDetector() }
     val barHeight = movoTopBarHeight()
     Box(modifier = modifier.fillMaxSize().background(MovoColors.bgCanvas)) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .captureMovoBackdrop(backdrop)
                 .nestedScroll(detector),
         ) {
             // 页内 Lazy 列表里展开区变高时，其余项跟着实际位置走（[MovoListResize]）。
@@ -127,7 +123,7 @@ internal fun MovoPage(
                 }
             }
         }
-        MovoTopBar(title = title, onBack = onBack, scrolled = scrolled ?: detector.scrolled, backdrop = backdrop, actions = actions)
+        MovoTopBar(title = title, onBack = onBack, scrolled = scrolled ?: detector.scrolled, actions = actions)
     }
 }
 

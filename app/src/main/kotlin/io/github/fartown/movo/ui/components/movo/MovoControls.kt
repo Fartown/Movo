@@ -4,6 +4,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -41,6 +43,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -51,10 +54,12 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
+import io.github.fartown.movo.R
 import io.github.fartown.movo.ui.theme.LocalReducedMotion
 import io.github.fartown.movo.ui.theme.MovoColors
 import io.github.fartown.movo.ui.theme.MovoIcon
 import io.github.fartown.movo.ui.theme.MovoIconData
+import io.github.fartown.movo.ui.theme.MovoIcons
 import io.github.fartown.movo.ui.theme.MovoMotion
 import io.github.fartown.movo.ui.theme.MovoRadius
 import io.github.fartown.movo.ui.theme.MovoSize
@@ -189,6 +194,94 @@ internal fun MovoIconButton(
         contentAlignment = Alignment.Center,
     ) {
         MovoIcon(icon, contentDescription = null, size = iconSize, tint = tint)
+    }
+}
+
+/** `VoiceMode/SplitControl`：语音退出与临时键盘输入保持为两个独立操作。 */
+internal enum class VoiceModeSplitControlSize { Standard, Compact }
+
+@Composable
+internal fun VoiceModeSplitControl(
+    onExitVoice: () -> Unit,
+    onKeyboardInput: () -> Unit,
+    modifier: Modifier = Modifier,
+    size: VoiceModeSplitControlSize = VoiceModeSplitControlSize.Standard,
+) {
+    val compact = size == VoiceModeSplitControlSize.Compact
+    val visualWidth = if (compact) 84.dp else 116.dp
+    val visualHeight = if (compact) MovoSize.controlCompact else 36.dp
+    val touchHeight = if (compact) MovoSize.controlSmall else MovoSize.touchTarget
+    val exitWidth = if (compact) 52.dp else 72.dp
+    val keyboardWidth = if (compact) 31.dp else 43.dp
+    val dividerWidth = 1.dp
+    val dividerHeight = if (compact) 12.dp else 18.dp
+    val shape = RoundedCornerShape(visualHeight / 2)
+    val exitShape = RoundedCornerShape(topStart = visualHeight / 2, bottomStart = visualHeight / 2)
+    val keyboardShape = RoundedCornerShape(topEnd = visualHeight / 2, bottomEnd = visualHeight / 2)
+    val exitDescription = stringResource(R.string.movo_voice_exit)
+    val keyboardDescription = stringResource(R.string.movo_voice_temporary_keyboard_input)
+
+    Box(
+        modifier = modifier.size(width = visualWidth, height = touchHeight),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            modifier = Modifier
+                .size(width = visualWidth, height = visualHeight)
+                .clip(shape)
+                .background(MovoColors.bgSurfaceMuted)
+                .border(MovoSize.hairline, MovoColors.borderHairline, shape),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Spacer(Modifier.width(exitWidth))
+            Box(Modifier.size(width = dividerWidth, height = dividerHeight).background(MovoColors.borderHairline))
+            Spacer(Modifier.width(keyboardWidth))
+        }
+        Row(
+            modifier = Modifier.size(width = visualWidth, height = touchHeight),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(exitWidth)
+                    .fillMaxHeight()
+                    .movoClickable(PressKind.Row, shape = exitShape, onClick = onExitVoice)
+                    .semantics(mergeDescendants = true) { contentDescription = exitDescription },
+                contentAlignment = Alignment.Center,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    MovoIcon(
+                        MovoIcons.X,
+                        contentDescription = null,
+                        size = if (compact) MovoSize.iconTiny else MovoSize.iconLabel,
+                        tint = MovoColors.textPrimary,
+                    )
+                    Spacer(Modifier.width(if (compact) 4.dp else 6.dp))
+                    Text(
+                        stringResource(R.string.movo_voice_exit_short),
+                        style = if (compact) MovoTypography.microMedium else MovoTypography.labelMedium,
+                        color = MovoColors.textPrimary,
+                        maxLines = 1,
+                    )
+                }
+            }
+            Spacer(Modifier.width(dividerWidth))
+            Box(
+                modifier = Modifier
+                    .width(keyboardWidth)
+                    .fillMaxHeight()
+                    .movoClickable(PressKind.Row, shape = keyboardShape, onClick = onKeyboardInput)
+                    .semantics { contentDescription = keyboardDescription },
+                contentAlignment = Alignment.Center,
+            ) {
+                MovoIcon(
+                    MovoIcons.Keyboard,
+                    contentDescription = null,
+                    size = if (compact) MovoSize.iconLabel else 18.dp,
+                    tint = MovoColors.textPrimary,
+                )
+            }
+        }
     }
 }
 

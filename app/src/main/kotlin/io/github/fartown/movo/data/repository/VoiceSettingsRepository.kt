@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import io.github.fartown.movo.BuildConfig
 import io.github.fartown.movo.data.model.DoubaoSpeechCredentials
 import io.github.fartown.movo.data.model.VoiceWakeSettings
 import io.github.fartown.movo.data.model.WakeListenScope
@@ -90,8 +91,17 @@ internal object VoiceSettingsRepository {
         dataStore.edit { it[WAKE_LISTEN_SCOPE] = scope.name }
     }
 
-    fun loadDoubaoCredentials(): DoubaoSpeechCredentials =
-        requireSecretStore().load()
+    fun loadDoubaoCredentials(): DoubaoSpeechCredentials {
+        val stored = requireSecretStore().load()
+        if (stored.hasUsableAuth()) return stored
+        // debug 包预置的默认 Api-Key：仅在用户未保存自己的凭证时回退，设备端保存过凭证后以用户的为准。
+        val packagedApiKey = BuildConfig.DOUBAO_VOICE_API_KEY
+        return if (packagedApiKey.isNotBlank()) {
+            stored.copy(apiKey = packagedApiKey).normalized()
+        } else {
+            stored
+        }
+    }
 
     fun saveDoubaoCredentials(credentials: DoubaoSpeechCredentials) {
         requireSecretStore().save(credentials)

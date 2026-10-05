@@ -340,12 +340,11 @@ internal class AgentAppState(
             }.fold(
                 onSuccess = { (snapshot, enabled, coreBudget) ->
                     withContext(Dispatchers.Main) {
-                        memoryState = AgentMemoryUiState(
+                        // The page reloads on re-entry. Keep an unsaved edit across toolbar,
+                        // system, and swipe back instead of replacing it with the disk snapshot.
+                        memoryState = memoryState.withLoadedSnapshot(
+                            content = snapshot.content,
                             enabled = enabled,
-                            isLoading = false,
-                            draft = snapshot.content,
-                            savedContent = snapshot.content,
-                            draftBytes = snapshot.byteSize,
                             coreBudgetChars = coreBudget,
                         )
                     }

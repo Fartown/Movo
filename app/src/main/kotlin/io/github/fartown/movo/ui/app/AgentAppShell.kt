@@ -158,7 +158,6 @@ fun AgentAppShell(
                     title = titleForRoute(currentRoute),
                     onBack = onBack,
                     scrolled = detector.scrolled,
-                    backdrop = backdrop,
                 )
             }
         }

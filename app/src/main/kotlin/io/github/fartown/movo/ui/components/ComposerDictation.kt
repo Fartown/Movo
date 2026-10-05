@@ -115,7 +115,8 @@ internal object ComposerNotices {
 
 /**
  * 语音输入 `Composer/Dictation`（规范 8.2）：说的话直接写进输入框（光标跟随），可编辑后再发。
- * 停止：再点麦克风，或静默约 2 秒自动停止；正在听时直接点发送 = 先停止再发送。
+ * 停止：再点麦克风，或静默约 2 秒自动停止（从最后一次识别到文字起算）；刚开始还没识别到任何文字时给一个更长的
+ * 开口窗口，到点仍没声音才停，避免一开口前的停顿被当成静默；正在听时直接点发送 = 先停止再发送。
  * 与唤醒词互斥：开始时暂停唤醒，结束后恢复。与语音对话互斥由调用方保证（语音对话中不显示麦克风）。
  */
 @Stable
@@ -155,7 +156,9 @@ internal class ComposerDictationState(
     private val controller = MovoDictationController(context)
     private var baseText = ""
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val silenceStop = Runnable { if (listening) stop() }
+    private val silenceStop = Runnable {
+        if (listening) stop()
+    }
 
     fun start() {
         if (listening) return
@@ -200,7 +203,8 @@ internal class ComposerDictationState(
                 finish()
             }
         })
-        armSilenceStop()
+        // 还没识别到文字：用更长的开口窗口；首个 partial 一到就改按「最后一次识别到文字 + 2 秒」计时。
+        armSilenceStop(INITIAL_STOP_MS)
     }
 
     /** 停止听写，已识别的文字保留在输入框里。 */
@@ -224,9 +228,9 @@ internal class ComposerDictationState(
         MovoWakeWordService.resumeWake(context)
     }
 
-    private fun armSilenceStop() {
+    private fun armSilenceStop(delayMs: Long = SILENCE_STOP_MS) {
         handler.removeCallbacks(silenceStop)
-        handler.postDelayed(silenceStop, SILENCE_STOP_MS)
+        handler.postDelayed(silenceStop, delayMs)
     }
 
     private fun errorNotice(message: String): ComposerNotice {
@@ -245,8 +249,11 @@ internal class ComposerDictationState(
     }
 
     private companion object {
-        /** 规范 8.2：静默约 2 秒自动停止（从最后一次识别到文字起算）。 */
+        /** 规范 8.2：识别到文字后，静默约 2 秒自动停止（从最后一次识别到文字起算）。 */
         const val SILENCE_STOP_MS = 2_000L
+
+        /** 开始后一直没识别到文字：给足开口时间，超过这个时长仍没声音才自动停止。 */
+        const val INITIAL_STOP_MS = 10_000L
     }
 }
 

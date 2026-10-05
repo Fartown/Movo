@@ -91,6 +91,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import io.github.fartown.movo.ui.components.movo.MovoCircleButton
 import io.github.fartown.movo.ui.components.movo.PressKind
+import io.github.fartown.movo.ui.components.movo.VoiceModeSplitControl
 import io.github.fartown.movo.ui.components.movo.movoClickable
 import io.github.fartown.movo.ui.components.movo.movoSurface
 import io.github.fartown.movo.ui.theme.LocalReducedMotion
@@ -473,7 +474,7 @@ internal fun AgentChatInputBar(
                 label = "composerLine",
             ) { voiceLine ->
             if (voiceLine) {
-                VoiceLine(voice = voice, onExit = ::enterText)
+                VoiceLine(voice = voice)
             } else Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Bottom,
@@ -596,12 +597,11 @@ internal fun AgentChatInputBar(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (voice.active) {
-                    // 切回文字（键盘 20，占附件「+」的位置）+ 一行提示（Micro/Medium 三级色）；切换时原地淡入 `fast`。
+                    // 退出语音 / 临时键盘输入 + 一行提示（Micro/Medium 三级色）；切换时原地淡入 `fast`。
                     io.github.fartown.movo.ui.components.movo.MovoEntrance(shift = 0.dp, durationMillis = MovoMotion.FAST) {
-                        MovoCircleButton(
-                            icon = MovoIcons.Keyboard,
-                            contentDescription = stringResource(R.string.movo_voice_back_to_text),
-                            onClick = ::enterText,
+                        VoiceModeSplitControl(
+                            onExitVoice = onEndVoice,
+                            onKeyboardInput = ::enterText,
                         )
                     }
                     io.github.fartown.movo.ui.components.movo.MovoEntrance(
@@ -700,8 +700,12 @@ internal fun AgentChatInputBar(
                             if (isStreaming) R.string.movo_main_stop else R.string.movo_main_stop_speaking,
                         ),
                         onClick = {
-                            if (isStreaming) onStop()
-                            if (voice.speaking) onStopSpeaking()
+                            dispatchVoiceModeStop(
+                                isStreaming = isStreaming,
+                                isSpeaking = voice.speaking,
+                                onStopStreaming = onStop,
+                                onStopSpeaking = onStopSpeaking,
+                            )
                         },
                     )
                 } else MainActionButton(
@@ -1289,15 +1293,26 @@ private fun VoiceSessionUiState.hint(agentBusy: Boolean): String = when {
     else -> stringResource(R.string.movo_voice_hint_listening)
 }
 
+internal fun dispatchVoiceModeStop(
+    isStreaming: Boolean,
+    isSpeaking: Boolean,
+    onStopStreaming: () -> Unit,
+    onStopSpeaking: () -> Unit,
+) {
+    when {
+        isStreaming -> onStopStreaming()
+        isSpeaking -> onStopSpeaking()
+    }
+}
+
 /**
  * 语音模式上行：最小高 32，左 8：指示（聆听 = Indigo 音量条 / 播报 = 扬声器 16 / 连接中 = 灰点）+ 8 +
  * 字幕 Input/Placeholder（已确认主色）；无字幕时「正在聆听…」（Q3 光带）。播报时「正在播报·说话即可打断」。
- * 字幕最多 3 行，指示跟随最新一行（底对齐）。点上行任意位置切回文字（规范 8.3「退出」）。
+ * 字幕最多 3 行，指示跟随最新一行（底对齐）。退出与临时键盘输入只由工具栏分段控件承载。
  */
 @Composable
 private fun VoiceLine(
     voice: VoiceSessionUiState,
-    onExit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val channel = voice.channel
@@ -1305,7 +1320,6 @@ private fun VoiceLine(
         modifier = modifier
             .fillMaxWidth()
             .defaultMinSize(minHeight = MovoSize.controlSmall)
-            .movoClickable(PressKind.Row, role = null, onClick = onExit)
             .padding(start = MovoSpacing.sm, top = MovoSpacing.xs, bottom = MovoSpacing.xs),
         verticalAlignment = Alignment.Bottom,
     ) {

@@ -31,9 +31,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
-import kotlinx.coroutines.flow.first
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -83,6 +80,7 @@ import io.github.fartown.movo.ui.screens.enhance.SystemEnhanceScreen
 import io.github.fartown.movo.ui.screens.mcp.McpServerDetailScreen
 import io.github.fartown.movo.ui.screens.mcp.McpServersScreen
 import io.github.fartown.movo.ui.screens.memory.AgentMemoryScreen
+import io.github.fartown.movo.ui.screens.chat.ChatLatestPositionRequests
 import io.github.fartown.movo.ui.screens.permissions.PermissionHealthScreen
 import io.github.fartown.movo.ui.screens.skills.AgentSkillsScreen
 import io.github.fartown.movo.ui.screens.terminal.LinuxEnvironmentScreen
@@ -214,23 +212,30 @@ internal fun AgentAppRoot(
             false
         }
         val then = AppHandoffRoute.consume()
+        var readyForHandoff = opened
         if (opened) {
             focusManager.clearFocus()
             conversationPaneOpen = false
             navigator.popToHome()
             // 浮层里点的是「查看日志」等：会话页之上接着打开那一页（浮层仍盖着，切过来时已经在目标页）。
             then?.let(navigator::push)
-            // Let the original chat load its messages, compose and apply its scroll-to-latest before removing the
-            // covering result window (a freshly created activity otherwise shows the conversation's first turn).
-            withTimeoutOrNull(1_000) {
-                snapshotFlow { agentState.homeState.messages.isNotEmpty() }.first { it }
+            if (then == null) {
+                // A same-conversation handoff does not reselect the chat or recreate its body.
+                // Ask that body to place the newest content, then keep the sheet covering us
+                // until the position has actually been applied rather than waiting fixed frames.
+                val selectedId = agentState.conversationPaneState.selectedConversationId
+                readyForHandoff = if (selectedId == null) false else {
+                    val ticket = ChatLatestPositionRequests.request(selectedId)
+                    try {
+                        withTimeoutOrNull(8_000) { ticket.awaitReady(); true } == true
+                    } finally {
+                        ticket.cancel()
+                    }
+                }
             }
-            withFrameNanos { }
-            withFrameNanos { }
-            withFrameNanos { }
             if (paneWasOpen) kotlinx.coroutines.delay(io.github.fartown.movo.ui.theme.MovoMotion.SLOW_EXIT.toLong())
         }
-        onResultConversationOpened(request, opened)
+        onResultConversationOpened(request, readyForHandoff)
     }
 
     fun pushRoute(

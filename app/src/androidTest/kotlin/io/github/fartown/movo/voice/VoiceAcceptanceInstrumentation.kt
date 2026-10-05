@@ -5,9 +5,12 @@ import android.app.Instrumentation
 import android.content.Intent
 import android.os.Bundle
 import android.os.SystemClock
+import io.github.fartown.movo.agent.runtime.AgentRuntimeInstrumentationAccess
 import io.github.fartown.movo.agent.voice.conversation.VoiceInstrumentationAccess
 import io.github.fartown.movo.agent.voice.conversation.DoubaoDialogEngine
 import io.github.fartown.movo.agent.voice.conversation.VoiceConversationController
+import io.github.fartown.movo.agent.voice.MovoWakeWordService
+import io.github.fartown.movo.agent.voice.session.VoiceSessionManager
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -29,7 +32,11 @@ class VoiceAcceptanceInstrumentation : Instrumentation() {
     override fun onStart() {
         directory = File(targetContext.getExternalFilesDir(null), "voice-acceptance/${System.currentTimeMillis()}").apply { mkdirs() }
         startAt = SystemClock.elapsedRealtime()
+        stage("instrumentation_started")
+        val mode = options.getString("mode")
         var oldConversation: String? = null
+        var wakePausedForInteraction = false
+        var runtimeFixtureStarted = false
         var result = "FAIL"
         var failure = ""
         val diagnosticFindings = mutableListOf<String>()
@@ -66,14 +73,39 @@ class VoiceAcceptanceInstrumentation : Instrumentation() {
                 decoderBytes += bytes.size
             } }
             if (options.getString("mode") != "physical") DoubaoDialogEngine.pcmInputFactory = { source }
-            startActivitySync(Intent(targetContext, io.github.fartown.movo.ui.MainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            stage("before_main_activity")
+            // MainActivity is singleTask. startActivitySync waits for a newly-created Activity and
+            // can block forever when a previous retry already left that task alive on the device.
+            targetContext.startActivity(
+                Intent(targetContext, io.github.fartown.movo.ui.MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            )
             SystemClock.sleep(2000)
-            runOnMainSync {
-                oldConversation = VoiceInstrumentationAccess.begin(targetContext)
+            stage("before_voice_begin")
+            if (mode == "overlay_voice_fixture" || mode == "running_voice_boundary_fixture") {
+                runOnMainSync { MovoWakeWordService.pauseWake(targetContext) }
+                wakePausedForInteraction = true
             }
-            waitFor("ready", 25_000) { events.any { it.name == "listening" } }
-            if (options.getString("mode") == "interaction_hold") {
+            runOnMainSync {
+                oldConversation = if (mode == "overlay_voice_fixture" || mode == "running_voice_boundary_fixture") {
+                    VoiceInstrumentationAccess.beginFixture(targetContext)
+                } else {
+                    VoiceInstrumentationAccess.begin(targetContext)
+                }
+            }
+            stage("after_voice_begin")
+            if (mode == "overlay_voice_fixture" || mode == "running_voice_boundary_fixture") {
+                waitForFixture("deterministic voice fixture", 5_000) { VoiceSessionManager.active }
+            } else {
+                waitFor("ready", 25_000) { events.any { it.name == "listening" } }
+            }
+            stage("voice_ready")
+            if (mode == "overlay_voice_fixture" || mode == "running_voice_boundary_fixture") {
+                runtimeFixtureStarted = true
+                stage("before_runtime_fixture")
+                wakePausedForInteraction = runRuntimeOverlayFixture(mode)
+                stage("after_runtime_fixture")
+            } else if (mode == "interaction_hold") {
                 // Test-only source for native UI mode-switch acceptance. Cloud ASR, the real
                 // SessionManager/AppState and keyboard actions remain unchanged. This is
                 // explicitly synthetic PCM, not evidence of physical microphone/AEC quality.
@@ -93,6 +125,19 @@ class VoiceAcceptanceInstrumentation : Instrumentation() {
                 check(events.drop(from).none { it.name == "dispatch" }) {
                     "Utterance was submitted before the UI switch; this run cannot prove partial draft retention"
                 }
+                // The product resumes the independently configured wake listener after the
+                // dialog controller has fully released the microphone. During this synthetic
+                // hold, queued PCM must not be consumed by a brand-new wake-triggered session;
+                // that would test wake re-entry rather than the just-finished mode switch.
+                val closeDeadline = SystemClock.elapsedRealtime() + 5_000
+                while (VoiceSessionManager.busy) {
+                    check(SystemClock.elapsedRealtime() < closeDeadline) {
+                        "Timeout waiting for voice controller closes"
+                    }
+                    SystemClock.sleep(100)
+                }
+                runOnMainSync { MovoWakeWordService.pauseWake(targetContext) }
+                wakePausedForInteraction = true
                 val deadline = SystemClock.elapsedRealtime() + 180_000
                 while (!done.exists() && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(100)
                 check(done.exists()) { "UI executor did not acknowledge completing screenshots and draft assertions" }
@@ -161,10 +206,16 @@ class VoiceAcceptanceInstrumentation : Instrumentation() {
             result = "PASS"
         } catch (t: Throwable) {
             failure = "${t.javaClass.simpleName}: ${t.message}"
+            stage("failure:$failure")
         } finally {
+            stage("finally_started")
+            if (runtimeFixtureStarted) AgentRuntimeInstrumentationAccess.finish()
             runOnMainSync { VoiceInstrumentationAccess.end(targetContext) }
             SystemClock.sleep(1000)
             source.close()
+            if (wakePausedForInteraction) {
+                runOnMainSync { MovoWakeWordService.resumeWake(targetContext) }
+            }
             DoubaoDialogEngine.pcmInputFactory = null
             DoubaoDialogEngine.playerObserver = null
             DoubaoDialogEngine.decoderObserver = null
@@ -193,14 +244,184 @@ class VoiceAcceptanceInstrumentation : Instrumentation() {
                 .put("result", result).put("failure", failure)
                 .put("mode", options.getString("mode", "core"))
                 .put("diagnostic_findings", JSONArray(diagnosticFindings))
-                .put("input", if (options.getString("mode") == "physical") "SDK physical microphone" else "Paced synthetic PCM; no end directive")
+                .put("input", when (mode) {
+                    "physical" -> "SDK physical microphone"
+                    "overlay_voice_fixture", "running_voice_boundary_fixture" ->
+                        "Deterministic VoiceSessionManager controller; no microphone, cloud ASR, model, or real tool"
+                    else -> "Paced synthetic PCM; no end directive"
+                })
                 .put("physical_aec_double_talk", "UNVERIFIED")
                 .put("elapsed_ms", SystemClock.elapsedRealtime() - startAt)
                 .put("dispatches", events.count { it.name == "dispatch" }).toString(2))
+            stage("result_written")
             finish(if (result == "PASS") Activity.RESULT_OK else Activity.RESULT_CANCELED,
                 Bundle().apply { putString("result", result); putString("failure", failure); putString("evidence", directory.absolutePath) })
         }
     }
+
+    @Synchronized
+    private fun stage(value: String) {
+        File(directory, "stage.log").appendText(
+            "${SystemClock.elapsedRealtime() - startAt}\t$value\n",
+        )
+    }
+
+    /**
+     * Holds a real Runtime/WindowManager overlay around a synthetic, non-model task. The fixture
+     * only supplies Runtime events; voice/session UI and all user actions remain production code.
+     */
+    private fun runRuntimeOverlayFixture(mode: String): Boolean {
+        check(AgentRuntimeInstrumentationAccess.begin(targetContext)) {
+            "Unable to start debuggable Runtime overlay fixture; a real run may already be active"
+        }
+        waitForFixture("runtime fixture starts", 10_000) {
+            AgentRuntimeInstrumentationAccess.snapshot().taskActive
+        }
+        targetContext.startActivity(
+            Intent(Intent.ACTION_MAIN)
+                .addCategory(Intent.CATEGORY_HOME)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+        waitForFixture("runtime overlay expands outside Movo", 10_000) {
+            AgentRuntimeInstrumentationAccess.expand()
+            AgentRuntimeInstrumentationAccess.snapshot().let {
+                it.taskActive && it.voiceActive && it.overlayAttached && it.expanded && it.phase == "RUNNING"
+            }
+        }
+
+        val action = if (mode == "running_voice_boundary_fixture") {
+            "exit_then_stop"
+        } else {
+            options.getString("fixture_action", "exit")
+        }
+        val exitMarker = File(directory, "fixture-exit-checked")
+        val keyboardMarker = File(directory, "fixture-keyboard-checked")
+        val stopMarker = File(directory, "fixture-stop-checked")
+        exitMarker.delete()
+        keyboardMarker.delete()
+        stopMarker.delete()
+
+        when (action) {
+            "exit", "exit_then_stop" -> {
+                publishFixtureStatus("overlay_exit_ready", exitMarker, action)
+                awaitMarker(exitMarker, "overlay Exit evidence")
+                waitForFixture("voice exits while task remains", 10_000) {
+                    AgentRuntimeInstrumentationAccess.snapshot().let {
+                        // The expanded card intentionally auto-collapses after voice ends; the
+                        // executor's immediate screenshot proves the visible post-state. The
+                        // lifecycle assertion here is that the task itself remains alive.
+                        !it.voiceActive && it.taskActive
+                    }
+                }
+                saveFixtureSnapshot("exit-result")
+                check(events.none { it.name == "dispatch" }) {
+                    "Runtime fixture must not dispatch a model task"
+                }
+                waitForVoiceControllerClose()
+                runOnMainSync { MovoWakeWordService.pauseWake(targetContext) }
+                if (action == "exit_then_stop") {
+                    // The card auto-collapsed after voice ended and its window was removed. Re-adding
+                    // it attaches on the next frame, so poll like the initial expansion does.
+                    waitForFixture("Runtime overlay re-expands for the explicit Stop assertion", 10_000) {
+                        AgentRuntimeInstrumentationAccess.expand()
+                        AgentRuntimeInstrumentationAccess.snapshot().let {
+                            it.taskActive && it.overlayAttached && it.expanded
+                        }
+                    }
+                    publishFixtureStatus("running_stop_ready", stopMarker, action)
+                    awaitMarker(stopMarker, "explicit task Stop evidence")
+                    waitForFixture("explicit Stop ends the task", 10_000) {
+                        AgentRuntimeInstrumentationAccess.snapshot().let {
+                            !it.taskActive && it.stopObserved
+                        }
+                    }
+                    saveFixtureSnapshot("stop-result")
+                }
+                return true
+            }
+
+            "keyboard" -> {
+                publishFixtureStatus("overlay_keyboard_ready", keyboardMarker, action)
+                awaitMarker(keyboardMarker, "overlay Keyboard evidence")
+                waitForFixture("Keyboard ends voice and keeps task", 10_000) {
+                    AgentRuntimeInstrumentationAccess.snapshot().let {
+                        !it.voiceActive && it.taskActive && it.overlayAttached && it.typing
+                    }
+                }
+                saveFixtureSnapshot("keyboard-result")
+                check(events.none { it.name == "dispatch" }) {
+                    "Runtime fixture must not dispatch a model task"
+                }
+                waitForVoiceControllerClose()
+                runOnMainSync { MovoWakeWordService.pauseWake(targetContext) }
+                return true
+            }
+
+            else -> error("Unknown Runtime overlay fixture action: $action")
+        }
+    }
+
+    private fun publishFixtureStatus(phase: String, marker: File, action: String) {
+        val snapshot = AgentRuntimeInstrumentationAccess.snapshot()
+        val payload = fixtureSnapshotJson(snapshot)
+            .put("phase", phase)
+            .put("action", action)
+            .put("marker", marker.absolutePath)
+            .put("evidence", directory.absolutePath)
+        File(directory, "fixture-status.json").writeText(payload.toString(2))
+        sendStatus(1, Bundle().apply {
+            putString("phase", phase)
+            putString("action", action)
+            putString("marker", marker.absolutePath)
+            putString("evidence", directory.absolutePath)
+        })
+    }
+
+    private fun saveFixtureSnapshot(name: String) {
+        File(directory, "fixture-$name.json").writeText(
+            fixtureSnapshotJson(AgentRuntimeInstrumentationAccess.snapshot()).toString(2),
+        )
+    }
+
+    private fun fixtureSnapshotJson(snapshot: AgentRuntimeInstrumentationAccess.Snapshot): JSONObject =
+        JSONObject()
+            .put("available", snapshot.available)
+            .put("task_active", snapshot.taskActive)
+            .put("voice_active", snapshot.voiceActive)
+            .put("overlay_attached", snapshot.overlayAttached)
+            .put("expanded", snapshot.expanded)
+            .put("typing", snapshot.typing)
+            .put("runtime_phase", snapshot.phase)
+            .put("stop_observed", snapshot.stopObserved)
+
+    private fun awaitMarker(marker: File, label: String) {
+        // Native screenshot + UI hierarchy collection on remote physical devices can take a few
+        // minutes. Keep the state stable long enough for evidence collection instead of expiring
+        // a valid fixture while the executor is still reading it.
+        val deadline = SystemClock.elapsedRealtime() + 600_000
+        while (!marker.exists() && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(100)
+        check(marker.exists()) { "UI executor did not acknowledge $label" }
+        marker.delete()
+    }
+
+    private fun waitForVoiceControllerClose() {
+        val deadline = SystemClock.elapsedRealtime() + 10_000
+        while (VoiceSessionManager.busy) {
+            check(SystemClock.elapsedRealtime() < deadline) { "Timeout waiting for voice controller closes" }
+            SystemClock.sleep(100)
+        }
+    }
+
+    private fun waitForFixture(label: String, timeout: Long, condition: () -> Boolean) {
+        val deadline = SystemClock.elapsedRealtime() + timeout
+        while (!condition()) {
+            check(SystemClock.elapsedRealtime() < deadline) {
+                "Timeout waiting for $label; snapshot=${AgentRuntimeInstrumentationAccess.snapshot()}"
+            }
+            SystemClock.sleep(100)
+        }
+    }
+
     private fun round(clip: String): Event {
         val from = events.size
         feed(clip)

@@ -105,6 +105,13 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     @Volatile
     private var activeSession: AgentRuntimeSession? = null
+    private data class InstrumentationFixture(
+        val session: AgentRuntimeSession,
+        val leaseId: String,
+        @Volatile var taskActive: Boolean = true,
+        @Volatile var stopObserved: Boolean = false,
+    )
+    @Volatile private var instrumentationFixture: InstrumentationFixture? = null
     private var startRequestGeneration = 0L
     private var pendingStartRequest: PendingStartRequest? = null
 
@@ -140,6 +147,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     @Volatile private var appForeground = false
     /** 展开卡的原始位置（距屏幕底部）；键盘补充时抬到键盘上方，键盘收起后回到这里。 */
     private var bubbleBaseY = 0
+    /**
+     * 悬浮球玻璃圆当前在屏幕上的中心（px），供展开卡的揭开动画作为“起点圆心”。
+     * 每次 orbParams 变化（新建、拖动、吸附、键盘避让、rebuild）都会更新一次；null 时表示没有悬浮球。
+     */
+    private val orbCenterOnScreen = mutableStateOf<androidx.compose.ui.geometry.Offset?>(null)
     private val resultConversationOpening = mutableStateOf(false)
     private var resultConversationTarget: AgentConversationTarget? = null
     private var resultConversationRunId: String? = null
@@ -219,6 +231,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     override fun onCreate() {
         super.onCreate()
+        liveInstance = this
         savedStateRegistryController.performRestore(null)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
@@ -291,6 +304,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     override fun onDestroy() {
+        finishInstrumentationFixture()
+        if (liveInstance === this) liveInstance = null
         application.unregisterActivityLifecycleCallbacks(appActivityCallbacks)
         io.github.fartown.movo.agent.overlay.OrbPrefs.prefs(this).unregisterOnSharedPreferenceChangeListener(orbPrefsListener)
         AgentAccessibilityService.removeInstanceListener(onAccessibilityInstanceChanged)
@@ -1116,6 +1131,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 hearing = voice.channel == VoiceChannel.Hearing,
                 longRun = (state.value.elapsedMillis(System.currentTimeMillis()) ?: 0L) >= 10_000L,
                 animateEntrance = animateOrbEntrance,
+                // 展开卡出现（!collapsed）时让真球淡出：两个窗口不再并存，看起来是同一颗球在变形。
+                hideForReveal = !collapsed.value,
             )
         }
         val orbLp = orbLayoutParams().apply {
@@ -1165,6 +1182,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         bubbleParams = null
         glowParams = null
         orbDiscRect = null
+        orbCenterOnScreen.value = null
         standby.value = false
         windowManager = null
         overlayOwner = null
@@ -1333,6 +1351,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 onEndVoice = VoiceSessionManager::switchToText,
                 onOpenResult = ::onOrbTapped,
                 notice = panelNotice.value,
+                orbCenterOnScreen = { orbCenterOnScreen.value },
             )
         }
         val lp = bubbleLayoutParams()
@@ -1606,6 +1625,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             lp.y = fingerY.toInt()
         }
         runCatching { wm.updateViewLayout(view, lp) }
+        // 拖动过程持续更新，展开卡再次弹出时揭开起点跟随最新位置。
+        publishOrbRect()
     }
 
     /** 松手：在移除区里 → 缩小淡出后移除；否则吸附到最近的左右边缘。 */
@@ -1694,6 +1715,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 if (orbView !== view) return@addUpdateListener
                 lp.x = animator.animatedValue as Int
                 runCatching { wm.updateViewLayout(view, lp) }
+                publishOrbRect()
             }
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: android.animation.Animator) = publishOrbRect()
@@ -2015,8 +2037,126 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         if (!active && !collapsed.value) scheduleBubbleAutoCollapse()
     }
 
+    /**
+     * Deterministic same-process fixture for device instrumentation.
+     *
+     * The entry is unreachable in non-debuggable APKs and never replaces a real run. Runtime
+     * events still pass through the production reducer/visibility path, and the execution lease,
+     * WindowManager overlay, Compose content and voice session are the production implementations.
+     */
+    private fun beginInstrumentationFixtureOnService(): Boolean {
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE == 0) return false
+        if (instrumentationFixture != null || activeSession != null || pendingStartRequest != null) return false
+        val runId = "instrumentation-overlay-${android.os.SystemClock.elapsedRealtime()}"
+        val session = AgentRuntimeSession(runId = runId, voiceSessionId = "instrumentation")
+        val leaseId = "instrumentation:$runId"
+        if (!AgentExecutionService.acquire(this, leaseId, task = runId) { session.controller.cancel() }) {
+            return false
+        }
+        val fixture = InstrumentationFixture(session = session, leaseId = leaseId)
+        instrumentationFixture = fixture
+        activeSession = session
+        standby.value = false
+        collapsed.value = true
+        bubbleVisible.value = true
+        state.value = AgentOverlayState.Initial
+
+        fun accept(event: AgentEvent) {
+            session.emit(event)
+            handleAcceptedRunEvent(session, event, entrySurfaceGuard = null)
+        }
+        accept(AgentEvent.RunStarted(initialImages = 0, initialImageBytes = 0, toolCount = 1, terminalTools = false))
+        accept(
+            AgentEvent.ToolStarted(
+                round = 1,
+                toolCallId = "instrumentation-step",
+                name = "tap",
+                argsPreview = "正在验证悬浮层",
+            ).also { it.atMillis = System.currentTimeMillis() },
+        )
+        thread(name = "agent-runtime-instrumentation-fixture") {
+            while (instrumentationFixture === fixture && !session.controller.isCancelled) {
+                android.os.SystemClock.sleep(20)
+            }
+            if (session.controller.isCancelled) {
+                mainHandler.post { completeInstrumentationFixtureStop(fixture) }
+            }
+        }
+        return true
+    }
+
+    private fun expandInstrumentationFixtureOnService(): Boolean {
+        val fixture = instrumentationFixture ?: return false
+        if (!fixture.taskActive || activeSession !== fixture.session) return false
+        ensureOverlayVisible()
+        expandBubble()
+        // Device instrumentation needs a stable inspection window; production interactions still
+        // use the normal four-second auto-collapse path.
+        mainHandler.removeCallbacksAndMessages(panelIdleToken)
+        updateStandbyOrbVisibility()
+        return !collapsed.value && bubbleView?.isAttachedToWindow == true
+    }
+
+    private fun completeInstrumentationFixtureStop(fixture: InstrumentationFixture) {
+        if (instrumentationFixture !== fixture || !fixture.taskActive) return
+        fixture.taskActive = false
+        fixture.stopObserved = true
+        if (activeSession === fixture.session) {
+            fixture.session.complete(
+                AgentRuntimeWire.RunResult(
+                    runId = fixture.session.runId,
+                    ok = false,
+                    content = "",
+                    error = "已停止",
+                ),
+            )
+            activeSession = null
+        }
+        AgentExecutionService.release(fixture.leaseId)
+        state.value = state.value.copy(
+            phase = AgentOverlayPhase.FAILED,
+            status = AgentOverlayStatus.Stopped,
+            pausedAtMillis = state.value.pausedAtMillis ?: System.currentTimeMillis(),
+        )
+        updateStandbyOrbVisibility()
+    }
+
+    private fun instrumentationFixtureSnapshotOnService(): AgentRuntimeInstrumentationAccess.Snapshot {
+        val fixture = instrumentationFixture
+        val params = bubbleParams
+        return AgentRuntimeInstrumentationAccess.Snapshot(
+            available = fixture != null,
+            taskActive = fixture?.taskActive == true && activeSession === fixture.session,
+            voiceActive = VoiceSessionManager.active,
+            overlayAttached = orbView?.isAttachedToWindow == true && bubbleView?.isAttachedToWindow == true,
+            expanded = !collapsed.value && bubbleView?.isAttachedToWindow == true,
+            typing = params != null && params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE == 0,
+            phase = state.value.phase.name,
+            stopObserved = fixture?.stopObserved == true,
+        )
+    }
+
+    private fun finishInstrumentationFixture() {
+        val fixture = instrumentationFixture ?: return
+        instrumentationFixture = null
+        if (activeSession === fixture.session) activeSession = null
+        fixture.session.cancel("Instrumentation fixture finished")
+        if (fixture.taskActive) {
+            fixture.taskActive = false
+            AgentExecutionService.release(fixture.leaseId)
+        }
+        mainHandler.removeCallbacksAndMessages(panelIdleToken)
+        mainHandler.removeCallbacksAndMessages(bubbleRemovalToken)
+        removeAmbientWindows()
+        state.value = AgentOverlayState.Initial
+        collapsed.value = true
+        bubbleVisible.value = true
+        pausedForTyping = false
+    }
+
     private fun removeAmbientWindows() {
         orbDiscRect = null
+        orbCenterOnScreen.value = null
         removeZoneView?.let { view -> runCatching { windowManager?.removeView(view) } }
         removeZoneView = null
         standby.value = false
@@ -2076,13 +2216,20 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         val lp = orbParams
         if (lp == null || orbView == null) {
             orbDiscRect = null
+            orbCenterOnScreen.value = null
             return
         }
         val window = dpToPx(ORB_WINDOW_DP)
         val inset = (window - dpToPx(ORB_DISC_DP)) / 2
         val left = resources.displayMetrics.widthPixels - lp.x - window + inset
         val top = lp.y + inset
-        orbDiscRect = android.graphics.Rect(left, top, left + dpToPx(ORB_DISC_DP), top + dpToPx(ORB_DISC_DP))
+        val disc = dpToPx(ORB_DISC_DP)
+        orbDiscRect = android.graphics.Rect(left, top, left + disc, top + disc)
+        // 展开卡揭开动画的起点：球心在屏幕上的实时位置（px）。
+        orbCenterOnScreen.value = androidx.compose.ui.geometry.Offset(
+            left + disc / 2f,
+            top + disc / 2f,
+        )
     }
 
     /** 从悬浮球打开对话浮层前登记起点：浮层从球的位置长出来（Q4）。 */
@@ -2092,6 +2239,22 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     internal companion object {
+        @Volatile private var liveInstance: AgentRuntimeService? = null
+
+        internal fun beginInstrumentationFixture(): Boolean =
+            liveInstance?.beginInstrumentationFixtureOnService() == true
+
+        internal fun expandInstrumentationFixture(): Boolean =
+            liveInstance?.expandInstrumentationFixtureOnService() == true
+
+        internal fun instrumentationFixtureSnapshot(): AgentRuntimeInstrumentationAccess.Snapshot =
+            liveInstance?.instrumentationFixtureSnapshotOnService()
+                ?: AgentRuntimeInstrumentationAccess.Snapshot()
+
+        internal fun finishInstrumentationFixture() {
+            liveInstance?.finishInstrumentationFixture()
+        }
+
         /** 进程内缓存的键盘高度（跨运行时服务重建保留）。 */
         private var imeHeightCache = 0
 

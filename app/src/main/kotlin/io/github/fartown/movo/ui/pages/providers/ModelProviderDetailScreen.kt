@@ -12,8 +12,13 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.snap
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -42,6 +47,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -93,7 +99,7 @@ import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 
 /**
  * 提供商详情 / 新建（规范 8.7 二级页）：居中顶栏标题为提供商名称；已有提供商在顶栏下方用分段切换「配置 / 模型」
- * （9.3.1「分段 / 标签」，下方内容交叉淡化 `fast`）；新建时只有配置。
+ * （9.3.1「分段 / 标签」，下方内容沿选择方向横向切换）；新建时只有配置。
  */
 @Composable
 internal fun ModelProviderDetailScreen(
@@ -176,6 +182,9 @@ internal fun ModelProviderDetailScreen(
     }
     val title = if (isNew && !fromTemplate) context.getString(R.string.page_create_new_provider_36cab9) else initial.name
     val reduced = LocalReducedMotion.current
+    // 请求与其反馈同属屏幕生命周期；Crossfade 移除配置页签时不能丢失测试状态。
+    var connectionStatus by remember(initial.id) { mutableStateOf<ProviderConnectionStatus?>(null) }
+    var connectionGeneration by remember(initial.id) { mutableIntStateOf(0) }
 
     MovoPage(
         title = title,
@@ -210,10 +219,20 @@ internal fun ModelProviderDetailScreen(
                     ),
                 )
             }
-            Crossfade(
+            AnimatedContent(
                 targetState = currentTab,
-                animationSpec = if (reduced) snap() else MovoMotion.fast(),
-                modifier = Modifier.weight(1f).fillMaxWidth(),
+                transitionSpec = {
+                    if (reduced) {
+                        EnterTransition.None togetherWith ExitTransition.None
+                    } else {
+                        val direction = if (targetState > initialState) 1 else -1
+                        // Both pages travel one full viewport with the same timing, so their
+                        // edges meet without two readable text layers occupying one position.
+                        slideInHorizontally(MovoMotion.fast()) { direction * it } togetherWith
+                            slideOutHorizontally(MovoMotion.fast()) { -direction * it }
+                    }
+                },
+                modifier = Modifier.weight(1f).fillMaxWidth().clipToBounds().background(MovoColors.bgCanvas),
                 label = "providerTab",
             ) { tab ->
                 when (tab) {
@@ -221,13 +240,25 @@ internal fun ModelProviderDetailScreen(
                         listState = configListState,
                         provider = initial,
                         draft = configDraft,
-                        onDraftChange = { configDraft = it },
+                        onDraftChange = {
+                            if (it != configDraft) {
+                                configDraft = it
+                                connectionGeneration++
+                                connectionStatus = null
+                            }
+                        },
                         scope = scope,
                         isNew = isNew,
                         fromTemplate = fromTemplate,
                         contentSidePadding = sidePadding,
                         onCreated = { id -> createdId = id },
                         onDeleted = onBack,
+                        connectionStatus = connectionStatus,
+                        onConnectionStatusChange = { connectionStatus = it },
+                        connectionGeneration = connectionGeneration,
+                        onConnectionResult = { generation, result ->
+                            if (generation == connectionGeneration) connectionStatus = result
+                        },
                     )
                     1 -> if (!isNew) {
                         ProviderModelsTab(
@@ -255,12 +286,15 @@ private fun ProviderConfigTab(
     contentSidePadding: Dp,
     onCreated: (String) -> Unit,
     onDeleted: () -> Unit,
+    connectionStatus: ProviderConnectionStatus?,
+    onConnectionStatusChange: (ProviderConnectionStatus) -> Unit,
+    connectionGeneration: Int,
+    onConnectionResult: (Int, ProviderConnectionStatus) -> Unit,
 ) {
     val context = LocalContext.current
     var headersExpanded by rememberSaveable { mutableStateOf(false) }
     var apiKeyVisible by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
-    var testStatus by remember { mutableStateOf<String?>(null) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showResetDialog by remember { mutableStateOf(false) }
     var showEndpointDialog by remember { mutableStateOf(false) }
@@ -342,7 +376,12 @@ private fun ProviderConfigTab(
                 }
                 MovoDivider(start = MovoSpacing.lg)
                 if (isChatGpt) {
-                    ChatGptAccountSection(scope = scope, onStatus = { testStatus = it })
+                    ChatGptAccountSection(scope = scope, onStatus = { message ->
+                        onConnectionStatusChange(ProviderConnectionStatus(
+                            message,
+                            if (message.startsWith(failPrefix)) ProviderStatusTone.Failure else ProviderStatusTone.Success,
+                        ))
+                    })
                 }
                 if (provider !is AnthropicProviderSetting) {
                     if (!isChatGpt) {
@@ -370,19 +409,25 @@ private fun ProviderConfigTab(
                 SettingsRow(
                     title = stringResource(R.string.ui_test_connection_10b7d8),
                     trailing = RowTrailing.None,
-                    enabled = !isWorking,
-                    showDivider = testStatus != null,
+                    enabled = !isWorking && connectionStatus?.tone != ProviderStatusTone.Running,
+                    showDivider = connectionStatus != null,
                     onClick = {
                         val validationError = validateProviderDraft(context, draft)
                         if (validationError != null) {
-                            testStatus = context.getString(R.string.provider_error, validationError)
+                            onConnectionStatusChange(ProviderConnectionStatus(
+                                context.getString(R.string.provider_error, validationError),
+                                ProviderStatusTone.Failure,
+                            ))
                             return@SettingsRow
                         }
+                        onConnectionStatusChange(ProviderConnectionStatus(
+                            context.getString(R.string.page_testing_f43705),
+                            ProviderStatusTone.Running,
+                        ))
+                        val generation = connectionGeneration
                         scope.launch {
-                            isWorking = true
-                            testStatus = context.getString(R.string.page_testing_f43705)
                             try {
-                                testStatus = testConnection(
+                                onConnectionResult(generation, testConnection(
                                     context,
                                     buildUpdatedProvider(
                                         source = provider,
@@ -395,18 +440,19 @@ private fun ProviderConfigTab(
                                         hostedWebSearchEnabled = draft.hostedWebSearchEnabled,
                                         anthropicVersion = draft.anthropicVersion,
                                         customHeaders = draft.headers.map { it.header },
-                                    )
-                                )
-                            } finally {
-                                isWorking = false
+                                    ),
+                                ))
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
                             }
                         }
                     },
                 )
-                testStatus?.let { message ->
+                connectionStatus?.let { result ->
                     ProviderStatusLine(
-                        message = message,
-                        isError = message.startsWith(failPrefix),
+                        message = result.message,
+                        isError = result.tone == ProviderStatusTone.Failure,
+                        tone = result.tone,
                         modifier = Modifier.padding(horizontal = MovoSpacing.lg, vertical = MovoSpacing.md),
                     )
                 }
@@ -669,12 +715,17 @@ private fun ProviderConfigTab(
 private suspend fun testConnection(
     context: android.content.Context,
     provider: ProviderSetting,
-): String =
+): ProviderConnectionStatus =
     RemoteModelFetcher.fetch(provider)
-        .map { context.resources.getQuantityString(R.plurals.provider_models_fetched, it.size, it.size) }
+        .map { ProviderConnectionStatus(
+            context.resources.getQuantityString(R.plurals.provider_models_fetched, it.size, it.size),
+            ProviderStatusTone.Success,
+        ) }
         .getOrElse { throwable ->
-            context.getString(
-                R.string.provider_error,
-                throwable.message ?: throwable.javaClass.simpleName,
+            ProviderConnectionStatus(
+                context.getString(R.string.provider_error, throwable.message ?: throwable.javaClass.simpleName),
+                ProviderStatusTone.Failure,
             )
         }
+
+private data class ProviderConnectionStatus(val message: String, val tone: ProviderStatusTone)

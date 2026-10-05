@@ -19,11 +19,20 @@ internal class WakeKeywordEncoder(
         }
         var variants = listOf("")
         for (word in words) {
-            val phones = chinese[word.value] ?: english[word.value.uppercase(Locale.ROOT)]
+            val phones = phonesFor(word.value)
             require(!phones.isNullOrEmpty()) { "唤醒词含暂不支持的字词：${word.value}" }
             variants = variants.flatMap { prefix -> phones.map { "$prefix $it".trim() } }.distinct().take(16)
         }
         return variants
+    }
+
+    private fun phonesFor(raw: String): List<String>? {
+        chinese[raw]?.let { return it }
+        val englishPhones = english[raw.uppercase(Locale.ROOT)] ?: return null
+        // 字母 O 混在中文唤醒词里时，实际都读成「欧」（小O小O）；把中文读法也加入变体，
+        // 否则只按英文 OW1 编成的关键词在模型上永远不会命中。
+        val extra = if (raw.length == 1 && raw.equals("O", ignoreCase = true)) chinese["欧"].orEmpty() else emptyList()
+        return (extra + englishPhones).distinct()
     }
 
     companion object {

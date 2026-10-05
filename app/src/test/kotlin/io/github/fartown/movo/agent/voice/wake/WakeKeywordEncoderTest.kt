@@ -14,6 +14,8 @@ class WakeKeywordEncoderTest {
         val tokens = File(assets, "tokens.txt").readLines().map { it.substringBefore(' ') }.toSet()
         val default = encoder.encode("小O小O")
         val custom = encoder.encode("你好小莫")
+        // 字母 O 必须同时给出中文「欧」读法（实际发音）和英文 OW1 读法。
+        assertTrue(default.contains("x iǎo ōu x iǎo ōu"))
         assertTrue(default.contains("x iǎo OW1 x iǎo OW1"))
         assertTrue(custom.contains("n ǐ h ǎo x iǎo m ò"))
         assertTrue(default.none { it in custom })

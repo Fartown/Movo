@@ -129,6 +129,36 @@ internal open class VoiceSessionOwner(
         return true
     }
 
+    /**
+     * Deterministic voice lifecycle used only by same-process instrumentation in a debuggable APK.
+     * It exercises the production SessionManager and switch-to-text boundary without requiring a
+     * cloud speech connection; production builds reject the entry before mutating state.
+     */
+    @MainThread
+    internal fun beginInstrumentationFixture(
+        context: Context,
+        conversations: VoiceConversationHost = AgentAppSession.get(context.applicationContext),
+    ): Boolean {
+        check(context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            "Voice instrumentation fixture requires a debuggable APK"
+        }
+        if (busy) return false
+        app = conversations
+        val id = runCatching { conversations.voiceConversationId() }.getOrElse { return false }
+        conversationId = id
+        accepting = true
+        closeHandled = false
+        quietEnd = false
+        showCloseNotice = false
+        val generation = ++epoch
+        val fixture = InstrumentationVoiceSession(controllerHost(generation))
+        // Publish only after ownership is installed: controllerHost.valid() deliberately rejects
+        // callbacks from stale/unowned controllers.
+        controller = fixture
+        fixture.start()
+        return true
+    }
+
     /** Called before AppState changes the selected conversation or removes its history. */
     fun onConversationChanging(nextId: String?) {
         if (conversationId != null && conversationId != nextId) end("已切换对话，语音已结束")
@@ -303,5 +333,33 @@ internal open class VoiceSessionOwner(
             conversationId = null
             host?.onVoiceClosed()
         }
+    }
+
+    private class InstrumentationVoiceSession(
+        private val host: VoiceConversationController.Host,
+    ) : VoiceConversationSession {
+        override var active: Boolean = false
+            private set
+        override var busy: Boolean = false
+            private set
+
+        override fun start() {
+            if (busy) return
+            active = true
+            busy = true
+            host.onState("listening", true, "我在听，说完会自动发送", "")
+        }
+
+        override fun end(message: String) {
+            if (!busy) return
+            active = false
+            busy = false
+            host.onState("ended", false, message, "")
+            host.onClosed()
+        }
+
+        override fun stopSpeaking() = Unit
+        override fun result(turn: Long, answer: String, confirmed: Boolean, failure: String?) = Unit
+        override fun runtimeEvent(turn: Long, event: AgentEvent) = Unit
     }
 }

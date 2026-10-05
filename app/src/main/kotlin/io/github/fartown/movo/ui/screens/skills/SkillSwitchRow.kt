@@ -58,6 +58,7 @@ import top.yukonga.miuix.kmp.basic.Text
 internal fun SkillSwitchRow(
     skill: SkillItemUi,
     enabled: Boolean,
+    busy: Boolean = false,
     onToggle: (Boolean) -> Unit,
     onDelete: (() -> Unit)? = null,
     showDivider: Boolean = true,
@@ -66,7 +67,7 @@ internal fun SkillSwitchRow(
     var showMenu by remember(skill.id) { mutableStateOf(false) }
     var descriptionTruncated by remember(skill.id) { mutableStateOf(false) }
     val hasDescription = skill.description.isNotBlank()
-    val subtitle = if (hasDescription) skill.description else stringResource(R.string.skills_no_description)
+    val subtitle = if (busy) stringResource(R.string.skills_updating) else if (hasDescription) skill.description else stringResource(R.string.skills_no_description)
     val viewDescription = stringResource(R.string.ui_view_description)
     val deleteLabel = stringResource(R.string.ui_delete_3755f5)
     val menuItems = buildList {
@@ -81,11 +82,16 @@ internal fun SkillSwitchRow(
         title = skill.name,
         subtitle = subtitle,
         enabled = enabled,
+        dimWhenDisabled = false,
         showDivider = showDivider,
         role = Role.Switch,
         onSubtitleOverflow = { descriptionTruncated = it },
         onClick = { onToggle(!skill.enabled) },
     ) {
+        if (busy) {
+            SkillSpinner()
+            Spacer(Modifier.width(MovoSpacing.xs))
+        }
         if (menuItems.isNotEmpty()) {
             Box(modifier = Modifier.align(Alignment.CenterVertically)) {
                 MovoIconButton(
@@ -124,6 +130,7 @@ internal fun SkillRow(
     title: String,
     subtitle: String?,
     enabled: Boolean,
+    dimWhenDisabled: Boolean = true,
     showDivider: Boolean,
     onClick: (() -> Unit)?,
     role: Role = Role.Button,
@@ -135,7 +142,7 @@ internal fun SkillRow(
         modifier = Modifier
             .fillMaxWidth()
             .then(
-                if (onClick != null) {
+                if (onClick != null && (enabled || dimWhenDisabled)) {
                     Modifier.movoClickable(
                         kind = PressKind.Row,
                         enabled = enabled,

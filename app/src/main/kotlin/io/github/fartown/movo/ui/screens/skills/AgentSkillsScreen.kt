@@ -40,7 +40,7 @@ import top.yukonga.miuix.kmp.basic.Text
  * Skills（规范 8.7 二级页，设置 · 能力与扩展 · Skills）：安装卡（从 ZIP 导入，检查中显示加载圈）、
  * 内置 / 用户安装 / 已移除三张分组卡（标题在卡内），替换 / 删除确认对话框。
  * 成功结果就地反馈（新装的 Skill 在列表中淡入、删除的行淡出，C5）；只有失败才弹 `Dialog/Info`。
- * 所有操作仍通过 [AgentSkillsAction] 分派；导入或单个 Skill 处理中时整页操作禁用。
+ * 所有操作仍通过 [AgentSkillsAction] 分派；串行操作时仅在目标行标出进度，其他内容保持可读。
  */
 @Composable
 fun AgentSkillsScreen(
@@ -96,6 +96,7 @@ fun AgentSkillsScreen(
                         stringResource(R.string.skills_choose_package)
                     },
                     enabled = !operationPending,
+                    dimWhenDisabled = false,
                     showDivider = false,
                     onClick = openZipPicker,
                     onClickLabel = stringResource(R.string.skills_choose_zip),
@@ -117,6 +118,7 @@ fun AgentSkillsScreen(
                         SkillSwitchRow(
                             skill = skill,
                             enabled = !operationPending,
+                            busy = state.busySkillId == skill.id,
                             onToggle = { enabled ->
                                 onAction(AgentSkillsAction.ToggleSkill(skill.id, enabled))
                             },
@@ -135,6 +137,7 @@ fun AgentSkillsScreen(
                         SkillSwitchRow(
                             skill = skill,
                             enabled = !operationPending,
+                            busy = state.busySkillId == skill.id,
                             onToggle = { enabled ->
                                 onAction(AgentSkillsAction.ToggleSkill(skill.id, enabled))
                             },
@@ -153,12 +156,15 @@ fun AgentSkillsScreen(
                     MovoAnimatedRows(items = removed, key = { it.id }) { skill ->
                         SkillRow(
                             title = skill.name,
-                            subtitle = stringResource(R.string.ui_click_to_reinstall_dc60de),
+                            subtitle = if (state.busySkillId == skill.id) stringResource(R.string.skills_updating)
+                                else stringResource(R.string.ui_click_to_reinstall_dc60de),
                             enabled = !operationPending,
+                            dimWhenDisabled = false,
                             showDivider = skill.id != removed.lastOrNull()?.id,
                             onClick = { onAction(AgentSkillsAction.ReinstallBuiltin(skill.id)) },
                         ) {
-                            MovoIcon(MovoIcons.Download, null, size = MovoSize.iconSmall, tint = MovoColors.textTertiary)
+                            if (state.busySkillId == skill.id) SkillSpinner()
+                            else MovoIcon(MovoIcons.Download, null, size = MovoSize.iconSmall, tint = MovoColors.textTertiary)
                     }
                     }
                 }

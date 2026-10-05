@@ -91,7 +91,6 @@ internal fun CharacterLibraryScreen(
         importer.launch(arrayOf("image/png", "application/json", "text/plain", "application/octet-stream"))
     }
     val createCharacter = {
-        store.discardEditor()
         onNavigate(AppRoute.CharacterEditor())
     }
     MovoListPage(

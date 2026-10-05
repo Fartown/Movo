@@ -12,11 +12,15 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import io.github.fartown.movo.ui.components.toTimelineEntries
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import io.github.fartown.movo.ui.components.AgentChatBody
+import io.github.fartown.movo.ui.components.LocalChatKeepLatestOnResize
 import io.github.fartown.movo.ui.components.AgentConversationDraftStore
 import io.github.fartown.movo.ui.components.ConversationSwitchFade
 import io.github.fartown.movo.ui.components.LocalConversationComposer
@@ -27,6 +31,28 @@ import io.github.fartown.movo.ui.model.AgentModelPickerUiState
 import io.github.fartown.movo.ui.share.ShareIntro
 import io.github.fartown.movo.ui.theme.LocalReducedMotion
 import io.github.fartown.movo.ui.theme.MovoMotion
+import kotlinx.coroutines.CompletableDeferred
+
+/** A one-shot request made by the sheet handoff, including when the selected conversation is unchanged. */
+internal object ChatLatestPositionRequests {
+    internal class Ticket(val conversationId: String) {
+        private val ready = CompletableDeferred<Unit>()
+        suspend fun awaitReady() = ready.await()
+        internal fun complete() { ready.complete(Unit) }
+        fun cancel() { ready.cancel(); if (pending === this) pending = null }
+    }
+
+    var pending by mutableStateOf<Ticket?>(null)
+        private set
+
+    fun request(conversationId: String): Ticket = Ticket(conversationId).also { pending = it }
+    fun complete(ticket: Ticket) {
+        if (pending === ticket) {
+            pending = null
+            ticket.complete()
+        }
+    }
+}
 
 /**
  * 独立对话页：与首页聊天主舞台共用同一套消息/输入组件，
@@ -56,6 +82,8 @@ internal fun AgentChatScreen(
         adoptedFromDraft = conversationKey != null &&
             conversationKey == io.github.fartown.movo.ui.components.AgentConversationDraftStore.shared.lastAssignedConversationId,
     )
+    val isSheet = LocalChatKeepLatestOnResize.current
+    val latestTicket = ChatLatestPositionRequests.pending?.takeIf { !isSheet && it.conversationId == conversationKey }
     // 每份组合最后一次作为当前会话时的内容：离场的那一份继续显示旧会话，而不是跟着新状态变。
     val frames = remember { HashMap<String, ChatFrame>() }
     val previousKey = remember { arrayOf<String?>(null) }
@@ -69,6 +97,7 @@ internal fun AgentChatScreen(
         conversationKey = conversationKey,
         isDrawerOpen = isDrawerOpen,
         initiallyShowLatestMessage = initiallyShowLatestMessage || ConversationSwitchMotion.instant,
+        latestTicket = latestTicket,
         // 分享提示只属于分享新开、还没发出消息的那条会话（规范 8.9.1）；App 与对话浮层都走这里。
         shareIntro = io.github.fartown.movo.ui.share.ShareIntake.intro
             ?.takeIf { conversationKey == null && state.messages.isEmpty() },
@@ -134,6 +163,7 @@ private class ChatFrame(
     val conversationKey: String?,
     val isDrawerOpen: Boolean,
     val initiallyShowLatestMessage: Boolean,
+    val latestTicket: ChatLatestPositionRequests.Ticket?,
     val shareIntro: ShareIntro?,
 )
 
@@ -196,6 +226,7 @@ private fun ChatBody(
             modifier = Modifier,
             isDrawerOpen = frame.isDrawerOpen,
             initiallyShowLatestMessage = frame.initiallyShowLatestMessage,
+            latestPositionRequest = frame.latestTicket,
             shareIntro = frame.shareIntro,
         )
     }

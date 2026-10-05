@@ -147,6 +147,21 @@ class VoiceSessionLifecycleTest {
         assertFalse(owner.busy)
     }
 
+    @Test fun instrumentationFixtureSwitchesToTextWithoutStoppingRunningTask() {
+        val host = FakeConversations().apply { running = true }
+        assertTrue(owner.beginInstrumentationFixture(context, host))
+        assertTrue(owner.active)
+        assertTrue(owner.busy)
+
+        owner.switchToText()
+
+        assertFalse(owner.active)
+        assertFalse(owner.busy)
+        assertTrue(host.running)
+        assertEquals(0, host.stops)
+        assertTrue(host.sent.isEmpty())
+    }
+
     @Test fun cancellingTaskAlsoRevokesVoiceWaitingBehindTheCurrentTextRun() {
         val host = FakeConversations(); host.running = true; begin(host)
         submit("不应在取消后执行")

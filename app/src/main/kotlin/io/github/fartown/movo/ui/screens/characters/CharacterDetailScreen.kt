@@ -187,10 +187,7 @@ internal fun CharacterDetailScreen(
                 SettingsRow(
                     title = "编辑角色",
                     enabled = !store.busy,
-                    onClick = {
-                        store.discardEditor()
-                        onNavigate(AppRoute.CharacterEditor(id))
-                    },
+                    onClick = { onNavigate(AppRoute.CharacterEditor(id)) },
                 )
                 SettingsRow(
                     title = "剧情记忆",

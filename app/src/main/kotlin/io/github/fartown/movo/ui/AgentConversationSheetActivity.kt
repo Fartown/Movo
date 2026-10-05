@@ -728,7 +728,9 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
             )
         }.onFailure { failed() }
         lifecycleScope.launch {
-            delay(10_000)
+            // Main may spend up to 8 s restoring the conversation and another 8 s
+            // positioning its long timeline before it acknowledges the handoff.
+            delay(20_000)
             failed()
         }
     }
@@ -776,6 +778,7 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
             if (current == SheetBodyState.READY) {
                 // 与 App 一致（规范 8.9）：失败卡的「查看日志」先展开到 App，再在 App 里打开运行日志。
                 androidx.compose.runtime.CompositionLocalProvider(
+                    io.github.fartown.movo.ui.components.LocalChatKeepLatestOnResize provides true,
                     io.github.fartown.movo.ui.screens.diagnostics.LocalRunLogOpener provides { runId ->
                         io.github.fartown.movo.ui.app.AppHandoffRoute.request(
                             runId?.let(io.github.fartown.movo.ui.navigation.AppRoute::DiagnosticsRun)

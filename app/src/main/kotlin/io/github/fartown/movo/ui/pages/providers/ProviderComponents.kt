@@ -15,11 +15,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
@@ -37,6 +43,8 @@ import io.github.fartown.movo.ui.theme.MovoRadius
 import io.github.fartown.movo.ui.theme.MovoSize
 import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.theme.MovoTypography
+import io.github.fartown.movo.ui.theme.LocalReducedMotion
+import io.github.fartown.movo.ui.theme.MovoMotion
 import top.yukonga.miuix.kmp.basic.Text
 
 /**
@@ -174,30 +182,52 @@ internal fun TagChip(
     )
 }
 
-/**
- * 就地结果（规范 8.11「轻提示」「失败」）：失败 = Rose 警示图标 + 主色文字；成功 = Green ✓ + 次要色文字。
- * 颜色不是唯一信号，图标同时区分。
- */
+internal enum class ProviderStatusTone { Running, Success, Failure }
+
+/** 就地反馈：运行中为中性加载圈，完成后才展示成功或失败图标。 */
 @Composable
 internal fun ProviderStatusLine(
     message: String,
     isError: Boolean,
     modifier: Modifier = Modifier,
+    tone: ProviderStatusTone = if (isError) ProviderStatusTone.Failure else ProviderStatusTone.Success,
 ) {
+    val reduced = LocalReducedMotion.current
+    // Keep the infinite transition out of Success/Failure; a settled status must not
+    // continue scheduling animation frames while the settings page is idle.
+    val iconModifier = if (tone == ProviderStatusTone.Running && !reduced) {
+        val spin = rememberInfiniteTransition(label = "providerStatusSpinner")
+        val angle by spin.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(tween(MovoMotion.SPINNER_PERIOD, easing = MovoMotion.EasingLinear)),
+            label = "providerStatusAngle",
+        )
+        Modifier.graphicsLayer { rotationZ = angle }
+    } else Modifier
     Row(modifier = modifier.fillMaxWidth()) {
         Box(modifier = Modifier.height(18.dp), contentAlignment = Alignment.Center) {
             MovoIcon(
-                icon = if (isError) MovoIcons.CircleAlert else MovoIcons.CircleCheck,
+                icon = when (tone) {
+                    ProviderStatusTone.Running -> MovoIcons.LoaderCircle
+                    ProviderStatusTone.Success -> MovoIcons.CircleCheck
+                    ProviderStatusTone.Failure -> MovoIcons.CircleAlert
+                },
                 contentDescription = null,
                 size = MovoSize.iconLabel,
-                tint = if (isError) MovoColors.roseFg else MovoColors.greenFg,
+                tint = when (tone) {
+                    ProviderStatusTone.Running -> MovoColors.textSecondary
+                    ProviderStatusTone.Success -> MovoColors.greenFg
+                    ProviderStatusTone.Failure -> MovoColors.roseFg
+                },
+                modifier = iconModifier,
             )
         }
         Spacer(Modifier.width(6.dp))
         Text(
             text = message,
             style = MovoTypography.labelRegular,
-            color = if (isError) MovoColors.textPrimary else MovoColors.textSecondary,
+            color = if (tone == ProviderStatusTone.Failure) MovoColors.textPrimary else MovoColors.textSecondary,
         )
     }
 }

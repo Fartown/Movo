@@ -1,22 +1,20 @@
 package io.github.fartown.movo.ui.components.movo
 
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.unit.dp
 import io.github.fartown.movo.ui.theme.MovoMotion
 import top.yukonga.miuix.kmp.nav.runtime.NavChange
 import top.yukonga.miuix.kmp.nav.transition.NavMotion
 import top.yukonga.miuix.kmp.nav.transition.NavSettlePhase
 import top.yukonga.miuix.kmp.nav.transition.NavSettleSpec
+import top.yukonga.miuix.kmp.nav.transition.NavSwipeEdge
 import top.yukonga.miuix.kmp.nav.transition.NavTransition
 import top.yukonga.miuix.kmp.nav.transition.NavTransitionScope
 import top.yukonga.miuix.kmp.nav.transition.navGraphicsTransition
 
 /**
  * 页面切换（规范 9.3「页面切换」）：
- * - 前进：新页从右侧 24 处移入并淡入，`slow` + `enter`；旧页不动，被新页盖住。
- * - 点返回：当前页右移 24 淡出，250ms + `exit`。
- * - 返回手势（系统预测性返回 / 边缘滑动）：跟手，当前页缩小到 0.9 并露出上一页；松手完成或取消 `standard`。
+ * - 前进：新页从右侧移入；旧页不动，被不透明的新页盖住。
+ * - 点返回 / 系统返回键：当前页右移退出，露出上一页。页面文字不会在淡化时互相穿透。
+ * - 返回手势（从屏幕边缘拖动的预测性返回）：跟手，当前页缩小到 0.9 并露出上一页；松手完成或取消 `standard`。
  * - 减少动画：纯淡入淡出 `fast`，不位移不缩放（规范 9.8）。
  *
  * Miuix 导航按 `relativeDepth` 驱动：≤ 0 为当前 / 进场页（-1 完全移出，0 就位），> 0 为被盖住的页。
@@ -37,11 +35,17 @@ internal fun movoNavTransition(reducedMotion: Boolean): NavTransition {
             alpha = 1f - hidden
             return@navGraphicsTransition
         }
+        val rtlSign = if (scope.layoutDirection == androidx.compose.ui.unit.LayoutDirection.Rtl) -1f else 1f
         if (scope.isGestureDriven()) {
-            applyGestureBack(scope, hidden)
+            if (scope.hasSwipeEdge()) {
+                applyGestureBack(scope, hidden)
+            } else {
+                // 系统返回键也经由预测性返回收尾，但没有跟手过程：与点返回一致，整页右移退出，不淡出叠字。
+                translationX = size.width * hidden * rtlSign
+                alpha = 1f
+            }
             return@navGraphicsTransition
         }
-        val shift = with(scope.density) { PAGE_SHIFT.toPx() }
         val visible = if (scope.change == NavChange.Pop) {
             // 退场：线性进度压缩到 250ms（总时长 360ms 的前 69%），`exit` 曲线。
             val t = (hidden * MovoMotion.SLOW / MovoMotion.SLOW_EXIT).coerceIn(0f, 1f)
@@ -49,10 +53,9 @@ internal fun movoNavTransition(reducedMotion: Boolean): NavTransition {
         } else {
             MovoMotion.EasingEnter.transform(1f - hidden)
         }
-        translationX = shift * (1f - visible) * if (scope.layoutDirection == androidx.compose.ui.unit.LayoutDirection.Rtl) -1f else 1f
-        alpha = visible
-        // 整页淡入淡出不走离屏合成（整页含磨砂顶栏与背景采样，离屏一帧就是整屏一次额外绘制）：透明度直接乘到每个绘制操作上。
-        compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.ModulateAlpha
+        // 让不透明页面边缘横向移动，只有两页各自的可见区域相邻；两套正文不再透叠。
+        translationX = size.width * (1f - visible) * rtlSign
+        alpha = 1f
     }
 }
 
@@ -76,6 +79,16 @@ private fun androidx.compose.ui.graphics.GraphicsLayerScope.applyGestureBack(sco
     }
 }
 
+/**
+ * 真正从屏幕边缘拖出的返回手势。Android 14+ 的系统返回键也会合成一次 onBackStarted
+ * （EDGE_LEFT、触点 (0,0)、进度 0）后立即提交，只能按触点和进度把它和真手势区分开。
+ */
+private fun NavTransitionScope.hasSwipeEdge(): Boolean {
+    val g = gesture ?: return false
+    if (g.swipeEdge == NavSwipeEdge.None) return false
+    return g.initialTouchY != 0f || g.touchY != 0f || g.progress > 0f
+}
+
 private fun NavTransitionScope.isGestureDriven(): Boolean {
     if (gesture != null) return true
     val phase = settle?.phase ?: return false
@@ -93,6 +106,4 @@ internal object NavGestureTracker {
     fun nowMillis(): Long = System.nanoTime() / 1_000_000L
 }
 
-private val PAGE_SHIFT = 24.dp
 private const val GESTURE_SCALE_DROP = 0.1f
-
