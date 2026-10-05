@@ -1,0 +1,619 @@
+app/src/main/kotlin/io/github/fartown/movo/hook/system/AccessibilityServiceEnforcer.kt:155: Warning: Field requires API level 33 (current min is 28): android.content.Context#RECEIVER_EXPORTED [InlinedApi]
+                    Context.RECEIVER_EXPORTED,
+                    ~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/hook/system/AccessibilityServiceEnforcer.kt:205: Warning: Field requires API level 33 (current min is 28): android.content.Context#RECEIVER_NOT_EXPORTED [InlinedApi]
+                    Context.RECEIVER_NOT_EXPORTED,
+                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/hook/system/AccessibilityServiceEnforcer.kt:240: Warning: Field requires API level 33 (current min is 28): android.content.Context#RECEIVER_NOT_EXPORTED [InlinedApi]
+                    Context.RECEIVER_NOT_EXPORTED,
+                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:815: Warning: Field requires API level 33 (current min is 28): android.content.ClipDescription#EXTRA_IS_SENSITIVE [InlinedApi]
+                putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:815: Warning: Field requires API level 33 (current min is 28): android.content.ClipDescription#EXTRA_IS_SENSITIVE [InlinedApi]
+                putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:1091: Warning: Field requires API level 30 (current min is 28): android.accessibilityservice.AccessibilityService#ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR [InlinedApi]
+                                    failures[window.id] = ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR
+                                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:1109: Warning: Field requires API level 30 (current min is 28): android.accessibilityservice.AccessibilityService#ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR [InlinedApi]
+                        failures[window.id] = ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR
+                                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:1422: Warning: Field requires API level 34 (current min is 28): android.view.accessibility.AccessibilityNodeInfo#ACTION_ARGUMENT_DIRECTION_INT [InlinedApi]
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_DIRECTION_INT,
+                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentExecutionService.kt:44: Warning: Field requires API level 34 (current min is 28): android.content.pm.ServiceInfo#FOREGROUND_SERVICE_TYPE_SPECIAL_USE [InlinedApi]
+            startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                                                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/overlay/AgentHapticFeedback.kt:22: Warning: Field requires API level 30 (current min is 28): android.os.VibrationEffect.Composition#PRIMITIVE_CLICK [InlinedApi]
+            primitiveId = VibrationEffect.Composition.PRIMITIVE_CLICK,
+                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/overlay/AgentHapticFeedback.kt:24: Warning: Field requires API level 29 (current min is 28): android.os.VibrationEffect#EFFECT_TICK [InlinedApi]
+            fallbackEffectId = VibrationEffect.EFFECT_TICK,
+                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/overlay/AgentHapticFeedback.kt:27: Warning: Field requires API level 31 (current min is 28): android.os.VibrationEffect.Composition#PRIMITIVE_LOW_TICK [InlinedApi]
+            primitiveId = VibrationEffect.Composition.PRIMITIVE_LOW_TICK,
+                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/overlay/AgentHapticFeedback.kt:29: Warning: Field requires API level 29 (current min is 28): android.os.VibrationEffect#EFFECT_HEAVY_CLICK [InlinedApi]
+            fallbackEffectId = VibrationEffect.EFFECT_HEAVY_CLICK,
+                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/overlay/AgentHapticFeedback.kt:32: Warning: Field requires API level 30 (current min is 28): android.os.VibrationEffect.Composition#PRIMITIVE_TICK [InlinedApi]
+            primitiveId = VibrationEffect.Composition.PRIMITIVE_TICK,
+                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/overlay/AgentHapticFeedback.kt:34: Warning: Field requires API level 29 (current min is 28): android.os.VibrationEffect#EFFECT_TICK [InlinedApi]
+            fallbackEffectId = VibrationEffect.EFFECT_TICK,
+                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/overlay/AgentHapticFeedback.kt:37: Warning: Field requires API level 30 (current min is 28): android.os.VibrationEffect.Composition#PRIMITIVE_CLICK [InlinedApi]
+            primitiveId = VibrationEffect.Composition.PRIMITIVE_CLICK,
+                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/overlay/AgentHapticFeedback.kt:39: Warning: Field requires API level 29 (current min is 28): android.os.VibrationEffect#EFFECT_CLICK [InlinedApi]
+            fallbackEffectId = VibrationEffect.EFFECT_CLICK,
+                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeConnection.kt:133: Warning: Field requires API level 29 (current min is 28): android.content.Context#BIND_INCLUDE_CAPABILITIES [InlinedApi]
+                Context.BIND_AUTO_CREATE or Context.BIND_IMPORTANT or Context.BIND_INCLUDE_CAPABILITIES,
+                                                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeService.kt:1856: Warning: Field requires API level 34 (current min is 28): android.app.ActivityOptions#MODE_BACKGROUND_ACTIVITY_START_ALLOWED [InlinedApi]
+                else ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeService.kt:1856: Warning: Field requires API level 34 (current min is 28): android.app.ActivityOptions#MODE_BACKGROUND_ACTIVITY_START_ALLOWED [InlinedApi]
+                else ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/tool/AgentStructuredDeviceTools.kt:263: Warning: Field requires API level 30 (current min is 28): android.net.wifi.WifiManager#UNKNOWN_SSID [InlinedApi]
+                val ssid = info?.ssid?.takeUnless { it == WifiManager.UNKNOWN_SSID }?.trim('"')
+                                                          ~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/tool/AgentToolCapabilities.kt:68: Warning: Field requires API level 29 (current min is 28): android.Manifest.permission#ACCESS_BACKGROUND_LOCATION [InlinedApi]
+            locationAllowed = context.checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+                                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/tools/device/AndroidDeviceReadBackend.kt:102: Warning: Field requires API level 30 (current min is 28): android.net.wifi.WifiManager#UNKNOWN_SSID [InlinedApi]
+        val ssid = info?.ssid?.takeUnless { it == WifiManager.UNKNOWN_SSID }?.trim('"') ?: fallbackSsid
+                                                  ~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/hook/colordirect/ColorDirectHooks.kt:117: Warning: Field requires API level 34 (current min is 28): android.app.Activity#OVERRIDE_TRANSITION_CLOSE [InlinedApi]
+        activity.overrideActivityTransition(Activity.OVERRIDE_TRANSITION_CLOSE, 0, 0)
+                                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/diagnostics/DiagnosticsEnvironment.kt:103: Warning: Field requires API level 33 (current min is 28): android.content.Context#RECEIVER_NOT_EXPORTED [InlinedApi]
+            }, Context.RECEIVER_NOT_EXPORTED)
+               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/app/ExecutionNotificationPermission.kt:26: Warning: Field requires API level 33 (current min is 28): android.Manifest.permission#POST_NOTIFICATIONS [InlinedApi]
+            launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/tools/file/FileToolBackends.kt:67: Warning: Field requires API level 29 (current min is 28): android.provider.MediaStore#VOLUME_EXTERNAL [InlinedApi]
+                MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+                                               ~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/MainActivity.kt:255: Warning: Field requires API level 34 (current min is 28): android.content.pm.ActivityInfo#CONFIG_GRAMMATICAL_GENDER [InlinedApi]
+                android.content.pm.ActivityInfo.CONFIG_GRAMMATICAL_GENDER to "grammaticalGender",
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/MainActivity.kt:256: Warning: Field requires API level 31 (current min is 28): android.content.pm.ActivityInfo#CONFIG_FONT_WEIGHT_ADJUSTMENT [InlinedApi]
+                android.content.pm.ActivityInfo.CONFIG_FONT_WEIGHT_ADJUSTMENT to "fontWeightAdjustment",
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoAssistantVoiceService.kt:91: Warning: Field requires API level 30 (current min is 28): android.content.pm.ServiceInfo#FOREGROUND_SERVICE_TYPE_MICROPHONE [InlinedApi]
+        startForeground(VOICE_NOTIFICATION, notification(text), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+                                                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoAssistantVoiceService.kt:134: Warning: Field requires API level 34 (current min is 28): android.app.ActivityOptions#MODE_BACKGROUND_ACTIVITY_START_ALLOWED [InlinedApi]
+                pendingIntentBackgroundActivityStartMode = ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                                                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoAssistantVoiceService.kt:134: Warning: Field requires API level 34 (current min is 28): android.app.ActivityOptions#MODE_BACKGROUND_ACTIVITY_START_ALLOWED [InlinedApi]
+                pendingIntentBackgroundActivityStartMode = ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                                                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/theme/MovoMotion.kt:99: Warning: Field requires API level 33 (current min is 28): android.content.Context#RECEIVER_NOT_EXPORTED [InlinedApi]
+            Context.RECEIVER_NOT_EXPORTED,
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoVoiceInteractionSession.kt:34: Warning: Field requires API level 33 (current min is 28): android.content.Context#RECEIVER_NOT_EXPORTED [InlinedApi]
+            Context.RECEIVER_NOT_EXPORTED,
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoWakeWordService.kt:107: Warning: Field requires API level 33 (current min is 28): android.content.Context#RECEIVER_NOT_EXPORTED [InlinedApi]
+            RECEIVER_NOT_EXPORTED,
+            ~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoWakeWordService.kt:190: Warning: Field requires API level 30 (current min is 28): android.content.pm.ServiceInfo#FOREGROUND_SERVICE_TYPE_MICROPHONE [InlinedApi]
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/screens/terminal/SharedFoldersScreen.kt:176: Warning: Field requires API level 30 (current min is 28): android.provider.Settings#ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION [InlinedApi]
+                                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/screens/voice/VoiceSettingsScreen.kt:112: Warning: Field requires API level 29 (current min is 28): android.app.role.RoleManager#ROLE_ASSISTANT [InlinedApi]
+    var assistantRole by remember { mutableStateOf(roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)) }
+                                                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/screens/voice/VoiceSettingsScreen.kt:171: Warning: Field requires API level 29 (current min is 28): android.app.role.RoleManager#ROLE_ASSISTANT [InlinedApi]
+        assistantRole = roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)
+                                               ~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/screens/voice/VoiceSettingsScreen.kt:178: Warning: Field requires API level 29 (current min is 28): android.app.role.RoleManager#ROLE_ASSISTANT [InlinedApi]
+                assistantRole = roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)
+                                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/screens/voice/VoiceSettingsScreen.kt:205: Warning: Field requires API level 29 (current min is 28): android.app.role.RoleManager#ROLE_ASSISTANT [InlinedApi]
+    val showRoleRow = !assistantRole && roleManager.isRoleAvailable(RoleManager.ROLE_ASSISTANT)
+                                                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/screens/voice/VoiceSettingsScreen.kt:346: Warning: Field requires API level 29 (current min is 28): android.app.role.RoleManager#ROLE_ASSISTANT [InlinedApi]
+                            onClick = { assistantLauncher.launch(roleManager.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT)) },
+                                                                                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/screens/terminal/WorkspaceScreen.kt:130: Warning: Field requires API level 30 (current min is 28): android.provider.Settings#ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION [InlinedApi]
+                            accessLauncher.launch(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+   Explanation for issues of type "InlinedApi":
+   This check scans through all the Android API field references in the
+   application and flags certain constants, such as static final integers and
+   Strings, which were introduced in later versions. These will actually be
+   copied into the class files rather than being referenced, which means that
+   the value is available even when running on older devices. In some cases
+   that's fine, and in other cases it can result in a runtime crash or
+   incorrect behavior. It depends on the context, so consider the code
+   carefully and decide whether it's safe and can be suppressed or whether the
+   code needs to be guarded.
+
+   If you really want to use this API and don't need to support older devices
+   just set the minSdkVersion in your build.gradle or AndroidManifest.xml
+   files.
+
+   If your code is deliberately accessing newer APIs, and you have ensured
+   (e.g. with conditional execution) that this code will only ever be called
+   on a supported platform, then you can annotate your class or method with
+   the @TargetApi annotation specifying the local minimum SDK to apply, such
+   as @TargetApi(11), such that this check considers 11 rather than your
+   manifest file's minimum SDK as the required API level.
+
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AccessibilityProtectionClient.kt:116: Error: Call requires API level 34 (current min is 28): android.app.BroadcastOptions#makeBasic [NewApi]
+            val options = BroadcastOptions.makeBasic()
+                                           ~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AccessibilityProtectionClient.kt:117: Error: Call requires API level 34 (current min is 28): android.app.BroadcastOptions#setShareIdentityEnabled [NewApi]
+                .setShareIdentityEnabled(true)
+                 ~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AccessibilityProtectionClient.kt:118: Error: Call requires API level 34 (current min is 28): android.app.BroadcastOptions#toBundle [NewApi]
+                .toBundle()
+                 ~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AccessibilityProtectionClient.kt:119: Error: Call requires API level 34 (current min is 28): android.content.Context#sendOrderedBroadcast [NewApi]
+            context.sendOrderedBroadcast(
+                    ~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/hook/system/AccessibilityServiceEnforcer.kt:278: Error: Call requires API level 34 (current min is 28): android.content.BroadcastReceiver#getSentFromUid [NewApi]
+            val senderUid = sentFromUid
+                            ~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/hook/system/AccessibilityServiceEnforcer.kt:735: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager#getServiceInfo [NewApi]
+            context.packageManager.getServiceInfo(
+                                   ~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/hook/system/AccessibilityServiceEnforcer.kt:737: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager.ComponentInfoFlags#of [NewApi]
+                PackageManager.ComponentInfoFlags.of(directBootFlags.toLong()),
+                                                  ~~
+app/src/main/kotlin/io/github/fartown/movo/hook/system/AccessibilityServiceEnforcer.kt:762: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager#getApplicationInfo [NewApi]
+            context.packageManager.getApplicationInfo(
+                                   ~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/hook/system/AccessibilityServiceEnforcer.kt:764: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager.ApplicationInfoFlags#of [NewApi]
+                PackageManager.ApplicationInfoFlags.of(directBootFlags.toLong()),
+                                                    ~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:300: Error: Call requires API level 30 (current min is 28): android.view.accessibility.AccessibilityEvent() [NewApi]
+                AccessibilityEvent(event)
+                ~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:320: Error: Call requires API level 33 (current min is 28): android.view.accessibility.AccessibilityRecord#getSource [NewApi]
+            event.getSource(0)
+                  ~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:340: Error: Call requires API level 33 (current min is 28): android.view.accessibility.AccessibilityNodeInfo#getUniqueId [NewApi]
+            sourceUniqueId = source.uniqueId.orEmpty(),
+                                    ~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:880: Error: Field requires API level 30 (current min is 28): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction#ACTION_IME_ENTER [NewApi]
+        if (node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)) {
+                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:1075: Error: Call requires API level 34 (current min is 28): android.accessibilityservice.AccessibilityService#takeScreenshotOfWindow [NewApi]
+                takeScreenshotOfWindow(window.id, screenshotExecutor, object : TakeScreenshotCallback {
+                ~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:1075: Error: Class requires API level 30 (current min is 28): android.accessibilityservice.AccessibilityService.TakeScreenshotCallback [NewApi]
+                takeScreenshotOfWindow(window.id, screenshotExecutor, object : TakeScreenshotCallback {
+                                                                               ~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:1075: Error: Implicit cast to TakeScreenshotCallback requires API level 30 (current min is 28) [NewApi]
+                takeScreenshotOfWindow(window.id, screenshotExecutor, object : TakeScreenshotCallback {
+                                                                      ^
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:1163: Error: Call requires API level 30 (current min is 28): android.accessibilityservice.AccessibilityService.ScreenshotResult#getHardwareBuffer [NewApi]
+        screenshot.hardwareBuffer.use { hardwareBuffer ->
+                   ~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:1164: Error: Call requires API level 29 (current min is 28): android.graphics.Bitmap#wrapHardwareBuffer [NewApi]
+            val wrapped = Bitmap.wrapHardwareBuffer(hardwareBuffer, screenshot.colorSpace)
+                                 ~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:1164: Error: Call requires API level 30 (current min is 28): android.accessibilityservice.AccessibilityService.ScreenshotResult#getColorSpace [NewApi]
+            val wrapped = Bitmap.wrapHardwareBuffer(hardwareBuffer, screenshot.colorSpace)
+                                                                               ~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:1352: Error: Field requires API level 34 (current min is 28): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction#ACTION_SCROLL_IN_DIRECTION [NewApi]
+            AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_IN_DIRECTION.id in actions -> 1
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:1418: Error: Field requires API level 34 (current min is 28): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction#ACTION_SCROLL_IN_DIRECTION [NewApi]
+        val inDirection = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_IN_DIRECTION.id
+                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:1480: Error: Call requires API level 33 (current min is 28): android.view.accessibility.AccessibilityNodeInfo#getUniqueId [NewApi]
+                    append(node.uniqueId.orEmpty())
+                                ~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:1491: Error: Call requires API level 33 (current min is 28): android.view.accessibility.AccessibilityNodeInfo#getUniqueId [NewApi]
+                    node.uniqueId?.isNotBlank() == true ||
+                         ~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:1545: Error: Field requires API level 29 (current min is 28): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction#ACTION_PAGE_UP [NewApi]
+        ScrollDirection.UP -> AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_UP.id
+                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:1546: Error: Field requires API level 29 (current min is 28): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction#ACTION_PAGE_DOWN [NewApi]
+        ScrollDirection.DOWN -> AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_DOWN.id
+                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:1547: Error: Field requires API level 29 (current min is 28): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction#ACTION_PAGE_LEFT [NewApi]
+        ScrollDirection.LEFT -> AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_LEFT.id
+                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:1548: Error: Field requires API level 29 (current min is 28): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction#ACTION_PAGE_RIGHT [NewApi]
+        ScrollDirection.RIGHT -> AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_RIGHT.id
+                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:1718: Error: Call requires API level 33 (current min is 28): android.view.accessibility.AccessibilityNodeInfo#getUniqueId [NewApi]
+                    uniqueId = node.uniqueId.orEmpty(),
+                                    ~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:2166: Error: Call requires API level 33 (current min is 28): android.view.accessibility.AccessibilityNodeInfo#getUniqueId [NewApi]
+                uniqueId = uniqueId.orEmpty(),
+                           ~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:2203: Error: Call requires API level 33 (current min is 28): android.view.accessibility.AccessibilityNodeInfo#getUniqueId [NewApi]
+                uniqueId = node.uniqueId.orEmpty(),
+                                ~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:2227: Error: Call requires API level 33 (current min is 28): android.view.accessibility.AccessibilityNodeInfo#getUniqueId [NewApi]
+                    uniqueId = node.uniqueId.orEmpty(),
+                                    ~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:2302: Error: Call requires API level 33 (current min is 28): android.view.accessibility.AccessibilityNodeInfo#getUniqueId [NewApi]
+                uniqueId = node.uniqueId.orEmpty(),
+                                ~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:2354: Error: Field requires API level 34 (current min is 28): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction#ACTION_SCROLL_IN_DIRECTION [NewApi]
+            AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_IN_DIRECTION.id,
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:2355: Error: Field requires API level 29 (current min is 28): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction#ACTION_PAGE_UP [NewApi]
+            AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_UP.id,
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:2356: Error: Field requires API level 29 (current min is 28): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction#ACTION_PAGE_DOWN [NewApi]
+            AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_DOWN.id,
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:2357: Error: Field requires API level 29 (current min is 28): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction#ACTION_PAGE_LEFT [NewApi]
+            AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_LEFT.id,
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:2358: Error: Field requires API level 29 (current min is 28): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction#ACTION_PAGE_RIGHT [NewApi]
+            AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_RIGHT.id,
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:2363: Error: Field requires API level 29 (current min is 28): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction#ACTION_PAGE_UP [NewApi]
+            AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_UP.id,
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:2364: Error: Field requires API level 29 (current min is 28): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction#ACTION_PAGE_DOWN [NewApi]
+            AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_DOWN.id,
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:2369: Error: Field requires API level 29 (current min is 28): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction#ACTION_PAGE_LEFT [NewApi]
+            AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_LEFT.id,
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/accessibility/AgentAccessibilityService.kt:2370: Error: Field requires API level 29 (current min is 28): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction#ACTION_PAGE_RIGHT [NewApi]
+            AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_RIGHT.id,
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentConversationHandoff.kt:68: Error: Call requires API level 33 (current min is 28): android.content.Intent#getParcelableExtra [NewApi]
+            intent.getParcelableExtra(EXTRA_RECEIVER, ResultReceiver::class.java))
+                   ~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentConversationHandoff.kt:89: Error: Call requires API level 34 (current min is 28): android.app.Activity#getLaunchedFromPackage [NewApi]
+        val external = activity.launchedFromPackage != activity.packageName
+                                ~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentConversationHandoff.kt:108: Error: Field requires API level 29 (current min is 28): android.app.TaskInfo#taskId [NewApi]
+        val task = tasks.firstOrNull { runCatching { it.taskInfo?.taskId == main.taskId }.getOrDefault(false) }
+                                                     ~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/AgentConversationSheetActivity.kt:398: Error: Call requires API level 30 (current min is 28): android.view.WindowManager#getMaximumWindowMetrics [NewApi]
+    private fun screenHeight(): Int = windowManager.maximumWindowMetrics.bounds.height()
+                                                    ~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/AgentConversationSheetActivity.kt:398: Error: Call requires API level 30 (current min is 28): android.view.WindowMetrics#getBounds [NewApi]
+    private fun screenHeight(): Int = windowManager.maximumWindowMetrics.bounds.height()
+                                                                         ~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentExecutionService.kt:44: Error: Call requires API level 29 (current min is 28): android.app.Service#startForeground [NewApi]
+            startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            ~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/device/AgentFileReferenceGateway.kt:279: Error: Call requires API level 29 (current min is 28): android.provider.MediaStore#getMediaUri [NewApi]
+                MediaStore.getMediaUri(context, uri)
+                           ~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/overlay/AgentHapticFeedback.kt:45: Error: Class requires API level 31 (current min is 28): android.os.VibratorManager [NewApi]
+        val vibrator = context.getSystemService(VibratorManager::class.java)
+                                                ~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/overlay/AgentHapticFeedback.kt:46: Error: Call requires API level 31 (current min is 28): android.os.VibratorManager#getDefaultVibrator [NewApi]
+            ?.defaultVibrator
+              ~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/overlay/AgentHapticFeedback.kt:52: Error: Call requires API level 30 (current min is 28): android.os.Vibrator#arePrimitivesSupported [NewApi]
+                .arePrimitivesSupported(type.primitiveId)
+                 ~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/overlay/AgentHapticFeedback.kt:55: Error: Call requires API level 30 (current min is 28): android.os.VibrationEffect#startComposition [NewApi]
+                VibrationEffect.startComposition()
+                                ~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/overlay/AgentHapticFeedback.kt:56: Error: Call requires API level 30 (current min is 28): android.os.VibrationEffect.Composition#addPrimitive [NewApi]
+                    .addPrimitive(type.primitiveId, type.primitiveScale)
+                     ~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/overlay/AgentHapticFeedback.kt:57: Error: Call requires API level 30 (current min is 28): android.os.VibrationEffect.Composition#compose [NewApi]
+                    .compose()
+                     ~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/overlay/AgentHapticFeedback.kt:59: Error: Call requires API level 29 (current min is 28): android.os.VibrationEffect#createPredefined [NewApi]
+                VibrationEffect.createPredefined(type.fallbackEffectId)
+                                ~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/tool/AgentPersonalContextTools.kt:148: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager#getApplicationInfo [NewApi]
+        val info = context.packageManager.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0))
+                                          ~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/tool/AgentPersonalContextTools.kt:148: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager.ApplicationInfoFlags#of [NewApi]
+        val info = context.packageManager.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0))
+                                                                                                              ~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeService.kt:1854: Error: Call requires API level 34 (current min is 28): android.app.ActivityOptions#setPendingIntentBackgroundActivityStartMode [NewApi]
+                pendingIntentBackgroundActivityStartMode = if (Build.VERSION.SDK_INT >= 36)
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeService.kt:1854: Error: Call requires API level 34 (current min is 28): android.app.ActivityOptions#setPendingIntentBackgroundActivityStartMode [NewApi]
+                pendingIntentBackgroundActivityStartMode = if (Build.VERSION.SDK_INT >= 36)
+                                                         ~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeService.kt:1858: Error: Call requires API level 34 (current min is 28): android.app.PendingIntent#send [NewApi]
+            pendingIntent.send(senderOptions.toBundle())
+                          ~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeWire.kt:358: Error: Call requires API level 33 (current min is 28): android.os.Bundle#getParcelableArrayList [NewApi]
+            bundle.getParcelableArrayList(KEY_IMAGES, Bundle::class.java).orEmpty().forEach { image ->
+                   ~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeWire.kt:359: Error: Call requires API level 33 (current min is 28): android.os.Bundle#getParcelable [NewApi]
+                val descriptor = image.getParcelable(KEY_IMAGE_FD, ParcelFileDescriptor::class.java)
+                                       ~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeWire.kt:390: Error: Call requires API level 33 (current min is 28): android.os.Bundle#getParcelableArrayList [NewApi]
+            bundle?.getParcelableArrayList(KEY_IMAGES, Bundle::class.java).orEmpty().forEach { image ->
+                    ~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeWire.kt:391: Error: Call requires API level 33 (current min is 28): android.os.Bundle#getParcelable [NewApi]
+                image.getParcelable(KEY_IMAGE_FD, ParcelFileDescriptor::class.java)?.close()
+                      ~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeWire.kt:476: Error: Call requires API level 33 (current min is 28): android.os.Bundle#getParcelableArrayList [NewApi]
+                ?: bundle.getParcelableArrayList(KEY_HISTORY, Bundle::class.java).orEmpty().map { message ->
+                          ~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentRuntimeWire.kt:592: Error: Call requires API level 33 (current min is 28): android.os.Bundle#getParcelableArrayList [NewApi]
+        bundle.getParcelableArrayList(KEY_RESULTS, Bundle::class.java)
+               ~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/tool/AgentStructuredDeviceTools.kt:373: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager#getApplicationInfo [NewApi]
+            context.packageManager.getApplicationInfo(
+                                   ~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/tool/AgentStructuredDeviceTools.kt:375: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager.ApplicationInfoFlags#of [NewApi]
+                android.content.pm.PackageManager.ApplicationInfoFlags.of(0L),
+                                                                       ~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentWireText.kt:40: Error: Call requires API level 33 (current min is 28): android.os.Bundle#getParcelable [NewApi]
+        val descriptor = bundle.getParcelable(key + FD_SUFFIX, ParcelFileDescriptor::class.java)
+                                ~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentWireText.kt:70: Error: Call requires API level 33 (current min is 28): android.os.Bundle#getParcelable [NewApi]
+                    copy.putParcelable(key, original.getParcelable(key, ParcelFileDescriptor::class.java)!!.dup())
+                                                     ~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/runtime/AgentWireText.kt:84: Error: Call requires API level 33 (current min is 28): android.os.Bundle#getParcelable [NewApi]
+            bundle.getParcelable(key, ParcelFileDescriptor::class.java)?.close()
+                   ~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/tools/device/AndroidAppToolBackends.kt:20: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager#queryIntentActivities [NewApi]
+            pm.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0L))
+               ~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/tools/device/AndroidAppToolBackends.kt:20: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager.ResolveInfoFlags#of [NewApi]
+            pm.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0L))
+                                                                             ~~
+app/src/main/kotlin/io/github/fartown/movo/agent/tools/device/AndroidAppToolBackends.kt:97: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager#resolveActivity [NewApi]
+            context.packageManager.resolveActivity(intent, PackageManager.ResolveInfoFlags.of(0L))
+                                   ~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/tools/device/AndroidAppToolBackends.kt:97: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager.ResolveInfoFlags#of [NewApi]
+            context.packageManager.resolveActivity(intent, PackageManager.ResolveInfoFlags.of(0L))
+                                                                                           ~~
+app/src/main/kotlin/io/github/fartown/movo/agent/tools/device/AndroidAppToolBackends.kt:157: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager#getApplicationInfo [NewApi]
+        context.packageManager.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0L))
+                               ~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/tools/device/AndroidAppToolBackends.kt:157: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager.ApplicationInfoFlags#of [NewApi]
+        context.packageManager.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0L))
+                                                                                                   ~~
+app/src/main/kotlin/io/github/fartown/movo/agent/tools/personal/AndroidPersonalBackends.kt:757: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager#getApplicationInfo [NewApi]
+        val info = context.packageManager.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0))
+                                          ~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/tools/personal/AndroidPersonalBackends.kt:757: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager.ApplicationInfoFlags#of [NewApi]
+        val info = context.packageManager.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0))
+                                                                                                              ~~
+app/src/main/kotlin/io/github/fartown/movo/hook/system/AssistantManager.kt:837: Error: Class requires API level 29 (current min is 28): android.app.role.RoleManager [NewApi]
+        val roleManager = context.getSystemService(RoleManager::class.java)
+                                                   ~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/hook/system/AssistantManager.kt:958: Error: Class requires API level 29 (current min is 28): android.app.role.RoleManager [NewApi]
+        val roleManager = context.getSystemService(RoleManager::class.java) ?: return false
+                                                   ~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/tools/clockmedia/ClockMediaBackends.kt:245: Error: Call requires API level 29 (current min is 28): android.view.ViewTreeObserver#registerFrameCommitCallback [NewApi]
+                    view.viewTreeObserver.registerFrameCommitCallback {
+                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/hook/colordirect/ColorDirectHooks.kt:117: Error: Call requires API level 34 (current min is 28): android.app.Activity#overrideActivityTransition [NewApi]
+        activity.overrideActivityTransition(Activity.OVERRIDE_TRANSITION_CLOSE, 0, 0)
+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/hook/colordirect/ColorDirectHooks.kt:142: Error: Call requires API level 33 (current min is 28): android.content.Intent#getParcelableExtra [NewApi]
+            intent.getParcelableExtra(
+                   ~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/systemizer/GoogleAppSystemizerInstaller.kt:139: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager#getApplicationInfo [NewApi]
+            context.packageManager.getApplicationInfo(
+                                   ~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/systemizer/GoogleAppSystemizerInstaller.kt:141: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager.ApplicationInfoFlags#of [NewApi]
+                PackageManager.ApplicationInfoFlags.of(0),
+                                                    ~~
+app/src/main/kotlin/io/github/fartown/movo/ui/components/LanguagePreference.kt:47: Error: Call requires API level 33 (current min is 28): android.os.LocaleList#matchesLanguageAndScript [NewApi]
+        locales.indexOfFirst { LocaleList.matchesLanguageAndScript(it, selected) } + 1
+                                          ~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/data/repository/LanguageSettingsRepository.kt:11: Error: Class requires API level 33 (current min is 28): android.app.LocaleManager [NewApi]
+        context.applicationContext.getSystemService(LocaleManager::class.java),
+                                                    ~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/data/repository/LanguageSettingsRepository.kt:15: Error: Call requires API level 33 (current min is 28): android.app.LocaleConfig#getSupportedLocales [NewApi]
+        LocaleConfig(context.applicationContext).supportedLocales,
+                                                 ~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/data/repository/LanguageSettingsRepository.kt:15: Error: Call requires API level 33 (current min is 28): android.app.LocaleConfig() [NewApi]
+        LocaleConfig(context.applicationContext).supportedLocales,
+        ~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/data/repository/LanguageSettingsRepository.kt:18: Error: Call requires API level 33 (current min is 28): android.app.LocaleManager#getApplicationLocales [NewApi]
+    fun selectedLocale(): Locale? = localeManager.applicationLocales
+                                                  ~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/data/repository/LanguageSettingsRepository.kt:26: Error: Call requires API level 33 (current min is 28): android.app.LocaleManager#getApplicationLocales [NewApi]
+        if (localeManager.applicationLocales != locales) {
+                          ~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/data/repository/LanguageSettingsRepository.kt:27: Error: Call requires API level 33 (current min is 28): android.app.LocaleManager#setApplicationLocales [NewApi]
+            localeManager.applicationLocales = locales
+                          ~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/data/repository/LanguageSettingsRepository.kt:27: Error: Call requires API level 33 (current min is 28): android.app.LocaleManager#setApplicationLocales [NewApi]
+            localeManager.applicationLocales = locales
+                                             ~
+app/src/main/kotlin/io/github/fartown/movo/agent/terminal/LinuxApkAnalysisInstaller.kt:375: Error: Call requires API level 34, or core library desugaring (current min is 28): java.nio.file.Path#of [NewApi]
+                java.nio.file.Files.createSymbolicLink(path, java.nio.file.Path.of("../../../opt/movo/apk-analysis/current/$relative"))
+                                                                                ~~
+app/src/main/kotlin/io/github/fartown/movo/ui/MainActivity.kt:128: Error: Call requires API level 29 (current min is 28): android.view.ViewTreeObserver#registerFrameCommitCallback [NewApi]
+            view.viewTreeObserver.registerFrameCommitCallback { view.post(afterFrame) }
+                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/MainActivity.kt:200: Error: Call requires API level 31 (current min is 28): android.app.UiModeManager#setApplicationNightMode [NewApi]
+        getSystemService(UiModeManager::class.java).setApplicationNightMode(mode)
+                                                    ~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoAssistantVoiceService.kt:91: Error: Call requires API level 29 (current min is 28): android.app.Service#startForeground [NewApi]
+        startForeground(VOICE_NOTIFICATION, notification(text), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+        ~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoAssistantVoiceService.kt:134: Error: Call requires API level 34 (current min is 28): android.app.ActivityOptions#setPendingIntentBackgroundActivityStartMode [NewApi]
+                pendingIntentBackgroundActivityStartMode = ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoAssistantVoiceService.kt:134: Error: Call requires API level 34 (current min is 28): android.app.ActivityOptions#setPendingIntentBackgroundActivityStartMode [NewApi]
+                pendingIntentBackgroundActivityStartMode = ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                                                         ~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoAssistantVoiceService.kt:136: Error: Call requires API level 34 (current min is 28): android.app.PendingIntent#send [NewApi]
+            runCatching { assistantPendingIntent(context, autoListen).send(senderOptions.toBundle()) }
+                                                                      ~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/theme/MovoMotion.kt:102: Error: Call requires API level 33 (current min is 28): android.animation.ValueAnimator#registerDurationScaleChangeListener [NewApi]
+        ValueAnimator.registerDurationScaleChangeListener(scaleListener)
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/theme/MovoMotion.kt:105: Error: Call requires API level 33 (current min is 28): android.animation.ValueAnimator#unregisterDurationScaleChangeListener [NewApi]
+            ValueAnimator.unregisterDurationScaleChangeListener(scaleListener)
+                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoRecognitionService.kt:114: Error: Call requires API level 33 (current min is 28): android.speech.RecognitionService.Callback#segmentResults [NewApi]
+            runCatching { callback.segmentResults(segmentResults) }
+                                   ~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoRecognitionService.kt:118: Error: Call requires API level 33 (current min is 28): android.speech.RecognitionService.Callback#endOfSegmentedSession [NewApi]
+            runCatching { callback.endOfSegmentedSession() }
+                                   ~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoRecognitionService.kt:123: Error: Call requires API level 34 (current min is 28): android.speech.RecognitionService.Callback#languageDetection [NewApi]
+            runCatching { callback.languageDetection(results) }
+                                   ~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoWakeTileService.kt:66: Error: Call requires API level 34 (current min is 28): android.service.quicksettings.TileService#startActivityAndCollapse [NewApi]
+        startActivityAndCollapse(
+        ~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoWakeTileService.kt:79: Error: Call requires API level 29 (current min is 28): android.service.quicksettings.Tile#setSubtitle [NewApi]
+        tile.subtitle = getString(state.subtitle)
+             ~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoWakeTileService.kt:79: Error: Call requires API level 29 (current min is 28): android.service.quicksettings.Tile#setSubtitle [NewApi]
+        tile.subtitle = getString(state.subtitle)
+                      ~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/MovoWakeWordService.kt:187: Error: Call requires API level 29 (current min is 28): android.app.Service#startForeground [NewApi]
+            startForeground(
+            ~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/wake/OnDeviceRecognitionWakeEngine.kt:49: Error: Call requires API level 31 (current min is 28): android.speech.SpeechRecognizer#isOnDeviceRecognitionAvailable [NewApi]
+        if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(context) &&
+                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/wake/OnDeviceRecognitionWakeEngine.kt:100: Error: Call requires API level 31 (current min is 28): android.speech.SpeechRecognizer#isOnDeviceRecognitionAvailable [NewApi]
+            SpeechRecognizer.isOnDeviceRecognitionAvailable(context) ->
+                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/wake/OnDeviceRecognitionWakeEngine.kt:101: Error: Call requires API level 31 (current min is 28): android.speech.SpeechRecognizer#createOnDeviceSpeechRecognizer [NewApi]
+                SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/terminal/PinnedLinuxToolInstaller.kt:91: Error: Call requires API level 34, or core library desugaring (current min is 28): java.nio.file.Path#of [NewApi]
+                    java.nio.file.Files.createSymbolicLink(link, java.nio.file.Path.of("../../../opt/movo/node/${artifact.version}/bin/$command"))
+                                                                                    ~~
+app/src/main/kotlin/io/github/fartown/movo/ui/screens/settings/SettingsScreen.kt:143: Error: Call requires API level 33 (current min is 28): android.os.LocaleList#matchesLanguageAndScript [NewApi]
+        locales.indexOfFirst { LocaleList.matchesLanguageAndScript(it, selected) } + 1
+                                          ~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/screens/terminal/SharedFoldersScreen.kt:108: Error: Call requires API level 30 (current min is 28): android.os.Environment#isExternalStorageManager [NewApi]
+        if (Environment.isExternalStorageManager()) showPicker = true
+                        ~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/screens/terminal/SharedFoldersScreen.kt:171: Error: Call requires API level 30 (current min is 28): android.os.Environment#isExternalStorageManager [NewApi]
+                        if (TerminalRuntime.rootAvailable || Environment.isExternalStorageManager()) {
+                                                                         ~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/app/StartupSplash.kt:67: Error: Call requires API level 31 (current min is 28): android.app.Activity#getSplashScreen [NewApi]
+        activity.splashScreen.setOnExitAnimationListener(::onExit)
+                 ~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/app/StartupSplash.kt:67: Error: Call requires API level 31 (current min is 28): android.window.SplashScreen#setOnExitAnimationListener [NewApi]
+        activity.splashScreen.setOnExitAnimationListener(::onExit)
+                              ~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/app/StartupSplash.kt:85: Error: Call requires API level 33 (current min is 28): android.animation.ValueAnimator#getDurationScale [NewApi]
+        val durationScale = ValueAnimator.getDurationScale()
+                                          ~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/app/StartupSplash.kt:87: Error: Call requires API level 31 (current min is 28): android.window.SplashScreenView#getIconAnimationStart [NewApi]
+            animationStart = view.iconAnimationStart,
+                                  ~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/app/StartupSplash.kt:88: Error: Call requires API level 31 (current min is 28): android.window.SplashScreenView#getIconAnimationDuration [NewApi]
+            animationDuration = view.iconAnimationDuration,
+                                     ~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/app/StartupSplash.kt:98: Error: Call requires API level 31 (current min is 28): android.window.SplashScreenView#getIconView [NewApi]
+        val icon = view.iconView
+                        ~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/app/StartupSplash.kt:135: Error: Call requires API level 31 (current min is 28): android.window.SplashScreenView#remove [NewApi]
+        view?.remove()
+              ~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/app/StartupSplash.kt:149: Error: Call requires API level 31 (current min is 28): android.app.Activity#getSplashScreen [NewApi]
+        activity.splashScreen.clearOnExitAnimationListener()
+                 ~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/app/StartupSplash.kt:149: Error: Call requires API level 31 (current min is 28): android.window.SplashScreen#clearOnExitAnimationListener [NewApi]
+        activity.splashScreen.clearOnExitAnimationListener()
+                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/SystemSpeechRecognizer.kt:18: Error: Call requires API level 31 (current min is 28): android.speech.SpeechRecognizer#isOnDeviceRecognitionAvailable [NewApi]
+        return if (SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)) {
+                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/SystemSpeechRecognizer.kt:19: Error: Call requires API level 31 (current min is 28): android.speech.SpeechRecognizer#createOnDeviceSpeechRecognizer [NewApi]
+            SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
+                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/SystemSpeechRecognizer.kt:30: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager#queryIntentServices [NewApi]
+        val services = context.packageManager.queryIntentServices(
+                                              ~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/agent/voice/SystemSpeechRecognizer.kt:32: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager.ResolveInfoFlags#of [NewApi]
+            PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_ALL.toLong()),
+                                            ~~
+app/src/main/kotlin/io/github/fartown/movo/agent/terminal/TerminalRuntime.kt:33: Error: Call requires API level 30 (current min is 28): android.os.Environment#isExternalStorageManager [NewApi]
+    val publicStorageGranted: Boolean get() = appContext != null && android.os.Environment.isExternalStorageManager()
+                                                                                           ~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/screens/voice/VoiceSettingsScreen.kt:111: Error: Class requires API level 29 (current min is 28): android.app.role.RoleManager [NewApi]
+    val roleManager = remember { context.getSystemService(RoleManager::class.java) }
+                                                          ~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/screens/voice/VoiceSettingsScreen.kt:112: Error: Call requires API level 29 (current min is 28): android.app.role.RoleManager#isRoleHeld [NewApi]
+    var assistantRole by remember { mutableStateOf(roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)) }
+                                                               ~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/screens/voice/VoiceSettingsScreen.kt:171: Error: Call requires API level 29 (current min is 28): android.app.role.RoleManager#isRoleHeld [NewApi]
+        assistantRole = roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)
+                                    ~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/screens/voice/VoiceSettingsScreen.kt:178: Error: Call requires API level 29 (current min is 28): android.app.role.RoleManager#isRoleHeld [NewApi]
+                assistantRole = roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)
+                                            ~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/screens/voice/VoiceSettingsScreen.kt:205: Error: Call requires API level 29 (current min is 28): android.app.role.RoleManager#isRoleAvailable [NewApi]
+    val showRoleRow = !assistantRole && roleManager.isRoleAvailable(RoleManager.ROLE_ASSISTANT)
+                                                    ~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/screens/voice/VoiceSettingsScreen.kt:346: Error: Call requires API level 29 (current min is 28): android.app.role.RoleManager#createRequestRoleIntent [NewApi]
+                            onClick = { assistantLauncher.launch(roleManager.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT)) },
+                                                                             ~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/screens/terminal/WorkspaceScreen.kt:55: Error: Call requires API level 30 (current min is 28): android.os.Environment#isExternalStorageManager [NewApi]
+    var publicAccess by remember { mutableStateOf(Environment.isExternalStorageManager()) }
+                                                              ~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/ui/screens/terminal/WorkspaceScreen.kt:57: Error: Call requires API level 30 (current min is 28): android.os.Environment#isExternalStorageManager [NewApi]
+        publicAccess = Environment.isExternalStorageManager()
+                                   ~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/hook/xiaoai/XiaoAiHooks.kt:159: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager#getPackageInfo [NewApi]
+            context.packageManager.getPackageInfo(
+                                   ~~~~~~~~~~~~~~
+app/src/main/kotlin/io/github/fartown/movo/hook/xiaoai/XiaoAiHooks.kt:161: Error: Call requires API level 33 (current min is 28): android.content.pm.PackageManager.PackageInfoFlags#of [NewApi]
+                PackageManager.PackageInfoFlags.of(0L),
+                                                ~~
+app/src/main/res/values/styles.xml:6: Error: android:windowSplashScreenAnimatedIcon requires API level 31 (current min is 28) [NewApi]
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_splash_icon</item>
+              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/res/values/styles.xml:8: Error: android:windowSplashScreenBackground requires API level 31 (current min is 28) [NewApi]
+        <item name="android:windowSplashScreenBackground">#FFF4F3EF</item>
+              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/res/values/styles.xml:11: Error: android:forceDarkAllowed requires API level 29 (current min is 28) [NewApi]
+        <item name="android:forceDarkAllowed">false</item>
+              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/res/values/styles.xml:12: Error: android:windowSplashScreenIconBackgroundColor requires API level 31 (current min is 28) [NewApi]
+        <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
+              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/res/values/styles.xml:13: Error: android:windowSplashScreenBehavior requires API level 33 (current min is 28) [NewApi]
+        <item name="android:windowSplashScreenBehavior">icon_preferred</item>
+              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/res/values/styles.xml:26: Error: android:forceDarkAllowed requires API level 29 (current min is 28) [NewApi]
+        <item name="android:forceDarkAllowed">false</item>
+              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+   Explanation for issues of type "NewApi":
+   This check scans through all the Android API calls in the application and
+   warns about any calls that are not available on all versions targeted by
+   this application (according to its minimum SDK attribute in the manifest).
+
+   If you really want to use this API and don't need to support older devices
+   just set the minSdkVersion in your build.gradle or AndroidManifest.xml
+   files.
+
+   If your code is deliberately accessing newer APIs, and you have ensured
+   (e.g. with conditional execution) that this code will only ever be called
+   on a supported platform, then you can annotate your class or method with
+   the @TargetApi annotation specifying the local minimum SDK to apply, such
+   as @TargetApi(11), such that this check considers 11 rather than your
+   manifest file's minimum SDK as the required API level.
+
+   If you are deliberately setting android: attributes in style definitions,
+   make sure you place this in a values-vNN folder in order to avoid running
+   into runtime conflicts on certain devices where manufacturers have added
+   custom attributes whose ids conflict with the new ones on later platforms.
+
+   Similarly, you can use tools:targetApi="11" in an XML file to indicate that
+   the element will only be inflated in an adequate context.
+
+147 errors, 43 warnings
