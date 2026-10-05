@@ -110,6 +110,26 @@ class ContractPlumbingTest {
         assertFalse("有后果的工具在未确认时不得执行", executed)
     }
 
+    @Test
+    fun externalTool_approvalFree_executesWithoutAsking() {
+        var executed = false
+        val external = object : ToolProvider {
+            override val tools = listOf(ContractTool(ExternalFake { executed = true }))
+        }
+        val mustNotAsk = object : UserInteraction {
+            override val available = true
+            override fun ask(question: UserQuestion, timeoutMs: Long): UserAnswer =
+                throw AssertionError("免审时不应提问")
+            override fun approve(request: ApprovalRequest, timeoutMs: Long): ApprovalDecision =
+                throw AssertionError("免审时不应弹审批")
+        }
+        val p = pipeline(listOf(external), ToolEnvironment(), mustNotAsk)
+        val result = p.execute(call("ext_fake", "{}"))
+        // 默认 YOLO：有后果的动作直接执行，不经过审批
+        assertEquals("ok", result.status)
+        assertTrue("免审时 external 工具应直接执行", executed)
+    }
+
     private fun deviceProvider() = object : ToolProvider {
         override val tools = listOf(ContractTool(DeviceReadTool(fakeBackend)))
     }

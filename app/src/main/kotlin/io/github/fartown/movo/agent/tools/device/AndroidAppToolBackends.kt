@@ -1,5 +1,9 @@
 package io.github.fartown.movo.agent.tools.device
 
+import io.github.fartown.movo.core.getApplicationInfoCompat
+import io.github.fartown.movo.core.resolveActivityCompat
+import io.github.fartown.movo.core.queryIntentActivitiesCompat
+import io.github.fartown.movo.BuildConfig
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -17,7 +21,7 @@ internal class LauncherAppIndex(private val context: Context) {
         val pm = context.packageManager
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         val resolveInfos = runCatching {
-            pm.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0L))
+            pm.queryIntentActivitiesCompat(intent)
         }.getOrDefault(emptyList())
         val apps = LinkedHashMap<String, AppMatch>()
         resolveInfos.forEach { info ->
@@ -94,7 +98,7 @@ internal class AndroidAppOpenBackend(
         if (parsed == null || parsed.scheme.isNullOrBlank()) return UriDispatch.InvalidScheme
         val intent = Intent(Intent.ACTION_VIEW, parsed).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val resolved = runCatching {
-            context.packageManager.resolveActivity(intent, PackageManager.ResolveInfoFlags.of(0L))
+            context.packageManager.resolveActivityCompat(intent)
         }.getOrNull() ?: return UriDispatch.NoActivity
         val targetPackage = resolved.activityInfo?.packageName?.takeUnless { it in RESOLVER_PACKAGES }
         return if (runCatching { context.startActivity(intent) }.isSuccess) {
@@ -143,7 +147,7 @@ internal class AndroidAppOpenBackend(
 
     private companion object {
         val RESOLVER_PACKAGES = setOf("android", "com.android.internal.app")
-        val MOVO_PACKAGES = setOf("io.github.fartown.movo")
+        val MOVO_PACKAGES = setOf(BuildConfig.APPLICATION_ID)
     }
 }
 
@@ -154,7 +158,7 @@ internal class AndroidAppControlBackend(
 ) : AppControlBackend {
 
     override fun exists(packageName: String): Boolean = runCatching {
-        context.packageManager.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0L))
+        context.packageManager.getApplicationInfoCompat(packageName)
     }.isSuccess
 
     override fun run(packageName: String, action: AppControlAction): ToggleDispatch {

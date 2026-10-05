@@ -26,12 +26,11 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
+import io.github.fartown.movo.ui.model.AgentInteractionUiState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -48,10 +47,6 @@ import io.github.fartown.movo.agent.device.RootAccess
 import io.github.fartown.movo.agent.media.AgentImageCodec
 import io.github.fartown.movo.agent.model.AgentModelClient
 import io.github.fartown.movo.agent.overlay.AgentHapticFeedback
-import io.github.fartown.movo.agent.overlay.AgentOverlayBubble
-import io.github.fartown.movo.agent.overlay.AgentOverlayGlow
-import io.github.fartown.movo.agent.overlay.AgentOverlayOrb
-import io.github.fartown.movo.agent.overlay.AgentOverlayRemoveZone
 import io.github.fartown.movo.agent.overlay.orbMode
 import io.github.fartown.movo.agent.voice.MovoAssistantVoiceService
 import io.github.fartown.movo.agent.voice.session.VoiceChannel
@@ -65,32 +60,23 @@ import io.github.fartown.movo.agent.overlay.markPaused
 import io.github.fartown.movo.agent.overlay.markResumed
 import io.github.fartown.movo.agent.overlay.AgentOverlayStatus
 import io.github.fartown.movo.agent.overlay.AgentOverlayVisibilityPolicy
-import io.github.fartown.movo.agent.overlay.AgentOverlayUnlockPrompt
 import io.github.fartown.movo.agent.overlay.InteractionCardCoordinator
 import io.github.fartown.movo.agent.overlay.OverlayLifecyclePolicy
-import io.github.fartown.movo.agent.overlay.OverlayUnlockActivity
 import io.github.fartown.movo.agent.overlay.applyEvent
 import io.github.fartown.movo.config.Prefs
 import io.github.fartown.movo.agent.tools.interaction.AgentInteractionRegistry
 import io.github.fartown.movo.agent.tools.interaction.InteractionReply
-import io.github.fartown.movo.ui.components.movo.AgentInteractionOverlayContent
-import io.github.fartown.movo.ui.model.AgentInteractionUiState
 import io.github.fartown.movo.core.AndroidAgentLogger
 import io.github.fartown.movo.core.ModuleConfig
 import io.github.fartown.movo.core.safeLogType
 import io.github.fartown.movo.core.toSafeLogToken
 import io.github.fartown.movo.data.repository.RuntimeConfigRepository
-import io.github.fartown.movo.ui.AgentConversationSheetActivity
-import io.github.fartown.movo.ui.markdown.InAppBrowserUriHandler
+import io.github.fartown.movo.flavor.FlavorModule
 import kotlin.concurrent.thread
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import top.yukonga.miuix.kmp.squircle.LocalSquircleEnabled
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.theme.darkColorScheme
-import top.yukonga.miuix.kmp.theme.lightColorScheme
 
 /**
  * 模块进程内的通用 Agent Runtime。
@@ -307,14 +293,15 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         lifecycleScope.launch { InteractionCardCoordinator.activeHost.collect { syncInteractionOverlay() } }
         lifecycleScope.launch { InteractionCardCoordinator.unlockInProgress.collect { syncInteractionOverlay() } }
         runCatching {
-            registerReceiver(
+            androidx.core.content.ContextCompat.registerReceiver(
+                this,
                 keyguardReceiver,
                 IntentFilter().apply {
                     addAction(Intent.ACTION_SCREEN_OFF)
                     addAction(Intent.ACTION_SCREEN_ON)
                     addAction(Intent.ACTION_USER_PRESENT)
                 },
-                Context.RECEIVER_NOT_EXPORTED,
+                androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
             )
         }
     }
@@ -648,7 +635,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         activeRunConversation = conversationTarget
             ?.takeIf { it.source == AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE && replyTo != null }
             ?.let { request.runId to it.key }
-        isResultConversation = fromResultCard || AgentConversationSheetActivity.isConversationVisible(conversationTarget)
+        isResultConversation = fromResultCard || FlavorModule.surfaces.isConversationVisible(conversationTarget)
         activeSession?.controller?.cancel()
         // 被替换的任务若在等审批 / 提问，它的等待已随取消结束：卡片（App 内与悬浮）一并收起，不等它迟到的「已处理」。
         InteractionCardCoordinator.clearRun(activeSession?.runId)
@@ -768,7 +755,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         val entrySurfaceReady = (!requiresEntrySurfaceDismissal || entrySurfaceGuard == null ||
             runCatching { entrySurfaceGuard.dismissOnce() }.getOrDefault(false)) &&
             (!requiresEntrySurfaceDismissal || !isResultConversation ||
-                AgentConversationSheetActivity.hideForDeviceOperation())
+                FlavorModule.surfaces.hideConversationForDeviceOperation())
         mainHandler.post {
             if (activeSession !== session) return@post
             if (
@@ -1281,7 +1268,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         orbEntrance = true
         val orb = createOverlayComposeView {
             val voice by VoiceSessionManager.state.collectAsState()
-            AgentOverlayOrb(
+            FlavorModule.runSurface.Orb(
                 mode = orbMode(
                     state.value.phase, standby.value, voice.active,
                     stopped = state.value.status == AgentOverlayStatus.Stopped,
@@ -1421,7 +1408,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         val glow = createOverlayComposeView {
             // 淡出中按结束态画（透明度随 `standard` 降到 0），不随状态复位成执行中重新满亮度流动。
             val current = state.value
-            AgentOverlayGlow(
+            FlavorModule.runSurface.Glow(
                 state = if (glowRetired.value) current.copy(phase = AgentOverlayPhase.FINISHED) else current,
             )
         }
@@ -1619,7 +1606,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun showBubble(wm: WindowManager): Boolean {
         if (bubbleView != null) return true
         val bubble = createOverlayComposeView {
-            AgentOverlayBubble(
+            FlavorModule.runSurface.Bubble(
                 state = state.value,
                 onCollapse = ::collapseBubble,
                 onPause = ::requestPause,
@@ -1782,16 +1769,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             setViewTreeLifecycleOwner(this@AgentRuntimeService)
             setViewTreeSavedStateRegistryOwner(this@AgentRuntimeService)
             setContent {
-                MiuixTheme(colors = if (isNightMode()) darkColorScheme() else lightColorScheme()) {
-                    // 部分 ROM 会给 TYPE_ACCESSIBILITY_OVERLAY 分配软件 Canvas；Miuix 的
-                    // RuntimeShader 只检查系统版本，因此系统浮层统一使用其普通圆角回退。
-                    CompositionLocalProvider(
-                        LocalSquircleEnabled provides false,
-                        LocalUriHandler provides InAppBrowserUriHandler(this@AgentRuntimeService),
-                    ) {
-                        io.github.fartown.movo.ui.theme.ProvideReducedMotion(content)
-                    }
-                }
+                FlavorModule.runSurface.Host(this@AgentRuntimeService, ::isNightMode, content)
             }
         }
 
@@ -1818,6 +1796,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
      * 无障碍重连后旧实例名下的窗口已被系统移除，按新 context 重建。
      */
     private fun syncInteractionOverlay() {
+        if (!FlavorModule.interactionCards) {
+            removeInteractionOverlay()
+            return
+        }
         val model = InteractionCardCoordinator.pending.value
         val floating = InteractionCardCoordinator.currentPlacement == InteractionCardCoordinator.Placement.FLOATING &&
             !InteractionCardCoordinator.unlockInProgress.value
@@ -1848,12 +1830,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             val model = InteractionCardCoordinator.pending.collectAsState().value
             if (model != null) {
                 if (interactionLocked.value) {
-                    AgentOverlayUnlockPrompt(
+                    FlavorModule.runSurface.UnlockPrompt(
                         onCancel = { InteractionCardCoordinator.reply(model, InteractionReply.Cancelled) },
                         onUnlock = ::requestUnlockForInteraction,
                     )
                 } else {
-                    AgentInteractionOverlayContent(
+                    FlavorModule.runSurface.Interaction(
                         model = model,
                         onApprove = { replyFromFloatingCard(model, InteractionReply.Approval(approved = true)) },
                         onDecline = { InteractionCardCoordinator.reply(model, InteractionReply.Approval(approved = false)) },
@@ -1948,7 +1930,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             UNLOCK_REQUEST_TIMEOUT_MS,
         )
         runCatching {
-            (AgentAccessibilityService.current() ?: this).startActivity(OverlayUnlockActivity.intent(this))
+            FlavorModule.runSurface.requestUnlock(AgentAccessibilityService.current() ?: this)
         }.onFailure { throwable ->
             AndroidAgentLogger.warnThrottled("runtime_unlock_request_failed") {
                 "Agent runtime unlock request failed: type=${throwable.safeLogType()}"
@@ -2067,7 +2049,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             windowAnimations = 0
         }
         val view = createOverlayComposeView {
-            AgentOverlayRemoveZone(visible = removeZoneVisible.value)
+            FlavorModule.runSurface.RemoveZone(visible = removeZoneVisible.value)
         }
         runCatching { wm.addView(view, lp) }.onFailure { return }
         removeZoneView = view
@@ -2263,17 +2245,22 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             val pendingIntent = PendingIntent.getActivity(
                 this, 0x524553,
                 AgentConversationHandoff.intent(this, target, runId, receiver)
-                    .setClass(this, AgentConversationSheetActivity::class.java)
+                    .setClass(this, FlavorModule.surfaces.conversationActivity)
                     .putExtra(MovoAssistantVoiceService.EXTRA_AUTO_LISTEN, autoListen),
                 PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                 creatorOptions.toBundle(),
             )
-            val senderOptions = ActivityOptions.makeBasic().apply {
-                pendingIntentBackgroundActivityStartMode = if (Build.VERSION.SDK_INT >= 36)
-                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_IF_VISIBLE
-                else ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                val senderOptions = ActivityOptions.makeBasic().apply {
+                    pendingIntentBackgroundActivityStartMode = if (Build.VERSION.SDK_INT >= 36)
+                        ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_IF_VISIBLE
+                    else ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                }
+                pendingIntent.send(senderOptions.toBundle())
+            } else {
+                // Android 14 以前没有后台启动 Activity 的发送方选项。
+                pendingIntent.send()
             }
-            pendingIntent.send(senderOptions.toBundle())
         }.onFailure {
             AndroidAgentLogger.warn("Agent result conversation launch failed")
             failResultHandoff(token)
@@ -2318,7 +2305,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             // 不自动弹出，避免打断用户正在看的 App。结果交付仍走原来的 handoff（点球时发起，带回执与失败提示）。
             // 屏幕边缘光晕随状态淡出后移除窗口。
             collapseBubble()
-            if (!AgentConversationSheetActivity.isConversationVisible(resultConversationTarget)) {
+            if (!FlavorModule.surfaces.isConversationVisible(resultConversationTarget)) {
                 // 没操作其他 App 的一轮：球已经在了，不再点亮边缘光晕（否则结束时闪一下）。
                 if (hasExecutedForegroundTool || orbView == null) ensureOverlayVisible()
                 scheduleResultOrbHide()
@@ -2690,7 +2677,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     /** 从悬浮球打开对话浮层前登记起点：浮层从球的位置长出来（Q4）。 */
     private fun markSheetFromOrb() {
         publishOrbRect()
-        orbDiscRect?.let { AgentConversationSheetActivity.expandFromOrb(it) }
+        orbDiscRect?.let { FlavorModule.surfaces.expandConversationFromOrb(it) }
     }
 
     internal companion object {

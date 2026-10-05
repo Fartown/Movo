@@ -1,9 +1,9 @@
 package io.github.fartown.movo.agent.tools.personal
 
+import io.github.fartown.movo.core.getApplicationInfoCompat
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
-import android.content.pm.PackageManager
 import io.github.fartown.movo.agent.device.AgentNotificationHistoryService
 import io.github.fartown.movo.agent.device.BoundedRootCommandExecutor
 import io.github.fartown.movo.agent.device.RootAccess
@@ -754,7 +754,7 @@ internal class AndroidUsageReadBackend(
         context.getSystemService(UsageStatsManager::class.java)
 
     private fun appName(packageName: String): String = runCatching {
-        val info = context.packageManager.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0))
+        val info = context.packageManager.getApplicationInfoCompat(packageName)
         context.packageManager.getApplicationLabel(info).toString()
     }.getOrDefault(packageName)
 }

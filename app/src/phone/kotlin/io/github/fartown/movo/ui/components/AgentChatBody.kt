@@ -1356,10 +1356,6 @@ internal fun List<AgentChatMessageUi>.toTimelineEntries(): List<AgentTimelineEnt
     flushWorkProcess()
 }
 
-/** 运行时补充以 `user-<runId>-supplement-<index>` 的用户消息投影进来（见 AgentRunMessageProjector）。 */
-internal fun AgentChatMessageUi.isRunSupplement(): Boolean =
-    this is UserMessageUi && id.startsWith("user-") && id.contains("-supplement-")
-
 private val RETRY_NOTICE_ID = Regex("^assistant-(.+)-retry-(\\d+)$")
 
 /**

@@ -1,9 +1,11 @@
 package io.github.fartown.movo.agent.runtime
 
+import androidx.core.content.IntentCompat
+import android.os.Build
+import io.github.fartown.movo.flavor.FlavorModule
 import android.content.Context
 import android.content.Intent
 import android.os.ResultReceiver
-import io.github.fartown.movo.ui.MainActivity
 
 /** Identifies an existing conversation; opening a result must never create another chat. */
 internal data class AgentConversationTarget(val source: String, val key: String) {
@@ -44,7 +46,7 @@ internal object AgentConversationHandoff {
     }
 
     fun intent(context: Context, target: AgentConversationTarget, runId: String?, receiver: ResultReceiver): Intent =
-        Intent(context, MainActivity::class.java)
+        Intent(context, FlavorModule.surfaces.mainActivity)
             .setAction(ACTION_OPEN)
             .putExtra(EXTRA_SOURCE, target.source)
             .putExtra(EXTRA_KEY, target.key)
@@ -74,7 +76,7 @@ internal object AgentConversationHandoff {
                 source != AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE) return null
         } else if (runId.isBlank()) return null
         return Request(AgentConversationTarget(source, key), runId,
-            intent.getParcelableExtra(EXTRA_RECEIVER, ResultReceiver::class.java))
+            IntentCompat.getParcelableExtra(intent, EXTRA_RECEIVER, ResultReceiver::class.java))
     }
 
     fun consume(intent: Intent) {
@@ -95,7 +97,9 @@ internal object AgentConversationHandoff {
 
     fun onMainCreated(activity: android.app.Activity) {
         // launchedFromPackage 只在拉起方是本应用（或主动共享身份）时才有值，桌面图标拉起时为 null。
-        val external = activity.launchedFromPackage != activity.packageName
+        // 拉起方只能在 Android 14+ 读到；更低版本不做这项处理。
+        val external = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+            activity.launchedFromPackage != activity.packageName
         systemLaunchedMain = if (external) java.lang.ref.WeakReference(activity) else null
     }
 
@@ -114,10 +118,13 @@ internal object AgentConversationHandoff {
         if (main.isFinishing || main.isDestroyed || main.taskId == ownTaskId) return
         val tasks = runCatching { context.getSystemService(android.app.ActivityManager::class.java).appTasks }
             .getOrDefault(emptyList())
-        val task = tasks.firstOrNull { runCatching { it.taskInfo?.taskId == main.taskId }.getOrDefault(false) }
+        val task = tasks.firstOrNull { runCatching { it.taskInfo?.taskIdCompat() == main.taskId }.getOrDefault(false) }
         val removed = task != null && runCatching { task.finishAndRemoveTask() }.isSuccess
         io.github.fartown.movo.core.AndroidAgentLogger.info(
             "Conversation handoff: replaced system-launched main task=${main.taskId} removed=$removed",
         )
     }
 }
+
+private fun android.app.ActivityManager.RecentTaskInfo.taskIdCompat(): Int =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) taskId else @Suppress("DEPRECATION") id

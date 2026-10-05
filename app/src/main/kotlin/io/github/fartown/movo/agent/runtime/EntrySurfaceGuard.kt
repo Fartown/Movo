@@ -1,5 +1,7 @@
 package io.github.fartown.movo.agent.runtime
 
+import io.github.fartown.movo.flavor.FlavorModule
+import io.github.fartown.movo.BuildConfig
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -7,7 +9,6 @@ import io.github.fartown.movo.agent.accessibility.AgentAccessibilityService
 import io.github.fartown.movo.agent.accessibility.PackageWindowVisibility
 import io.github.fartown.movo.agent.voice.session.VoiceSurfaceTracker
 import io.github.fartown.movo.core.AgentLogger
-import io.github.fartown.movo.ui.AgentConversationSheetActivity
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -165,7 +166,7 @@ internal class EntrySurfaceGuard private constructor(
         private const val BREENO_PACKAGE_NAME = "com.heytap.speechassist"
         private const val XIAOAI_HANDOFF_SOURCE = "xiaoai"
         private const val XIAOAI_PACKAGE_NAME = "com.miui.voiceassist"
-        private const val MOVO_PACKAGE_NAME = "io.github.fartown.movo"
+        private const val MOVO_PACKAGE_NAME = BuildConfig.APPLICATION_ID
         private const val NANOS_PER_MILLISECOND = 1_000_000L
     }
 }
@@ -262,7 +263,7 @@ internal object MovoOwnedPages {
         }
         return MovoPageDismisser(
             visiblePageCount = { onMain { VoiceSurfaceTracker.visibleActivities().size } ?: Int.MAX_VALUE },
-            hideConversationSheet = { AgentConversationSheetActivity.hideForDeviceOperation() },
+            hideConversationSheet = { FlavorModule.surfaces.hideConversationForDeviceOperation() },
             moveVisiblePagesToBack = { onMain(::moveVisiblePagesToBack) ?: false },
         ).dismiss()
     }

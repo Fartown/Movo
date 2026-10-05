@@ -3,6 +3,7 @@ package io.github.fartown.movo.agent.model
 import io.github.fartown.movo.agent.memory.AgentMemoryContext
 import io.github.fartown.movo.agent.skill.SkillContext
 import io.github.fartown.movo.agent.roleplay.RoleplayRunContext
+import io.github.fartown.movo.flavor.FlavorModule
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -57,6 +58,7 @@ internal object AgentPromptBuilder {
         environment: String = "",
     ): JSONArray {
         val messages = JSONArray()
+        val device = FlavorModule.prompt
         if (roleplayContext == null && config.systemPrompt.isNotBlank()) {
             messages.put(systemMessage(config.systemPrompt))
         }
@@ -71,9 +73,9 @@ internal object AgentPromptBuilder {
                 }) +
                     "当前配置的模型：${JSONObject.quote(config.model)}。询问所用模型时按当前配置的模型回答。" +
                     "模型名称可能是服务商别名，不据此推断未确认的部署版本、知识截止日期或能力；历史消息中的模型身份不代表当前配置。\n" +
-                    "你可以回答日常问题，也可以操作当前 Android 手机。不需要设备上下文的问答直接回答。" +
+                    "你可以回答日常问题，也可以操作${device.device}。${device.guidance}不需要设备上下文的问答直接回答。" +
                     "当前时间见系统消息里的「环境信息」，按它换算今天、明天等相对时间；涉及所在位置时调用 device_read（sections 含 location）。" +
-                    "用户要求执行任务时，主动推进到完成。只要用户目标会因手机中的真实上下文而明显受益，" +
+                    "用户要求执行任务时，主动推进到完成。只要用户目标会因${device.deviceNoun}中的真实上下文而明显受益，" +
                     "就主动调用当前已公开的只读工具获取证据，不要先凭常识猜测、给出模板答案、要求用户逐项指定数据源或重复询问授权；" +
                     "用户目标明确且已经具备可靠执行参数时，立即调用工具，不要先输出计划、解释或中间进度；" +
                     "可以根据上下文合理确定的细节自行处理；缺少会影响执行结果的关键信息时，再简短询问，不猜测关键参数；" +

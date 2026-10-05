@@ -1,5 +1,6 @@
 package io.github.fartown.movo.agent.voice
 
+import android.os.Build
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
@@ -111,16 +112,16 @@ class MovoRecognitionService : RecognitionService() {
         override fun onEvent(eventType: Int, params: Bundle) = Unit
 
         override fun onSegmentResults(segmentResults: Bundle) {
-            runCatching { callback.segmentResults(segmentResults) }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) runCatching { callback.segmentResults(segmentResults) }
         }
 
         override fun onEndOfSegmentedSession() {
-            runCatching { callback.endOfSegmentedSession() }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) runCatching { callback.endOfSegmentedSession() }
             releaseRecognizer(callback)
         }
 
         override fun onLanguageDetection(results: Bundle) {
-            runCatching { callback.languageDetection(results) }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) runCatching { callback.languageDetection(results) }
         }
     }
 }

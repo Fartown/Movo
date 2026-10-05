@@ -224,5 +224,5 @@ App 恢复时以 `checkpoint + outbox + active session` 统一对账，不再用
 最终验证仍运行项目统一命令：
 
 ```bash
-./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
+./gradlew :app:assemblePhoneDebug :app:testPhoneDebugUnitTest :app:lintPhoneDebug
 ```

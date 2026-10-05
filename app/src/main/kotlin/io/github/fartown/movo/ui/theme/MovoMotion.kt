@@ -1,5 +1,6 @@
 package io.github.fartown.movo.ui.theme
 
+import android.os.Build
 import android.animation.ValueAnimator
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -98,11 +99,18 @@ internal fun ProvideReducedMotion(content: @Composable () -> Unit) {
             IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED),
             Context.RECEIVER_NOT_EXPORTED,
         )
-        val scaleListener = ValueAnimator.DurationScaleChangeListener { refresh() }
-        ValueAnimator.registerDurationScaleChangeListener(scaleListener)
+        // 动画时长倍率的变化监听从 Android 13 起才有；更低版本只跟随省电模式变化。
+        val scaleListener = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ValueAnimator.DurationScaleChangeListener { refresh() }
+                .also(ValueAnimator::registerDurationScaleChangeListener)
+        } else {
+            null
+        }
         onDispose {
             runCatching { context.unregisterReceiver(receiver) }
-            ValueAnimator.unregisterDurationScaleChangeListener(scaleListener)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && scaleListener != null) {
+                ValueAnimator.unregisterDurationScaleChangeListener(scaleListener)
+            }
         }
     }
     CompositionLocalProvider(LocalReducedMotion provides reduced, content = content)

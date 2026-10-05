@@ -1,5 +1,6 @@
 package io.github.fartown.movo.agent.overlay
 
+import android.os.Build
 import android.content.Context
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -41,6 +42,8 @@ internal object AgentHapticFeedback {
     }
 
     fun perform(context: Context, type: Type) {
+        // VibratorManager 与 primitive 组合要 Android 12+；更低版本（电视）不振动。
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
         if (!isSystemHapticEnabled(context)) return
         val vibrator = context.getSystemService(VibratorManager::class.java)
             ?.defaultVibrator

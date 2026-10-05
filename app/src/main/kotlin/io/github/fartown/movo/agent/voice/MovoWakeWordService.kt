@@ -1,5 +1,7 @@
 package io.github.fartown.movo.agent.voice
 
+import androidx.core.app.ServiceCompat
+import io.github.fartown.movo.flavor.FlavorModule
 import android.app.Activity
 import android.app.Application
 import android.app.Notification
@@ -28,7 +30,6 @@ import io.github.fartown.movo.data.model.WakeListenScope
 import io.github.fartown.movo.data.model.WakePhraseRules
 import io.github.fartown.movo.data.model.WakeSensitivity
 import io.github.fartown.movo.data.repository.VoiceSettingsRepository
-import io.github.fartown.movo.ui.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -184,7 +185,8 @@ internal class MovoWakeWordService : Service() {
         }
         if (foregroundActive && !force) return true
         return try {
-            startForeground(
+            ServiceCompat.startForeground(
+                this,
                 NOTIFICATION_ID,
                 notification(),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
@@ -269,7 +271,7 @@ internal class MovoWakeWordService : Service() {
         val open = PendingIntent.getActivity(
             this,
             0,
-            Intent(this, MainActivity::class.java),
+            Intent(this, FlavorModule.surfaces.mainActivity),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val stop = PendingIntent.getService(

@@ -1,5 +1,6 @@
 package io.github.fartown.movo.agent.accessibility
 
+import io.github.fartown.movo.BuildConfig
 import android.net.Uri
 import android.os.Bundle
 
@@ -17,7 +18,7 @@ internal object AccessibilityProtectionProtocol {
     const val ACTION_RECOVER =
         "io.github.fartown.movo.action.RECOVER_ACCESSIBILITY_SERVICE"
     const val PERMISSION =
-        "io.github.fartown.movo.permission.CONTROL_ACCESSIBILITY_PROTECTION"
+        "${BuildConfig.APPLICATION_ID}.permission.CONTROL_ACCESSIBILITY_PROTECTION"
     const val RECEIVER_PACKAGE = "android"
 
     const val EXTRA_PROTOCOL_VERSION = "protocol_version"
@@ -30,7 +31,7 @@ internal object AccessibilityProtectionProtocol {
     const val SETTING_NAME = "movo_accessibility_protection_enabled"
     const val DEFAULT_ENABLED = false
 
-    const val HEALTH_AUTHORITY = "io.github.fartown.movo.accessibility.health"
+    const val HEALTH_AUTHORITY = "${BuildConfig.APPLICATION_ID}.accessibility.health"
     const val HEALTH_METHOD = "accessibility_health"
     const val HEALTH_STATUS = "status"
     const val HEALTH_STATUS_CONNECTED = "connected"

@@ -88,7 +88,7 @@ internal class PinnedLinuxToolInstaller(
                 ManagedLinuxTool.NODE -> listOf("node", "npm", "npx").forEach { command ->
                     val link = File(localBin, command).toPath()
                     java.nio.file.Files.deleteIfExists(link)
-                    java.nio.file.Files.createSymbolicLink(link, java.nio.file.Path.of("../../../opt/movo/node/${artifact.version}/bin/$command"))
+                    java.nio.file.Files.createSymbolicLink(link, java.nio.file.Paths.get("../../../opt/movo/node/${artifact.version}/bin/$command"))
                 }
             }
             return true

@@ -1,5 +1,6 @@
 package io.github.fartown.movo.agent.voice.wake
 
+import android.os.Build
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -46,7 +47,7 @@ internal class OnDeviceRecognitionWakeEngine(
         this.phrase = WakePhraseRules.normalizeOrDefault(phrase)
         this.sensitivity = sensitivity
         this.listener = listener
-        if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(context) &&
+        if (!onDeviceAvailable() &&
             SystemSpeechRecognizer.create(context) == null
         ) {
             listener.onError("设备不支持本地唤醒识别，请稍后集成 Sherpa 模型")
@@ -97,7 +98,7 @@ internal class OnDeviceRecognitionWakeEngine(
             return
         }
         val created = when {
-            SpeechRecognizer.isOnDeviceRecognitionAvailable(context) ->
+            onDeviceAvailable() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
                 SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
             else -> SystemSpeechRecognizer.create(context)
         } ?: run {
@@ -175,4 +176,8 @@ internal class OnDeviceRecognitionWakeEngine(
         WakeSensitivity.Medium -> 2_500L
         WakeSensitivity.High -> 1_500L
     }
+
+    /** 本地识别从 Android 12 起才有。 */
+    private fun onDeviceAvailable(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
 }

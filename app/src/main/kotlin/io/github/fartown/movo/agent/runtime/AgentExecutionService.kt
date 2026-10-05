@@ -1,5 +1,7 @@
 package io.github.fartown.movo.agent.runtime
 
+import androidx.core.app.ServiceCompat
+import io.github.fartown.movo.flavor.FlavorModule
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -14,7 +16,6 @@ import android.os.Looper
 import io.github.fartown.movo.R
 import io.github.fartown.movo.core.AndroidAgentLogger
 import io.github.fartown.movo.core.safeLogType
-import io.github.fartown.movo.ui.MainActivity
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -46,7 +47,7 @@ internal class AgentExecutionService : Service() {
         if (foregroundActive || startRejected) return
         attachOwner(owner)
         try {
-            startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
             foregroundActive = true
             io.github.fartown.movo.diagnostics.DiagnosticsEnvironment.executionService = true
             io.github.fartown.movo.diagnostics.MemoryDiagnostics.record("lifecycle", "execution_service.foreground")
@@ -107,7 +108,7 @@ internal class AgentExecutionService : Service() {
 
     private fun notification(): Notification {
         val open = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
+            this, 0, Intent(this, FlavorModule.surfaces.mainActivity),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val stopTasks = PendingIntent.getService(

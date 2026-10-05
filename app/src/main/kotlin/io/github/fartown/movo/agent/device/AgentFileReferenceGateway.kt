@@ -1,5 +1,6 @@
 package io.github.fartown.movo.agent.device
 
+import android.os.Build
 import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
@@ -275,6 +276,7 @@ internal class AgentFileReferenceGateway(
             ) {
                 return null
             }
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
             val mediaUri = try {
                 MediaStore.getMediaUri(context, uri)
             } catch (_: RuntimeException) {

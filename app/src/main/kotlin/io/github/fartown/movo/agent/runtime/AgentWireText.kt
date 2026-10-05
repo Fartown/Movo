@@ -1,5 +1,6 @@
 package io.github.fartown.movo.agent.runtime
 
+import androidx.core.os.BundleCompat
 import android.os.Binder
 import android.os.Message
 import android.os.Messenger
@@ -37,7 +38,7 @@ internal object AgentWireText {
     fun hasDescriptor(bundle: Bundle, key: String): Boolean = bundle.containsKey(key + FD_SUFFIX)
 
     fun read(bundle: Bundle, key: String): String? {
-        val descriptor = bundle.getParcelable(key + FD_SUFFIX, ParcelFileDescriptor::class.java)
+        val descriptor = BundleCompat.getParcelable(bundle, key + FD_SUFFIX, ParcelFileDescriptor::class.java)
             ?: return bundle.getString(key)
         bundle.remove(key + FD_SUFFIX)
         return ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
@@ -67,7 +68,7 @@ internal object AgentWireText {
                 val copy = Bundle(original)
                 localCopy = copy
                 original.keySet().filter { it.endsWith(FD_SUFFIX) }.forEach { key ->
-                    copy.putParcelable(key, original.getParcelable(key, ParcelFileDescriptor::class.java)!!.dup())
+                    copy.putParcelable(key, BundleCompat.getParcelable(original, key, ParcelFileDescriptor::class.java)!!.dup())
                 }
                 message.data = copy
             }
@@ -81,7 +82,7 @@ internal object AgentWireText {
 
     fun close(bundle: Bundle) {
         bundle.keySet().filter { it.endsWith(FD_SUFFIX) }.forEach { key ->
-            bundle.getParcelable(key, ParcelFileDescriptor::class.java)?.close()
+            BundleCompat.getParcelable(bundle, key, ParcelFileDescriptor::class.java)?.close()
             bundle.remove(key)
         }
     }

@@ -1,5 +1,6 @@
 package io.github.fartown.movo.agent.voice.session
 
+import io.github.fartown.movo.flavor.FlavorModule
 import android.content.Context
 import androidx.annotation.MainThread
 import androidx.compose.runtime.snapshotFlow
@@ -9,7 +10,6 @@ import io.github.fartown.movo.agent.voice.conversation.VoiceConversationControll
 import io.github.fartown.movo.agent.voice.conversation.VoiceConversationSession
 import io.github.fartown.movo.agent.voice.conversation.VoiceReplyContent
 import io.github.fartown.movo.agent.voice.conversation.VoiceTurnCoordinator
-import io.github.fartown.movo.ui.app.AgentAppSession
 import io.github.fartown.movo.ui.model.PendingImageUi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -88,7 +88,7 @@ internal open class VoiceSessionOwner(
 
     @MainThread
     fun attach(serviceHost: ServiceHost, context: Context) =
-        attach(serviceHost, AgentAppSession.get(context.applicationContext))
+        attach(serviceHost, FlavorModule.voiceHost(context.applicationContext))
 
     internal fun attach(serviceHost: ServiceHost, conversations: VoiceConversationHost) {
         host = serviceHost
@@ -137,7 +137,7 @@ internal open class VoiceSessionOwner(
     @MainThread
     internal fun beginInstrumentationFixture(
         context: Context,
-        conversations: VoiceConversationHost = AgentAppSession.get(context.applicationContext),
+        conversations: VoiceConversationHost = FlavorModule.voiceHost(context.applicationContext),
     ): Boolean {
         check(context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
             "Voice instrumentation fixture requires a debuggable APK"

@@ -80,6 +80,20 @@ android {
         }
     }
 
+    // 设备形态：phone 为现有手机版；tv 为电视版（Android 9 起，与手机版可并存）。
+    // 两边的差异只经各自源码集里的 FlavorModule 装配，见 docs/solutions/tv-voice-app/电视端语音App实施方案.md §5.5。
+    flavorDimensions += "device"
+    productFlavors {
+        create("phone") {
+            dimension = "device"
+        }
+        create("tv") {
+            dimension = "device"
+            applicationIdSuffix = ".tv"
+            minSdk = 28
+        }
+    }
+
     signingConfigs {
         if (hasReleaseSigning) {
             create("release") {
@@ -157,13 +171,18 @@ android {
     lint {
         abortOnError = true
         checkReleaseBuilds = false
+        // 电视版 Android 9 兼容门禁（CI）：带 -PlintNewApiOnly 时只检查高版本 API 调用，
+        // 不受仓库里其他既有 lint 问题影响；不带时 lint 行为不变。
+        if (providers.gradleProperty("lintNewApiOnly").isPresent) {
+            checkOnly += "NewApi"
+        }
     }
 
     testBuildType = if (voiceTestRelease) "release" else "debug"
 
     testOptions {
         unitTests.isIncludeAndroidResources = true
-        // 设计还原截图：./gradlew :app:testDebugUnitTest -PmovoShots=true --tests '*DesignShotsTest*'
+        // 设计还原截图：./gradlew :app:testPhoneDebugUnitTest -PmovoShots=true --tests '*DesignShotsTest*'
         unitTests.all { test ->
             val shots = (project.findProperty("movoShots") ?: "false").toString()
             // 截图测试依赖 Robolectric 原生图形，只在显式生成截图时运行，不进普通单测。
@@ -179,14 +198,16 @@ dependencies {
     implementation("com.bytedance.speechengine:speechengine_tob:0.0.15.0@aar")
     implementation(libs.commons.compress)
     implementation(libs.xz)
-    compileOnly(libs.libxposed.api)
+    // Xposed 模块入口与 hook 只在手机版。
+    "phoneCompileOnly"(libs.libxposed.api)
     // UI 侧 RemotePreferences 写入桥：通过 XposedService 将配置提交到 LSPosed 数据库；
     // Hook 侧用 XposedInterface.getRemotePreferences 读取当前进程持有的配置缓存。
     implementation(libs.libxposed.service)
-    implementation(libs.miuix.ui)
-    implementation(libs.miuix.blur)
-    implementation(libs.miuix.nav)
-    implementation(libs.miuix.preference)
+    // miuix 只用于手机界面（miuix-blur 要求 minSdk 33，电视版不能带）。
+    "phoneImplementation"(libs.miuix.ui)
+    "phoneImplementation"(libs.miuix.blur)
+    "phoneImplementation"(libs.miuix.nav)
+    "phoneImplementation"(libs.miuix.preference)
     implementation(libs.material.icons.extended)
     implementation(libs.androidx.navigationevent)
     implementation(libs.androidx.lifecycle.runtime.compose)

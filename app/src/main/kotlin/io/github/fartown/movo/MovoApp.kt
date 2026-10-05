@@ -6,7 +6,6 @@ import android.os.Looper
 import io.github.fartown.movo.agent.skill.SkillRuntime
 import io.github.fartown.movo.agent.device.RootAccess
 import io.github.fartown.movo.agent.terminal.TerminalRuntime
-import io.github.fartown.movo.agent.voice.MovoWakeWordController
 import io.github.fartown.movo.agent.voice.session.VoiceSurfaceTracker
 import io.github.fartown.movo.config.Prefs
 import io.github.fartown.movo.core.AndroidAgentLogger
@@ -15,12 +14,11 @@ import io.github.fartown.movo.data.auth.ChatGptAuth
 import io.github.fartown.movo.data.auth.ChatGptLoginManager
 import io.github.fartown.movo.data.datastore.SettingsDataStore
 import io.github.fartown.movo.data.repository.AgentMemoryRepository
-import io.github.fartown.movo.data.repository.AppearanceSettingsRepository
 import io.github.fartown.movo.data.repository.McpServerRepository
 import io.github.fartown.movo.data.repository.LinuxEnvironmentSettingsRepository
 import io.github.fartown.movo.data.repository.ProviderRepository
 import io.github.fartown.movo.data.repository.VoiceSettingsRepository
-import io.github.fartown.movo.ui.app.PredictiveBackController
+import io.github.fartown.movo.flavor.FlavorModule
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
 import java.util.concurrent.CopyOnWriteArraySet
@@ -28,7 +26,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 
 /**
  * 模块 UI 进程的 Application。
@@ -58,17 +55,11 @@ class MovoApp : Application(), XposedServiceHelper.OnServiceListener {
         SettingsDataStore.init(this)
         VoiceSettingsRepository.init(this)
         VoiceSurfaceTracker.install(this)
-        MovoWakeWordController.startObserving(this)
-        val predictiveBackEnabled = runBlocking(Dispatchers.IO) {
-            AppearanceSettingsRepository.settings().predictiveBackEnabled
-        }
-        PredictiveBackController.apply(applicationInfo, predictiveBackEnabled)
         AgentMemoryRepository.init(this)
         ProviderRepository.init(this)
         ChatGptAuth.init(this)
         ChatGptLoginManager.init(this)
         McpServerRepository.init(this)
-        XposedServiceHelper.registerListener(this)
         applicationScope.launch {
             LinuxEnvironmentSettingsRepository.initialize(this@MovoApp)
             runCatching {
@@ -79,6 +70,8 @@ class MovoApp : Application(), XposedServiceHelper.OnServiceListener {
                 )
             }
         }
+        // 设备专属的初始化（手机：唤醒词监听、预测性返回、Xposed 服务监听）。
+        FlavorModule.initializers.forEach { it(this) }
     }
 
     override fun onServiceBind(service: XposedService) {

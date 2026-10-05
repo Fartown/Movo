@@ -1,5 +1,7 @@
 package io.github.fartown.movo.agent.voice
 
+import io.github.fartown.movo.core.queryIntentServicesCompat
+import android.os.Build
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -15,7 +17,10 @@ internal object SystemSpeechRecognizer {
         resolveExternalService(appContext)?.let { component ->
             return SpeechRecognizer.createSpeechRecognizer(appContext, component)
         }
-        return if (SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)) {
+        return if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)
+        ) {
             SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
         } else {
             null
@@ -27,9 +32,9 @@ internal object SystemSpeechRecognizer {
             context.contentResolver,
             VOICE_RECOGNITION_SERVICE,
         )?.let(ComponentName::unflattenFromString)
-        val services = context.packageManager.queryIntentServices(
+        val services = context.packageManager.queryIntentServicesCompat(
             Intent(RecognitionService.SERVICE_INTERFACE),
-            PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_ALL.toLong()),
+            PackageManager.MATCH_ALL.toLong(),
         )
         return services
             .asSequence()

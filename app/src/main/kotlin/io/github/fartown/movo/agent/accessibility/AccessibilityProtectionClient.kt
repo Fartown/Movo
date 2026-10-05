@@ -1,5 +1,6 @@
 package io.github.fartown.movo.agent.accessibility
 
+import android.os.Build
 import android.app.BroadcastOptions
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -113,19 +114,32 @@ internal object AccessibilityProtectionClient {
 
         try {
             // Android 14 起广播默认不共享发送者身份；保护后端必须取得真实 UID 才接受请求。
-            val options = BroadcastOptions.makeBasic()
-                .setShareIdentityEnabled(true)
-                .toBundle()
-            context.sendOrderedBroadcast(
-                intent,
-                null,
-                options,
-                resultReceiver,
-                scheduler,
-                AccessibilityProtectionProtocol.RESULT_UNAVAILABLE,
-                null,
-                null,
-            )
+            // 更低版本没有这个开关（发送者身份本来就可见），用不带 options 的重载。
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                val options = BroadcastOptions.makeBasic()
+                    .setShareIdentityEnabled(true)
+                    .toBundle()
+                context.sendOrderedBroadcast(
+                    intent,
+                    null,
+                    options,
+                    resultReceiver,
+                    scheduler,
+                    AccessibilityProtectionProtocol.RESULT_UNAVAILABLE,
+                    null,
+                    null,
+                )
+            } else {
+                context.sendOrderedBroadcast(
+                    intent,
+                    null,
+                    resultReceiver,
+                    scheduler,
+                    AccessibilityProtectionProtocol.RESULT_UNAVAILABLE,
+                    null,
+                    null,
+                )
+            }
         } catch (_: RuntimeException) {
             scheduler.post {
                 onResult(

@@ -1,5 +1,7 @@
 package io.github.fartown.movo.agent.accessibility
 
+import androidx.annotation.RequiresApi
+import android.os.Build
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.ClipData
@@ -21,11 +23,13 @@ import android.os.HandlerThread
 import android.os.Looper
 import android.os.PersistableBundle
 import android.os.SystemClock
+import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import io.github.fartown.movo.flavor.FlavorModule
 import io.github.fartown.movo.agent.device.ScrollAxis
 import io.github.fartown.movo.agent.device.ScrollAxisContract
 import io.github.fartown.movo.agent.device.ScrollDirection
@@ -139,6 +143,10 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() = Unit
+
+    /** 只有无障碍配置开启了按键过滤（电视版）时系统才会派发；是否消费由设备的 KeyInterceptor 决定。 */
+    override fun onKeyEvent(event: KeyEvent): Boolean =
+        FlavorModule.keyInterceptor?.onKeyEvent(event) ?: super.onKeyEvent(event)
 
     /**
      * 一次观察与其节点句柄组成不可变快照。调用方必须把同一实例传回节点动作，
@@ -303,7 +311,12 @@ class AgentAccessibilityService : AccessibilityService() {
         ) { observation ->
             // 系统可能在滚动后清掉节点缓存，source 必须复制事件后在后台解析。
             val eventCopy = try {
-                AccessibilityEvent(event)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    AccessibilityEvent(event)
+                } else {
+                    @Suppress("DEPRECATION")
+                    AccessibilityEvent.obtain(event)
+                }
             } catch (error: RuntimeException) {
                 AndroidAgentLogger.warnThrottled("scroll_event_copy") {
                     "Agent accessibility action=observe_scroll_event " +
@@ -323,7 +336,7 @@ class AgentAccessibilityService : AccessibilityService() {
 
     private fun resolveScrollSignal(event: AccessibilityEvent): ScrollSignal? {
         val source = try {
-            event.getSource(0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) event.getSource(0) else event.source
         } catch (error: RuntimeException) {
             AndroidAgentLogger.warnThrottled("scroll_event_source") {
                 "Agent accessibility action=resolve_scroll_event " +
@@ -343,7 +356,7 @@ class AgentAccessibilityService : AccessibilityService() {
             maxScrollY = event.maxScrollY,
             fromIndex = event.fromIndex,
             toIndex = event.toIndex,
-            sourceUniqueId = source.uniqueId.orEmpty(),
+            sourceUniqueId = source.uniqueIdCompat.orEmpty(),
             sourceViewId = source.viewIdResourceName.orEmpty(),
             sourceClassName = source.className?.toString().orEmpty(),
             sourceBounds = source.bounds(),
@@ -883,7 +896,10 @@ class AgentAccessibilityService : AccessibilityService() {
                 "NO_FOCUSED_EDITABLE",
                 "没有获得输入焦点的可编辑节点",
             )
-        if (node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return@runNodeActionOnMainSync NodeActionResult.failure("UNSUPPORTED", "Android 11 以下不支持输入法回车动作")
+        }
+        if (node.performAction(android.R.id.accessibilityActionImeEnter)) {
             NodeActionResult.success(method = "ACTION_IME_ENTER")
         } else {
             NodeActionResult.failure("ACTION_FAILED", "输入节点拒绝回车动作")
@@ -975,6 +991,10 @@ class AgentAccessibilityService : AccessibilityService() {
             }
         }
         if (Looper.myLooper() == Looper.getMainLooper()) {
+            return ScreenshotCaptureResult.unavailable().also { signalWindowsSubmitted() }
+        }
+        // 无障碍截图（takeScreenshotOfWindow）要 Android 14；更低版本（电视）明确返回不可用，不复用旧截图。
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             return ScreenshotCaptureResult.unavailable().also { signalWindowsSubmitted() }
         }
         val startedAt = SystemClock.elapsedRealtime()
@@ -1165,6 +1185,7 @@ class AgentAccessibilityService : AccessibilityService() {
         )
     }
 
+    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
     private fun convertToSoftwareBitmap(screenshot: ScreenshotResult): Bitmap? =
         screenshot.hardwareBuffer.use { hardwareBuffer ->
             val wrapped = Bitmap.wrapHardwareBuffer(hardwareBuffer, screenshot.colorSpace)
@@ -1366,7 +1387,7 @@ class AgentAccessibilityService : AccessibilityService() {
                 AccessibilityNodeInfo.ACTION_SCROLL_FORWARD in actions ||
                     AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD in actions
                 ) -> 2
-            AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_IN_DIRECTION.id in actions -> 1
+            android.R.id.accessibilityActionScrollInDirection in actions -> 1
             else -> 0
         }
     }
@@ -1432,7 +1453,7 @@ class AgentAccessibilityService : AccessibilityService() {
                 )
             }
         }
-        val inDirection = AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_IN_DIRECTION.id
+        val inDirection = android.R.id.accessibilityActionScrollInDirection
         if (inDirection in actionIds) {
             val args = Bundle().apply {
                 putInt(
@@ -1494,7 +1515,7 @@ class AgentAccessibilityService : AccessibilityService() {
                 if (!node.isVisibleToUser) return
                 val bounds = node.bounds()
                 val key = buildString {
-                    append(node.uniqueId.orEmpty())
+                    append(node.uniqueIdCompat.orEmpty())
                     append('|')
                     append(node.className?.toString().orEmpty())
                     append('|')
@@ -1505,7 +1526,7 @@ class AgentAccessibilityService : AccessibilityService() {
                     append(node.contentDescription?.toString().orEmpty().take(80))
                 }
                 if (
-                    node.uniqueId?.isNotBlank() == true ||
+                    node.uniqueIdCompat?.isNotBlank() == true ||
                     node.viewIdResourceName?.isNotBlank() == true ||
                     node.text?.isNotBlank() == true ||
                     node.contentDescription?.isNotBlank() == true
@@ -1559,10 +1580,10 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     private fun ScrollDirection.pageActionId(): Int = when (this) {
-        ScrollDirection.UP -> AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_UP.id
-        ScrollDirection.DOWN -> AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_DOWN.id
-        ScrollDirection.LEFT -> AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_LEFT.id
-        ScrollDirection.RIGHT -> AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_RIGHT.id
+        ScrollDirection.UP -> android.R.id.accessibilityActionPageUp
+        ScrollDirection.DOWN -> android.R.id.accessibilityActionPageDown
+        ScrollDirection.LEFT -> android.R.id.accessibilityActionPageLeft
+        ScrollDirection.RIGHT -> android.R.id.accessibilityActionPageRight
     }
 
     private fun ScrollDirection.focusDirection(): Int = when (this) {
@@ -1732,7 +1753,7 @@ class AgentAccessibilityService : AccessibilityService() {
                 out += IndexedNode(
                     index = out.size,
                     node = node,
-                    uniqueId = node.uniqueId.orEmpty(),
+                    uniqueId = node.uniqueIdCompat.orEmpty(),
                     windowId = node.windowId,
                     text = text,
                     desc = desc,
@@ -2193,7 +2214,7 @@ class AgentAccessibilityService : AccessibilityService() {
 
         private fun AccessibilityNodeInfo.toIdentity(): AccessibilityNodeIdentity =
             AccessibilityNodeIdentity(
-                uniqueId = uniqueId.orEmpty(),
+                uniqueId = uniqueIdCompat.orEmpty(),
                 windowId = windowId,
                 packageName = packageName?.toString().orEmpty(),
                 className = className?.toString().orEmpty(),
@@ -2230,7 +2251,7 @@ class AgentAccessibilityService : AccessibilityService() {
             if (!runCatching { node.refresh() }.getOrDefault(false)) return null
             if (!node.isVisibleToUser || !node.isEnabled) return null
             val refreshedIdentity = AccessibilityNodeIdentity(
-                uniqueId = node.uniqueId.orEmpty(),
+                uniqueId = node.uniqueIdCompat.orEmpty(),
                 windowId = node.windowId,
                 packageName = node.packageName?.toString().orEmpty(),
                 className = node.className?.toString().orEmpty(),
@@ -2254,7 +2275,7 @@ class AgentAccessibilityService : AccessibilityService() {
             fun capture(node: AccessibilityNodeInfo): NodeActionTarget = NodeActionTarget(
                 node = node,
                 identity = AccessibilityNodeIdentity(
-                    uniqueId = node.uniqueId.orEmpty(),
+                    uniqueId = node.uniqueIdCompat.orEmpty(),
                     windowId = node.windowId,
                     packageName = node.packageName?.toString().orEmpty(),
                     className = node.className?.toString().orEmpty(),
@@ -2329,7 +2350,7 @@ class AgentAccessibilityService : AccessibilityService() {
     ) {
         companion object {
             fun from(node: AccessibilityNodeInfo): ScrollTargetIdentity = ScrollTargetIdentity(
-                uniqueId = node.uniqueId.orEmpty(),
+                uniqueId = node.uniqueIdCompat.orEmpty(),
                 viewId = node.viewIdResourceName.orEmpty(),
                 className = node.className?.toString().orEmpty(),
                 bounds = Rect().also(node::getBoundsInScreen),
@@ -2374,6 +2395,8 @@ class AgentAccessibilityService : AccessibilityService() {
                 Thread(runnable, "agent-screenshot-callback").apply { isDaemon = true }
             }
 
+        // 翻页（Android 10）与按方向滚动（Android 14）用 android.R.id 常量：编译期内联为同一个 id，
+        // 不在类加载时访问低版本系统上不存在的 AccessibilityAction 静态字段。
         private val SCROLL_ACTION_IDS = setOf(
             AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id,
             AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id,
@@ -2381,23 +2404,23 @@ class AgentAccessibilityService : AccessibilityService() {
             AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id,
             AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD.id,
             AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD.id,
-            AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_IN_DIRECTION.id,
-            AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_UP.id,
-            AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_DOWN.id,
-            AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_LEFT.id,
-            AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_RIGHT.id,
+            android.R.id.accessibilityActionScrollInDirection,
+            android.R.id.accessibilityActionPageUp,
+            android.R.id.accessibilityActionPageDown,
+            android.R.id.accessibilityActionPageLeft,
+            android.R.id.accessibilityActionPageRight,
         )
         private val VERTICAL_DIRECTION_ACTION_IDS = setOf(
             AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id,
             AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id,
-            AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_UP.id,
-            AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_DOWN.id,
+            android.R.id.accessibilityActionPageUp,
+            android.R.id.accessibilityActionPageDown,
         )
         private val HORIZONTAL_DIRECTION_ACTION_IDS = setOf(
             AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.id,
             AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id,
-            AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_LEFT.id,
-            AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_RIGHT.id,
+            android.R.id.accessibilityActionPageLeft,
+            android.R.id.accessibilityActionPageRight,
         )
 
         private val SERVICE_TOKENS = AtomicLong(0)
@@ -2435,3 +2458,7 @@ class AgentAccessibilityService : AccessibilityService() {
         data class Invalid(val result: NodeActionResult) : NodeValidation
     }
 }
+
+/** 节点稳定 ID 从 Android 13 起才有；更低版本为 null，身份比对改用窗口、类名、viewId、文字与位置。 */
+private val AccessibilityNodeInfo.uniqueIdCompat: String?
+    get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) uniqueId else null

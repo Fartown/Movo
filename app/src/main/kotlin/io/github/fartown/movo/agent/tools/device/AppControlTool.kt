@@ -1,5 +1,6 @@
 package io.github.fartown.movo.agent.tools.device
 
+import io.github.fartown.movo.BuildConfig
 import io.github.fartown.movo.agent.tools.core.ToolUiBlock
 import io.github.fartown.movo.agent.tools.core.ToolUiView
 import io.github.fartown.movo.agent.tools.core.forTitle
@@ -209,7 +210,7 @@ internal class AppControlTool(
 
     private companion object {
         val PACKAGE_NAME = Regex("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+")
-        const val MOVO_PACKAGE = "io.github.fartown.movo"
+        const val MOVO_PACKAGE = BuildConfig.APPLICATION_ID
 
         /** 系统关键包：桌面、SystemUI、输入法、电话等，拒绝停止/冻结。 */
         val SELF_PROTECT_PACKAGES = setOf(

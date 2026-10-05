@@ -1471,7 +1471,6 @@ private fun SupplementInput(
  * 收起须不长于窗口移除的延迟（AgentRuntimeService.BUBBLE_EXIT_MS）。
  */
 private const val PANEL_MORPH_IN_MS = MovoMotion.SLOW
-internal const val PANEL_MORPH_OUT_MS = MovoMotion.SLOW_EXIT
 
 /** 卡片与窗口球侧边缘之间的通道：球窗口 44 + 卡片与球间距 8，正好盖住悬浮球（这一侧的阴影余量落在通道里）。 */
 internal val PANEL_ORB_LANE = 52.dp

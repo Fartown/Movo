@@ -1,5 +1,6 @@
 package io.github.fartown.movo.agent.tools.clockmedia
 
+import android.os.Build
 import android.app.AlarmManager
 import android.content.ComponentName
 import android.content.Context
@@ -242,8 +243,13 @@ internal object ClockBackgroundAnchor {
                         detach(attached)
                         return@onSuccess
                     }
-                    view.viewTreeObserver.registerFrameCommitCallback {
-                        mainHandler.postDelayed({ shown.countDown() }, VISIBLE_SETTLE_MS)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        view.viewTreeObserver.registerFrameCommitCallback {
+                            mainHandler.postDelayed({ shown.countDown() }, VISIBLE_SETTLE_MS)
+                        }
+                    } else {
+                        // Android 10 以前没有帧提交回调：等下一次布局绘制后再计时。
+                        view.post { mainHandler.postDelayed({ shown.countDown() }, VISIBLE_SETTLE_MS) }
                     }
                     view.invalidate()
                 }

@@ -1,5 +1,6 @@
 package io.github.fartown.movo.agent.tool
 
+import io.github.fartown.movo.core.getApplicationInfoCompat
 import android.app.ActivityManager
 import android.app.AlarmManager
 import android.app.Notification
@@ -370,10 +371,7 @@ internal class AgentStructuredDeviceTools(
         val packageName = args.getString("package_name")
         if (!PACKAGE_NAME.matches(packageName)) return error("INVALID_PACKAGE", "包名格式无效")
         val appExists = runCatching {
-            context.packageManager.getApplicationInfo(
-                packageName,
-                android.content.pm.PackageManager.ApplicationInfoFlags.of(0L),
-            )
+            context.packageManager.getApplicationInfoCompat(packageName)
         }.isSuccess
         if (!appExists) return error("APP_NOT_FOUND", "未找到指定应用")
         val action = args.getString("action").lowercase(Locale.ROOT)

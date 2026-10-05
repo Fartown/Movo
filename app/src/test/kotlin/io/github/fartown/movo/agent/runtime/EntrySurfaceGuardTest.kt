@@ -1,5 +1,6 @@
 package io.github.fartown.movo.agent.runtime
 
+import io.github.fartown.movo.BuildConfig
 import io.github.fartown.movo.agent.accessibility.PackageWindowVisibility
 import io.github.fartown.movo.core.AgentLogger
 import org.junit.Assert.assertEquals
@@ -62,11 +63,11 @@ class EntrySurfaceGuardTest {
         )
 
         assertNotNull(guard)
-        assertEquals("io.github.fartown.movo", guard?.targetPackageName)
+        assertEquals(BuildConfig.APPLICATION_ID, guard?.targetPackageName)
         assertTrue(guard?.dismissOnce() == true)
         assertTrue(guard?.dismissOnce() == true)
         assertEquals(1, dismissCalls.get())
-        assertEquals(setOf("io.github.fartown.movo"), guard?.consumeScreenshotExcludedPackages())
+        assertEquals(setOf(BuildConfig.APPLICATION_ID), guard?.consumeScreenshotExcludedPackages())
     }
 
     @Test

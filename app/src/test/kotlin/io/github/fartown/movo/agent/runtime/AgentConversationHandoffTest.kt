@@ -4,7 +4,7 @@ import android.app.Application
 import android.content.Intent
 import android.os.Bundle
 import android.os.ResultReceiver
-import io.github.fartown.movo.ui.MainActivity
+import io.github.fartown.movo.flavor.FlavorModule
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -51,7 +51,7 @@ class AgentConversationHandoffTest {
         val received = mutableListOf<Int>()
         val receiver = receiver(received)
         val intent = AgentConversationHandoff.intent(RuntimeEnvironment.getApplication(), target, "run-1", receiver)
-        assertEquals(MainActivity::class.java.name, intent.component?.className)
+        assertEquals(FlavorModule.surfaces.mainActivity.name, intent.component?.className)
         assertTrue(intent.flags and Intent.FLAG_ACTIVITY_SINGLE_TOP != 0)
         assertTrue(intent.flags and Intent.FLAG_ACTIVITY_CLEAR_TOP != 0)
         val request = AgentConversationHandoff.from(intent)!!
@@ -80,7 +80,7 @@ class AgentConversationHandoffTest {
         val received = mutableListOf<Int>()
         val intent = AgentConversationHandoff.intent(RuntimeEnvironment.getApplication(), target, null, receiver(received))
         val request = AgentConversationHandoff.from(intent)!!
-        assertEquals(MainActivity::class.java.name, intent.component?.className)
+        assertEquals(FlavorModule.surfaces.mainActivity.name, intent.component?.className)
         assertEquals(target, request.target)
         assertNull(request.runId)
         request.acknowledge(true)

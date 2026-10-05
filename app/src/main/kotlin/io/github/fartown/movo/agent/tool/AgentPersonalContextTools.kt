@@ -1,12 +1,12 @@
 package io.github.fartown.movo.agent.tool
 
+import io.github.fartown.movo.core.getApplicationInfoCompat
 import android.app.AppOpsManager
 import android.app.KeyguardManager
 import android.app.NotificationManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
-import android.content.pm.PackageManager
 import android.hardware.display.DisplayManager
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
@@ -145,7 +145,7 @@ internal class AgentPersonalContextTools(private val context: Context) {
     }
 
     private fun appName(packageName: String): String = runCatching {
-        val info = context.packageManager.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0))
+        val info = context.packageManager.getApplicationInfoCompat(packageName)
         context.packageManager.getApplicationLabel(info).toString()
     }.getOrDefault(packageName)
 

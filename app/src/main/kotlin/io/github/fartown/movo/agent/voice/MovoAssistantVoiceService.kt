@@ -1,5 +1,7 @@
 package io.github.fartown.movo.agent.voice
 
+import androidx.core.app.ServiceCompat
+import io.github.fartown.movo.flavor.FlavorModule
 import android.app.ActivityOptions
 import android.app.Notification
 import android.app.NotificationChannel
@@ -20,7 +22,6 @@ import io.github.fartown.movo.agent.voice.session.VoiceSessionOwner
 import io.github.fartown.movo.agent.voice.session.VoiceSessionUiState
 import io.github.fartown.movo.agent.voice.session.VoiceSurfaceTracker
 import io.github.fartown.movo.core.AndroidAgentLogger
-import io.github.fartown.movo.ui.AgentConversationSheetActivity
 
 /** Owns microphone FGS lifetime only. Opening/restoring a chat does not start this service. */
 internal class MovoAssistantVoiceService : Service(), VoiceSessionOwner.ServiceHost {
@@ -88,7 +89,7 @@ internal class MovoAssistantVoiceService : Service(), VoiceSessionOwner.ServiceH
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(VOICE_CHANNEL, "语音对话", NotificationManager.IMPORTANCE_LOW),
         )
-        startForeground(VOICE_NOTIFICATION, notification(text), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+        ServiceCompat.startForeground(this, VOICE_NOTIFICATION, notification(text), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         notifiedText = text
         foreground = true
     }
@@ -130,16 +131,23 @@ internal class MovoAssistantVoiceService : Service(), VoiceSessionOwner.ServiceH
                 if (autoListen) VoiceEntry.startInPlace(context)
                 return
             }
-            val senderOptions = ActivityOptions.makeBasic().apply {
-                pendingIntentBackgroundActivityStartMode = ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+            runCatching {
+                val pendingIntent = assistantPendingIntent(context, autoListen)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    val senderOptions = ActivityOptions.makeBasic().apply {
+                        pendingIntentBackgroundActivityStartMode = ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                    }
+                    pendingIntent.send(senderOptions.toBundle())
+                } else {
+                    pendingIntent.send()
+                }
             }
-            runCatching { assistantPendingIntent(context, autoListen).send(senderOptions.toBundle()) }
                 .onFailure { AndroidAgentLogger.warn("Assistant sheet launch failed") }
         }
 
         private fun assistantPendingIntent(context: Context, autoListen: Boolean): PendingIntent {
-            val intent = Intent(context, AgentConversationSheetActivity::class.java)
-                .setAction(AgentConversationSheetActivity.ACTION_ASSISTANT)
+            val intent = Intent(context, FlavorModule.surfaces.conversationActivity)
+                .setAction(FlavorModule.surfaces.assistantAction)
                 .putExtra(EXTRA_AUTO_LISTEN, autoListen)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or
                     Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION)

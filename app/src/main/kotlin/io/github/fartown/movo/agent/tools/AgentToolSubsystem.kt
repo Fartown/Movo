@@ -1,29 +1,19 @@
 package io.github.fartown.movo.agent.tools
 
 import io.github.fartown.movo.agent.model.AgentModelClient
-import io.github.fartown.movo.agent.tools.browser.BrowserToolProvider
-import io.github.fartown.movo.agent.tools.clockmedia.ClockMediaToolProvider
-import io.github.fartown.movo.agent.tools.conversation.ConversationToolProvider
 import io.github.fartown.movo.agent.tools.core.ToolEnvironment
 import io.github.fartown.movo.agent.tools.core.ToolPipeline
 import io.github.fartown.movo.agent.tools.core.ToolGuard
 import io.github.fartown.movo.agent.tools.core.ToolProvider
 import io.github.fartown.movo.agent.tools.core.ToolRegistry
 import io.github.fartown.movo.agent.tools.core.UserInteraction
-import io.github.fartown.movo.agent.tools.device.DeviceToolProvider
-import io.github.fartown.movo.agent.tools.file.FileToolProvider
+import io.github.fartown.movo.flavor.FlavorModule
 import io.github.fartown.movo.agent.tools.mcp.McpCatalog
-import io.github.fartown.movo.agent.tools.mcp.McpToolProvider
-import io.github.fartown.movo.agent.monitor.MonitorToolProvider
-import io.github.fartown.movo.agent.tools.memory.MemoryToolProvider
 import io.github.fartown.movo.agent.tools.meta.MetaToolProvider
-import io.github.fartown.movo.agent.tools.personal.PersonalToolProvider
-import io.github.fartown.movo.agent.tools.skill.SkillToolProvider
-import io.github.fartown.movo.agent.tools.terminal.TerminalToolProvider
-import io.github.fartown.movo.agent.tools.ui.UiToolProvider
 
 /**
- * 工具子系统总装：把 11 个领域 Provider 与元工具装配成一个 [ToolPipeline]（实现 AgentModelClient.ToolExecutor）。
+ * 工具子系统总装：把本设备装配的领域 Provider（由 FlavorModule 按设备白名单给出）与元工具装配成一个
+ * [ToolPipeline]（实现 AgentModelClient.ToolExecutor）。
  * 一次运行构造一个实例，结束时 [close]。目录、系统提示分节、执行、审批、投影全部由 pipeline 统一出口。
  *
  * 领域所有权对应实施方案 §4.1：device / clockmedia / ui / personal / file / terminal / browser /
@@ -56,36 +46,32 @@ internal class AgentToolSubsystem(
         cancelled = cancelled,
         interaction = interaction,
         guards = guards,
+
     ).also { meta.pipeline = it }
 
     private fun buildProviders(
         mcpCatalog: McpCatalog,
         characterId: () -> String?,
         conversationLoader: () -> List<AgentModelClient.ConversationMessage>,
-    ): List<ToolProvider> {
-        val context = services.context
-        val logger = services.logger
-        val root = services.root()
-        val rootAvailable = services.rootAvailable
-        return listOf(
-            DeviceToolProvider(context, root, rootAvailable),
-            ClockMediaToolProvider(context, logger, root, rootAvailable),
-            UiToolProvider(context, logger, rootAvailable, services.screenshotExcludedPackages),
-            PersonalToolProvider(context, root, rootAvailable),
-            FileToolProvider(context, root, rootAvailable),
-            TerminalToolProvider(logger),
-            BrowserToolProvider(context),
-            MemoryToolProvider(context, characterId),
-            SkillToolProvider(context),
-            ConversationToolProvider(conversationLoader),
-            McpToolProvider(mcpCatalog),
-            // 角色对话不提供后台监听与通知（事件会被当成对白）：环境里只有记忆作用域能看出角色会话，记忆关闭时看不出来。
-            MonitorToolProvider(context, isRoleplay = { characterId() != null }),
-            meta,
-        )
-    }
+    ): List<ToolProvider> =
+        FlavorModule.toolProviders(
+            ToolProviderInputs(
+                services = services,
+                mcpCatalog = mcpCatalog,
+                characterId = characterId,
+                conversationLoader = conversationLoader,
+            ),
+        ) + meta
 
     override fun close() {
         pipeline.close()
     }
 }
+
+/** 装配领域 Provider 所需的输入；各设备在 FlavorModule.toolProviders 里按白名单取用。 */
+internal class ToolProviderInputs(
+    val services: ToolServices,
+    val mcpCatalog: McpCatalog,
+    val characterId: () -> String?,
+    val conversationLoader: () -> List<AgentModelClient.ConversationMessage>,
+)

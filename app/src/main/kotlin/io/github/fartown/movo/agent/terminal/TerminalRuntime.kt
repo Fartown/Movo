@@ -30,7 +30,8 @@ internal object TerminalRuntime {
     }
 
     val rootAvailable: Boolean get() = RootAccess.isGranted
-    val publicStorageGranted: Boolean get() = appContext != null && android.os.Environment.isExternalStorageManager()
+    val publicStorageGranted: Boolean get() = appContext != null &&
+        android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R && android.os.Environment.isExternalStorageManager()
     val nativeLibraryDir: File? get() = appContext?.applicationInfo?.nativeLibraryDir?.let(::File)
     val userWorkspacePath: String get() = appContext?.let {
         TerminalPrivateStorage.workspace(it.filesDir).absolutePath

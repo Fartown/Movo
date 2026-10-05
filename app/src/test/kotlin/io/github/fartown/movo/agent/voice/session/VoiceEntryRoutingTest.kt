@@ -3,7 +3,7 @@ package io.github.fartown.movo.agent.voice.session
 import android.app.Activity
 import android.app.Application
 import android.content.Context
-import io.github.fartown.movo.ui.AgentConversationSheetActivity
+import io.github.fartown.movo.flavor.FlavorModule
 import org.junit.Assert.*
 import org.junit.After
 import org.junit.Test
@@ -41,7 +41,7 @@ class VoiceEntryRoutingTest {
     }
     @Test fun openingAssistantWithoutAutoListenLaunchesTheChatWithoutStartingMicrophoneService() {
         systemEntry(autoListen = false)
-        assertEquals(AgentConversationSheetActivity::class.java.name, shadowOf(context as Application).nextStartedActivity?.component?.className)
+        assertEquals(FlavorModule.surfaces.conversationActivity.name, shadowOf(context as Application).nextStartedActivity?.component?.className)
         assertNull(shadowOf(context as Application).nextStartedService)
     }
     @Test fun resumedSettingsActivityDoesNotCountAsAVisibleChat() {
@@ -49,7 +49,7 @@ class VoiceEntryRoutingTest {
         assertTrue(VoiceSurfaceTracker.appVisible)
         assertFalse(VoiceSurfaceTracker.chatVisible)
         systemEntry(autoListen = true)
-        assertEquals(AgentConversationSheetActivity::class.java.name, shadowOf(context as Application).nextStartedActivity?.component?.className)
+        assertEquals(FlavorModule.surfaces.conversationActivity.name, shadowOf(context as Application).nextStartedActivity?.component?.className)
         assertNull(shadowOf(context as Application).nextStartedService)
     }
     @Test fun startingWithoutMicrophonePermissionNeverStartsTheForegroundService() {

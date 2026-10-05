@@ -33,6 +33,7 @@ internal class ToolPipeline(
     private val interaction: UserInteraction = UserInteraction.NONE,
     private val guards: List<ToolGuard> = emptyList(),
     private val approvalTimeoutMs: Long = DEFAULT_APPROVAL_TIMEOUT_MS,
+
 ) : AgentModelClient.ToolExecutor, ToolConcurrencyOracle, AutoCloseable {
     private val loadedDeferred = ConcurrentHashMap.newKeySet<String>()
 
