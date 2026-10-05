@@ -13,6 +13,8 @@ import io.github.fartown.movo.agent.skill.SkillContext
 import io.github.fartown.movo.agent.skill.SkillRuntime
 import io.github.fartown.movo.agent.tool.AgentToolCapabilities
 import io.github.fartown.movo.agent.tools.AgentToolSubsystem
+import io.github.fartown.movo.agent.tools.mcp.McpCatalog
+import io.github.fartown.movo.agent.tools.mcp.McpCatalogLoader
 import io.github.fartown.movo.agent.tools.GuiReadinessGuard
 import io.github.fartown.movo.agent.tools.ToolServices
 import io.github.fartown.movo.agent.tools.toToolEnvironment
@@ -141,8 +143,18 @@ internal class AgentRuntimeRunExecutor(
                 }
             }
             AgentInteractionRegistry.register(request.runId, interactionBroker)
+            // run 开始快照一次 MCP 目录（用户已添加可用 MCP 时暴露 mcp_* 工具；为空则不暴露）。
+            val mcpCatalog = runBlocking {
+                runCatching { McpCatalogLoader.load() }.getOrElse { throwable ->
+                    AndroidAgentLogger.warnThrottled("agent_mcp_catalog_failed") {
+                        "MCP catalog unavailable: type=${throwable.safeLogType()}"
+                    }
+                    McpCatalog.EMPTY
+                }
+            }
             val typedSubsystem = AgentToolSubsystem(
                 services = ToolServices(appContext, AndroidAgentLogger, request.runId),
+                mcpCatalog = mcpCatalog,
                 environment = {
                     AgentToolCapabilities.capture(appContext).toToolEnvironment(
                         switches = ToolSwitches(
