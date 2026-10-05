@@ -17,6 +17,7 @@ import io.github.fartown.movo.core.AndroidAgentLogger
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -207,5 +208,32 @@ class FileToolsTest {
         assertEquals("ok", json.getString("status"))
         assertEquals(2, json.getJSONObject("data").getInt("count"))
         assertFalse(json.has("effect_verified"))
+    }
+
+    @Test
+    fun fileHandle_hmacBound_rejectsForgedOrTamperedHandles() {
+        // 正常签发的句柄可验签解析（路径 + 大小/修改时间）。
+        val handle = FileSupport.encodeHandle("/sdcard/DCIM/a.jpg", sizeBytes = 2048, mtimeMillis = 1_700_000_000_000)
+        val decoded = FileSupport.decodeHandle(handle)
+        assertEquals("/sdcard/DCIM/a.jpg", decoded?.path)
+        assertEquals(2048L, decoded?.sizeBytes)
+        assertEquals(1_700_000_000_000L, decoded?.mtimeMillis)
+
+        // 伪造：模型自造一个指向任意路径的句柄（无有效签名）→ 拒绝，读不到。
+        val forged = "fh2:" + java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("""{"p":"/data/data/com.bank/secret","s":1,"m":1}""".toByteArray()) + ".AAAA"
+        assertNull(FileSupport.decodeHandle(forged))
+        assertNull(FileSupport.decodeHandlePath(forged))
+
+        // 篡改：改动签过名的 body（换路径）→ 签名不符 → 拒绝。
+        val dot = handle.lastIndexOf('.')
+        val tampered = "fh2:" + java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("""{"p":"/etc/hosts","s":2048,"m":1700000000000}""".toByteArray()) +
+            handle.substring(dot)
+        assertNull(FileSupport.decodeHandle(tampered))
+
+        // 旧格式（无签名段）不再被接受。
+        assertNull(FileSupport.decodeHandlePath("fh1:" + java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("""{"p":"/sdcard/x","s":1,"m":1}""".toByteArray())))
     }
 }
