@@ -60,6 +60,8 @@ internal class UiKeyTool(
         backend = backend.backend(env),
         // 全局键不绑目标：target=None，readableTarget=true（不走 blindCoordinate 确认）。
         readableTarget = true,
+        // 按键是本地交互，与点击、滑动一致不被污点逐个拦；发送 / 支付等后果由声明的 effect 与受保护应用兜底。
+        exfiltrates = false,
     )
 
     override fun execute(input: UiKeyInput, resolution: CallResolution, ctx: ToolContext): Verdict<UiAfter> {

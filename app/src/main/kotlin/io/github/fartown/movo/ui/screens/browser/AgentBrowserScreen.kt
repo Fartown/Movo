@@ -468,7 +468,8 @@ private fun ColumnScope.BrowserStatusBanner(snapshot: BrowserSessionSnapshot, no
     val error = snapshot.error ?: notice
     val message = when {
         error != null -> error
-        snapshot.isUserControlling && snapshot.available ->
+        // 只有 Agent 用过这个浏览器时才提示「Agent 的网页操作已停止」；用户自己打开浏览器页时没有可停的 Agent 操作。
+        snapshot.isUserControlling && snapshot.available && snapshot.lastAgentRunId != null ->
             stringResource(R.string.browser_user_controlling)
         else -> null
     }

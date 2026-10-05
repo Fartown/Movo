@@ -102,15 +102,16 @@ internal class AgentRuntimeSession(
         }
     }
 
-    /** 后台监听事件并入本轮下一步；接收后把界面事件记入重放并发给订阅者。 */
-    fun injectMonitorEvent(text: String, events: List<AgentEvent>): Boolean =
+    /**
+     * 后台监听事件排入本轮下一个步骤边界。[blocks] 为事件标签段，[events] 为「已消费」事件：
+     * 这里不发给界面，等模型循环真正把事件写进上下文时才发（并记入重放与检查点），
+     * 没被读到的事件界面上不会留下行，App 会把它们放回队首。
+     * 语音轮不接收：播报会变成提醒，事件留给语音结束后的事件轮。
+     */
+    fun injectMonitorEvent(blocks: String, events: List<AgentEvent>): Boolean =
         lock.withLock {
-            if (state != State.RUNNING || operation != AgentRuntimeWire.OP_CHAT || !controller.injectEvent(text)) return false
-            events.forEach { event ->
-                recordForReplay(event)
-                subscribers.forEach { it.eventSink(event) }
-            }
-            true
+            if (state != State.RUNNING || operation != AgentRuntimeWire.OP_CHAT || voiceSessionId.isNotBlank()) return false
+            controller.injectEvent(blocks, events)
         }
 
     fun <T : AgentEvent> steer(

@@ -13,7 +13,9 @@ class AgentToolRequirementsTest {
     @Test
     fun everyRegisteredToolHasExactlyOneRequirement() {
         val tools = catalog(root = true)
-        assertEquals(AgentToolRequirements.toolNames, tools.names())
+        // 旧目录的工具都登记了；另外登记了类型化工具名（「设置 → 全部工具」用）。
+        assertTrue(AgentToolRequirements.toolNames.containsAll(tools.names()))
+        assertTrue(AgentToolRequirements.toolNames.containsAll(TYPED_TOOL_NAMES))
         assertEquals(tools.length(), tools.names().size)
         assertFalse(tools.toString().contains("rootRequirement"))
     }
@@ -96,3 +98,13 @@ class AgentToolRequirementsTest {
         .map { getJSONObject(it).getJSONObject("function") }
         .single { it.getString("name") == name }.getJSONObject("parameters").getJSONObject("properties")
 }
+
+private val TYPED_TOOL_NAMES = setOf(
+    "ui_observe", "ui_tap", "ui_scroll", "ui_swipe", "ui_input", "ui_key", "ui_wait", "clipboard_read",
+    "clipboard_write", "app_search", "app_open", "app_control", "device_read", "device_toggle", "setting_read",
+    "setting_write", "device_diagnostics", "clock_create", "clock_read", "media_control", "volume_set",
+    "personal_search", "sms_code_read", "usage_read", "health_read", "wifi_password_read", "file_search",
+    "file_read", "file_write", "file_list", "terminal_run", "terminal_job", "browser_open", "browser_read",
+    "browser_act", "memory_read", "memory_write", "skill_read", "skill_install", "conversation_read",
+    "ask_user", "tool_search", "mcp_find", "mcp_call", "monitor_start", "monitor_stop", "monitor_list", "notify_user",
+)

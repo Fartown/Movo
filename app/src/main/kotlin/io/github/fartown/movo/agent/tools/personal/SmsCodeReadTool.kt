@@ -16,6 +16,7 @@ import io.github.fartown.movo.agent.tools.core.ToolInput
 import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.objectSchema
+import io.github.fartown.movo.agent.tools.core.TaintKind
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -125,6 +126,8 @@ internal class SmsCodeReadTool(
             )
         return Verdict.Read(SmsCodeReadOutput(codes))
     }
+
+    override fun taintKinds(input: SmsCodeReadInput): Set<TaintKind> = setOf(TaintKind.PERSONAL)
 
     override fun renderForModel(output: SmsCodeReadOutput): ModelContent {
         val array = JSONArray()

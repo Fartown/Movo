@@ -19,6 +19,7 @@ import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.ToolResource
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.objectSchema
+import io.github.fartown.movo.agent.tools.core.TaintKind
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -89,6 +90,9 @@ internal class UiObserveTool(
             is UiObserveResult.Observed -> Verdict.Read(UiObserveOutput(result))
         }
     }
+
+    /** 其他应用的屏幕内容（聊天、网页、购物）是不可信内容。 */
+    override fun taintKinds(input: UiObserveInput): Set<TaintKind> = setOf(TaintKind.UNTRUSTED)
 
     override fun renderForModel(output: UiObserveOutput): ModelContent {
         val o = output.observed

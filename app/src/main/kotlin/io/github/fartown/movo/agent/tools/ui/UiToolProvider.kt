@@ -20,9 +20,11 @@ internal class UiToolProvider(
     context: Context,
     logger: AgentLogger,
     rootAvailable: () -> Boolean = { RootAccess.isGranted },
+    /** 截图时要排除的包（正在退场的入口面板），由运行时的 EntrySurfaceGuard 提供。 */
+    screenshotExcludedPackages: () -> Set<String> = { emptySet() },
 ) : ToolProvider {
 
-    private val screen = RealUiScreenBackend(context, logger, rootAvailable)
+    private val screen = RealUiScreenBackend(context, logger, rootAvailable, screenshotExcludedPackages)
 
     override val tools: List<AgentTool> = listOf(
         ContractTool(UiObserveTool(screen)),

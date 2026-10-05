@@ -1,5 +1,7 @@
 package io.github.fartown.movo.agent.tools.terminal
 
+import io.github.fartown.movo.agent.terminal.ShellProcessSupervisor
+import io.github.fartown.movo.agent.terminal.isLinux
 import io.github.fartown.movo.core.AgentLogger
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -9,17 +11,18 @@ import java.util.concurrent.atomic.AtomicInteger
 /**
  * 进程内的终端任务注册表，同时作为 terminal_run 与 terminal_job 的真实后端。
  *
- * 用户与 Root 命令都通过 [ProcessBuilder]（`sh -c` / `su -c`）启动，拿到 Process 句柄以便读输出、
- * 发输入、停止。wait 模式在 wait_ms 内结束返回 Completed，否则登记任务转后台。
+ * 进程由 [ShellProcessSupervisor] 启动（与终端页、重构前的 Agent 终端同一套）：Android 环境按身份 `sh` / `su`，
+ * Linux 环境进入用户在设置里选的发行版（免 Root 走 PRoot，Root 走 chroot，共享文件夹挂到 /workspace/mounts）。
+ * 停止与取消按进程树结束。wait 模式在 wait_ms 内结束返回 Completed，否则登记任务转后台；
+ * 前台等待期间每 200ms 检查一次运行是否已取消，取消就结束进程树，不等命令自己跑完（真机：sleep 20 时点停止要等 21 秒）。
  *
  * TODO（见报告）：
  * - 环形缓冲落盘：当前只在内存保留首尾，超限截断，不落盘。
  * - keep_alive 跨 run 存活：应走 DetachedTaskSupervisor，这里只在本注册表内保留，不真正脱离进程。
- * - Linux(proot) 环境：未接 ProotCommandBuilder，environment=linux 时按普通 shell 跑。
- * - Root 停止子进程、补退出码记录：su 的子进程可能杀不干净。
  */
 internal class TerminalJobRegistry(
     private val logger: AgentLogger,
+    private val supervisor: ShellProcessSupervisor = ShellProcessSupervisor(),
 ) : TerminalRunBackend, TerminalJobBackend, AutoCloseable {
 
     private val jobs = ConcurrentHashMap<String, Job>()
@@ -38,9 +41,29 @@ internal class TerminalJobRegistry(
                 keepAlive = spec.mode == TerminalMode.KEEP_ALIVE,
             )
         }
-        val finished = runCatching {
-            job.process.waitFor(spec.waitMs, TimeUnit.MILLISECONDS)
-        }.getOrDefault(false)
+        val deadline = System.currentTimeMillis() + spec.waitMs
+        var finished = false
+        while (true) {
+            val remaining = deadline - System.currentTimeMillis()
+            if (remaining <= 0) break
+            finished = runCatching {
+                job.process.waitFor(minOf(remaining, CANCEL_POLL_MS), TimeUnit.MILLISECONDS)
+            }.getOrDefault(false)
+            if (finished) break
+            if (spec.cancelled()) {
+                // 运行被取消：结束整棵进程树，不再等命令自己跑完。调用方随后按取消处理。
+                terminate(job)
+                jobs.remove(job.id)
+                return TerminalRunResult.Completed(
+                    exitCode = job.exitCode ?: -1,
+                    stdout = job.snapshot(StreamBuf.OUT).text,
+                    stderr = job.snapshot(StreamBuf.ERR).text,
+                    elapsedMs = System.currentTimeMillis() - job.startedAtMillis,
+                    stdoutTruncated = job.snapshot(StreamBuf.OUT).truncated,
+                    stderrTruncated = job.snapshot(StreamBuf.ERR).truncated,
+                )
+            }
+        }
         if (!finished) {
             return TerminalRunResult.Backgrounded(
                 jobId = job.id,
@@ -96,10 +119,7 @@ internal class TerminalJobRegistry(
             jobs.remove(jobId)
             return TerminalStopOutcome.STOPPED
         }
-        runCatching { job.process.destroy() }
-        runCatching { job.process.waitFor(500, TimeUnit.MILLISECONDS) }
-        if (job.process.isAlive) runCatching { job.process.destroyForcibly() }
-        runCatching { job.process.waitFor(500, TimeUnit.MILLISECONDS) }
+        terminate(job)
         return if (!job.process.isAlive) {
             job.finish()
             jobs.remove(jobId)
@@ -114,26 +134,42 @@ internal class TerminalJobRegistry(
         jobs.values.forEach { job ->
             if (!job.keepAlive) {
                 // TODO：keep_alive 应移交 DetachedTaskSupervisor 继续存活；非 keep_alive 这里停掉。
-                runCatching { job.process.destroy() }
+                terminate(job)
             }
         }
         jobs.clear()
     }
 
+    /** 按进程树结束（su、PRoot、chroot 下的子进程一起），再兜底 destroy。 */
+    private fun terminate(job: Job) {
+        runCatching { supervisor.terminateProcessTree(job.process) }
+        if (job.process.isAlive) {
+            runCatching { job.process.destroy() }
+            runCatching { job.process.waitFor(500, TimeUnit.MILLISECONDS) }
+            if (job.process.isAlive) runCatching { job.process.destroyForcibly() }
+            runCatching { job.process.waitFor(500, TimeUnit.MILLISECONDS) }
+        }
+        if (!job.process.isAlive) job.finish()
+    }
+
     private fun start(spec: TerminalRunSpec): Job {
         val id = "job_" + counter.incrementAndGet()
-        val argv = when (spec.identity) {
-            TerminalIdentity.USER -> listOf("sh", "-c", spec.command)
-            TerminalIdentity.ROOT -> listOf("su", "-c", spec.command)
-        }
-        val builder = ProcessBuilder(argv).redirectErrorStream(false)
-        spec.cwd?.let { cwd -> runCatching { builder.directory(File(cwd)) } }
-        val process = runCatching { builder.start() }.getOrElse {
-            logger.warn("terminal_run start failed: ${it.javaClass.simpleName}")
+        val launch = launchPlan(spec)
+        val process = runCatching {
+            supervisor.startShellProcess(
+                identity = launch.identity,
+                command = launch.command,
+                mergeStderr = false,
+                environment = launch.environment,
+                linuxRootfsPath = launch.rootfsPath,
+                linuxSharedMounts = launch.sharedMounts,
+            )
+        }.getOrNull() ?: run {
+            logger.warn("terminal_run start failed: environment=${launch.environment.wireName} identity=${launch.identity}")
             throw io.github.fartown.movo.agent.tools.core.ToolFailure(
                 io.github.fartown.movo.agent.tools.core.ToolErrorCode.SYSTEM_REJECTED,
-                "命令无法启动",
-                detail = it.javaClass.simpleName,
+                if (launch.environment.isLinux) "Linux 环境里的命令无法启动" else "命令无法启动",
+                hint = if (launch.environment.isLinux) "确认设置里的 Linux 工具环境已装好；需要 Root 的 chroot 方式要先授权 Root" else null,
             )
         }
         val job = Job(id, spec, process)
@@ -280,3 +316,47 @@ internal class TerminalJobRegistry(
 
     private data class BufferView(val text: String, val truncated: Boolean)
 }
+
+/** 一次启动用的环境、身份与命令（Linux 环境按设置里选的发行版与后端决定身份）。 */
+private data class LaunchPlan(
+    val environment: io.github.fartown.movo.agent.terminal.TerminalEnvironment,
+    val identity: String,
+    val command: String,
+    val rootfsPath: String?,
+    val sharedMounts: List<io.github.fartown.movo.agent.terminal.SharedFolderMount>,
+)
+
+private fun launchPlan(spec: TerminalRunSpec): LaunchPlan {
+    val command = spec.cwd?.let { "cd ${shellQuote(it)} && ${spec.command}" } ?: spec.command
+    if (spec.environment != TerminalEnv.LINUX) {
+        return LaunchPlan(
+            environment = io.github.fartown.movo.agent.terminal.TerminalEnvironment.ANDROID,
+            identity = if (spec.identity == TerminalIdentity.ROOT) "root" else "user",
+            command = command,
+            rootfsPath = null,
+            sharedMounts = emptyList(),
+        )
+    }
+    val context = io.github.fartown.movo.agent.runtime.AgentAppContext.resolve()
+        ?: throw io.github.fartown.movo.agent.tools.core.ToolFailure(
+            io.github.fartown.movo.agent.tools.core.ToolErrorCode.UNSUPPORTED, "Linux 环境尚未就绪", detail = "linux_not_ready",
+        )
+    val distribution = io.github.fartown.movo.data.repository.LinuxEnvironmentSettingsRepository.current(context)
+    val environment = when (distribution) {
+        io.github.fartown.movo.agent.terminal.LinuxDistribution.ALPINE -> io.github.fartown.movo.agent.terminal.TerminalEnvironment.ALPINE
+        io.github.fartown.movo.agent.terminal.LinuxDistribution.DEBIAN -> io.github.fartown.movo.agent.terminal.TerminalEnvironment.DEBIAN
+    }
+    val rootfs = io.github.fartown.movo.agent.terminal.LinuxEnvironmentPaths.rootfsDir(context, distribution).absolutePath
+    return LaunchPlan(
+        environment = environment,
+        // 免 Root（PRoot）用普通身份，chroot 用 Root：由用户在设置里选的后端决定，不看模型传的 identity。
+        identity = io.github.fartown.movo.agent.terminal.TerminalRuntime.defaultIdentity(environment, rootfs),
+        command = command,
+        rootfsPath = rootfs,
+        sharedMounts = runCatching { io.github.fartown.movo.agent.terminal.SharedFolderMounts.current() }.getOrDefault(emptyList()),
+    )
+}
+
+private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
+
+private const val CANCEL_POLL_MS = 200L

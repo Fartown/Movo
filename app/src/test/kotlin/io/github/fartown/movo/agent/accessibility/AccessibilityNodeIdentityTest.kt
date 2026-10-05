@@ -51,6 +51,48 @@ class AccessibilityNodeIdentityTest {
         )
     }
 
+    /** 真机：设置首页观察总被截断，页面又一直在变，每次点按都判过期，原地转了 62 步。 */
+    @Test
+    fun `truncated snapshot is unique when the live window has exactly one match`() {
+        assertTrue(
+            AccessibilityIdentityFreshnessPolicy.canBypassContentChange(
+                hasUniqueId = false,
+                snapshotTruncated = true,
+                identityMatchCount = 1,
+                liveIdentityMatchCount = { 1 },
+            ),
+        )
+        // 整窗还有同身份的节点（例如每行一个「删除」），不能证明点到的还是原来那一个。
+        assertFalse(
+            AccessibilityIdentityFreshnessPolicy.canBypassContentChange(
+                hasUniqueId = false,
+                snapshotTruncated = true,
+                identityMatchCount = 1,
+                liveIdentityMatchCount = { 2 },
+            ),
+        )
+        // 查不了（没有文字、窗口不可访问）按原规则处理。
+        assertFalse(
+            AccessibilityIdentityFreshnessPolicy.canBypassContentChange(
+                hasUniqueId = false,
+                snapshotTruncated = true,
+                identityMatchCount = 1,
+                liveIdentityMatchCount = { null },
+            ),
+        )
+        // 快照里已经重复就不再去查整窗。
+        var queried = false
+        assertFalse(
+            AccessibilityIdentityFreshnessPolicy.canBypassContentChange(
+                hasUniqueId = false,
+                snapshotTruncated = true,
+                identityMatchCount = 2,
+                liveIdentityMatchCount = { queried = true; 1 },
+            ),
+        )
+        assertFalse(queried)
+    }
+
     @Test
     fun `complete snapshot requires exactly one semantic identity match`() {
         assertTrue(

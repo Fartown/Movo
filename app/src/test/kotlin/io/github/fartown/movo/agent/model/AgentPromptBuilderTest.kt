@@ -66,19 +66,19 @@ class AgentPromptBuilderTest {
         assertEquals("自定义系统约束", messages.getJSONObject(0).getString("content"))
         assertTrue(messages.systemContents().any { it.contains("只有系统保护后端可用时才会请求有限重绑") })
         assertTrue(messages.systemContents().any { it.contains("不要改用坐标或 Shell 重放") })
-        assertTrue(messages.systemContents().any { it.contains("通用 GUI 工具完成输入和点击发送") })
+        assertTrue(messages.systemContents().any { it.contains("直接用 ui_input、ui_tap 完成输入和点击发送") })
         assertTrue(messages.systemContents().any { it.contains("不追加二次确认") })
         assertTrue(messages.systemContents().any { it.contains("立即调用工具") })
         assertTrue(messages.systemContents().any { it.contains("不要先输出计划、解释或中间进度") })
         assertTrue(messages.systemContents().any { it.contains("不要为了展示思考而拆成多个回合") })
-        assertTrue(messages.systemContents().any { it.contains("不要例行调用 observe_screen") })
+        assertTrue(messages.systemContents().any { it.contains("不要例行调用 ui_observe") })
         assertTrue(messages.systemContents().any { it.contains("读取或汇总屏幕信息") })
         assertTrue(messages.systemContents().any { it.contains("确认最终结果") })
         assertTrue(messages.systemContents().any { it.contains("后续操作依赖特定文本或应用出现") })
-        assertFalse(messages.systemContents().any { it.contains("点击或打开应用后优先用 wait_for_text") })
-        assertTrue(messages.systemContents().any { it.contains("只读取 UI 树，不附截图") })
-        assertTrue(messages.systemContents().any { it.contains("include_screenshot=true") })
-        assertTrue(messages.systemContents().any { it.contains("保持 include_ui_tree=true") })
+        assertFalse(messages.systemContents().any { it.contains("observe_screen") || it.contains("tap_element") || it.contains("get_current_context") })
+        assertTrue(messages.systemContents().any { it.contains("默认只返回节点、不附截图") })
+        assertTrue(messages.systemContents().any { it.contains("screenshot=true") })
+        assertTrue(messages.systemContents().any { it.contains("effect=pay") })
         assertTrue(messages.systemContents().any { it.contains("禁止把新截图与旧节点混用") })
         assertTrue(messages.systemContents().any { it.contains("不要仅因截断请求截图") })
         assertTrue(messages.systemContents().any { it.contains("主动调用当前已公开的只读工具获取证据") })
@@ -91,9 +91,9 @@ class AgentPromptBuilderTest {
         assertTrue(messages.systemContents().any { it.contains("合法且克制的 GitHub Flavored Markdown") })
         assertTrue(messages.systemContents().any { it.contains("不用整句粗体冒充标题") })
         assertTrue(messages.systemContents().any { it.contains("表格前后留空行") })
-        assertTrue(messages.getJSONObject(2).getString("content").contains("open_and_exec"))
-        assertTrue(messages.getJSONObject(2).getString("content").contains("同一轮模型回复最多调用一次 read_image"))
-        assertTrue(messages.getJSONObject(2).getString("content").contains("再在下一轮调用下一张"))
+        assertTrue(messages.getJSONObject(2).getString("content").contains("terminal_run"))
+        assertTrue(messages.getJSONObject(2).getString("content").contains("同一轮模型回复最多读一张图片"))
+        assertTrue(messages.getJSONObject(2).getString("content").contains("再在下一轮读下一张"))
         assertFalse(messages.systemContents().any { it.contains("网页浏览、读取") })
         assertEquals("旧问题", messages.getJSONObject(3).getString("content"))
         assertEquals("旧回答", messages.getJSONObject(4).getString("content"))
@@ -133,13 +133,13 @@ class AgentPromptBuilderTest {
 
         assertEquals(listOf("system", "system", "system", "user"), messages.roles())
         val systemContents = messages.systemContents()
-        assertTrue(systemContents.any { it.contains("browser_use") })
-        assertFalse(systemContents.any { it.contains("open_and_exec") })
+        assertTrue(systemContents.any { it.contains("browser_open") && it.contains("browser_read") })
+        assertFalse(systemContents.any { it.contains("terminal_run") })
         val skillMessage = systemContents.single { it.contains("id=screen-audit") }
         assertTrue(skillMessage.contains("path=/skills/screen-audit/SKILL.md"))
         assertTrue(skillMessage.contains("capabilities=scripts, assets"))
         assertTrue(skillMessage.contains("description=检查屏幕 并输出 结论"))
-        assertTrue(skillMessage.contains("先调用 skills_read"))
+        assertTrue(skillMessage.contains("先调用 skill_read"))
         assertEquals("读取网页", messages.getJSONObject(3).getString("content"))
     }
 
@@ -187,6 +187,38 @@ class AgentPromptBuilderTest {
         assertTrue(memory.contains("revision=${"b".repeat(64)}"))
         assertTrue(memory.contains("用户以前偏好中文"))
         assertEquals("现在改用英文回答", messages.getJSONObject(messages.length() - 1).getString("content"))
+    }
+
+    @Test
+    fun environmentGoesIntoTheLastSystemMessageAndToolGuideIsInjected() {
+        val messages = AgentPromptBuilder.buildInitialMessages(
+            config = modelConfig("", terminalTools = false, browserTools = false),
+            prompt = "明天早上七点叫我",
+            images = emptyList(),
+            history = listOf(AgentModelClient.ConversationMessage(role = "user", content = "旧问题")),
+            skillContext = SkillContext.EMPTY,
+            toolGuide = "## 时钟与音频\n- clock_create 回读核实",
+            environment = "当前时间：2026-10-06 星期二 09:30（Asia/Shanghai，UTC+08:00）",
+        )
+
+        val guide = messages.systemContents().single { it.startsWith("各类工具的用法") }
+        assertTrue(guide.contains("clock_create 回读核实"))
+        val systems = messages.systemContents()
+        // 环境信息是系统块的最后一条，写明不是用户说的话（真机上放进用户消息会被当成用户新说的话）。
+        assertTrue(systems.last().startsWith("环境信息（Movo 自动提供，不是用户说的话）：当前时间：2026-10-06 星期二 09:30"))
+        // 真机 T1-E1：模型把时间写进了用户让创建的文件。
+        assertTrue(systems.last().contains("不要把时间写进文件、消息或回答"))
+        assertEquals("旧问题", messages.getJSONObject(messages.length() - 2).getString("content"))
+        assertEquals("明天早上七点叫我", messages.getJSONObject(messages.length() - 1).getString("content"))
+    }
+
+    @Test
+    fun environmentLineNamesDateWeekdayTimeAndZone() {
+        val now = java.time.ZonedDateTime.of(2026, 10, 6, 9, 5, 0, 0, java.time.ZoneId.of("Asia/Shanghai"))
+        assertEquals(
+            "当前时间：2026-10-06 星期二 09:05（Asia/Shanghai，UTC+08:00）",
+            AgentPromptBuilder.environmentLine(now),
+        )
     }
 
     private fun modelConfig(

@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="monitor_execution_label">后台监听</string>
-    <string name="monitor_execution_summary">后台监听 %1$d 个·%2$s，%3$s 自动结束</string>
+    <plurals name="monitor_execution_summary">
+        <item quantity="other">后台监听 %1$d 个·%2$s，%3$s 自动结束</item>
+    </plurals>
+    <string name="monitor_execution_mixed">任务 %1$d 项·后台监听 %2$d 个</string>
     <string name="monitor_stop_all">全部停止</string>
     <string name="monitor_notify_channel">Movo 通知</string>
     <string name="monitor_notify_stop">停止提醒</string>
@@ -12,15 +15,20 @@
     <string name="monitor_row_rate_limit">监听已停止·%1$s·输出太频繁</string>
     <string name="monitor_row_interrupted">监听已中断·%1$s·Movo 被系统关闭</string>
     <string name="monitor_row_exit">监听结束·%1$s·%2$s</string>
+    <string name="monitor_row_exit_code">监听结束·%1$s·退出码 %2$d·%3$s</string>
     <string name="monitor_chip">监听</string>
     <string name="monitor_chip_count">监听 %1$d</string>
     <string name="monitor_list_title">后台监听</string>
-    <string name="monitor_list_item_detail">已触发 %1$d 次·%2$s 自动结束</string>
+    <plurals name="monitor_list_item_detail">
+        <item quantity="other">已触发 %1$d 次·%2$s 自动结束</item>
+    </plurals>
     <string name="monitor_list_stop">停止</string>
     <string name="monitor_settings_group">后台监听</string>
     <string name="monitor_settings_max_duration">最长监听时长</string>
-    <string name="monitor_settings_footer">超过这个时长的监听会自动停止。修改只影响之后新开始的监听。</string>
+    <string name="monitor_settings_footer_1">超过这个时长的监听会自动停止。</string>
+    <string name="monitor_settings_footer_2">修改只影响之后新开始的监听。</string>
     <string name="monitor_settings_choice_desc">超过这个时长，监听会自动停止</string>
+    <string name="monitor_duration_seconds">%1$d 秒</string>
     <string name="monitor_duration_minutes">%1$d 分钟</string>
     <string name="monitor_duration_hours">%1$d 小时</string>
     <string name="tool_monitor_start">开始监听</string>

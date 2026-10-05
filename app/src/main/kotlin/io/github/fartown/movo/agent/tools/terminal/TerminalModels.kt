@@ -25,6 +25,8 @@ internal data class TerminalRunSpec(
     val waitMs: Long,
     val tty: Boolean,
     val mode: TerminalMode,
+    /** 本次运行是否已被取消：前台等待期间按它检查，取消就立刻结束命令（不等 wait_ms 跑完）。 */
+    val cancelled: () -> Boolean = { false },
 )
 
 internal sealed interface TerminalRunResult {

@@ -1,8 +1,10 @@
 package io.github.fartown.movo.agent.model
 
+import io.github.fartown.movo.agent.monitor.MonitorEventFormatter
 import io.github.fartown.movo.agent.runtime.AgentEvent
 import io.github.fartown.movo.agent.runtime.AgentRunController
 import io.github.fartown.movo.agent.runtime.AgentTokenUsage
+import io.github.fartown.movo.agent.runtime.SteeringItem
 import io.github.fartown.movo.agent.roleplay.RoleplayRunContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -230,25 +232,43 @@ internal class AgentLoop(
         }
     }
 
+    /** 本轮已并入的监听事件条数（每次合并算一条）；到上限后剩下的留给下一个事件轮，一轮不会被事件拖着停不下来。 */
+    private var injectedEventItems = 0
+
     private fun appendPendingSteeringMessage(): Boolean {
-        val item = runController.pollSteeringMessage() ?: return false
-        appendMessage(steeringMessage(item))
-        context.userAppended()
+        val item = runController.pollSteeringMessage(allowEvents = injectedEventItems < MAX_EVENT_INJECTIONS) ?: return false
+        appendSteeringItem(item)
         return true
     }
 
+    /** 自然结束前只为用户补充续跑；监听事件不续跑本轮。 */
     private fun appendPendingSteeringOrSeal(): Boolean {
         val item = runController.pollSteeringOrSeal() ?: return false
-        appendMessage(steeringMessage(item))
-        context.userAppended()
+        appendSteeringItem(item)
         return true
     }
 
-    private fun steeringMessage(item: io.github.fartown.movo.agent.runtime.SteeringItem): JSONObject = when (item) {
-        is io.github.fartown.movo.agent.runtime.SteeringItem.User -> steeringMessage(item.text)
-        // 后台监听事件：正文已按「系统通知 - 非用户输入」写好，不包装成用户补充指令。
-        is io.github.fartown.movo.agent.runtime.SteeringItem.Event -> AgentConversationCodec.userTextMessage(item.text)
-            .put("_movo_message_id", "monitor-$operationId-${++monitorEventIndex}")
+    private fun appendSteeringItem(item: SteeringItem) {
+        when (item) {
+            is SteeringItem.User -> {
+                appendMessage(steeringMessage(item.text))
+                context.userAppended()
+            }
+            is SteeringItem.Event -> {
+                // 模型真正读到事件时才告诉界面（插事件行、设历史锚点）。先发再写：停止恰好落在两者之间时，
+                // 界面多出的那一批由 App 按结果 transcript 里的条数撤掉并放回队首；反过来先写后发，
+                // 模型读到了界面却没有行，事件会再送一次、历史多出一条。
+                item.events.forEach(onEvent)
+                // 正文是「系统通知 - 非用户输入」，不包装成用户补充指令；标签段里的命令输出已转义。
+                appendMessage(
+                    AgentConversationCodec.userTextMessage(MonitorEventFormatter.wrap(item.text))
+                        .put("_movo_message_id", "monitor-$operationId-${++monitorEventIndex}"),
+                )
+                context.eventAppended()
+                injectedEventItems++
+                publishTranscript()
+            }
+        }
     }
 
     private var monitorEventIndex = 0
@@ -443,6 +463,10 @@ internal class AgentLoop(
             AssistantBlockKind.TOOL_CALL -> AgentEvent.AssistantBlockKind.TOOL_CALL
         }
 
+    internal companion object {
+        /** 一轮里最多并入几次监听事件（每次可合并多条）；超出的留给下一个事件轮。 */
+        const val MAX_EVENT_INJECTIONS = 3
+    }
 }
 
 /** 给工具事件记下发生时刻，供执行卡与执行详情计算每步用时（规范 8.1、8.8）。 */

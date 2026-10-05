@@ -154,7 +154,13 @@ internal fun CharacterDetailScreen(
         item(key = "greetings") {
             MovoCard {
                 CardTitle("开场白")
-                val greetings = listOf(profile.card.firstMessage) + profile.card.alternateGreetings
+                // 预览与开聊后一致：{{user}}、{{char}} 按当前人设与角色名替换（真机：预览里露出「{{user}}」原文）。
+                val userName = store.persona.name.takeIf { store.usePersona && it.isNotBlank() } ?: "用户"
+                val greetings = (listOf(profile.card.firstMessage) + profile.card.alternateGreetings).map { raw ->
+                    runCatching {
+                        io.github.fartown.movo.agent.roleplay.CharacterMacros.expand(raw, profile.card, userName = userName)
+                    }.getOrDefault(raw)
+                }
                 greetings.forEachIndexed { index, greeting ->
                     val title = if (index == 0) "默认开场白" else "开场白 ${index + 1}"
                     val selected = store.greetingIndex == index

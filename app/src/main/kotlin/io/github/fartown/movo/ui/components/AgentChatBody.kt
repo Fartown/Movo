@@ -261,7 +261,7 @@ internal fun AgentChatBody(
         } else {
             visibleMessages.lastOrNull { message ->
                 message is ToolActivityMessageUi &&
-                    message.toolName == "browser_use" &&
+                    message.toolName in BROWSER_TOOL_NAMES &&
                     message.id.startsWith("$runId-tool-") &&
                     message.id.endsWith("-$toolCallId")
             }?.id
@@ -611,7 +611,14 @@ internal fun AgentConversationMessages(
     val workTurnSpans = remember(timelineEntries) { workTurnSpans(timelineEntries) }
     // 执行卡后面紧接着出现了有正文的回答：这张卡的步骤已经结束，收成摘要条（方案 B，只收一次）。
     val answeredWorkKeys = remember(timelineEntries) { answeredWorkKeys(timelineEntries) }
+    val turnFinalWorkKeys = remember(timelineEntries) { lastWorkKeysPerTurn(timelineEntries) }
     val workStepOffsets = remember(timelineEntries) { workStepOffsets(timelineEntries) }
+    // 后台监听行：叠放间距 4、与执行卡间距 8（规范 8.12）。
+    val monitorRowSpacings = remember(timelineEntries) { monitorRowSpacings(timelineEntries) }
+    // 事件轮（后台监听唤醒、没有用户原话）里的回答和失败卡：不提供「重新生成」「重试」。
+    val nonRegenerableIds = remember(visibleMessages) {
+        io.github.fartown.movo.ui.app.AgentConversationRevisionReducer.nonRegenerableMessageIds(visibleMessages)
+    }
     // 暂停时本来就不会有数据：不提示「已 N 秒没有收到数据」。
     val runPaused = LocalRunControls.current.isPaused
     val stoppedWithoutWork = remember(timelineEntries) { stoppedNoticesWithoutWork(timelineEntries) }
@@ -867,6 +874,7 @@ internal fun AgentConversationMessages(
             io.github.fartown.movo.ui.components.movo.LocalVisibleViewportBottom provides visibleBottom,
             LocalChatListScroll provides chatListScroll,
             LocalChatBottomReserve provides bottomReserve,
+            LocalMonitorRowSpacings provides monitorRowSpacings,
         ) {
         LazyColumn(
             state = scrollState,
@@ -910,7 +918,7 @@ internal fun AgentConversationMessages(
                                     onRunTraceClick = onRunTraceClick,
                                     onOpenBrowser = onOpenBrowser,
                                     showBrowserShortcut = message is ToolActivityMessageUi &&
-                                        message.toolName == "browser_use" &&
+                                        message.toolName in BROWSER_TOOL_NAMES &&
                                         message.id == currentBrowserMessageId,
                                     showCopyAction = message !is AgentMessageUi ||
                                         message.characterEditable || message.id in finalResultMessageIds,
@@ -921,6 +929,7 @@ internal fun AgentConversationMessages(
                                     onEditMessage = onEditMessage,
                                     onDeleteMessage = onDeleteMessage,
                                     onRegenerateMessage = onRegenerateMessage,
+                                    canRegenerate = message.id !in nonRegenerableIds,
                                     onSelectReplyCandidate = onSelectReplyCandidate,
                                     noticeActive = message.id == activeNoticeId,
                                     stoppedWithoutWork = message.id in stoppedWithoutWork,
@@ -947,6 +956,7 @@ internal fun AgentConversationMessages(
                                 // 本轮仍在进行：模型在两步之间思考时步骤都已完成，但执行卡不能当作完成收起。
                                 runActive = isStreaming && entry.key == lastWorkKey,
                                 answerStarted = entry.key in answeredWorkKeys,
+                                lastCardOfTurn = entry.key in turnFinalWorkKeys,
                                 stepOffset = workStepOffsets[entry.key] ?: 0,
                                 outcome = workOutcomes[entry.key],
                                 turnSpan = workTurnSpans[entry.key],
@@ -1136,6 +1146,23 @@ internal fun currentTurnCompletedSteps(entries: List<AgentTimelineEntry>): Int {
 internal fun timelineContentType(entry: AgentTimelineEntry): Any = when (entry) {
     is AgentTimelineEntry.Message -> entry.message::class
     is AgentTimelineEntry.WorkProcess -> AgentTimelineEntry.WorkProcess::class
+}
+
+/** 每一轮（用户消息或唤醒事件之后）的最后一张执行卡。 */
+internal fun lastWorkKeysPerTurn(entries: List<AgentTimelineEntry>): Set<String> {
+    val keys = mutableSetOf<String>()
+    var last: String? = null
+    entries.forEach { entry ->
+        when (entry) {
+            is AgentTimelineEntry.Message -> if (entry.message is UserMessageUi || entry.message.isTurnStart()) {
+                last?.let(keys::add)
+                last = null
+            }
+            is AgentTimelineEntry.WorkProcess -> last = entry.key
+        }
+    }
+    last?.let(keys::add)
+    return keys
 }
 
 /** 后面紧接着一条有正文的回答的执行卡。 */
@@ -1661,3 +1688,6 @@ private fun EditHiddenItem(
 
 /** 「一打开就停在最新消息」最多等消息读出来的时长。 */
 private const val INITIAL_LATEST_WAIT_MS = 1_500L
+
+/** 用过 Agent 浏览器的步骤（类型化工具 browser_open/read/act；browser_use 是重构前的旧名，旧会话里还有）。 */
+private val BROWSER_TOOL_NAMES = setOf("browser_open", "browser_read", "browser_act", "browser_use")

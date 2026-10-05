@@ -95,6 +95,8 @@ internal object AgentModelClient {
         capabilitiesProvider: () -> AgentToolCapabilities = { AgentToolCapabilities(rootAvailable = false) },
         // S4 非 UI 接线（默认 null=走旧目录组装）：非空时每轮用类型化工具子系统的目录，toolExecutor 由调用方传子系统 pipeline。
         typedCatalog: ((AgentToolCapabilities) -> JSONArray)? = null,
+        /** 类型化工具各领域的用法分节；作为一条系统消息注入（工具重构实施方案：去掉写死的工具规则、注入领域分节）。 */
+        toolGuide: () -> String = { "" },
         sessionId: String = java.util.UUID.randomUUID().toString(),
         compactOnly: Boolean = false,
         operationId: String = sessionId,
@@ -109,6 +111,9 @@ internal object AgentModelClient {
     ): ModelResponse.Text {
         config.validate()
         val initialCapabilities = capabilitiesProvider()
+        val guide = if (rewriteReply) "" else runCatching(toolGuide).getOrDefault("")
+        // 环境信息每次任务算一次，重建系统消息时沿用同一份（系统消息条数、前缀都不变）。
+        val environment = if (rewriteReply || compactOnly) "" else AgentPromptBuilder.environmentLine()
         val messages = AgentPromptBuilder.buildInitialMessages(
             config,
             prompt,
@@ -119,6 +124,8 @@ internal object AgentModelClient {
             rootAvailable = initialCapabilities.rootAvailable,
             roleplayContext = roleplayContext,
             voiceConversation = voiceConversation,
+            toolGuide = guide,
+            environment = environment,
         )
         if (rewriteReply) {
             messages.put(messages.length() - 1, AgentConversationCodec.userTextMessage(
@@ -133,7 +140,8 @@ internal object AgentModelClient {
         val transcript = JSONArray()
         // 旧 history 中的无效消息可能在组装时被跳过，系统边界不能由 history 条数倒推。
         val systemCount = AgentPromptBuilder.buildSystemMessages(
-            config, skillContext, memoryContext, initialCapabilities.rootAvailable, roleplayContext, voiceConversation,
+            config, skillContext, memoryContext, initialCapabilities.rootAvailable, roleplayContext, voiceConversation, guide,
+            environment,
         ).length()
         fun toolsFor(capabilities: AgentToolCapabilities): JSONArray {
             if (rewriteReply) return JSONArray()
@@ -187,7 +195,8 @@ internal object AgentModelClient {
                 val capabilities = capabilitiesProvider()
                 if (capabilities.rootAvailable != promptRootAvailable) {
                     val systemMessages = AgentPromptBuilder.buildSystemMessages(
-                        config, skillContext, memoryContext, capabilities.rootAvailable, roleplayContext, voiceConversation,
+                        config, skillContext, memoryContext, capabilities.rootAvailable, roleplayContext, voiceConversation, guide,
+                        environment,
                     )
                     for (index in 0 until systemMessages.length()) {
                         messages.put(index, systemMessages.getJSONObject(index))

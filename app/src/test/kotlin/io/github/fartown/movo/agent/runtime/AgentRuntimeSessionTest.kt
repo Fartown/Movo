@@ -20,6 +20,35 @@ class AgentRuntimeSessionTest {
     }
 
     @Test
+    fun monitorEventsAreNotShownUntilTheLoopConsumesThem() {
+        val delivered = mutableListOf<AgentEvent>()
+        val session = AgentRuntimeSession("run", eventSink = delivered::add)
+        val consumed = AgentEvent.MonitorEventReceived("m1", "喝水提醒", "event", 1, 0L, "tick", anchor = true)
+
+        assertTrue(session.injectMonitorEvent("<monitor-event/>\n", listOf(consumed)))
+
+        // 排进下一个边界，不先告诉界面：模型没读到就结束时，界面不会留下事件行。
+        assertTrue(delivered.isEmpty())
+        val queued = session.controller.pollSteeringMessage() as SteeringItem.Event
+        assertEquals(listOf(consumed), queued.events)
+        // 读到时由模型循环经 emit 发出，照常记入重放。
+        assertTrue(session.emit(consumed))
+        assertEquals(listOf<AgentEvent>(consumed), delivered)
+        val replayed = mutableListOf<AgentEvent>()
+        assertTrue(session.attach(eventSink = replayed::add, resultSink = {}))
+        assertEquals(listOf<AgentEvent>(consumed), replayed)
+    }
+
+    @Test
+    fun voiceTurnsDoNotAcceptMonitorEvents() {
+        val session = AgentRuntimeSession("voice-run", voiceSessionId = "voice-1")
+        assertFalse(session.injectMonitorEvent("<monitor-event/>\n", emptyList()))
+        assertFalse(session.controller.hasPendingSteering)
+        val compact = AgentRuntimeSession("compact", operation = AgentRuntimeWire.OP_COMPACT)
+        assertFalse(compact.injectMonitorEvent("<monitor-event/>\n", emptyList()))
+    }
+
+    @Test
     fun cancellationDeliversCommittedContextAndRejectsLaterUpdates() {
         val delivered = mutableListOf<AgentRuntimeWire.RunResult>()
         val session = AgentRuntimeSession("run", resultSink = delivered::add)

@@ -86,6 +86,7 @@ import androidx.compose.animation.core.snap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.height
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -654,17 +655,28 @@ internal fun AgentChatInputBar(
                         }
                     }
                     AnimatedVisibility(
-                        visible = !isEditingMessage && availableReasoningEfforts.isNotEmpty() && !isStreaming,
+                        visible = availableReasoningEfforts.isNotEmpty(),
                         enter = fadeIn(MovoMotion.fast()),
                         exit = fadeOut(MovoMotion.fastExit()),
                     ) {
+                        // 运行中 / 编辑消息时「思考」照常淡出，但保留它的位置：后面的「监听」胶囊不会在淡出后左跳
+                        // （规范 9.0「界面不跳闪」、8.12 入口在「思考」之后）。隐藏期间不可点、不读屏。
+                        val hidden = isEditingMessage || isStreaming
+                        val thinkingAlpha by androidx.compose.animation.core.animateFloatAsState(
+                            targetValue = if (hidden) 0f else 1f,
+                            animationSpec = if (hidden) MovoMotion.fastExit() else MovoMotion.fast(),
+                            label = "thinkingChipAlpha",
+                        )
                         ThinkingEffortChip(
                             effort = reasoningEffort,
                             options = availableReasoningEfforts,
-                            enabled = true,
+                            enabled = !hidden,
                             popupAnchorTopPx = inputContainerTopPx,
                             popupMaxHeight = thinkingPopupMaxHeight,
                             onEffortChange = onReasoningEffortChange,
+                            modifier = Modifier
+                                .graphicsLayer { alpha = thinkingAlpha }
+                                .then(if (hidden) Modifier.clearAndSetSemantics {} else Modifier),
                         )
                     }
                     // 后台监听入口（规范 8.12）：本对话有运行中的监听时出现；语音模式不在这个分支里，自然隐藏。

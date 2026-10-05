@@ -21,7 +21,10 @@ internal data class ApprovalRequest(
     val toolName: String,
     val title: String,
     val detail: String,
-    /** 可以“一直允许”的范围说明，例如“微信”“adb shell 命令 pm”；为空时不提供长期允许。 */
+    /**
+     * 卡片上勾选框的完整文案：「本次任务内，这类操作都允许」或一直允许的说法（如「以后读取短信不再询问」）；
+     * 为空时不显示勾选框。
+     */
     val rememberScope: String?,
     val reason: ApprovalReason,
 )
@@ -29,12 +32,16 @@ internal data class ApprovalRequest(
 internal enum class ApprovalReason {
     /** 动作对外或不可逆。 */
     EXTERNAL_EFFECT,
-    /** 目标在受保护应用中（支付、银行、系统设置、通讯发送界面）。 */
+    /** 用户指定的受保护应用（默认没有）里的操作；用户设过受保护应用、却认不出当前是哪个应用时也用它。 */
     PROTECTED_APP,
-    /** 本轮读过不可信内容或个人数据后，又要执行可能外发的动作。 */
+    /** 本轮既读过不可信内容、又读过个人数据之后，又要执行会把内容发出去的动作。 */
     TAINTED,
-    /** 模型声明了动作后果（send / pay / delete / submit）。 */
+    /** 模型声明了动作后果（send / delete / submit）。 */
     DECLARED_EFFECT,
+    /** 支付、转账：深色确认，不能勾「本次任务内都允许」（定稿 16-02）。 */
+    PAYMENT,
+    /** 第一次读取短信、通话记录这类个人数据。 */
+    PERSONAL_DATA,
 }
 
 internal sealed interface ApprovalDecision {

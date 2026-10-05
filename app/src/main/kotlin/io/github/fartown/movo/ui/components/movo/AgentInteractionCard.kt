@@ -234,7 +234,10 @@ private data class HeaderSpec(
 
 private fun headerSpec(model: AgentInteractionUiState): HeaderSpec = when {
     !model.isApproval -> HeaderSpec(null, MovoColors.indigoFg, "需要你选择")
-    model.reason == "PROTECTED_APP" -> HeaderSpec(MovoIcons.TriangleAlert, MovoColors.roseFg, "需要你确认")
+    // 支付、转账（定稿 16-02）：Rose 警示。
+    model.reason == "PAYMENT" -> HeaderSpec(MovoIcons.TriangleAlert, MovoColors.roseFg, "需要你确认 · 付款")
+    model.reason == "PROTECTED_APP" -> HeaderSpec(MovoIcons.ShieldAlert, MovoColors.roseFg, "需要你确认 · 受保护应用")
+    model.reason == "PERSONAL_DATA" -> HeaderSpec(MovoIcons.Eye, MovoColors.indigoFg, "需要你确认 · 读取个人数据")
     isUnlock(model) -> HeaderSpec(MovoIcons.Lock, MovoColors.textPrimary, "需要你操作")
     else -> HeaderSpec(MovoIcons.ArrowUp, MovoColors.indigoFg, "需要你确认")
 }
@@ -248,7 +251,8 @@ private fun ApprovalContent(
     onApprove: (Boolean) -> Unit,
     onDecline: () -> Unit,
 ) {
-    val protectedApp = model.reason == "PROTECTED_APP"
+    // 只有支付、转账用深色确认、不提供勾选（定稿 16-02）；受保护应用、读取个人数据用普通主操作。
+    val payment = model.reason == "PAYMENT"
     if (model.detail.isNotBlank()) {
         if (isUnlock(model)) {
             Spacer(Modifier.size(MovoSpacing.sm))
@@ -259,7 +263,10 @@ private fun ApprovalContent(
         }
     }
 
-    var remember by remember(model.requestId) { mutableStateOf(model.rememberLabel != null) }
+    // 「本次任务内」默认勾上（定稿 16-01）；「以后不再询问」这类一直允许默认不勾。
+    var remember by remember(model.requestId) {
+        mutableStateOf(model.rememberLabel != null && model.reason != "PERSONAL_DATA")
+    }
     if (model.rememberLabel != null) {
         Spacer(Modifier.size(MovoSpacing.md))
         RememberRow(
@@ -267,10 +274,10 @@ private fun ApprovalContent(
             checked = remember,
             onToggle = { remember = it },
         )
-    } else if (protectedApp) {
+    } else if (payment) {
         Spacer(Modifier.size(MovoSpacing.md))
         Text(
-            "此操作不提供「一直允许」，确认后可能仍需在设备上点按或完成身份验证。",
+            "付款不提供「本次任务内都允许」；确认后仍需在屏幕上点按或验证身份。",
             style = MovoTypography.labelRegular,
             color = MovoColors.textTertiary,
         )
@@ -280,9 +287,9 @@ private fun ApprovalContent(
     MovoButtonRow {
         MovoBlockButton(label = "拒绝", onClick = onDecline, tone = BlockTone.Secondary)
         MovoBlockButton(
-            label = if (protectedApp) "继续" else "允许",
+            label = if (payment || model.reason == "PROTECTED_APP") "继续" else "允许",
             onClick = { onApprove(remember) },
-            tone = if (protectedApp) BlockTone.Destructive else BlockTone.Primary,
+            tone = if (payment) BlockTone.Destructive else BlockTone.Primary,
         )
     }
 }
@@ -419,5 +426,5 @@ private fun FreeTextRow(onSubmit: (String) -> Unit) {
     }
 }
 
-private fun rememberText(scope: String): String =
-    if (scope.isBlank()) "本次任务内，这类操作都允许" else "本次任务内，「$scope」这类操作都允许"
+/** 勾选框文案由运行时给出完整句子（「本次任务内，这类操作都允许」「以后读取短信不再询问」）。 */
+private fun rememberText(label: String): String = label.ifBlank { "本次任务内，这类操作都允许" }

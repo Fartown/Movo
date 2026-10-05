@@ -410,6 +410,8 @@ internal fun ChatMessageItem(
     onEditMessage: (String) -> Unit = {},
     onDeleteMessage: (String) -> Unit = {},
     onRegenerateMessage: (String) -> Unit = {},
+    /** 这一轮有用户原话可以重来：后台监听唤醒的事件轮没有，回答上不显示「重新生成」、失败卡不显示「重试」。 */
+    canRegenerate: Boolean = true,
     onSelectReplyCandidate: (String, Int) -> Unit = { _, _ -> },
     /** 模型重试提示：本轮仍在进行（还在重试）。 */
     noticeActive: Boolean = false,
@@ -433,6 +435,7 @@ internal fun ChatMessageItem(
             messageActionsEnabled = messageActionsEnabled,
             onDelete = { onDeleteMessage(message.id) },
             onRegenerate = { onRegenerateMessage(message.id) },
+            canRegenerate = canRegenerate,
             onEdit = { onEditMessage(message.id) },
             onSelectCandidate = { onSelectReplyCandidate(message.id, it) },
             modifier = modifier,
@@ -448,6 +451,7 @@ internal fun ChatMessageItem(
                 message = message,
                 actionsEnabled = messageActionsEnabled,
                 onRetry = { onRegenerateMessage(message.id) },
+                canRetry = canRegenerate,
                 onDelete = { onDeleteMessage(message.id) },
                 modifier = modifier,
             )
@@ -481,6 +485,7 @@ internal fun ChatMessageItem(
                 messageActionsEnabled = messageActionsEnabled,
                 onDelete = { onDeleteMessage(message.id) },
                 onRegenerate = { onRegenerateMessage(message.id) },
+                canRegenerate = canRegenerate,
             )
             if (message.code == SystemNoticeCode.RuntimeFailed || message.code == SystemNoticeCode.Interrupted) {
                 RunLogLink(messageId = message.id)
@@ -527,6 +532,8 @@ internal fun AgentWorkProcess(
     onDeleteMessage: (String) -> Unit = {},
     runActive: Boolean = false,
     answerStarted: Boolean = false,
+    /** 这一轮的最后一张执行卡：头部严格按「看最后一步」显示（规范 8.8），回答之后也不当作已绕过。 */
+    lastCardOfTurn: Boolean = true,
     stepOffset: Int = 0,
     outcome: WorkOutcome? = null,
     turnSpan: WorkTurnSpan? = null,
@@ -556,8 +563,10 @@ internal fun AgentWorkProcess(
     // 计时每秒重组一次卡片：步骤列表只在消息变化时重算。
     val tools = remember(messages) { messages.filterIsInstance<ToolActivityMessageUi>() }
     val toolCount = tools.size
-    // 后面接着给出了回答、也没有失败 / 停止卡：中途失败的步骤已被绕过，整张卡按完成显示（该步自己仍是 ✕）。
-    val failedIndex = if (answerStarted && outcome == null) -1 else unrecoveredFailedStep(tools)
+    // 一轮里回答把执行分成几张卡时，中间那张后面接着过渡回答、后面还有步骤：它的失败已被绕过，按完成显示（该步自己仍是 ✕）。
+    // 这一轮的最后一张卡照设计「看最后一步」：最后一步失败就是「第 N 步未完成」，后面的回答只是在解释做不了
+    // （真机：无障碍关着，各步 ✕，卡片头却显示绿色「已完成」）。
+    val failedIndex = if (answerStarted && outcome == null && !lastCardOfTurn) -1 else unrecoveredFailedStep(tools)
     var expanded by rememberSaveable(id) { mutableStateOf(running) }
     var manuallyExpanded by rememberSaveable(id) { mutableStateOf(false) }
 
@@ -1876,6 +1885,7 @@ private fun AgentMessageBlock(
     messageActionsEnabled: Boolean,
     onDelete: () -> Unit,
     onRegenerate: () -> Unit,
+    canRegenerate: Boolean = true,
     onEdit: () -> Unit = {},
     onSelectCandidate: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -1983,12 +1993,14 @@ private fun AgentMessageBlock(
                     },
                 )
                 if (showMessageActions) {
-                    MessageActionButton(
-                        icon = io.github.fartown.movo.ui.theme.MovoIcons.RotateCcw,
-                        contentDescription = stringResource(R.string.ui_regenerate_reply_84a7d9),
-                        enabled = messageActionsEnabled,
-                        onClick = onRegenerate,
-                    )
+                    if (canRegenerate) {
+                        MessageActionButton(
+                            icon = io.github.fartown.movo.ui.theme.MovoIcons.RotateCcw,
+                            contentDescription = stringResource(R.string.ui_regenerate_reply_84a7d9),
+                            enabled = messageActionsEnabled,
+                            onClick = onRegenerate,
+                        )
+                    }
                     var showMore by remember(message.id) { mutableStateOf(false) }
                     Box {
                         MessageActionButton(
@@ -4523,6 +4535,7 @@ private fun RunFailureCard(
     onRetry: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
+    canRetry: Boolean = true,
 ) {
     val openLog = io.github.fartown.movo.ui.screens.diagnostics.LocalRunLogOpener.current
     val failure = io.github.fartown.movo.ui.screens.diagnostics.rememberRunFailure(message.id)
@@ -4600,13 +4613,14 @@ private fun RunFailureCard(
             }
             Spacer(Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
+                val primaryShown = openModelSettings != null || canRetry
                 if (openModelSettings != null) {
                     io.github.fartown.movo.ui.components.movo.MovoPillButton(
                         label = stringResource(R.string.movo_run_model_settings),
                         onClick = openModelSettings,
                         primary = true,
                     )
-                } else {
+                } else if (canRetry) {
                     io.github.fartown.movo.ui.components.movo.MovoPillButton(
                         label = stringResource(R.string.movo_run_retry),
                         onClick = onRetry,
@@ -4614,7 +4628,7 @@ private fun RunFailureCard(
                     )
                 }
                 if (openRunLog != null) {
-                    Spacer(Modifier.width(8.dp))
+                    if (primaryShown) Spacer(Modifier.width(8.dp))
                     io.github.fartown.movo.ui.components.movo.MovoPillButton(
                         label = stringResource(R.string.movo_run_view_log),
                         onClick = openRunLog,

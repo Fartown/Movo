@@ -18,6 +18,7 @@ import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.fail
 import io.github.fartown.movo.agent.tools.core.objectSchema
+import io.github.fartown.movo.agent.tools.core.TaintKind
 import io.github.fartown.movo.data.model.McpToolDefinition
 import org.json.JSONArray
 import org.json.JSONObject
@@ -95,6 +96,8 @@ internal fun mcpResolution(entry: McpToolEntry): CallResolution = CallResolution
     sensitivity = Sensitivity.PRIVATE,
     resources = emptySet(),
     target = TargetIdentity.Named("mcp", entry.shortName),
+    // 参数会发给第三方服务器：两类污点同时成立时要确认（实施方案 5.1）。
+    exfiltrates = true,
 )
 
 /** 运行时按被调工具的 schema 做最小校验：缺必填字段 → INVALID_ARGUMENTS。深层类型校验交给服务器（-32602）。 */
@@ -180,6 +183,9 @@ internal class McpCallTool(
     override fun renderForModel(output: McpToolOutput): ModelContent = renderMcpOutput(output)
 
     override fun images(output: McpToolOutput): List<AgentModelClient.ModelImage> = output.images
+
+    /** 第三方服务器的返回是不可信内容。 */
+    override fun taintKinds(input: McpCallInput): Set<TaintKind> = setOf(TaintKind.UNTRUSTED)
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +231,9 @@ internal class McpDirectTool(
     override fun renderForModel(output: McpToolOutput): ModelContent = renderMcpOutput(output)
 
     override fun images(output: McpToolOutput): List<AgentModelClient.ModelImage> = output.images
+
+    /** 第三方服务器的返回是不可信内容。 */
+    override fun taintKinds(input: McpDirectInput): Set<TaintKind> = setOf(TaintKind.UNTRUSTED)
 
     private companion object {
         const val MAX_DESCRIPTION_CHARS = 200

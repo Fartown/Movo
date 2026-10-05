@@ -2,18 +2,32 @@ package io.github.fartown.movo.agent.tools.core
 
 import java.util.concurrent.ConcurrentHashMap
 
+/** 污点的两类（实施方案 5.1）。 */
+internal enum class TaintKind {
+    /** 不可信内容：网页、其他应用的屏幕内容、通知、MCP 结果、后台监听送来的命令输出。 */
+    UNTRUSTED,
+    /** 个人数据：个人记录（短信、通话、通讯录、相册等）、验证码、剪贴板、文件、健康、应用用量、位置、Wi‑Fi 密码。 */
+    PERSONAL,
+}
+
 /**
- * 本轮运行的污点状态：读过网页、通知、MCP 结果或个人数据之后，可能外发的动作一律需要确认。
- * 污点只增不减，跟随单次运行。
+ * 本轮运行的污点状态（实施方案 5.1）：分「不可信内容」「个人数据」两类，只增不减，跟随单次运行。
+ * 只有两类**同时成立**时，会把内容发出去的动作才需要确认——针对「个人数据被注入的指令发出去」这一威胁；
+ * 只读了其中一类不触发（用户 2026-10-04 定）。工具自己的输出（终端、写记忆）不算污点来源。
  */
 internal class TaintTracker {
-    private val sources = ConcurrentHashMap.newKeySet<String>()
+    private val sources = ConcurrentHashMap<TaintKind, MutableSet<String>>()
 
-    val tainted: Boolean get() = sources.isNotEmpty()
-    val snapshot: Set<String> get() = sources.toSet()
+    val untrusted: Boolean get() = !sources[TaintKind.UNTRUSTED].isNullOrEmpty()
+    val personal: Boolean get() = !sources[TaintKind.PERSONAL].isNullOrEmpty()
 
-    fun mark(source: String) {
-        sources += source
+    /** 两类同时成立。 */
+    val tainted: Boolean get() = untrusted && personal
+
+    val snapshot: Map<TaintKind, Set<String>> get() = sources.mapValues { it.value.toSet() }
+
+    fun mark(kind: TaintKind, source: String) {
+        sources.getOrPut(kind) { ConcurrentHashMap.newKeySet() } += source
     }
 }
 
@@ -22,9 +36,17 @@ internal data class ApprovalNeed(
     val reason: ApprovalReason,
     val title: String,
     val detail: String,
-    /** 长期允许的键（工具名之外的范围），例如包名、规范化命令前缀；为空则不能长期允许。 */
+    /** 一直允许的键（工具名之外的范围），例如「首次读取短信」；为空则不能一直允许。 */
     val scopeKey: String? = null,
+    /** 一直允许那一行的完整文案，例如「以后读取短信不再询问」。 */
     val scopeLabel: String? = null,
+    /**
+     * 「本次任务内」的目标范围（实施方案 5.4：同一个工具、同一个目标在本次运行内不再询问），例如包名、设置项、域名。
+     * 为空时按工具算。
+     */
+    val taskScope: String? = null,
+    /** 能否勾选「本次任务内，这类操作都允许」；支付、转账、删除不能（定稿 16-02）。 */
+    val allowTaskScope: Boolean = true,
 )
 
 /** 用户“一直允许”的规则。键包含策略版本，策略变化后旧授权失效。 */
@@ -49,46 +71,40 @@ internal interface ApprovalRuleStore {
 }
 
 /**
- * 受保护应用名单：在这些应用里的点击与输入需要确认。名单只能增加确认，不能免除确认。
+ * 受保护应用：用户自己指定的应用，Movo 在里面的点击、滑动、输入每一步都要确认。
+ * **默认为空**，只有用户在「设置 → 工具 → 受保护应用」里加了才生效（2026-10-05 用户要求：可以留着，但要能管理，默认不应该有）。
  */
 internal object ProtectedApps {
-    private val packages = setOf(
-        // 支付与银行
-        "com.eg.android.AlipayGphone",
-        "com.unionpay",
-        "com.chinamworld.main",
-        "com.icbc",
-        "cmb.pb",
-        "com.android.bankabc",
-        "com.chinamworld.bocmbci",
-        "com.bankcomm.Bankcomm",
-        "com.paypal.android.p2pmobile",
-        // 系统设置与安全
-        "com.android.settings",
-        "com.miui.securitycenter",
-        "com.coloros.safecenter",
-        "com.oplus.safecenter",
-        "com.android.permissioncontroller",
-        "com.google.android.permissioncontroller",
-    )
+    private const val PREFS = "movo_protected_apps"
+    private const val KEY = "packages"
 
-    /** 发送消息类应用：在这些应用里执行声明为 send / submit 的动作需要确认。 */
-    private val messaging = setOf(
-        "com.tencent.mm",
-        "com.tencent.mobileqq",
-        "com.tencent.tim",
-        "com.android.mms",
-        "com.google.android.apps.messaging",
-        "com.ss.android.lark",
-        "com.alibaba.android.rimet",
-        "com.tencent.wework",
-        "org.telegram.messenger",
-        "com.whatsapp",
-    )
+    @Volatile private var cache: Set<String>? = null
 
-    fun isProtected(packageName: String?): Boolean =
-        packageName != null && packageName in packages
+    private fun prefs(context: android.content.Context) =
+        context.applicationContext.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
 
-    fun isMessaging(packageName: String?): Boolean =
-        packageName != null && packageName in messaging
+    fun packages(context: android.content.Context): Set<String> =
+        cache ?: prefs(context).getStringSet(KEY, emptySet()).orEmpty().toSet().also { cache = it }
+
+    fun setPackages(context: android.content.Context, packages: Set<String>) {
+        prefs(context).edit().putStringSet(KEY, packages.toSet()).apply()
+        cache = packages.toSet()
+    }
+
+    fun add(context: android.content.Context, pkg: String) = setPackages(context, packages(context) + pkg)
+
+    fun remove(context: android.content.Context, pkg: String) = setPackages(context, packages(context) - pkg)
+
+    /** 工具解析时调用（没有 Context 入参）：取进程的 Application；取不到时按未保护处理。 */
+    fun isProtected(packageName: String?): Boolean {
+        if (packageName.isNullOrBlank()) return false
+        val context = io.github.fartown.movo.agent.runtime.AgentAppContext.resolve() ?: return false
+        return packageName in packages(context)
+    }
+
+    /** 用户是否设过受保护应用。没设过时，认不出前台应用也不用确认（无从判断「是不是在受保护应用里」）。 */
+    fun anyConfigured(): Boolean {
+        val context = io.github.fartown.movo.agent.runtime.AgentAppContext.resolve() ?: return false
+        return packages(context).isNotEmpty()
+    }
 }

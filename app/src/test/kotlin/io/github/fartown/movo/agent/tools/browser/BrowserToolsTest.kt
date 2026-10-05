@@ -337,7 +337,7 @@ class BrowserToolsTest {
         assertTrue(fake.performed)
     }
 
-    /** 直接产生污点的测试工具（raw AgentTool，覆盖 taintSource）。 */
+    /** 直接产生污点的测试工具（raw AgentTool，覆盖 taintKinds）：两类污点同时成立。 */
     private class TaintingTool : AgentTool {
         override val name = "taint_fake"
         override val domain = ToolDomain.BROWSER
@@ -346,7 +346,8 @@ class BrowserToolsTest {
         override fun risk(args: ToolArgs, env: ToolEnvironment) = Risk.READ
         override fun sensitivity(args: ToolArgs, env: ToolEnvironment) = Sensitivity.PRIVATE
         override fun concurrency(args: ToolArgs, env: ToolEnvironment) = Concurrency.Exclusive(ToolResource.BROWSER)
-        override fun taintSource(args: ToolArgs, outcome: ToolOutcome) = "browser_read_test"
+        override fun taintKinds(args: ToolArgs, outcome: ToolOutcome) =
+            setOf(io.github.fartown.movo.agent.tools.core.TaintKind.UNTRUSTED, io.github.fartown.movo.agent.tools.core.TaintKind.PERSONAL)
         override fun execute(args: ToolArgs, ctx: ToolContext) = ToolOutcome.ok(JSONObject().put("read", true))
     }
 }

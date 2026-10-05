@@ -97,11 +97,12 @@ internal class RealUiScreenBackend(
     private val context: Context,
     private val logger: AgentLogger,
     private val rootAvailable: () -> Boolean,
+    private val screenshotExcludedPackages: () -> Set<String> = { emptySet() },
 ) : UiObserveBackend, UiActionBackend {
 
     override val selfPackage: String = context.packageName
 
-    private val controller = RootShellDeviceController(logger, rootAvailable = rootAvailable)
+    private val controller = RootShellDeviceController(logger, screenshotExcludedPackages, rootAvailable)
     private val observations = ConcurrentHashMap<String, ObservationEntry>()
     private val genCounter = AtomicLong(0L)
     @Volatile private var latest: ObservationRef? = null
@@ -122,6 +123,17 @@ internal class RealUiScreenBackend(
         AgentAccessibilityService.current()?.currentPackageName()?.takeIf { it.isNotBlank() }
 
     override fun observationPackage(observationId: String): String? = observations[observationId]?.packageName
+
+    override fun observedNode(observationId: String, index: Int): UiNodeProbe? =
+        observations[observationId]?.elementObservation?.nodes?.firstOrNull { it.index == index }?.let { node ->
+            UiNodeProbe(
+                text = node.text.ifBlank { null },
+                desc = node.desc.ifBlank { null },
+                role = node.className.ifBlank { null },
+                bounds = listOf(node.bounds.left, node.bounds.top, node.bounds.right, node.bounds.bottom),
+                clickable = node.clickable,
+            )
+        }
 
     // ---- UiObserveBackend ----
 

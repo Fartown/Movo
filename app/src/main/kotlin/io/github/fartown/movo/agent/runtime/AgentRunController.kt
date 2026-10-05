@@ -28,6 +28,7 @@ internal class AgentRunController {
         lock.withLock {
             cancelled = true
             acceptingSteering = false
+            // 没消费的监听事件随队列丢弃：App 只认运行时发回的「已消费」，这一轮结束时会把它们放回自己的队首。
             steeringMessages.clear()
             paused = false
             pauseCondition.signalAll()
@@ -51,32 +52,50 @@ internal class AgentRunController {
     }
 
     /**
-     * 后台监听的事件（已按系统通知格式写好）排入下一个边界，与用户补充同一队列、按到达顺序消费。
-     * 不取消当前模型请求或工具批次；本 run 已在收尾（不再接收）时返回 false，由调用方另开事件轮。
+     * 后台监听的事件排入下一个边界。[blocks] 是事件的标签段（不含开头结尾的说明），[events] 是模型读到时
+     * 要发给界面的「已消费」事件。不取消当前模型请求或工具批次；本 run 已在收尾（不再接收）时返回 false。
      */
-    fun injectEvent(text: String): Boolean {
-        if (text.isBlank()) return false
+    fun injectEvent(blocks: String, events: List<AgentEvent> = emptyList()): Boolean {
+        if (blocks.isBlank()) return false
         lock.withLock {
             if (cancelled || !acceptingSteering) return false
-            steeringMessages.addLast(SteeringItem.Event(text))
+            steeringMessages.addLast(SteeringItem.Event(blocks, events))
         }
         return true
     }
 
-    /** 默认逐条消费，避免后来的补充指令越过前一条的模型回合。 */
-    fun pollSteeringMessage(): SteeringItem? =
-        lock.withLock { steeringMessages.pollFirst() }
+    /**
+     * 步骤边界取下一条：用户补充优先，逐条消费，避免后来的补充指令越过前一条的模型回合；
+     * 没有补充时（且 [allowEvents]）把排着的监听事件一次取完、合成一条（同一边界上积压的事件一起交给模型）。
+     * 补充先于事件：补充在界面上是发出时就显示的，事件行在模型读到时才插入，这样两者在界面与模型历史里的先后一致。
+     */
+    fun pollSteeringMessage(allowEvents: Boolean = true): SteeringItem? =
+        lock.withLock { pollLocked(allowEvents) }
 
     /**
-     * 自然结束前原子地消费最后一条 steering；若队列为空则永久关闭本 run 的接收入口。
+     * 自然结束前原子地消费最后一条用户补充；没有补充时永久关闭本 run 的接收入口。
      * 这样 Service 不会在 loop 已返回后仍把补充指令误报为已接收。
+     * 监听事件不让本轮续跑：留在队列里随本轮结束丢弃，由 App 放回队首、交给下一个事件轮。
      */
     fun pollSteeringOrSeal(): SteeringItem? =
         lock.withLock {
-            steeringMessages.pollFirst()?.let { return it }
+            pollLocked(allowEvents = false)?.let { return it }
             acceptingSteering = false
             null
         }
+
+    private fun pollLocked(allowEvents: Boolean): SteeringItem? {
+        val supplement = steeringMessages.firstOrNull { it is SteeringItem.User }
+        if (supplement != null) {
+            steeringMessages.remove(supplement)
+            return supplement
+        }
+        if (!allowEvents) return null
+        val events = steeringMessages.filterIsInstance<SteeringItem.Event>()
+        if (events.isEmpty()) return null
+        steeringMessages.removeAll(events.toSet())
+        return SteeringItem.Event.merge(events)
+    }
 
     val hasPendingSteering: Boolean
         get() = lock.withLock { steeringMessages.isNotEmpty() }
@@ -158,7 +177,29 @@ internal class AgentRunController {
 internal sealed interface SteeringItem {
     val text: String
     data class User(override val text: String) : SteeringItem
-    data class Event(override val text: String) : SteeringItem
+
+    /**
+     * 后台监听事件：[text] 为标签段，[events] 为模型读到时发给界面的事件。
+     * 合并后的一条在模型历史里只占一条 user 条目，所以只有第一条事件是界面的历史锚点。
+     */
+    data class Event(override val text: String, val events: List<AgentEvent> = emptyList()) : SteeringItem {
+        companion object {
+            fun merge(items: List<Event>): Event {
+                val events = items.flatMap { it.events }
+                var anchored = false
+                return Event(
+                    text = items.joinToString("") { item -> item.text.let { if (it.endsWith('\n')) it else it + '\n' } },
+                    events = events.map { event ->
+                        if (event is AgentEvent.MonitorEventReceived) {
+                            event.copy(anchor = !anchored).also { anchored = true }
+                        } else {
+                            event
+                        }
+                    },
+                )
+            }
+        }
+    }
 }
 
 internal class AgentRunCancelledException : RuntimeException("Agent run cancelled")

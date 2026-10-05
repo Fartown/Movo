@@ -24,6 +24,21 @@ class WorkSummaryOutcomeTest {
     }
 
     @Test
+    fun onlyTheLastCardOfEachTurnIsFinal() {
+        val entries = listOf(
+            message(UserMessageUi("u1", "打开设置")),
+            work("w1"),
+            message(io.github.fartown.movo.ui.model.AgentMessageUi("a1", "先看一下")),
+            work("w2"),
+            message(io.github.fartown.movo.ui.model.AgentMessageUi("a2", "做不了")),
+            message(UserMessageUi("u2", "再试一次")),
+            work("w3"),
+        )
+        // 中间那张（w1）后面还有步骤：失败按已绕过；每轮最后一张（w2、w3）照设计看最后一步。
+        assertEquals(setOf("w2", "w3"), lastWorkKeysPerTurn(entries))
+    }
+
+    @Test
     fun workFollowedByFailureCardIsUnfinished() {
         val entries = listOf(
             message(UserMessageUi("u1", "打开设置")),

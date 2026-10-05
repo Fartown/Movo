@@ -95,6 +95,9 @@ class AgentAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         instance = this
         notifyInstanceChanged()
+        // 常驻悬浮球（默认开）原来只在主界面恢复时请求：装包或进程被杀后无障碍可能比主界面晚连上，
+        // 断开重连时建球也可能失败——无障碍连上时补一次，悬浮球自己回来（常驻关或用户刚移除过时什么都不做）。
+        io.github.fartown.movo.agent.overlay.OrbPrefs.restoreStandbyOrb(this)
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
@@ -1605,7 +1608,7 @@ class AgentAccessibilityService : AccessibilityService() {
         }
         if (
             windowContentGeneration(snapshot.windowId) != snapshot.contentGeneration &&
-            !snapshot.hasUnambiguousIdentity(indexed)
+            !snapshot.hasUnambiguousIdentity(indexed, liveRoot = activeRoot)
         ) {
             return NodeValidation.Invalid(
                 NodeActionResult.failure("STALE_CONTENT", "窗口内容已经变化，请重新观察屏幕"),
@@ -2082,7 +2085,8 @@ class AgentAccessibilityService : AccessibilityService() {
     ) {
         val nodes: List<UiNode> = indexedNodes.map(IndexedNode::toUiNode)
 
-        internal fun hasUnambiguousIdentity(target: IndexedNode): Boolean {
+        /** [liveRoot]：动作前的当前活动窗口；快照被截断时在它里面按文字补查同身份节点数。 */
+        internal fun hasUnambiguousIdentity(target: IndexedNode, liveRoot: AccessibilityNodeInfo? = null): Boolean {
             if (!target.hasStrongIdentity()) return false
             val hasUniqueId = target.uniqueId.isNotBlank()
             val matches = if (hasUniqueId) {
@@ -2094,6 +2098,7 @@ class AgentAccessibilityService : AccessibilityService() {
                 hasUniqueId = hasUniqueId,
                 snapshotTruncated = truncated,
                 identityMatchCount = matches,
+                liveIdentityMatchCount = { liveRoot?.let { root -> target.liveIdentityMatchCount(root) } },
             )
         }
     }
@@ -2149,6 +2154,17 @@ class AgentAccessibilityService : AccessibilityService() {
 
         fun identityMatches(refreshed: AccessibilityNodeInfo): Boolean =
             identity().matches(refreshed.toIdentity())
+
+        /**
+         * 当前整个窗口里与本节点身份相同的节点数（按文字或描述查，不受观察截断影响）；查不了时返回 null。
+         * 系统按「包含、忽略大小写」查找，这里再按完整身份过滤。
+         */
+        fun liveIdentityMatchCount(root: AccessibilityNodeInfo): Int? {
+            val key = text.ifBlank { desc }
+            if (key.isBlank()) return null
+            val candidates = runCatching { root.findAccessibilityNodeInfosByText(key) }.getOrNull() ?: return null
+            return candidates.count(::identityMatches)
+        }
 
         private fun identity(): AccessibilityNodeIdentity = AccessibilityNodeIdentity(
             uniqueId = uniqueId,

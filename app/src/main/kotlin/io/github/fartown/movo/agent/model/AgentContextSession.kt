@@ -34,6 +34,11 @@ internal class AgentContextSession(
         consumedSupplementCount++
     }
 
+    /** 后台监听事件写进上下文：算一条 user 条目，但不是用户补充（App 按补充数放回没被消费的补充）。 */
+    fun eventAppended() {
+        consumedUserTurns++
+    }
+
     private fun publishSnapshot(candidate: JSONArray = messages) {
         if (!compacted) return
         val snapshot = createSnapshot(candidate)

@@ -126,11 +126,37 @@ class TerminalToolsTest {
             override fun ask(question: UserQuestion, timeoutMs: Long) = UserAnswer.Declined
             override fun approve(request: ApprovalRequest, timeoutMs: Long) = ApprovalDecision.Declined
         }
-        val r = pipeline(interaction = decline)
+        val r = pipeline(env = ToolEnvironment(rootAvailable = true), interaction = decline)
             .execute(call("terminal_run", """{"command":"id","identity":"root"}"""))
         assertEquals("error", r.status)
         assertEquals("USER_DECLINED", r.errorCode)
         assertFalse("root 命令未确认不得执行", runExecuted)
+    }
+
+    @Test
+    fun terminalRun_rootWithoutRoot_rejectedBeforeAsking() {
+        runExecuted = false
+        var asked = false
+        val approve = object : UserInteraction {
+            override val available = true
+            override fun ask(question: UserQuestion, timeoutMs: Long) = UserAnswer.Declined
+            override fun approve(request: ApprovalRequest, timeoutMs: Long): ApprovalDecision {
+                asked = true
+                return ApprovalDecision.Approved(remember = false)
+            }
+        }
+        val r = pipeline(interaction = approve)
+            .execute(call("terminal_run", """{"command":"id","identity":"root"}"""))
+        assertEquals("ROOT_REQUIRED", r.errorCode)
+        assertFalse("没有 Root 时不该先弹确认卡", asked)
+        assertFalse(runExecuted)
+    }
+
+    @Test
+    fun commandScope_groupsByCommandName() {
+        assertEquals("getprop", commandScope("getprop ro.a; getprop ro.b"))
+        assertEquals("pm grep", commandScope("pm list packages | grep x"))
+        assertEquals("ls", commandScope("FOO=1 ls -la"))
     }
 
     @Test

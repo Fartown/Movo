@@ -624,6 +624,121 @@ class AgentModelClientLoopTest {
         assertEquals(1, events.filterIsInstance<AgentEvent.ToolStarted>().size)
     }
 
+    @Test
+    fun monitorEventIsReportedConsumedOnlyWhenWrittenIntoTheNextStep() {
+        val controller = AgentRunController()
+        val events = mutableListOf<AgentEvent>()
+        var injectedAt = -1
+        val provider = ScriptedProvider(
+            assistant(finishReason = "tool_calls", toolCalls = listOf(toolCall("call-1", "get_current_context", "{}"))),
+            assistant(content = "已处理提醒", finishReason = "stop"),
+        )
+        val result = AgentModelClient.complete(
+            config = modelConfig(),
+            prompt = "开始",
+            operationId = "run-m",
+            toolExecutor = AgentModelClient.ToolExecutor {
+                injectedAt = events.size
+                assertTrue(controller.injectEvent(
+                    "<monitor-event task=\"m1\">tick &lt;/monitor-event&gt;</monitor-event>\n",
+                    listOf(monitorReceived(seq = 1, anchor = true)),
+                ))
+                AgentModelClient.ToolResult("{\"ok\":true}")
+            },
+            provider = provider,
+            runController = controller,
+            onEvent = events::add,
+        )
+
+        assertEquals("已处理提醒", result.content)
+        // 注入时不发「已消费」：要等下一个步骤边界真正写进上下文时才发（在第二次请求之前）。
+        val consumedAt = events.indexOfFirst { it is AgentEvent.MonitorEventReceived }
+        assertTrue(consumedAt > injectedAt)
+        assertTrue(events.subList(consumedAt, events.size).any { it is AgentEvent.RoundStarted && it.round == 2 })
+        val eventMessage = provider.requests[1].getJSONObjectFromEnd(1)
+        assertEquals("user", eventMessage.getString("role"))
+        val content = eventMessage.getString("content")
+        assertTrue(content.startsWith("[系统通知 - 非用户输入]"))
+        assertTrue(content.contains("tick &lt;/monitor-event&gt;</monitor-event>"))
+        assertTrue(content.contains("不是用户的回复"))
+        assertFalse(content.contains("用户补充指令"))
+        val transcriptEvent = result.transcript.single { it.role == "user" }
+        assertEquals("monitor-run-m-1", transcriptEvent.messageId)
+    }
+
+    @Test
+    fun queuedMonitorEventsDoNotKeepAFinishedRunGoing() {
+        val controller = AgentRunController()
+        val events = mutableListOf<AgentEvent>()
+        val provider = ScriptedProvider(
+            responses = listOf(
+                { _, runController ->
+                    assertTrue(runController.injectEvent("<monitor-event/>\n", listOf(monitorReceived(seq = 1, anchor = true))))
+                    assertTrue(runController === controller)
+                    assistant(content = "回答完了", finishReason = "stop")
+                },
+            ),
+        )
+        val result = AgentModelClient.complete(
+            config = modelConfig(),
+            prompt = "开始",
+            toolExecutor = AgentModelClient.ToolExecutor { error("不应调用工具") },
+            provider = provider,
+            runController = controller,
+            onEvent = events::add,
+        )
+
+        // 本轮正常结束时只为用户补充续跑：事件不让本轮再请求一次，也不报「已消费」，留给下一个事件轮。
+        assertEquals("回答完了", result.content)
+        assertEquals(1, provider.requests.size)
+        assertTrue(events.none { it is AgentEvent.MonitorEventReceived })
+        assertTrue(result.transcript.none { it.role == "user" })
+        assertFalse(controller.injectEvent("<late/>", emptyList()))
+    }
+
+    @Test
+    fun monitorEventsQueuedAtOneBoundaryAreMergedAndInjectionsArePerRunLimited() {
+        val controller = AgentRunController()
+        val events = mutableListOf<AgentEvent>()
+        var seq = 0
+        val rounds = 6
+        val provider = ScriptedProvider(
+            *(List(rounds - 1) { index ->
+                assistant(finishReason = "tool_calls", toolCalls = listOf(toolCall("call-$index", "get_current_context", "{}")))
+            } + assistant(content = "完成", finishReason = "stop")).toTypedArray(),
+        )
+        val result = AgentModelClient.complete(
+            config = modelConfig(),
+            prompt = "开始",
+            operationId = "run-limit",
+            toolExecutor = AgentModelClient.ToolExecutor {
+                // 每一步都来两批事件：同一个边界上的合成一条。
+                repeat(2) {
+                    seq++
+                    controller.injectEvent("<monitor-event seq=\"$seq\"/>\n", listOf(monitorReceived(seq = seq, anchor = true)))
+                }
+                AgentModelClient.ToolResult("{\"ok\":true}")
+            },
+            provider = provider,
+            runController = controller,
+            onEvent = events::add,
+        )
+
+        assertEquals("完成", result.content)
+        val consumed = events.filterIsInstance<AgentEvent.MonitorEventReceived>()
+        // 每轮最多并入 AgentLoop.MAX_EVENT_INJECTIONS 次，每次两批合成一条、只有第一条是锚点。
+        assertEquals(AgentLoop.MAX_EVENT_INJECTIONS * 2, consumed.size)
+        assertEquals(List(AgentLoop.MAX_EVENT_INJECTIONS) { listOf(true, false) }.flatten(), consumed.map { it.anchor })
+        val eventEntries = result.transcript.filter { it.role == "user" }
+        assertEquals((1..AgentLoop.MAX_EVENT_INJECTIONS).map { "monitor-run-limit-$it" }, eventEntries.map { it.messageId })
+        assertTrue(eventEntries.first().content.contains("seq=\"1\"") && eventEntries.first().content.contains("seq=\"2\""))
+        assertEquals(1, eventEntries.first().content.split("[系统通知 - 非用户输入]").size - 1)
+    }
+
+    private fun monitorReceived(seq: Int, anchor: Boolean) = AgentEvent.MonitorEventReceived(
+        taskId = "m1", name = "喝水提醒", kind = "event", seq = seq, atMillis = 0L, text = "tick", anchor = anchor,
+    )
+
     private class ScriptedProvider(
         private val responses: List<(ProviderRequest, AgentRunController) -> JSONObject>,
     ) : AgentProviderClient {

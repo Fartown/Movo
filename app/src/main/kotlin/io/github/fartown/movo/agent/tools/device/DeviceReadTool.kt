@@ -17,6 +17,7 @@ import io.github.fartown.movo.agent.tools.core.ToolWarning
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.fail
 import io.github.fartown.movo.agent.tools.core.objectSchema
+import io.github.fartown.movo.agent.tools.core.TaintKind
 import org.json.JSONObject
 
 /** 纵向链路第一条真工具：device_read（只读）。验证合同接线，不走审批、不占资源。 */
@@ -93,6 +94,10 @@ internal class DeviceReadTool(
         }
         return Verdict.Read(DeviceReadOutput(data, failed))
     }
+
+    /** 只有位置算个人数据；电量、内存、网络等系统状态不算。 */
+    override fun taintKinds(input: DeviceReadInput): Set<TaintKind> =
+        if (DeviceSection.LOCATION in input.sections) setOf(TaintKind.PERSONAL) else emptySet()
 
     override fun renderForModel(output: DeviceReadOutput): ModelContent = ModelContent.Json(output.data)
 

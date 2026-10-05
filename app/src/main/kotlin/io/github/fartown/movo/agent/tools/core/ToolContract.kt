@@ -58,6 +58,18 @@ internal interface ToolContract<I : ToolInput, O : ToolOutput> {
      * 返回 null 时管线回退到按原因的通用标题 + 参数摘要。只对会触发确认的工具有意义，其余保持默认 null。
      */
     fun approvalPreview(input: I): ApprovalPreview? = null
+
+    /**
+     * 成功执行后给本轮打哪类污点（实施方案 5.1）。默认不打：只有读到不可信内容（网页、屏幕、通知、MCP）
+     * 或个人数据（个人记录、验证码、剪贴板、文件、位置等）的工具才声明。
+     */
+    fun taintKinds(input: I): Set<TaintKind> = emptySet()
+
+    /**
+     * 「本次任务内，这类操作都允许」的目标范围（实施方案 5.4），例如命令前缀、设置项、域名。
+     * 默认 null = 按工具算：同一个工具本次任务内不再询问。
+     */
+    fun approvalScope(input: I): String? = null
 }
 
 /** 确认卡的可读预览：[title] 为卡片大标题，[detail] 为预览盒正文（首行作对象/强调，换行后为内容）。 */
@@ -100,9 +112,13 @@ internal data class CallResolution(
     val resources: Set<ResourceKey>,
     val backend: InjectionBackend = InjectionBackend.NONE,
     val target: TargetIdentity = TargetIdentity.None,
-    /** 本次动作是否读到了可信节点。false + 坐标/受保护窗 → 必须确认（合同 §5.3，后端无关）。 */
+    /**
+     * 本次动作是否读到了可信节点（坐标点下有没有节点）。只作记录，不再单独触发确认：
+     * 读不到节点的界面（地图、画布、游戏、节点很多的列表）里每点一下都弹卡，用户无法使用（2026-10-05 用户反馈）。
+     * 受保护应用里的每一步、模型声明的发送 / 支付照常确认。
+     */
     val readableTarget: Boolean = true,
-    /** 前台包名是否可信归因；false 时有目标 ui_* 按最保守处理。 */
+    /** 前台包名是否可信归因；认不出且用户设过受保护应用时，由 ui 工具自己要求确认（见 buildUiActionResolution）。 */
     val packageAttributed: Boolean = true,
     /** 工具额外的审批诉求；与中央派生取并集。 */
     val toolApproval: ApprovalNeed? = null,
@@ -114,32 +130,21 @@ internal data class CallResolution(
      */
     val reject: ToolError? = null,
     /**
-     * 本次调用是否可能把数据外发（决定有污点时是否确认）。null=按 risk 派生（非 READ 即外发）；
-     * 个别 READ 工具实为外发通道（如 browser_open 导航到带查询参数的 URL）时显式置 true。
+     * 这次调用会不会把内容发出去（实施方案 5.1 的外发类动作）：带参数的网址、网页提交、Linux 终端命令、
+     * 能联网的命令、非只读的 MCP、把内容写进长期记忆。只有显式置 true 的调用在两类污点同时成立时才确认；
+     * 设闹钟、调音量、复制、写本机文件、界面点击等本地动作不受污点影响。
      */
-    val exfiltrates: Boolean? = null,
+    val exfiltrates: Boolean = false,
 ) {
-    /** 中央派生“是否必须确认”；非法组合在这里统一兜底。 */
-    fun requiresApproval(taintedExternal: Boolean): ApprovalNeed? {
-        val hasTarget = target != TargetIdentity.None
-        val blindCoordinate = !readableTarget &&
-            (target is TargetIdentity.Coordinate || backend == InjectionBackend.ROOT_INPUT)
-        return when {
-            toolApproval != null -> toolApproval
-            risk == Risk.EXTERNAL -> ApprovalNeed(ApprovalReason.EXTERNAL_EFFECT, title = "", detail = "")
-            blindCoordinate -> ApprovalNeed(
-                ApprovalReason.PROTECTED_APP, title = "", detail = "无法读取屏幕内容，无法核实是否为提交/支付点",
-            )
-            !packageAttributed && hasTarget -> ApprovalNeed(
-                ApprovalReason.PROTECTED_APP, title = "", detail = "无法确认前台应用",
-            )
-            // 污点确认针对「外发 / 会持久化未信内容」的动作。默认 (risk != READ) 保守拦截；但纯本地、短暂、不持久的
-            // 动作（界面点击/滑动、切换应用等）显式置 exfiltrates=false——否则读屏后每个 UI 动作都要确认、UI 自动化
-            // 无法使用（真机实证）。memory_write 等会持久化未信内容的动作保持被拦（默认或显式 exfiltrates=true）。
-            taintedExternal && (exfiltrates ?: (risk != Risk.READ)) ->
-                ApprovalNeed(ApprovalReason.TAINTED, title = "", detail = "")
-            else -> null
-        }
+    /**
+     * 中央派生「是否必须确认」（实施方案 5.3）：工具自带诉求 → 对外或不可撤销（EXTERNAL）→
+     * 两类污点同时成立后的外发动作。[tainted] 是两类同时成立（[TaintTracker.tainted]）。
+     */
+    fun requiresApproval(tainted: Boolean): ApprovalNeed? = when {
+        toolApproval != null -> toolApproval
+        risk == Risk.EXTERNAL -> ApprovalNeed(ApprovalReason.EXTERNAL_EFFECT, title = "", detail = "")
+        tainted && exfiltrates -> ApprovalNeed(ApprovalReason.TAINTED, title = "", detail = "")
+        else -> null
     }
 }
 

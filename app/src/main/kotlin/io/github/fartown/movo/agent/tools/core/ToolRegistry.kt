@@ -18,8 +18,11 @@ internal class ToolRegistry(private val providers: List<ToolProvider>) : AutoClo
 
     fun find(name: String): AgentTool? = byName[name]
 
-    fun isAvailable(tool: AgentTool, env: ToolEnvironment): Boolean =
-        tool.availability(env) == ToolAvailability.Available
+    fun isAvailable(tool: AgentTool, env: ToolEnvironment): Boolean = availability(tool, env) == ToolAvailability.Available
+
+    /** 开关（[ToolSwitchGate]）优先，再看工具自己的条件（权限、Root、来源）。 */
+    fun availability(tool: AgentTool, env: ToolEnvironment): ToolAvailability =
+        ToolSwitchGate.check(tool.name, env.switches) ?: tool.availability(env)
 
     /** 本轮下发给模型的目录：常驻工具加已加载的按需工具，且当前可用。顺序稳定，以保住提示缓存。 */
     fun catalog(env: ToolEnvironment, loadedDeferred: Set<String>): JSONArray = JSONArray().also { array ->
@@ -38,7 +41,7 @@ internal class ToolRegistry(private val providers: List<ToolProvider>) : AutoClo
     /** 至少有一个工具可用的领域，才注入它的用法分节。 */
     fun promptSections(env: ToolEnvironment): List<PromptSection> =
         providers.mapNotNull { provider ->
-            provider.promptSection?.takeIf { provider.tools.any { tool -> isAvailable(tool, env) } }
+            provider.promptSection(env)?.takeIf { provider.tools.any { tool -> isAvailable(tool, env) } }
         }
 
     override fun close() {

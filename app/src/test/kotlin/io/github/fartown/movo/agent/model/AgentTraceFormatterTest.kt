@@ -455,6 +455,49 @@ class AgentTraceFormatterTest {
         assertTrue(summary.length < longOutput.length)
     }
 
+    @Test
+    fun typedResultsUseStructuredStatusForSuccessAndSummary() {
+        val core = io.github.fartown.movo.agent.tools.core.ToolOutcome
+        val failed = core.error(io.github.fartown.movo.agent.tools.core.ToolErrorCode.PERMISSION_REQUIRED, "无障碍不可用，无法点击")
+        val failedResult = AgentModelClient.ToolResult(content = "{\"status\":\"error\"}", status = "error", outcome = failed)
+        assertFalse(formatter.isSuccessResult(failedResult))
+        assertEquals("失败 · 无障碍不可用，无法点击 · code=PERMISSION_REQUIRED", formatter.summarizeResult("ui_tap", failedResult))
+
+        val unknown = core.error(io.github.fartown.movo.agent.tools.core.ToolErrorCode.OUTCOME_UNKNOWN, "点击已派发但无法确认是否生效")
+        val unknownResult = AgentModelClient.ToolResult(content = "{}", status = "unknown", outcome = unknown)
+        assertFalse(formatter.isSuccessResult(unknownResult))
+        assertTrue(formatter.summarizeResult("ui_tap", unknownResult).startsWith("未确认"))
+
+        val ok = core.ok(JSONObject().put("app_name", "设置"))
+        val okResult = AgentModelClient.ToolResult(content = "{}", outcome = ok)
+        assertTrue(formatter.isSuccessResult(okResult))
+        assertEquals("已打开 · 设置", formatter.summarizeResult("app_open", okResult))
+    }
+
+    @Test
+    fun typedTerminalResultKeepsExitCodeAndOutput() {
+        val core = io.github.fartown.movo.agent.tools.core.ToolOutcome
+        fun body(code: Int, out: String, err: String) =
+            "exit_code: $code\nelapsed_ms: 12\nenvironment: android\nidentity: user\n--- stdout ---\n$out\n--- stderr ---\n$err"
+        val success = AgentModelClient.ToolResult(content = "", outcome = core.ok(textBody = body(0, "14", "")))
+        assertTrue(formatter.isSuccessResult(success))
+        assertEquals("执行完成\n14", formatter.summarizeResult("terminal_run", success))
+
+        val failed = AgentModelClient.ToolResult(content = "", outcome = core.ok(textBody = body(1, "", "ls: /x: No such file")))
+        assertFalse("退出码不是 0 算失败", formatter.isSuccessResult(failed))
+        assertEquals("失败 · 退出码 1\nls: /x: No such file", formatter.summarizeResult("terminal_run", failed))
+    }
+
+    @Test
+    fun typedStepTitlesCarryOneKeyArgument() {
+        fun title(name: String, args: String) = formatter.summarizeArguments(AgentModelClient.ToolCall("c", name, args))
+        assertEquals("滚动屏幕 · 向下", title("ui_scroll", """{"direction":"down"}"""))
+        assertEquals("更新记忆 · 追加 · 1 行 · 9 字节", title("memory_write", """{"mode":"append","new_text":"喝美式"}"""))
+        assertEquals("开始监听·喝水提醒 · 最长 2 小时", title("monitor_start", """{"description":"喝水提醒","command":"x","timeout_ms":7200000}"""))
+        assertEquals("更新记忆", TypedToolLabels.of("memory_write"))
+        assertEquals("调用 MCP 工具", TypedToolLabels.of("mcp_github_search"))
+    }
+
     private data class RedactionCase(
         val toolName: String,
         val argumentsJson: String,

@@ -156,12 +156,29 @@ internal fun toolDisplayNameResource(name: String): Int? = when (name) {
     "file_read" -> R.string.tool_read_file
     "file_write" -> R.string.tool_write_file
     "file_list" -> R.string.tool_list_directory
+    "file_search" -> R.string.tool_file_search
     "terminal_run", "terminal_job" -> R.string.tool_terminal
     "browser_open", "browser_read", "browser_act" -> R.string.tool_browser_use
     "memory_read" -> R.string.tool_memory_get
+    "clock_create" -> R.string.tool_clock_create
+    "clock_read" -> R.string.tool_clock_read
+    "device_diagnostics" -> R.string.tool_device_diagnostics
+    "personal_search" -> R.string.tool_personal_search
+    "usage_read" -> R.string.tool_usage_read
+    "health_read" -> R.string.tool_health_read
+    "skill_read" -> R.string.tool_skill_read
+    "skill_install" -> R.string.tool_skill_install
+    "conversation_read" -> R.string.tool_conversation_read
+    "ask_user" -> R.string.tool_ask_user
+    "tool_search" -> R.string.tool_tool_search
+    "mcp_find" -> R.string.tool_mcp_find
+    "mcp_call" -> R.string.tool_mcp_call
     "monitor_start" -> R.string.tool_monitor_start
     "monitor_stop" -> R.string.tool_monitor_stop
     "monitor_list" -> R.string.tool_monitor_list
     "notify_user" -> R.string.tool_notify_user
-    else -> null
+    // 预算内逐个暴露的第三方 MCP 工具（mcp_<server>_<tool>）：悬浮层不显示内部名，统一按「调用 MCP 工具」。
+    else -> if (name.startsWith(MCP_DIRECT_TOOL_PREFIX)) R.string.tool_mcp_call else null
 }
+
+private const val MCP_DIRECT_TOOL_PREFIX = "mcp_"

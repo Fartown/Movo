@@ -208,8 +208,8 @@ internal class BrowserActTool(
         val decision = ctx.interaction.approve(
             ApprovalRequest(
                 toolName = name,
-                title = "提交网页表单",
-                detail = "即将在 ${request.action.name.lowercase()} 命中提交点：${target.summary}",
+                title = "在网页上提交？",
+                detail = "${target.summary.take(120)}\n这一步可能提交表单或把内容发出去。",
                 rememberScope = null,
                 reason = ApprovalReason.DECLARED_EFFECT,
             ),

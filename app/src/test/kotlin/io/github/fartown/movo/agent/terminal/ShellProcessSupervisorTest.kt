@@ -24,6 +24,25 @@ class ShellProcessSupervisorTest {
         assertNull(process)
     }
 
+    /**
+     * 改名（Eta → Movo）时 `\neta_status` 没被替换，命令的退出码被随后的 wait 覆盖：失败的命令一律报退出码 0。
+     */
+    @Test
+    fun failingCommandKeepsItsExitCode() {
+        val supervisor = ShellProcessSupervisor()
+        val process = requireNotNull(
+            // 子 Shell 失败、外层继续往下走（`exit 3` 会直接结束外层，测不出包装脚本的问题）。
+            supervisor.startShellProcess(identity = "user", command = "sh -c 'exit 3'", mergeStderr = true),
+        )
+        try {
+            assertTrue(process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS))
+            assertEquals(3, process.exitValue())
+        } finally {
+            supervisor.terminateAndReap(process)
+            supervisor.unregisterProcess(process)
+        }
+    }
+
     @Test
     fun rootAndroidPayloadUsesDiscoveredBusyBoxWithoutChangingUserShell() {
         val supervisor = ShellProcessSupervisor()

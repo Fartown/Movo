@@ -5,7 +5,7 @@ import androidx.compose.foundation.layout.Spacer
 import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.components.movo.rememberLastNonNull
 import io.github.fartown.movo.ui.components.movo.MovoFailureDialog
-import io.github.fartown.movo.ui.components.movo.AgentInteractionCard
+import io.github.fartown.movo.agent.overlay.InteractionCardHost
 import io.github.fartown.movo.ui.components.movo.MovoConfirmDialog
 import android.Manifest
 import android.app.Activity
@@ -818,14 +818,9 @@ internal fun AgentAppRoot(
         },
     )
 
-    // 同步交互卡（提问 / 审批，实施方案 §6.1）：底部锚定、背景静止；作答经 AgentAppState 回传给等待中的 run。
-    AgentInteractionCard(
-        state = agentState.activeInteraction,
-        onApprove = { remember -> agentState.submitInteractionApproval(approved = true, remember = remember) },
-        onDecline = { agentState.submitInteractionApproval(approved = false, remember = false) },
-        onAnswer = { text, optionIndex -> agentState.submitInteractionAnswer(text, optionIndex) },
-        onCancel = { agentState.cancelInteraction() },
-    )
+    // 同步交互卡（提问 / 审批，实施方案 §6.1）：底部锚定、背景静止。显示的是 Runtime 当前等待作答的卡（不论任务从哪个入口发起），
+    // 主界面 resumed 时在这里显示，离开后迁移到悬浮卡（同一张卡任何时候只在一处）；作答直接投递给等待中的 run。
+    InteractionCardHost()
 }
 
 /** App 根部的失败说明（`Dialog/Info`）。 */

@@ -50,6 +50,21 @@ internal object AgentConversationStore {
 
     private val saveMutex = Mutex()
 
+    /** 一次保存请求：登记时拍下的整份会话状态。 */
+    class SaveRequest internal constructor(
+        internal val generation: Long,
+        internal val selectedConversationId: String?,
+        internal val conversationsById: Map<String, AgentChatHomeUiState>,
+        internal val titles: Map<String, String>,
+        internal val updatedAt: Map<String, Long>,
+    )
+
+    private val requestLock = Any()
+    private var requestGeneration = 0L
+    private var latestRequest: SaveRequest? = null
+    /** 已写进数据库的最新一份（由 [saveMutex] 保护）。 */
+    private var writtenGeneration = 0L
+
     fun load(context: Context): Snapshot =
         runBlocking(Dispatchers.IO) {
             loadSnapshot(context.applicationContext)
@@ -61,9 +76,44 @@ internal object AgentConversationStore {
         conversationsById: Map<String, AgentChatHomeUiState>,
         titles: Map<String, String>,
         updatedAt: Map<String, Long>,
-    ) {
+    ) = commit(context, request(selectedConversationId, conversationsById, titles, updatedAt))
+
+    /**
+     * 登记一份要保存的状态（调用方按时间先后登记，后登记的就是更新的状态）。真正写入在 [commit]。
+     */
+    fun request(
+        selectedConversationId: String?,
+        conversationsById: Map<String, AgentChatHomeUiState>,
+        titles: Map<String, String>,
+        updatedAt: Map<String, Long>,
+    ): SaveRequest = synchronized(requestLock) {
+        SaveRequest(++requestGeneration, selectedConversationId, conversationsById, titles, updatedAt)
+            .also { latestRequest = it }
+    }
+
+    /**
+     * 保证 [request] 这一份（或比它更新的一份）已经写进数据库后返回。
+     * 合并写入：排着队的多次保存只写当时最新登记的那份，其余直接返回——后台监听每来一个事件、
+     * 每段流式输出都要保存时，不再每次把所有会话整库重写一遍。
+     */
+    suspend fun commit(context: Context, request: SaveRequest) {
         val appContext = context.applicationContext
         saveMutex.withLock {
+            if (writtenGeneration >= request.generation) return
+            val latest = synchronized(requestLock) { latestRequest }
+                ?.takeIf { it.generation >= request.generation }
+                ?: request
+            write(appContext, latest)
+            writtenGeneration = latest.generation
+        }
+    }
+
+    private suspend fun write(appContext: Context, request: SaveRequest) {
+        val selectedConversationId = request.selectedConversationId
+        val conversationsById = request.conversationsById
+        val titles = request.titles
+        val updatedAt = request.updatedAt
+        run {
             withContext(Dispatchers.IO) {
                 val sorted = conversationsById.entries
                     .sortedByDescending { (id, _) -> updatedAt[id] ?: 0L }
@@ -290,6 +340,8 @@ internal object AgentConversationStore {
                     .apply {
                         runStartedAtMillis?.let { put("run_started_at", it) }
                         runFinishedAtMillis?.let { put("run_finished_at", it) }
+                        exitCode?.let { put("exit_code", it) }
+                        limitMs?.let { put("limit_ms", it) }
                     }
                     .toString(),
                 renderMarkdown = false,
@@ -373,19 +425,30 @@ internal object AgentConversationStore {
 
             TYPE_MONITOR -> {
                 val extra = runCatching { org.json.JSONObject(toolsJson) }.getOrNull()
+                val kind = runCatching { MonitorEventKindUi.valueOf(toolStatus.orEmpty()) }.getOrDefault(MonitorEventKindUi.Event)
+                // 旧版本把到期行的时长存在正文里。
+                val legacyLimit = if (kind == MonitorEventKindUi.Ended && resultSummary == "TIMEOUT" && extra?.has("limit_ms") != true) {
+                    content.toLongOrNull()
+                } else {
+                    null
+                }
                 MonitorEventMessageUi(
                     id = id,
                     taskId = toolName.orEmpty(),
                     name = argumentsSummary.orEmpty(),
-                    kind = runCatching { MonitorEventKindUi.valueOf(toolStatus.orEmpty()) }.getOrDefault(MonitorEventKindUi.Event),
+                    kind = kind,
                     seq = elapsedSeconds ?: 0,
                     atMillis = startedAt ?: 0L,
-                    text = content,
+                    text = if (legacyLimit != null) "" else content,
                     reason = resultSummary,
-                    startsTurn = extra?.optBoolean("starts_turn") == true,
+                    // 旧版本把「已停止」「已中断」也记成了一轮的起点；它们不唤醒 Movo，不是起点。
+                    startsTurn = extra?.optBoolean("starts_turn") == true &&
+                        !(kind == MonitorEventKindUi.Ended && resultSummary in NON_WAKING_MONITOR_REASONS),
                     historyAnchor = extra?.optBoolean("history_anchor") == true,
                     runStartedAtMillis = extra?.takeIf { it.has("run_started_at") }?.optLong("run_started_at"),
                     runFinishedAtMillis = extra?.takeIf { it.has("run_finished_at") }?.optLong("run_finished_at"),
+                    exitCode = extra?.takeIf { it.has("exit_code") }?.optInt("exit_code"),
+                    limitMs = extra?.takeIf { it.has("limit_ms") }?.optLong("limit_ms") ?: legacyLimit,
                 )
             }
 
@@ -441,6 +504,7 @@ internal object AgentConversationStore {
     private const val TYPE_TOOL_SUMMARY = "tool_summary"
     private const val TYPE_SUGGESTIONS = "suggestions"
     private const val TYPE_MONITOR = "monitor"
+    private val NON_WAKING_MONITOR_REASONS = setOf("STOPPED_BY_USER", "STOPPED_BY_AGENT", "SESSION_END", "INTERRUPTED")
     private const val MESSAGE_LOAD_PAGE_SIZE = 128
     private const val LEGACY_UNNAMED_TITLE = "新对话"
 }

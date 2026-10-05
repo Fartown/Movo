@@ -7,6 +7,19 @@ import org.junit.Test
 
 class AgentOverlayVisibilityPolicyTest {
     @Test
+    fun `typed ui tools reveal the operation overlay and dismiss the entry surface`() {
+        // 重构后的工具名必须在名单里：否则操作其他 App 时悬浮球、光晕、跨应用审批卡都不出现（2026-10-05 用户反馈）。
+        listOf("app_open", "ui_tap", "ui_swipe", "ui_scroll", "ui_input", "ui_key").forEach { name ->
+            val started = AgentEvent.ToolStarted(round = 1, toolCallId = "c-$name", name = name, argsPreview = "")
+            assertTrue(name, AgentOverlayVisibilityPolicy.shouldRevealFor(started))
+            assertTrue(name, AgentOverlayVisibilityPolicy.shouldDismissEntrySurfaceFor(started))
+        }
+        assertTrue(AgentOverlayVisibilityPolicy.isForegroundOperationTool("ui_observe"))
+        assertFalse(AgentOverlayVisibilityPolicy.isForegroundOperationTool("terminal_run"))
+        assertFalse(AgentOverlayVisibilityPolicy.isForegroundOperationTool("monitor_start"))
+    }
+
+    @Test
     fun `text-only and background tool events do not reveal operation overlay`() {
         val events = listOf(
             AgentEvent.RunStarted(

@@ -56,19 +56,69 @@ class AgentRunControllerTest {
     }
 
     @Test
-    fun monitorEventsShareTheSteeringQueueInArrivalOrder() {
+    fun supplementsAreConsumedBeforeMonitorEventsEvenIfTheyArrivedLater() {
         val controller = AgentRunController()
+        assertTrue(controller.injectEvent("<monitor-event>1</monitor-event>\n", listOf(monitorEvent(1))))
         assertTrue(controller.steer("补充"))
-        assertTrue(controller.injectEvent("[系统通知 - 非用户输入] 事件"))
-        val first = controller.pollSteeringMessage()
-        val second = controller.pollSteeringMessage()
-        assertTrue(first is SteeringItem.User)
-        assertTrue(second is SteeringItem.Event)
-        assertEquals("[系统通知 - 非用户输入] 事件", second?.text)
-        // 收尾封口后不再接收事件：调用方改为另开事件轮。
-        assertNull(controller.pollSteeringOrSeal())
-        assertFalse(controller.injectEvent("late"))
+        // 补充在界面上发出时就显示，事件行在读到时才插：补充先消费，两边先后才一致。
+        assertEquals(SteeringItem.User("补充"), controller.pollSteeringMessage())
+        val event = controller.pollSteeringMessage() as SteeringItem.Event
+        assertEquals(listOf(1), event.events.map { (it as AgentEvent.MonitorEventReceived).seq })
+        assertNull(controller.pollSteeringMessage())
     }
+
+    @Test
+    fun queuedMonitorEventsAreMergedIntoOneItemWithOneHistoryAnchor() {
+        val controller = AgentRunController()
+        assertTrue(controller.injectEvent("<a/>", listOf(monitorEvent(1, anchor = true))))
+        assertTrue(controller.injectEvent("<b/>\n", listOf(monitorEvent(2, anchor = true), monitorEvent(3))))
+
+        val merged = controller.pollSteeringMessage() as SteeringItem.Event
+
+        assertEquals("<a/>\n<b/>\n", merged.text)
+        val events = merged.events.map { it as AgentEvent.MonitorEventReceived }
+        assertEquals(listOf(1, 2, 3), events.map { it.seq })
+        // 合并后在模型历史里只占一条 user 条目：只有第一条是界面的历史锚点。
+        assertEquals(listOf(true, false, false), events.map { it.anchor })
+        assertNull(controller.pollSteeringMessage())
+    }
+
+    @Test
+    fun naturalEndContinuesOnlyForSupplementsAndSealsWithEventsLeftBehind() {
+        val controller = AgentRunController()
+        assertTrue(controller.injectEvent("<a/>", listOf(monitorEvent(1))))
+        // 只剩监听事件：本轮不续跑，直接封口；事件随本轮丢弃，由 App 放回队首交给下一个事件轮。
+        assertNull(controller.pollSteeringOrSeal())
+        assertFalse(controller.injectEvent("<late/>", listOf(monitorEvent(2))))
+        assertFalse(controller.steer("too late"))
+
+        val withSupplement = AgentRunController()
+        assertTrue(withSupplement.injectEvent("<a/>", listOf(monitorEvent(1))))
+        assertTrue(withSupplement.steer("补充"))
+        assertEquals(SteeringItem.User("补充"), withSupplement.pollSteeringOrSeal())
+    }
+
+    @Test
+    fun eventsWaitWhileTheRunHasUsedItsInjections() {
+        val controller = AgentRunController()
+        assertTrue(controller.injectEvent("<a/>", listOf(monitorEvent(1))))
+        assertNull(controller.pollSteeringMessage(allowEvents = false))
+        assertTrue(controller.hasPendingSteering)
+        assertTrue(controller.pollSteeringMessage(allowEvents = true) is SteeringItem.Event)
+    }
+
+    @Test
+    fun cancelDropsQueuedEventsWithoutReportingThemConsumed() {
+        val controller = AgentRunController()
+        assertTrue(controller.injectEvent("<a/>", listOf(monitorEvent(1))))
+        controller.cancel()
+        assertFalse(controller.hasPendingSteering)
+        assertFalse(controller.injectEvent("<b/>", listOf(monitorEvent(2))))
+    }
+
+    private fun monitorEvent(seq: Int, anchor: Boolean = false) = AgentEvent.MonitorEventReceived(
+        taskId = "m1", name = "喝水提醒", kind = "event", seq = seq, atMillis = seq.toLong(), text = "tick $seq", anchor = anchor,
+    )
 
     @Test
     fun finalPollAtomicallySealsSteering() {

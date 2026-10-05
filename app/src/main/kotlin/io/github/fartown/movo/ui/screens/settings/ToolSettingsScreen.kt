@@ -93,7 +93,13 @@ internal fun ToolSettingsScreen(
                     showDivider = false,
                     onClick = { showMonitorChoice = true },
                 )
-                CardFooter(listOf(stringResource(R.string.monitor_settings_footer)))
+                // 规范 10.1：页脚一句一行，不在词中间折行。
+                CardFooter(
+                    listOf(
+                        stringResource(R.string.monitor_settings_footer_1),
+                        stringResource(R.string.monitor_settings_footer_2),
+                    ),
+                )
             }
         }
         item(key = "environment") {

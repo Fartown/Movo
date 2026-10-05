@@ -2,6 +2,7 @@ package io.github.fartown.movo.agent.tools.terminal
 
 import io.github.fartown.movo.agent.tools.core.ApprovalNeed
 import io.github.fartown.movo.agent.tools.core.ApprovalReason
+import io.github.fartown.movo.agent.tools.core.ApprovalPreview
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.JobRef
 import io.github.fartown.movo.agent.tools.core.ModelContent
@@ -9,6 +10,7 @@ import io.github.fartown.movo.agent.tools.core.ResourceKey
 import io.github.fartown.movo.agent.tools.core.Risk
 import io.github.fartown.movo.agent.tools.core.Sensitivity
 import io.github.fartown.movo.agent.tools.core.ToolArgs
+import io.github.fartown.movo.agent.tools.core.ToolAvailability
 import io.github.fartown.movo.agent.tools.core.ToolContext
 import io.github.fartown.movo.agent.tools.core.ToolContract
 import io.github.fartown.movo.agent.tools.core.ToolDomain
@@ -70,8 +72,16 @@ internal class TerminalRunTool(
         mode = args.enum<TerminalMode>("mode", TerminalMode.WAIT),
     )
 
+    /** 「终端与文件」开关关着时不进目录（以前要到执行时才报错，先弹确认卡、批完才失败）。 */
+    override fun availability(env: ToolEnvironment): ToolAvailability =
+        if (env.switches.terminal) {
+            ToolAvailability.Available
+        } else {
+            ToolAvailability.Unavailable(ToolErrorCode.DISABLED, "终端需要开启「终端与文件」开关")
+        }
+
     override fun resolve(input: TerminalRunInput, env: ToolEnvironment): CallResolution {
-        // root 命令一律确认（放行白名单解析略，见报告 TODO）；keep_alive 要确认；污点由中央派生叠加。
+        // root 命令、keep_alive 要确认；同一类命令（命令前缀相同）本次任务内可以勾选不再询问。
         val risk = if (input.identity == TerminalIdentity.ROOT || input.mode == TerminalMode.KEEP_ALIVE) {
             Risk.EXTERNAL
         } else {
@@ -80,8 +90,9 @@ internal class TerminalRunTool(
         val approval = if (input.mode == TerminalMode.KEEP_ALIVE) {
             ApprovalNeed(
                 reason = ApprovalReason.DECLARED_EFFECT,
-                title = "保持后台任务运行",
-                detail = "keep_alive 任务在本次任务结束后仍将继续运行：${input.command.take(120)}",
+                title = "让这条命令在后台一直运行？",
+                detail = "${input.command.take(160)}\n这个任务结束后它还会继续运行，直到你在终端里停止它。",
+                taskScope = commandScope(input.command),
             )
         } else {
             null
@@ -91,8 +102,27 @@ internal class TerminalRunTool(
             sensitivity = Sensitivity.PRIVATE,
             resources = setOf(ResourceKey(ToolResource.TERMINAL)),
             toolApproval = approval,
+            // 没有 Root 却要以 Root 运行：确认之前就拒绝。
+            reject = if (input.identity == TerminalIdentity.ROOT && !env.rootAvailable) {
+                ToolError(ToolErrorCode.ROOT_REQUIRED, "该命令需要 Root，这台手机没有 Root 授权")
+            } else {
+                null
+            },
+            // Linux 环境的命令、联网命令可能把内容发出去（实施方案 5.1）。
+            exfiltrates = input.environment == TerminalEnv.LINUX || NETWORK_COMMAND.containsMatchIn(input.command),
         )
     }
+
+    override fun approvalPreview(input: TerminalRunInput): ApprovalPreview = if (input.identity == TerminalIdentity.ROOT) {
+        ApprovalPreview(
+            title = "以 Root 身份运行命令？",
+            detail = "${input.command.take(200)}\nRoot 命令能读写整个系统。",
+        )
+    } else {
+        ApprovalPreview(title = "运行这条命令？", detail = input.command.take(200))
+    }
+
+    override fun approvalScope(input: TerminalRunInput): String = commandScope(input.command)
 
     override fun execute(
         input: TerminalRunInput,
@@ -100,7 +130,7 @@ internal class TerminalRunTool(
         ctx: ToolContext,
     ): Verdict<TerminalRunOutput> {
         if (!ctx.env.switches.terminal) {
-            return Verdict.Failed(ToolError(ToolErrorCode.DISABLED, "终端需要开启「文件与终端」开关"))
+            return Verdict.Failed(ToolError(ToolErrorCode.DISABLED, "终端需要开启「终端与文件」开关"))
         }
         if (input.identity == TerminalIdentity.ROOT && !ctx.env.rootAvailable) {
             return Verdict.Failed(ToolError(ToolErrorCode.ROOT_REQUIRED, "该命令需要 Root"))
@@ -112,7 +142,10 @@ internal class TerminalRunTool(
         }
         ctx.checkCancelled()
 
-        return when (val result = backend.run(input.toSpec())) {
+        val result = backend.run(input.toSpec(cancelled = { ctx.isCancelled }))
+        // 前台等待中被取消：命令已经结束（后端按取消杀掉了进程树），这里把取消交给管线，不再当结果返回。
+        ctx.checkCancelled()
+        return when (result) {
             is TerminalRunResult.Completed -> Verdict.Read(TerminalRunOutput(completedBody(input, result)))
             is TerminalRunResult.Backgrounded -> Verdict.Backgrounded(
                 TerminalRunOutput(backgroundedBody(input, result)),
@@ -128,7 +161,7 @@ internal class TerminalRunTool(
 
     override fun renderForModel(output: TerminalRunOutput): ModelContent = ModelContent.Text(output.textBody)
 
-    private fun TerminalRunInput.toSpec() = TerminalRunSpec(
+    private fun TerminalRunInput.toSpec(cancelled: () -> Boolean) = TerminalRunSpec(
         command = command,
         description = description,
         environment = environment,
@@ -137,6 +170,7 @@ internal class TerminalRunTool(
         waitMs = waitMs,
         tty = tty,
         mode = mode,
+        cancelled = cancelled,
     )
 
     private fun completedBody(input: TerminalRunInput, result: TerminalRunResult.Completed): String = buildString {
@@ -162,3 +196,21 @@ internal class TerminalRunTool(
             append("命令已转入后台，用 terminal_job read 查看输出；不要 sleep 轮询。")
         }
 }
+
+/** 能把内容发到网上的命令。 */
+private val NETWORK_COMMAND = Regex("""(^|[\s;&|(`])(curl|wget|nc|ncat|netcat|ssh|scp|sftp|rsync|ftp|telnet|socat|aria2c)(\s|$)""")
+
+/**
+ * 命令的审批范围：按 `&&`、`;`、`|` 切开，每段取命令名（跳过 sudo、env 赋值），用于「本次任务内，这类操作都允许」。
+ * 例如 `getprop ro.a; getprop ro.b` → `getprop`，`pm list packages | grep x` → `pm grep`。
+ */
+internal fun commandScope(command: String): String =
+    command.split(Regex("&&|\\|\\||;|\\|"))
+        .mapNotNull { segment ->
+            segment.trim().split(Regex("\\s+"))
+                .dropWhile { it == "sudo" || it == "su" || it == "-c" || it.contains('=') }
+                .firstOrNull()?.takeIf { it.isNotBlank() }
+        }
+        .distinct()
+        .joinToString(" ")
+        .ifBlank { command.trim().take(40) }

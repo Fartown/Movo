@@ -20,6 +20,7 @@ import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.fail
 import io.github.fartown.movo.agent.tools.core.objectSchema
+import io.github.fartown.movo.agent.tools.core.ApprovalPreview
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -135,6 +136,11 @@ internal class SkillInstallTool(
             resources = emptySet(),
         )
 
+    override fun approvalPreview(input: SkillInstallInput): ApprovalPreview = ApprovalPreview(
+        title = "安装这个技能？",
+        detail = "${input.repository.orEmpty().take(120)}\n技能里的脚本之后可能会在终端里运行。",
+    )
+
     override fun execute(
         input: SkillInstallInput,
         resolution: CallResolution,
@@ -159,8 +165,8 @@ internal class SkillInstallTool(
             val decision = ctx.interaction.approve(
                 ApprovalRequest(
                     toolName = name,
-                    title = "替换已安装技能",
-                    detail = "将覆盖已安装技能：$names",
+                    title = "替换已安装的技能？",
+                    detail = "$names\n会用新下载的版本覆盖它。",
                     rememberScope = null,
                     reason = ApprovalReason.EXTERNAL_EFFECT,
                 ),

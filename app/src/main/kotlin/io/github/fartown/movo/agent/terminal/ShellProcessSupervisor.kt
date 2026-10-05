@@ -178,7 +178,7 @@ internal class ShellProcessSupervisor(
         ptyRows: Int = DEFAULT_PTY_ROWS,
     ): String {
         val managedCommand = command?.let { value ->
-            "$value\neta_status=${'$'}?\nwait\nexit ${'$'}movo_status"
+            "$value\nmovo_status=${'$'}?\nwait\nexit ${'$'}movo_status"
         }
         val payload = when (environment) {
             TerminalEnvironment.ANDROID -> buildAndroidPayload(

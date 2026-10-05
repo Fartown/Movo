@@ -108,6 +108,21 @@ class AgentToolSubsystemTest {
         }
     }
 
+    /** tool_search 不在目录里时，提示词与「工具不存在」的提示都不能再教模型去调它。 */
+    @Test
+    fun noDeferredTools_promptAndUnknownToolHintDoNotMentionToolSearch() {
+        subsystem().use { sub ->
+            val guide = sub.pipeline.promptSections().joinToString("\n") { it.text }
+            assertTrue("用法分节里仍有 ask_user", "ask_user" in guide)
+            assertTrue("无按需工具时不应提 tool_search：$guide", "tool_search" !in guide)
+            val result = sub.pipeline.execute(
+                io.github.fartown.movo.agent.model.AgentModelClient.ToolCall("c1", "no_such_tool", "{}"),
+            )
+            assertTrue(result.content, "UNKNOWN_TOOL" in result.content)
+            assertTrue(result.content, "tool_search" !in result.content)
+        }
+    }
+
     @Test
     fun rootDisabledEnv_hidesRootOnlyTools() {
         subsystem().use { sub ->

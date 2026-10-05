@@ -17,6 +17,7 @@ import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.invalidArgs
 import io.github.fartown.movo.agent.tools.core.objectSchema
+import io.github.fartown.movo.agent.tools.core.ApprovalPreview
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -107,11 +108,15 @@ internal class AppOpenTool(
     }
 
     override fun resolve(input: AppOpenInput, env: ToolEnvironment): CallResolution =
-        // 仅本地切换前台应用，不外发也不持久化未信内容；读屏/读网页后不应被污点逐个拦（exfiltrates=false）。
-        // 打开应用后在其中的敏感操作由受保护应用名单 + 声明 effect 兜底。
+        // 打开应用只是切换前台，不外发；带参数的 URI（如 https://…?q=…）会把参数交给别的应用或网站，
+        // 两类污点同时成立时要确认（实施方案 5.1）。
         CallResolution(
-            risk = Risk.LOCAL, sensitivity = Sensitivity.NORMAL, resources = emptySet(), exfiltrates = false,
+            risk = Risk.LOCAL, sensitivity = Sensitivity.NORMAL, resources = emptySet(),
+            exfiltrates = (input.target as? AppOpenTarget.ByUri)?.uri?.contains('?') == true,
         )
+
+    override fun approvalPreview(input: AppOpenInput): ApprovalPreview? =
+        (input.target as? AppOpenTarget.ByUri)?.let { ApprovalPreview("打开这个链接？", it.uri.take(200)) }
 
     override fun execute(
         input: AppOpenInput,

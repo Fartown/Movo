@@ -41,7 +41,7 @@ internal class AgentTraceFormatter {
             "open_system_panel" -> "打开系统面板"
             "read_image" -> "查看图片"
             AgentConversationToolCatalog.READ_HISTORY -> "读取当前会话历史"
-            "memory_get", "character_memory_get" -> summarizeMemoryGetArguments(toolCall.argumentsJson)
+            "memory_get", "character_memory_get", "memory_read" -> summarizeMemoryGetArguments(toolCall.argumentsJson)
             "memory_write", "character_memory_write" -> summarizeMemoryWriteArguments(toolCall.argumentsJson)
             "skills_list" -> "查看技能列表"
             "skills_read" -> "读取技能"
@@ -50,15 +50,25 @@ internal class AgentTraceFormatter {
             "skills_inspect_github" -> "查看技能详情"
             "skills_install_from_github" -> "安装技能"
             // 后台监听与通知：步骤标题带上监听名字 / 通知标题（规范 8.12）。
-            "monitor_start" -> labelWithArgument("开始监听", toolCall.argumentsJson, "description")
-            "monitor_stop" -> "停止监听"
+            "monitor_start" -> summarizeMonitorStartArguments(toolCall.argumentsJson)
+            "monitor_stop" -> runCatching {
+                io.github.fartown.movo.agent.monitor.MonitorRegistry
+                    .find(JSONObject(toolCall.argumentsJson).optString("task_id"))?.name
+            }.getOrNull()?.takeIf { it.isNotBlank() }?.let { "停止监听·$it" } ?: "停止监听"
             "monitor_list" -> "查看后台监听"
             "notify_user" -> labelWithArgument("发送通知", toolCall.argumentsJson, "title")
+            // 类型化工具：步骤标题带上一个关键参数。
+            "ui_scroll" -> summarizeScrollArguments("滚动屏幕", toolCall.argumentsJson)
+            "ui_input" -> summarizeTextLength("输入文本", toolCall.argumentsJson, "text")
+            "app_open" -> labelWithArgument("打开应用", toolCall.argumentsJson, "name")
+            "browser_open" -> runCatching {
+                safeHttpHost(JSONObject(toolCall.argumentsJson).optString("url"))?.let { "打开网页 · $it" }
+            }.getOrNull() ?: "打开网页"
             else -> {
-                val label = DEVICE_ACTION_LABELS[toolCall.name] ?: TYPED_TOOL_LABELS[toolCall.name]
+                val label = DEVICE_ACTION_LABELS[toolCall.name] ?: TypedToolLabels.of(toolCall.name)
                 when {
                     label == null -> "准备执行"
-                    toolCall.name.startsWith("search_") ->
+                    toolCall.name.startsWith("search_") || toolCall.name.endsWith("_search") ->
                         summarizeQueryArguments(label, toolCall.argumentsJson)
                     else -> label
                 }
@@ -89,6 +99,20 @@ internal class AgentTraceFormatter {
             .replace(SENSITIVE_HEADER) { match ->
                 "${match.groupValues[1]}${match.groupValues[2]}<已隐藏>"
             }
+
+    /**
+     * 「开始监听·喝水提醒 · 最长 30 分钟」：名字 + 实际生效的时长（规范 8.12）。实际时长 = 请求值（没写用默认值）
+     * 与设置里的上限取小，和注册表启动时的算法一致（真机：请求 1 小时、上限 30 分钟，标题曾写成 1 小时）。
+     */
+    private fun summarizeMonitorStartArguments(argumentsJson: String): String {
+        val base = labelWithArgument("开始监听", argumentsJson, "description")
+        val requested = runCatching { JSONObject(argumentsJson).optLong("timeout_ms", 0L) }.getOrDefault(0L)
+            .takeIf { it > 0L } ?: io.github.fartown.movo.agent.monitor.MonitorSettings.DEFAULT_TIMEOUT_MS
+        val cap = io.github.fartown.movo.agent.runtime.AgentAppContext.resolve()
+            ?.let { runCatching { io.github.fartown.movo.agent.monitor.MonitorSettings.maxDurationMs(it) }.getOrNull() }
+        val effective = cap?.let { minOf(requested, it) } ?: requested
+        return "$base · 最长 ${io.github.fartown.movo.agent.monitor.MonitorEventFormatter.durationLabel(effective)}"
+    }
 
     /** 「开始监听·喝水提醒」：标题后接一个短参数（名字 / 标题），取不到时只写标题。 */
     private fun labelWithArgument(label: String, argumentsJson: String, key: String): String =
@@ -220,12 +244,14 @@ internal class AgentTraceFormatter {
         runCatching {
             val arguments = JSONObject(argumentsJson)
             val mode = when (arguments.optString("mode")) {
-                "replace_range" -> "替换片段"
+                "replace_range", "replace" -> "替换片段"
                 "append" -> "追加"
                 "clear" -> "清空"
                 else -> null
             }
-            val content = arguments.optString("content")
+            if (arguments.optString("mode") == "clear") return@runCatching "更新记忆 · 清空"
+            // 新 schema 用 new_text，旧 schema 用 content。
+            val content = arguments.optString("new_text").ifEmpty { arguments.optString("content") }
             val lines = if (content.isEmpty()) 0 else content.count { it == '\n' } + 1
             buildList {
                 add("更新记忆")
@@ -235,14 +261,24 @@ internal class AgentTraceFormatter {
             }.joinToString(" · ")
         }.getOrDefault("更新记忆")
 
-    /** 结果成败供事件与 UI 状态使用，不再依赖摘要文本里的标记。 */
-    fun isSuccessResult(result: AgentModelClient.ToolResult): Boolean =
-        parseResultJson(result)?.optBoolean("ok", true) ?: true
+    /**
+     * 结果成败供事件与 UI 状态使用。类型化工具看结构化结果：status 不是 ok（error、unknown）算失败，
+     * 终端命令退出码不是 0 也算失败；旧格式结果才看 JSON 里的 ok 字段。
+     */
+    fun isSuccessResult(result: AgentModelClient.ToolResult): Boolean {
+        result.outcome?.let { outcome ->
+            if (outcome.status != io.github.fartown.movo.agent.tools.core.ToolStatus.OK) return false
+            return terminalExitCode(outcome.textBody)?.let { it == 0 } ?: true
+        }
+        if (result.status != "ok") return false
+        return parseResultJson(result)?.optBoolean("ok", true) ?: true
+    }
 
     fun summarizeResult(
         toolName: String,
         result: AgentModelClient.ToolResult,
     ): String {
+        result.outcome?.let { return summarizeTypedResult(toolName, result, it) }
         val json = parseResultJson(result)
         // 终端 exit_code != 0 时 ok=false 但没有 code 字段，必须走专用分支保留退出码与输出
         if (toolName == "terminal" || toolName == "run_command") {
@@ -262,6 +298,67 @@ internal class AgentTraceFormatter {
 
     private fun parseResultJson(result: AgentModelClient.ToolResult): JSONObject? =
         runCatching { JSONObject(result.content) }.getOrNull()
+
+    /** 类型化工具的结果摘要：失败写原因和错误码，终端写退出码和输出开头，其余写「完成」加一个关键信息。 */
+    private fun summarizeTypedResult(
+        toolName: String,
+        result: AgentModelClient.ToolResult,
+        outcome: io.github.fartown.movo.agent.tools.core.ToolOutcome,
+    ): String {
+        val error = outcome.error
+        if (outcome.status != io.github.fartown.movo.agent.tools.core.ToolStatus.OK && error != null) {
+            val head = if (outcome.status == io.github.fartown.movo.agent.tools.core.ToolStatus.UNKNOWN) "未确认" else "失败"
+            return buildList {
+                add(head)
+                sanitizeSummaryValue(error.message).takeIf { it.isNotBlank() }?.let(::add)
+                add("code=${error.code.name}")
+            }.joinToString(" · ")
+        }
+        val data = outcome.data
+        if (toolName == "terminal_run" || toolName == "terminal_job") {
+            if (data?.optBoolean("running", false) == true && data.has("job_id")) return "已转入后台"
+            return summarizeTypedTerminal(outcome.textBody)
+        }
+        val detail: String? = when (toolName) {
+            "app_open" -> data?.optString("app_name")?.let(::sanitizeSummaryValue)?.takeIf { it.isNotBlank() }
+                ?.let { "已打开 · $it" } ?: "已打开"
+            "browser_open" -> data?.optString("title")?.let(::sanitizeSummaryValue)?.takeIf { it.isNotBlank() }
+                ?.let { "已打开 · 《$it》" } ?: "已打开网页"
+            "browser_read" -> "已读取网页"
+            "memory_read" -> "已读取记忆"
+            "memory_write" -> "已更新记忆"
+            "clipboard_write" -> "已复制"
+            "notify_user" -> "已发送通知"
+            else -> null
+        }
+        if (detail != null) return detail
+        val count = data?.let { json ->
+            sequenceOf("apps", "results", "records", "items", "files", "entries", "alarms", "timers", "nodes")
+                .mapNotNull { key -> json.optJSONArray(key)?.length() }
+                .firstOrNull()
+        }
+        return buildList {
+            add("完成")
+            count?.let { add("$it 条") }
+            if (result.images.isNotEmpty()) add("${result.images.size} 张图片")
+        }.joinToString(" · ")
+    }
+
+    /** terminal_run 的文本结果头部有 `exit_code: N`。 */
+    private fun terminalExitCode(textBody: String?): Int? =
+        textBody?.lineSequence()?.take(8)
+            ?.firstOrNull { it.startsWith("exit_code:") }
+            ?.substringAfter(':')?.trim()?.toIntOrNull()
+
+    private fun summarizeTypedTerminal(textBody: String?): String {
+        val exitCode = terminalExitCode(textBody) ?: return "完成"
+        val stdout = textBody.orEmpty().substringAfter("--- stdout ---\n", "").substringBefore("\n--- stderr ---")
+        val stderr = textBody.orEmpty().substringAfter("--- stderr ---\n", "")
+        val status = if (exitCode == 0) "执行完成" else "失败 · 退出码 $exitCode"
+        val output = if (exitCode == 0) stdout else stderr.ifBlank { stdout }
+        val preview = terminalOutputPreview(output, truncated = output.contains("…(std")) ?: return status
+        return "$status\n$preview"
+    }
 
     /** 失败摘要保留 code= 标记，供运行日志提取稳定错误码；message 是工具侧给出的中文原因。 */
     private fun summarizeFailure(json: JSONObject?): String {
@@ -555,51 +652,6 @@ internal class AgentTraceFormatter {
         /** 会把命令原文作为可核对字段展示给用户的工具。 */
         val COMMAND_TOOLS = setOf("terminal", "run_command", "terminal_run", "monitor_start")
 
-        /** 类型化工具子系统的工具名 → 步骤标题（只展示动作，不暴露参数）。 */
-        val TYPED_TOOL_LABELS = mapOf(
-            "device_read" to "查看设备状态",
-            "device_toggle" to "切换设备开关",
-            "setting_read" to "读取系统设置",
-            "setting_write" to "修改系统设置",
-            "device_diagnostics" to "设备诊断",
-            "app_search" to "搜索应用",
-            "app_open" to "打开应用",
-            "app_control" to "管理应用",
-            "ui_observe" to "查看屏幕",
-            "ui_tap" to "点击屏幕",
-            "ui_scroll" to "滚动屏幕",
-            "ui_swipe" to "滑动屏幕",
-            "ui_input" to "输入文本",
-            "ui_key" to "按键",
-            "ui_wait" to "等待界面",
-            "clipboard_read" to "读取剪贴板",
-            "clipboard_write" to "写入剪贴板",
-            "clock_create" to "设置闹钟或计时器",
-            "clock_read" to "查看闹钟和计时器",
-            "volume_set" to "调整音量",
-            "personal_search" to "搜索个人数据",
-            "sms_code_read" to "读取验证码",
-            "usage_read" to "查看应用使用情况",
-            "health_read" to "读取健康数据",
-            "wifi_password_read" to "读取 Wi-Fi 密码",
-            "file_search" to "搜索文件",
-            "file_read" to "读取文件",
-            "file_write" to "写入文件",
-            "file_list" to "列出目录",
-            "terminal_run" to "执行命令",
-            "terminal_job" to "管理后台命令",
-            "browser_open" to "打开网页",
-            "browser_read" to "读取网页",
-            "browser_act" to "操作网页",
-            "memory_read" to "读取记忆",
-            "skill_read" to "读取技能",
-            "skill_install" to "安装技能",
-            "conversation_read" to "读取会话历史",
-            "ask_user" to "询问你",
-            "tool_search" to "查找工具",
-            "mcp_call" to "调用 MCP 工具",
-            "mcp_find" to "查找 MCP 工具",
-        )
 
         /** 结构化设备工具只展示动作标签，不暴露任何参数。 */
         val DEVICE_ACTION_LABELS = mapOf(
@@ -647,4 +699,61 @@ internal class AgentTraceFormatter {
             "app_state_control" to "管理应用状态",
         )
     }
+}
+
+/** 类型化工具子系统的工具名 → 中文动作名（执行卡步骤标题、审批卡标题共用；只写动作，不暴露参数）。 */
+internal object TypedToolLabels {
+    private val labels = mapOf(
+        "device_read" to "查看设备状态",
+        "device_toggle" to "切换设备开关",
+        "setting_read" to "读取系统设置",
+        "setting_write" to "修改系统设置",
+        "device_diagnostics" to "设备诊断",
+        "app_search" to "搜索应用",
+        "app_open" to "打开应用",
+        "app_control" to "管理应用",
+        "ui_observe" to "查看屏幕",
+        "ui_tap" to "点击屏幕",
+        "ui_scroll" to "滚动屏幕",
+        "ui_swipe" to "滑动屏幕",
+        "ui_input" to "输入文本",
+        "ui_key" to "按键",
+        "ui_wait" to "等待界面",
+        "clipboard_read" to "读取剪贴板",
+        "clipboard_write" to "写入剪贴板",
+        "clock_create" to "设置闹钟或计时器",
+        "clock_read" to "查看闹钟和计时器",
+        "volume_set" to "调整音量",
+        "personal_search" to "搜索个人数据",
+        "sms_code_read" to "读取验证码",
+        "usage_read" to "查看应用使用情况",
+        "health_read" to "读取健康数据",
+        "wifi_password_read" to "读取 Wi-Fi 密码",
+        "file_search" to "搜索文件",
+        "file_read" to "读取文件",
+        "file_write" to "写入文件",
+        "file_list" to "列出目录",
+        "terminal_run" to "执行命令",
+        "terminal_job" to "管理后台命令",
+        "browser_open" to "打开网页",
+        "browser_read" to "读取网页",
+        "browser_act" to "操作网页",
+        "memory_read" to "读取记忆",
+        "skill_read" to "读取技能",
+        "skill_install" to "安装技能",
+        "conversation_read" to "读取会话历史",
+        "ask_user" to "询问你",
+        "tool_search" to "查找工具",
+        "mcp_call" to "调用 MCP 工具",
+        "mcp_find" to "查找 MCP 工具",
+        "memory_write" to "更新记忆",
+        "media_control" to "控制媒体播放",
+        "monitor_start" to "开始后台监听",
+        "monitor_stop" to "停止后台监听",
+        "monitor_list" to "查看后台监听",
+        "notify_user" to "发送通知",
+    )
+
+    /** 类型化工具的动作名；MCP 直连工具（mcp_<服务器>_<工具>）统一叫「调用 MCP 工具」。 */
+    fun of(name: String): String? = labels[name] ?: if (name.startsWith("mcp_")) "调用 MCP 工具" else null
 }

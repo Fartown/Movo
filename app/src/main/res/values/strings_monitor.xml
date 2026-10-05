@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="monitor_execution_label">Background monitors</string>
-    <string name="monitor_execution_summary">%1$d background monitors · %2$s, ends at %3$s</string>
+    <plurals name="monitor_execution_summary">
+        <item quantity="one">%1$d background monitor · %2$s, ends at %3$s</item>
+        <item quantity="other">%1$d background monitors · %2$s, ends at %3$s</item>
+    </plurals>
+    <string name="monitor_execution_mixed">Tasks: %1$d · Background monitors: %2$d</string>
     <string name="monitor_stop_all">Stop all</string>
     <string name="monitor_notify_channel">Movo notifications</string>
     <string name="monitor_notify_stop">Stop reminder</string>
@@ -12,15 +16,21 @@
     <string name="monitor_row_rate_limit">Monitor stopped·%1$s·too much output</string>
     <string name="monitor_row_interrupted">Monitor interrupted·%1$s·Movo was closed by the system</string>
     <string name="monitor_row_exit">Monitor ended·%1$s·%2$s</string>
+    <string name="monitor_row_exit_code">Monitor ended·%1$s·exit code %2$d·%3$s</string>
     <string name="monitor_chip">Monitor</string>
     <string name="monitor_chip_count">Monitors %1$d</string>
     <string name="monitor_list_title">Background monitors</string>
-    <string name="monitor_list_item_detail">Fired %1$d times·ends at %2$s</string>
+    <plurals name="monitor_list_item_detail">
+        <item quantity="one">Fired %1$d time·ends at %2$s</item>
+        <item quantity="other">Fired %1$d times·ends at %2$s</item>
+    </plurals>
     <string name="monitor_list_stop">Stop</string>
     <string name="monitor_settings_group">Background monitors</string>
     <string name="monitor_settings_max_duration">Max monitor duration</string>
-    <string name="monitor_settings_footer">Monitors stop automatically after this long. Changes apply to monitors started later.</string>
+    <string name="monitor_settings_footer_1">Monitors stop automatically after this long.</string>
+    <string name="monitor_settings_footer_2">Changes apply to monitors started later.</string>
     <string name="monitor_settings_choice_desc">Monitors stop automatically after this long</string>
+    <string name="monitor_duration_seconds">%1$d sec</string>
     <string name="monitor_duration_minutes">%1$d min</string>
     <string name="monitor_duration_hours">%1$d hr</string>
     <string name="tool_monitor_start">Start monitor</string>

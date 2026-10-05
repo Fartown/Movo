@@ -115,16 +115,19 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import io.github.fartown.movo.agent.monitor.MonitorDeliveryQueue
 import io.github.fartown.movo.agent.monitor.MonitorEndReason
 import io.github.fartown.movo.agent.monitor.MonitorEventFormatter
 import io.github.fartown.movo.agent.monitor.MonitorNotice
 import io.github.fartown.movo.agent.monitor.MonitorNoticeSink
 import io.github.fartown.movo.agent.monitor.MonitorRegistry
+import io.github.fartown.movo.agent.monitor.MonitorWakePolicy
 import io.github.fartown.movo.agent.runtime.AgentRuntimeService
+import io.github.fartown.movo.ui.components.MonitorRowLabels
 import io.github.fartown.movo.ui.model.MonitorEventKindUi
 import io.github.fartown.movo.ui.model.MonitorEventMessageUi
 import io.github.fartown.movo.ui.model.isTurnStart
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.Mutex
@@ -259,12 +262,26 @@ internal class AgentAppState(
     var activeInteraction: AgentInteractionUiState? by mutableStateOf(null)
         private set
 
-    // 后台监听的待投递队列：必须声明在 init 之前（init 里的收集器会立刻调用 pumpMonitorNotices）。
-    /** 每个对话还没投递给 Movo 的监听通知（按到达顺序）。 */
-    private val pendingMonitorNotices = LinkedHashMap<String, MutableList<MonitorNotice>>()
+    // 后台监听的投递状态：必须声明在 init 之前（init 里的收集器会立刻调用 pumpMonitorNotices）。
+    /** 还没交给 Movo 的监听通知、并入运行中一轮还没被读到的通知、事件轮的起点批次。 */
+    private val monitorQueue = MonitorDeliveryQueue()
     /** 运行中的对话里用户停掉监听：结束行等这一轮结束再补，不把正在执行的一轮切开。 */
     private val deferredMonitorRows = LinkedHashMap<String, MutableList<MonitorEventMessageUi>>()
+    /** 事件轮发起前的消息（撤回时连同被收起的推荐追问一起恢复）与它插入的行。 */
+    private val monitorTurnLaunches = mutableMapOf<String, MonitorTurnLaunch>()
+    /** 已收到 RunStarted 的运行：运行时确实在执行这一轮，才能把事件并入它。 */
+    private val startedRunIds = mutableSetOf<String>()
+    /** 已经开始干活（模型有输出、调了工具）的运行：事件轮被取消时不再撤回。 */
+    private val runsWithModelOutput = mutableSetOf<String>()
+    /** 为用户发起的运行让路而撤下的事件轮（不是用户点的停止）。 */
+    private val preemptedMonitorRuns = mutableSetOf<String>()
+    /** 重放事件期间暂存的监听行：按 id 复用原来的行（带退出码等），只调整位置。 */
+    private var replayMonitorRows: Map<String, MonitorEventMessageUi> = emptyMap()
     private var monitorRetryJob: Job? = null
+    private var monitorRetryDelayMs = MONITOR_RETRY_MIN_MS
+    private var monitorPersistJob: Job? = null
+
+    private data class MonitorTurnLaunch(val rowIds: Set<String>, val preLaunchMessages: List<AgentChatMessageUi>)
 
     init {
         refreshConversationSummaries()
@@ -272,9 +289,25 @@ internal class AgentAppState(
         scope.launch {
             snapshotFlow { voiceRuntimeBusy }.distinctUntilChanged().collect { busy ->
                 if (!busy) {
+                    // 用户排队的消息先发，事件轮在它之后。
                     drainQueuedText()
                     pumpMonitorNotices()
                 }
+            }
+        }
+        // 后台监听改为事件驱动：编辑结束、排队消息发出、模型切换完成、语音结束时再看一次有没有等着的事件。
+        scope.launch {
+            snapshotFlow {
+                Triple(
+                    homeState.messageEdit != null || conversationsById.values.any { it.messageEdit != null },
+                    queuedTextSubmission != null,
+                    modelPickerState.isChanging,
+                )
+            }.distinctUntilChanged().collect { pumpMonitorNotices() }
+        }
+        scope.launch {
+            voiceSession.state.map { it.active }.distinctUntilChanged().collect { active ->
+                if (!active) pumpMonitorNotices()
             }
         }
         MonitorRegistry.sink = MonitorNoticeSink { notice -> onMonitorNotice(notice) }
@@ -540,6 +573,10 @@ internal class AgentAppState(
                 searchQuery = "",
             )
             refreshConversationSummaries()
+            // 导入后不存在的对话：它们的后台监听没人管了，停掉；排着的事件一起丢掉。
+            MonitorRegistry.stopOrphans(conversationsById.keys)
+            monitorQueue.retainConversations(conversationsById.keys)
+            deferredMonitorRows.keys.retainAll(conversationsById.keys)
         }
     }
 
@@ -739,6 +776,7 @@ internal class AgentAppState(
             updateConversation(conversationId, RoleplayConversationReducer.linkRun(state, runId))
         }
         setConversationStreaming(runId, false)
+        settleMonitorDeliveries(runId, checkpoint.transcript)
         runMessageProjector.clearRun(runId)
         runConversationIds.remove(runId)
         conversationUpdatedAt = conversationUpdatedAt +
@@ -1031,8 +1069,7 @@ internal class AgentAppState(
     }
 
     fun deleteConversation(conversationId: String) {
-        MonitorRegistry.stopConversation(conversationId, MonitorEndReason.STOPPED_BY_AGENT)
-        pendingMonitorNotices.remove(conversationId)
+        forgetMonitorsOf(conversationId)
         if (voiceSession.ownsConversation(conversationId)) voiceSession.end("对话已删除，语音已结束")
         if (queuedTextSubmission?.conversationId == conversationId) queuedTextSubmission = null
         followUpJobs.remove(conversationId)?.cancel()
@@ -1150,6 +1187,8 @@ internal class AgentAppState(
     ) {
         val state = conversationsById[conversationId]
         if (voiceRuntimeBusy || state == null || state.isCompacting || modelPickerState.isChanging) {
+            // 用户说的话优先：还没开始干活的事件轮让路，语音会话在空闲后重发这一句。
+            preemptMonitorRunForUser()
             onResult(AgentRuntimeWire.RunResult(runId, false, "", "当前任务仍在执行，请等完成后再说", resultKind = "rejected"))
             return
         }
@@ -1271,6 +1310,8 @@ internal class AgentAppState(
             queuedTextSubmission = QueuedTextSubmission(id, prompt, pendingImages, pendingFileReferences)
             updateConversation(id, homeState.copy(input = remainder, pendingImages = emptyList(), pendingFileReferences = emptyList()))
             persistConversations()
+            // 用户发起的运行优先于事件轮：还没开始干活的事件轮撤回，这条排队的消息先跑。
+            preemptMonitorRunForUser()
             return
         }
         val runtimePrompt = AgentFileReferencePromptCodec.format(prompt, fileReferences)
@@ -1479,6 +1520,8 @@ internal class AgentAppState(
             revisions = removed.roleplayMessages.revisions.filterKeys { it in retainedIds },
         ))
         if (revised.messages.isEmpty()) {
+            // 删光所有轮次 = 对话被移除：它的后台监听一起停掉，不留没人管的监听。
+            forgetMonitorsOf(conversationId)
             conversationsById = conversationsById - conversationId
             conversationTitles = conversationTitles - conversationId
             conversationUpdatedAt = conversationUpdatedAt - conversationId
@@ -1511,8 +1554,8 @@ internal class AgentAppState(
             )
             return
         }
-        val boundary = AgentConversationRevisionReducer.boundary(homeState, messageId) ?: return
-        // 事件轮没有用户原话：不能编辑 / 重新生成。
+        // 回到这一轮里用户自己说的话（跳过运行中并入的监听事件行）；事件轮没有用户原话，界面上也不提供这个按钮。
+        val boundary = AgentConversationRevisionReducer.regenerationBoundary(homeState, messageId) ?: return
         val turnMessage = boundary.userMessage ?: return
         val images = turnMessage.images.mapIndexed { index, dataUrl ->
             PendingImageUi(
@@ -2157,17 +2200,27 @@ internal class AgentAppState(
         if (isReplyRewrite(runId)) return
         // 恢复是完整快照：先清除同一 run 的旧投影，再一次发布，避免历史增量重复追加
         // 或中途的 Running 状态使已结束的思考重新展开、播放动画。
+        // 本轮读到的监听行也按重放重新排位（原来的行对象保留，只换位置），不会跑到重放出来的步骤前面。
+        val replayMonitorIds = events.filterIsInstance<AgentEvent.MonitorEventReceived>()
+            .mapTo(mutableSetOf()) { monitorRowId(it.taskId, it.seq, it.kind) }
         Snapshot.withMutableSnapshot {
             flushPendingRunDelta(runId)
             updateMessages(runId, updateTimestamp = false) { messages ->
+                replayMonitorRows = messages.filterIsInstance<MonitorEventMessageUi>()
+                    .filter { it.id in replayMonitorIds && !it.startsTurn }
+                    .associateBy { it.id }
                 runMessageProjector.resetForReplay(
                     runId = runId,
                     messages = messages,
                     replaySupplementIndexes = events.filterIsInstance<AgentEvent.UserSupplementReceived>()
                         .mapTo(mutableSetOf()) { it.index },
-                )
+                ).filterNot { it.id in replayMonitorRows }
             }
-            events.forEach { event -> applyRunEvent(runId, event, persistSupplement = false) }
+            try {
+                events.forEach { event -> applyRunEvent(runId, event, persistSupplement = false) }
+            } finally {
+                replayMonitorRows = emptyMap()
+            }
         }
     }
 
@@ -2365,6 +2418,13 @@ internal class AgentAppState(
             }
             return
         }
+        // 这一轮已经开始干活：事件轮之后被取消也不再撤回（模型可能已经做了事）。
+        when (event) {
+            is AgentEvent.AssistantBlockStart, is AgentEvent.AssistantReceived, is AgentEvent.ToolStarted,
+            is AgentEvent.HostedToolStarted, is AgentEvent.MonitorEventReceived, is AgentEvent.UserSupplementReceived,
+            is AgentEvent.ContextCompaction -> runsWithModelOutput += runId
+            else -> Unit
+        }
         when (event) {
             is AgentEvent.AssistantBlockStart -> {
                 updateRunTrace(runId) { messages ->
@@ -2524,6 +2584,11 @@ internal class AgentAppState(
                 if (runId in stopRequestedRunIds) scope.launch(Dispatchers.IO) {
                     AgentRuntimeClient(appContext, AndroidAgentLogger).cancelRun(runId)
                 }
+                // 运行时已在执行这一轮：准备期间到的监听事件现在可以并入了（重放时不触发）。
+                startedRunIds += runId
+                if (persistSupplement && conversationIdForRun(runId)?.let(monitorQueue::hasPending) == true) {
+                    scope.launch { pumpMonitorNotices() }
+                }
             }
             is AgentEvent.InteractionRequested -> {
                 activeInteraction = AgentInteractionUiState(
@@ -2633,9 +2698,16 @@ internal class AgentAppState(
             refreshRuntimeResults()
             return
         }
+        // 后台监听发起的事件轮没真正开始（被拒、被别处的新任务替换、开始前被取消）：撤回，事件稍后再发，不显示失败卡。
+        if (monitorQueue.isEventTurn(runId) && shouldRollBackMonitorTurn(runId, result)) {
+            rollBackMonitorTurn(runId, result, acknowledgeRuntimeResult)
+            return
+        }
         flushPendingRunDelta(runId)
         // 停止、失败等不经过 RunFinished 的结束：这里补记这一轮的结束时刻（已记过的不覆盖）。
         if (recoveredHandoff == null) updateMessages(runId) { messages -> stampTurnFinished(messages) }
+        // 并入这一轮、模型没读到的监听事件放回队首（只按结果 transcript 认），交给下一个事件轮。
+        settleMonitorDeliveries(runId, result.transcript.takeIf { result.contextSnapshotRef.isBlank() })
         val followUpConfig = followUpRunConfigs.remove(runId)
         val rewriting = result.operation == AgentRuntimeWire.OP_REWRITE_REPLY || isReplyRewrite(runId)
         stopRequestedRunIds.remove(runId)
@@ -2643,6 +2715,8 @@ internal class AgentAppState(
             currentRunId = null
             currentRunJob = null
         }
+        // 本轮结束后看看有没有等着的监听事件（事件驱动，不轮询）。
+        scope.launch { pumpMonitorNotices() }
         if (rewriting) {
             val conversationId = conversationIdForRun(runId)
             val existing = conversationsById[conversationId]
@@ -2784,21 +2858,27 @@ internal class AgentAppState(
     // ---------------------------------------------------------------------------
 
     /**
-     * 监听通知到达（主线程）：本对话正在执行就并入它的下一步；空闲就开一轮事件轮；
-     * 别处在执行、语音进行中等忙碌时排队，空闲后一并交给 Movo（积压的多条在同一轮里）。
+     * 监听通知到达（主线程）：本对话正在执行、且是 App 订阅着的这一轮，就排进它的下一个步骤边界；空闲就开一轮事件轮；
+     * 别处在执行、语音进行中、用户在编辑消息或有排队的消息时先排队，这些情况解除时（事件驱动）一并交给 Movo。
      * 用户手动停止只插「已停止监听」，不唤醒；Movo 自己停止的不插行（执行卡里已有这一步）。
      */
     private fun onMonitorNotice(notice: MonitorNotice) {
         val conversationId = notice.conversationId
-        if (conversationsById[conversationId] == null) return
+        if (conversationsById[conversationId] == null) {
+            // 对话已经不在了（删除、删光轮次、导入备份）：这个监听没人管了，停掉。
+            MonitorRegistry.stop(notice.taskId, MonitorEndReason.SESSION_END)
+            monitorQueue.dropConversation(conversationId)
+            return
+        }
         AndroidAgentLogger.info(
             "Monitor notice: kind=${if (notice is MonitorNotice.Ended) "ended:" + notice.reason.name else "event"}, " +
                 "streaming=${conversationsById[conversationId]?.isStreaming}",
         )
         if (notice is MonitorNotice.Ended && !notice.reason.wakesAgent) {
-            pendingMonitorNotices[conversationId]?.removeAll { it.taskId == notice.taskId }
+            monitorQueue.dropTask(notice.taskId)
             if (notice.reason == MonitorEndReason.STOPPED_BY_USER) {
-                val row = notice.toMonitorRow(startsTurn = true)
+                // 「已停止」不唤醒 Movo，不是一轮的起点。
+                val row = notice.toMonitorRow(startsTurn = false)
                 if (conversationsById[conversationId]?.isStreaming == true) {
                     deferredMonitorRows.getOrPut(conversationId) { mutableListOf() } += row
                 } else {
@@ -2807,60 +2887,116 @@ internal class AgentAppState(
             }
             return
         }
-        pendingMonitorNotices.getOrPut(conversationId) { mutableListOf() } += notice
+        monitorQueue.enqueue(notice)
         pumpMonitorNotices()
     }
 
+    /**
+     * 把排着的监听通知交出去。由通知到达、本 App 的一轮结束或开始执行、编辑结束、排队消息发出、模型切换完成、
+     * 语音结束触发；只有看不到的阻塞（运行时被别的入口占着、语音还在收尾）才按退避间隔重试。
+     */
     private fun pumpMonitorNotices() {
-        for ((conversationId, rows) in deferredMonitorRows.entries.toList()) {
-            if (conversationsById[conversationId]?.isStreaming == true) continue
-            deferredMonitorRows.remove(conversationId)
-            appendMonitorRows(conversationId, rows)
-        }
-        for ((conversationId, notices) in pendingMonitorNotices.entries.toList()) {
-            if (notices.isEmpty() || conversationsById[conversationId] == null) {
-                pendingMonitorNotices.remove(conversationId)
+        flushDeferredMonitorRows()
+        dropMonitorsWithoutConversation()
+        var progressed = false
+        for (conversationId in monitorQueue.conversations()) {
+            val runId = monitorRunInConversation(conversationId)
+            if (runId != null) {
+                // 上一批还没被读到时先不再交（新到的留在 App 队列里，受每个监听的积压上限约束），语音轮等不并入：等这一轮结束。
+                if (!MonitorWakePolicy.canInject(monitorRunFacts(runId, conversationId))) continue
+                val batch = monitorQueue.take(conversationId)
+                if (batch.isEmpty()) continue
+                // 只交给 App 自己订阅着的这一轮：运行时在模型真正读到时发回「已消费」，那时才插行、设锚点。
+                if (AgentRuntimeService.injectMonitorEvent(conversationId, runId, MonitorEventFormatter.blocks(batch), batch.map { it.toRuntimeEvent() })) {
+                    monitorQueue.markInFlight(runId, conversationId, batch)
+                    progressed = true
+                } else {
+                    monitorQueue.requeueFront(conversationId, batch)
+                }
                 continue
             }
-            val batch = notices.toList()
-            val text = MonitorEventFormatter.format(batch)
-            val events = batch.mapIndexed { index, notice -> notice.toRuntimeEvent().copy(anchor = index == 0) }
-            if (AgentRuntimeService.injectMonitorEvent(conversationId, text, events)) {
-                pendingMonitorNotices.remove(conversationId)
-                continue
-            }
-            if (canStartMonitorRun()) {
-                pendingMonitorNotices.remove(conversationId)
-                startMonitorEventRun(conversationId, batch, text)
-                break
+            if (canStartMonitorRun(conversationId)) {
+                val batch = monitorQueue.take(conversationId)
+                if (batch.isNotEmpty() && startMonitorEventRun(conversationId, batch)) progressed = true
             }
         }
-        if (pendingMonitorNotices.isNotEmpty() || deferredMonitorRows.isNotEmpty()) scheduleMonitorRetry()
+        if (progressed) monitorRetryDelayMs = MONITOR_RETRY_MIN_MS
+        scheduleMonitorRetry()
     }
 
-    private fun canStartMonitorRun(): Boolean =
-        currentRunId == null &&
-            conversationsById.values.none { it.isStreaming || it.isCompacting } &&
-            !modelPickerState.isChanging &&
-            !io.github.fartown.movo.agent.voice.session.VoiceSessionManager.active &&
-            AgentRuntimeService.isIdle()
+    /** 本 App 当前订阅着的、属于这个对话的一轮；没有时返回 null。 */
+    private fun monitorRunInConversation(conversationId: String): String? =
+        currentRunId?.takeIf { runConversationIds[it] == conversationId }
 
-    /** 语音结束、外部入口的任务结束等不经过本状态的变化：隔几秒再试一次。 */
+    private fun monitorRunFacts(runId: String, conversationId: String): MonitorWakePolicy.RunFacts {
+        val state = conversationsById[conversationId]
+        return MonitorWakePolicy.RunFacts(
+            sameConversation = state != null && runConversationIds[runId] == conversationId,
+            // 收到 RunStarted 才说明运行时在执行这一轮（运行时只按对话核对，准备期间可能是别的运行）。
+            started = runId in startedRunIds,
+            streaming = state?.isStreaming == true,
+            compacting = state?.isCompacting == true,
+            roleplay = state?.roleplay != null,
+            // 语音轮不并入：播报会变成提醒，等语音结束后的事件轮。
+            voiceTurn = voiceRunListeners.containsKey(runId),
+            replyRewrite = isReplyRewrite(runId),
+            batchInFlight = monitorQueue.hasInFlight(runId),
+        )
+    }
+
+    private fun monitorIdleFacts(conversationId: String): MonitorWakePolicy.IdleFacts = MonitorWakePolicy.IdleFacts(
+        appRunActive = currentRunId != null,
+        anyConversationBusy = conversationsById.values.any { it.isStreaming || it.isCompacting },
+        userEditing = homeState.messageEdit != null || conversationsById.values.any { it.messageEdit != null },
+        userMessageQueued = queuedTextSubmission != null,
+        modelChanging = modelPickerState.isChanging,
+        voiceActive = voiceSession.active,
+        voiceClosing = voiceSession.busy,
+        runtimeIdle = AgentRuntimeService.isIdle(),
+        roleplay = conversationsById[conversationId]?.roleplay != null,
+    )
+
+    /**
+     * 事件轮可以开始：本 App 没有在跑的一轮、运行时空闲、没有语音会话，而且不打断用户——
+     * 用户没在编辑消息、没有排队等发的消息（用户发起的运行优先于事件轮）、模型不在切换。
+     */
+    private fun canStartMonitorRun(conversationId: String): Boolean =
+        conversationsById[conversationId] != null && MonitorWakePolicy.canStartEventTurn(monitorIdleFacts(conversationId))
+
+    /** 还有事件在等、而阻塞看不到何时解除时，隔一会儿再试（1 秒起，逐次加倍，最长 30 秒）。 */
     private fun scheduleMonitorRetry() {
+        val waiting = monitorQueue.hasAnyPending() || deferredMonitorRows.isNotEmpty()
+        if (!waiting || MonitorWakePolicy.blockedObservably(monitorIdleFacts(conversationId = ""))) {
+            // 能看到的阻塞解除时自己会再触发一次，不需要定时器。
+            monitorRetryJob?.cancel()
+            monitorRetryJob = null
+            monitorRetryDelayMs = MONITOR_RETRY_MIN_MS
+            return
+        }
         if (monitorRetryJob?.isActive == true) return
+        val delayMs = monitorRetryDelayMs
+        monitorRetryDelayMs = MonitorWakePolicy.nextRetryDelay(delayMs, MONITOR_RETRY_MIN_MS, MONITOR_RETRY_MAX_MS)
         monitorRetryJob = scope.launch {
-            kotlinx.coroutines.delay(MONITOR_RETRY_MS)
+            delay(delayMs)
             monitorRetryJob = null
             pumpMonitorNotices()
         }
     }
 
     /** 事件轮：本轮的起点是事件行（不是用户消息），给模型的是系统通知正文。 */
-    private fun startMonitorEventRun(conversationId: String, notices: List<MonitorNotice>, prompt: String) {
-        val state = conversationsById[conversationId] ?: return
-        val runId = UUID.randomUUID().toString()
-        val rows = notices.mapIndexed { index, notice -> notice.toMonitorRow(startsTurn = index == 0).copy(historyAnchor = index == 0) }
-            .filterNot { row -> state.messages.any { it.id == row.id } }
+    private fun startMonitorEventRun(conversationId: String, notices: List<MonitorNotice>): Boolean {
+        val state = conversationsById[conversationId] ?: return false
+        val existing = state.messages.mapTo(HashSet()) { it.id }
+        val fresh = notices.filterNot { MonitorDeliveryQueue.rowKey(it) in existing }
+        if (fresh.isEmpty()) return false
+        val runId = "run-${UUID.randomUUID()}"
+        // 第一行是这一轮的起点，也是模型历史里那条 user 条目（事件正文）的锚点。
+        val rows = fresh.mapIndexed { index, notice ->
+            notice.toMonitorRow(startsTurn = index == 0).copy(historyAnchor = index == 0)
+        }
+        val prompt = MonitorEventFormatter.format(fresh)
+        monitorQueue.markEventTurn(runId, conversationId, fresh)
+        monitorTurnLaunches[runId] = MonitorTurnLaunch(rows.mapTo(HashSet()) { it.id }, state.messages)
         launchConversationRun(
             conversationId = conversationId,
             runId = runId,
@@ -2873,24 +3009,111 @@ internal class AgentAppState(
             reasoningEffort = state.reasoningEffort,
             origin = AgentRuntimeWire.ORIGIN_MONITOR,
         )
+        return true
     }
 
-    /** 运行中并入的事件：插在本轮当前位置之后，不作为新一轮的起点。重放时按 id 去重。 */
-    private fun insertMonitorRow(runId: String, event: AgentEvent.MonitorEventReceived, persist: Boolean) {
-        val row = MonitorEventMessageUi(
-            id = monitorRowId(event.taskId, event.seq, event.kind),
-            taskId = event.taskId,
-            name = event.name,
-            kind = if (event.kind == "ended") MonitorEventKindUi.Ended else MonitorEventKindUi.Event,
-            seq = event.seq,
-            atMillis = event.atMillis,
-            text = event.text,
-            reason = event.reason.ifBlank { null },
-            startsTurn = false,
-            historyAnchor = event.anchor,
+    /**
+     * 用户发起的运行优先于事件轮：还没开始干活的事件轮撤回（事件放回队首），用户的消息先跑。
+     * 已经在干活的事件轮不打断，用户的消息照常排在它后面。
+     */
+    private fun preemptMonitorRunForUser() {
+        val runId = currentRunId ?: return
+        if (!monitorQueue.isEventTurn(runId) || runId in runsWithModelOutput) return
+        if (!preemptedMonitorRuns.add(runId)) return
+        AndroidAgentLogger.info("Monitor event turn yields to a user run")
+        // 准备阶段由 stopRequestedRunIds 拦下；已交给运行时的由取消结束，结果按「让路」撤回而不是「已停止」。
+        stopRequestedRunIds += runId
+        scope.launch(Dispatchers.IO) { AgentRuntimeClient(appContext, AndroidAgentLogger).cancelRun(runId) }
+    }
+
+    /**
+     * 事件轮该撤回：没有任何进展（模型没输出、没调工具、transcript 为空），且结束原因是
+     * 被拒（运行时忙）、在准备时被新任务替换、或不是用户点的停止（被别的入口顶掉、为用户运行让路）。
+     */
+    private fun shouldRollBackMonitorTurn(runId: String, result: AgentRuntimeWire.RunResult): Boolean =
+        MonitorTurnRollback.shouldRollBack(
+            result = result,
+            madeProgress = runId in runsWithModelOutput,
+            stoppedByUser = runId in stopRequestedRunIds && runId !in preemptedMonitorRuns,
         )
+
+    /** 撤回没真正开始的事件轮：撤掉事件行与历史里的事件正文，事件放回队首，稍后再发；不显示失败卡。 */
+    private fun rollBackMonitorTurn(runId: String, result: AgentRuntimeWire.RunResult, acknowledgeRuntimeResult: Boolean) {
+        flushPendingRunDelta(runId)
+        val conversationId = conversationIdForRun(runId)
+        val launch = monitorTurnLaunches.remove(runId)
+        // 起点那一批（与理论上不会有的在途事件）一起放回队首。
+        monitorQueue.settle(runId, consumedGroups = null)
+        val requeued = monitorQueue.rollbackEventTurn(runId)
+        followUpRunConfigs.remove(runId)
+        stopRequestedRunIds.remove(runId)
+        preemptedMonitorRuns.remove(runId)
+        startedRunIds.remove(runId)
+        runsWithModelOutput.remove(runId)
+        if (runId == currentRunId) {
+            currentRunId = null
+            currentRunJob = null
+        }
+        val state = conversationId?.let(conversationsById::get)
+        if (conversationId != null && state != null) {
+            updateConversation(
+                conversationId,
+                MonitorTurnRollback.rollBack(state, runId, launch?.rowIds.orEmpty(), launch?.preLaunchMessages),
+                updateTimestamp = false,
+            )
+        }
+        runMessageProjector.clearRun(runId)
+        runConversationIds.remove(runId)
+        refreshConversationSummaries()
+        persistConversations(
+            onSaved = if (acknowledgeRuntimeResult && result.resultKind == "terminal" && result.contextSnapshotRef.isBlank()) {
+                { AgentRuntimeClient(appContext, AndroidAgentLogger).ackResult(runId) }
+            } else {
+                null
+            },
+        )
+        AndroidAgentLogger.info("Monitor event turn rolled back: requeued=${requeued.size}, kind=${result.resultKind}")
+        scope.launch { pumpMonitorNotices() }
+    }
+
+    /**
+     * 一轮结束：结算并入这一轮的监听事件。transcript 里实际写进去的事件条目少于界面已插的批次时
+     * （停止恰好落在「已消费」与写入上下文之间），多出来的行撤掉；没被读到的通知都放回队首。
+     * [transcript] 为 null 表示结果要等恢复，只放回没确认的。
+     */
+    private fun settleMonitorDeliveries(runId: String, transcript: List<AgentModelClient.ConversationMessage>?) {
+        val consumed = transcript?.count { it.role == "user" && it.messageId.startsWith("monitor-$runId-") }
+        val settlement = monitorQueue.settle(runId, consumed)
+        if (settlement.removeRowKeys.isNotEmpty()) {
+            updateMessages(runId, updateTimestamp = false) { messages -> messages.filterNot { it.id in settlement.removeRowKeys } }
+        }
+        if (settlement.requeue.isNotEmpty()) {
+            AndroidAgentLogger.info("Monitor events requeued after run: count=${settlement.requeue.size}")
+        }
+        monitorQueue.finishEventTurn(runId)
+        monitorTurnLaunches.remove(runId)
+        startedRunIds.remove(runId)
+        runsWithModelOutput.remove(runId)
+        preemptedMonitorRuns.remove(runId)
+    }
+
+    /**
+     * 运行时发回「已消费」：模型这一步真正读到了这些事件。这时才插行（插在本轮当前位置之后，不是新一轮的起点），
+     * 每批第一行是模型历史里那条 user 条目的锚点。重放时按 id 复用原来的行。
+     */
+    private fun insertMonitorRow(runId: String, event: AgentEvent.MonitorEventReceived, persist: Boolean) {
+        val id = monitorRowId(event.taskId, event.seq, event.kind)
+        val notice = monitorQueue.confirm(runId, id, event.anchor)
+        val row = (notice?.toMonitorRow(startsTurn = false) ?: replayMonitorRows[id] ?: event.toMonitorRow())
+            .copy(startsTurn = false, historyAnchor = event.anchor)
         updateMessages(runId) { messages -> if (messages.any { it.id == row.id }) messages else messages + row }
-        if (persist) persistConversations()
+        if (persist) {
+            persistMonitorRowsSoon()
+            // 这一批读到了：排着的下一批可以交给这一轮了。
+            if (!monitorQueue.hasInFlight(runId) && conversationIdForRun(runId)?.let(monitorQueue::hasPending) == true) {
+                scope.launch { pumpMonitorNotices() }
+            }
+        }
     }
 
     private fun appendMonitorRows(conversationId: String, rows: List<MonitorEventMessageUi>) {
@@ -2900,17 +3123,53 @@ internal class AgentAppState(
         if (fresh.isEmpty()) return
         updateConversation(conversationId, state.copy(messages = state.messages + fresh))
         refreshConversationSummaries()
-        persistConversations()
+        persistMonitorRowsSoon()
     }
 
-    /** 上个进程里被系统杀掉时还在运行的监听：在各自对话里补一行「监听已中断」，不唤醒。 */
+    private fun flushDeferredMonitorRows() {
+        for ((conversationId, rows) in deferredMonitorRows.entries.toList()) {
+            if (conversationsById[conversationId]?.isStreaming == true) continue
+            deferredMonitorRows.remove(conversationId)
+            appendMonitorRows(conversationId, rows)
+        }
+    }
+
+    /** 对话不在了、或是角色对话（不提供监听）：停掉它的监听，丢掉排着的事件。 */
+    private fun dropMonitorsWithoutConversation() {
+        monitorQueue.conversations().forEach { conversationId ->
+            val state = conversationsById[conversationId]
+            if (state == null || state.roleplay != null) forgetMonitorsOf(conversationId)
+        }
+        deferredMonitorRows.keys.retainAll(conversationsById.keys)
+    }
+
+    /** 对话被删除 / 移除：停掉它的后台监听（结束进程在注册表自己的线程池里，不卡主线程），丢掉排着的事件。 */
+    private fun forgetMonitorsOf(conversationId: String) {
+        MonitorRegistry.stopConversation(conversationId, MonitorEndReason.SESSION_END)
+        monitorQueue.dropConversation(conversationId)
+        deferredMonitorRows.remove(conversationId)
+    }
+
+    /** 监听行变化合并保存：一段时间里的多次变化只写一次（每个事件都整库重写太重）。 */
+    private fun persistMonitorRowsSoon() {
+        if (monitorPersistJob?.isActive == true) return
+        monitorPersistJob = scope.launch {
+            delay(MONITOR_PERSIST_DEBOUNCE_MS)
+            monitorPersistJob = null
+            persistConversations()
+        }
+    }
+
+    /**
+     * 上个进程里被系统杀掉时还在运行的监听：在各自对话里补一行「监听已中断」，不唤醒、不是一轮的起点。
+     * 时刻用开始时刻与最后一次心跳里较晚的那个（之后进程随时可能被杀；不是恢复的这一刻）。
+     */
     private fun recordInterruptedMonitors() {
         val interrupted = MonitorRegistry.takeInterrupted(appContext)
         if (interrupted.isEmpty()) return
+        // 会话在构造时已从数据库载入；推到 init 之后再补行。
         scope.launch {
-            // 等会话从数据库载入后再补行。
-            snapshotFlow { conversationsById.keys }.first { keys: Set<String> -> interrupted.any { it.conversationId in keys } }
-            interrupted.groupBy { it.conversationId }.forEach { (conversationId, items) ->
+            interrupted.filter { it.conversationId in conversationsById }.groupBy { it.conversationId }.forEach { (conversationId, items) ->
                 appendMonitorRows(conversationId, items.map { item ->
                     MonitorEventMessageUi(
                         id = monitorRowId(item.taskId, 0, "interrupted"),
@@ -2918,17 +3177,17 @@ internal class AgentAppState(
                         name = item.name,
                         kind = MonitorEventKindUi.Ended,
                         seq = 0,
-                        atMillis = System.currentTimeMillis(),
+                        atMillis = item.interruptedAtMillis.takeIf { it > 0 } ?: System.currentTimeMillis(),
                         text = "",
-                        reason = "INTERRUPTED",
-                        startsTurn = true,
+                        reason = MonitorRowLabels.INTERRUPTED,
+                        startsTurn = false,
                     )
                 })
             }
         }
     }
 
-    private fun monitorRowId(taskId: String, seq: Int, kind: String) = "monitor-$taskId-$kind-$seq"
+    private fun monitorRowId(taskId: String, seq: Int, kind: String) = MonitorDeliveryQueue.rowKey(taskId, kind, seq)
 
     private fun MonitorNotice.toMonitorRow(startsTurn: Boolean): MonitorEventMessageUi = when (this) {
         is MonitorNotice.Event -> MonitorEventMessageUi(
@@ -2939,17 +3198,41 @@ internal class AgentAppState(
         is MonitorNotice.Ended -> MonitorEventMessageUi(
             id = monitorRowId(taskId, eventCount, "ended"),
             taskId = taskId, name = name, kind = MonitorEventKindUi.Ended, seq = eventCount, atMillis = atMillis,
-            // 到期行存时长毫秒数，显示时按界面语言格式化。
-            text = if (reason == MonitorEndReason.TIMEOUT) timeoutMs.toString() else "",
+            // 命令自己结束时最后的输出作为可展开原文，退出码写进结束行；到期行记下时长（显示时按界面语言格式化）。
+            text = tail.orEmpty(),
             reason = reason.name, startsTurn = startsTurn,
+            exitCode = exitCode.takeIf { reason == MonitorEndReason.EXIT },
+            limitMs = timeoutMs.takeIf { reason == MonitorEndReason.TIMEOUT },
         )
     }
 
+    /** 交给运行时的「已消费」事件；退出码、时长附在 reason 后（`EXIT@1`、`TIMEOUT@7200000`），检查点恢复时也能还原结束行。 */
     private fun MonitorNotice.toRuntimeEvent(): AgentEvent.MonitorEventReceived {
         val row = toMonitorRow(startsTurn = false)
+        val detail = row.exitCode?.toLong() ?: row.limitMs
         return AgentEvent.MonitorEventReceived(
             taskId = taskId, name = name, kind = if (row.kind == MonitorEventKindUi.Ended) "ended" else "event",
-            seq = row.seq, atMillis = atMillis, text = row.text, reason = row.reason.orEmpty(),
+            seq = row.seq, atMillis = atMillis, text = row.text,
+            reason = row.reason.orEmpty() + (detail?.let { "@$it" } ?: ""),
+        )
+    }
+
+    private fun AgentEvent.MonitorEventReceived.toMonitorRow(): MonitorEventMessageUi {
+        val reasonName = reason.substringBefore('@').ifBlank { null }
+        val detail = reason.substringAfter('@', "").toLongOrNull()
+        return MonitorEventMessageUi(
+            id = monitorRowId(taskId, seq, kind),
+            taskId = taskId,
+            name = name,
+            kind = if (kind == "ended") MonitorEventKindUi.Ended else MonitorEventKindUi.Event,
+            seq = seq,
+            atMillis = atMillis,
+            text = text,
+            reason = reasonName,
+            startsTurn = false,
+            historyAnchor = anchor,
+            exitCode = detail?.toInt()?.takeIf { reasonName == MonitorEndReason.EXIT.name },
+            limitMs = detail?.takeIf { reasonName == MonitorEndReason.TIMEOUT.name },
         )
     }
 
@@ -3152,6 +3435,8 @@ internal class AgentAppState(
                             R.string.conversation_preview_tool_call,
                             lastMessage.toolName,
                         )
+                        // 最后一条是监听行（已停止、已中断等）：预览写这一行，不是空会话提示。
+                        is MonitorEventMessageUi -> MonitorRowLabels.label(appContext, lastMessage)
                         else -> appContext.getString(R.string.conversation_preview_empty)
                     }.take(MAX_PREVIEW_CHARS),
                     timeLabel = if (state.isStreaming) {
@@ -3211,22 +3496,19 @@ internal class AgentAppState(
     }
 
     private fun persistConversations(onSaved: (() -> Unit)? = null): Deferred<Boolean> {
-        val selected = selectedConversationId
-        val conversations = conversationsById
-        val titles = conversationTitles
-        val timestamps = conversationUpdatedAt
+        // 按调用先后登记这一刻的状态；排着队的几次保存只写最新登记的那份（合并写入，见 AgentConversationStore.commit）。
+        val request = AgentConversationStore.request(
+            selectedConversationId = selectedConversationId,
+            conversationsById = conversationsById,
+            titles = conversationTitles,
+            updatedAt = conversationUpdatedAt,
+        )
         return synchronized(persistenceLock) {
             val previous = persistenceJob
             scope.async(Dispatchers.IO) {
                 try {
                     previous?.join()
-                    AgentConversationStore.save(
-                        context = appContext,
-                        selectedConversationId = selected,
-                        conversationsById = conversations,
-                        titles = titles,
-                        updatedAt = timestamps,
-                    )
+                    AgentConversationStore.commit(appContext, request)
                     onSaved?.invoke()
                     true
                 } catch (cancelled: CancellationException) {
@@ -3243,7 +3525,11 @@ internal class AgentAppState(
 
     private companion object {
         const val MAX_TITLE_CHARS = 24
-        const val MONITOR_RETRY_MS = 3_000L
+        /** 后台监听在看不到的阻塞（运行时被别的入口占着、语音还在收尾）下的重试退避：1 秒起，逐次加倍，最长 30 秒。 */
+        const val MONITOR_RETRY_MIN_MS = 1_000L
+        const val MONITOR_RETRY_MAX_MS = 30_000L
+        /** 监听行（事件行、结束行）合并保存：这段时间里的多次变化只写一次。 */
+        const val MONITOR_PERSIST_DEBOUNCE_MS = 800L
         const val MAX_PREVIEW_CHARS = 48
         const val LEGACY_STOPPED_ERROR = "已停止"
         const val SYNTHETIC_STATUS_STOPPED = "movo_status:stopped"
@@ -3302,144 +3588,139 @@ private fun stableArchiveId(value: String): String =
         .take(12)
         .joinToString(separator = "") { byte -> "%02x".format(byte) }
 
-internal fun buildToolsState(context: Context): AgentToolsUiState =
-    AgentToolsUiState(
+/**
+ * 「设置 → 全部工具」：列出运行时实际使用的类型化工具（重构后只剩这些名字），按用户能理解的分组。
+ * 名称与说明在 strings_tools.xml；与旧工具语义相同的沿用原来的文案。
+ */
+internal fun buildToolsState(context: Context): AgentToolsUiState {
+    // 显式引用资源 id（不用 getIdentifier），避免 release 资源压缩把只按名字查的字符串删掉。
+    fun typed(id: String): ToolItemUi {
+        val (title, desc) = when (id) {
+            "ui_observe" -> R.string.tool_typed_ui_observe_title to R.string.tool_typed_ui_observe_desc
+            "ui_tap" -> R.string.tool_typed_ui_tap_title to R.string.tool_typed_ui_tap_desc
+            "ui_swipe" -> R.string.tool_typed_ui_swipe_title to R.string.tool_typed_ui_swipe_desc
+            "ui_scroll" -> R.string.tool_typed_ui_scroll_title to R.string.tool_typed_ui_scroll_desc
+            "ui_key" -> R.string.tool_typed_ui_key_title to R.string.tool_typed_ui_key_desc
+            "ui_wait" -> R.string.tool_typed_ui_wait_title to R.string.tool_typed_ui_wait_desc
+            "ui_input" -> R.string.tool_typed_ui_input_title to R.string.tool_typed_ui_input_desc
+            "clipboard_read" -> R.string.tool_typed_clipboard_read_title to R.string.tool_typed_clipboard_read_desc
+            "clipboard_write" -> R.string.tool_typed_clipboard_write_title to R.string.tool_typed_clipboard_write_desc
+            "browser_open" -> R.string.tool_typed_browser_open_title to R.string.tool_typed_browser_open_desc
+            "browser_read" -> R.string.tool_typed_browser_read_title to R.string.tool_typed_browser_read_desc
+            "browser_act" -> R.string.tool_typed_browser_act_title to R.string.tool_typed_browser_act_desc
+            "app_search" -> R.string.tool_typed_app_search_title to R.string.tool_typed_app_search_desc
+            "app_open" -> R.string.tool_typed_app_open_title to R.string.tool_typed_app_open_desc
+            "app_control" -> R.string.tool_typed_app_control_title to R.string.tool_typed_app_control_desc
+            "setting_read" -> R.string.tool_typed_setting_read_title to R.string.tool_typed_setting_read_desc
+            "setting_write" -> R.string.tool_typed_setting_write_title to R.string.tool_typed_setting_write_desc
+            "device_toggle" -> R.string.tool_typed_device_toggle_title to R.string.tool_typed_device_toggle_desc
+            "device_read" -> R.string.tool_typed_device_read_title to R.string.tool_typed_device_read_desc
+            "clock_create" -> R.string.tool_typed_clock_create_title to R.string.tool_typed_clock_create_desc
+            "clock_read" -> R.string.tool_typed_clock_read_title to R.string.tool_typed_clock_read_desc
+            "device_diagnostics" -> R.string.tool_typed_device_diagnostics_title to R.string.tool_typed_device_diagnostics_desc
+            "personal_search" -> R.string.tool_typed_personal_search_title to R.string.tool_typed_personal_search_desc
+            "file_search" -> R.string.tool_typed_file_search_title to R.string.tool_typed_file_search_desc
+            "terminal_job" -> R.string.tool_typed_terminal_job_title to R.string.tool_typed_terminal_job_desc
+            "conversation_read" -> R.string.tool_typed_conversation_read_title to R.string.tool_typed_conversation_read_desc
+            "skill_read" -> R.string.tool_typed_skill_read_title to R.string.tool_typed_skill_read_desc
+            "skill_install" -> R.string.tool_typed_skill_install_title to R.string.tool_typed_skill_install_desc
+            "monitor_start" -> R.string.tool_typed_monitor_start_title to R.string.tool_typed_monitor_start_desc
+            "monitor_stop" -> R.string.tool_typed_monitor_stop_title to R.string.tool_typed_monitor_stop_desc
+            "monitor_list" -> R.string.tool_typed_monitor_list_title to R.string.tool_typed_monitor_list_desc
+            "notify_user" -> R.string.tool_typed_notify_user_title to R.string.tool_typed_notify_user_desc
+            "ask_user" -> R.string.tool_typed_ask_user_title to R.string.tool_typed_ask_user_desc
+            "tool_search" -> R.string.tool_typed_tool_search_title to R.string.tool_typed_tool_search_desc
+            "mcp_find" -> R.string.tool_typed_mcp_find_title to R.string.tool_typed_mcp_find_desc
+            "mcp_call" -> R.string.tool_typed_mcp_call_title to R.string.tool_typed_mcp_call_desc
+            else -> error("Unknown typed tool card: $id")
+        }
+        return ToolItemUi(id, context.getString(title), context.getString(desc))
+    }
+    fun item(id: String, title: Int, desc: Int) = ToolItemUi(id, context.getString(title), context.getString(desc))
+    return AgentToolsUiState(
         groups = listOf(
             ToolGroupUi(
                 id = "screen",
                 title = context.getString(R.string.state_screens_and_controls_3f095b),
-                tools = listOf(
-                    ToolItemUi("observe_screen", context.getString(R.string.tool_ui_watch_the_screen_e70f2a), context.getString(R.string.tool_ui_read_the_current_node_and_attach_the_original_im_df1fec)),
-                    ToolItemUi("tap_element", context.getString(R.string.tool_ui_click_element_7a3d91), context.getString(R.string.tool_ui_click_on_the_most_recently_observed_node_b4cf5a)),
-                    ToolItemUi("tap_area", context.getString(R.string.tool_ui_click_area_cbaa08), context.getString(R.string.tool_ui_click_by_coordinate_area_2ad961)),
-                    ToolItemUi("long_press", context.getString(R.string.tool_ui_long_press_f7a417), context.getString(R.string.tool_ui_long_press_on_coordinates_or_elements_796384)),
-                    ToolItemUi("swipe", context.getString(R.string.tool_ui_slide_3723aa), context.getString(R.string.tool_ui_perform_up_down_left_and_right_swipe_gestures_3ef0de)),
-                    ToolItemUi("scroll", context.getString(R.string.tool_ui_scroll_220e68), context.getString(R.string.tool_ui_scroll_the_page_or_specify_a_node_83ab24)),
-                ),
+                tools = listOf("ui_observe", "ui_tap", "ui_swipe", "ui_scroll", "ui_key", "ui_wait").map(::typed),
             ),
             ToolGroupUi(
                 id = "text",
                 title = context.getString(R.string.state_text_and_clipboard_3a7340),
-                tools = listOf(
-                    ToolItemUi("input_text", context.getString(R.string.tool_ui_enter_text_ae47ab), context.getString(R.string.tool_ui_append_or_paste_text_to_the_current_focus_1efdcc)),
-                    ToolItemUi("replace_text", context.getString(R.string.tool_ui_replacement_text_1a5c8d), context.getString(R.string.tool_ui_replace_text_in_focus_or_node_30d332)),
-                    ToolItemUi("clear_text", context.getString(R.string.tool_ui_clear_text_d4cb57), context.getString(R.string.tool_ui_clear_focus_or_node_text_3e754a)),
-                    ToolItemUi("paste_text", context.getString(R.string.tool_ui_paste_text_791b85), context.getString(R.string.tool_ui_reliably_enter_long_text_with_the_clipboard_b6041e)),
-                    ToolItemUi("wait_for_text", context.getString(R.string.tool_ui_wait_for_text_9e9a54), context.getString(R.string.tool_ui_wait_for_the_specified_text_to_appear_on_the_scr_43f9b0)),
-                ),
+                tools = listOf("ui_input", "clipboard_read", "clipboard_write").map(::typed),
             ),
             ToolGroupUi(
                 id = "web",
                 title = context.getString(R.string.state_web_browsing_e56105),
-                tools = listOf(
-                    ToolItemUi("browser_use", context.getString(R.string.tool_ui_agent_browser_a66bd5), context.getString(R.string.tool_ui_open_web_pages_off_screen_and_keep_a_takeover_br_72972e)),
-                    ToolItemUi("browser_read", context.getString(R.string.tool_ui_read_web_pages_4f0bb9), context.getString(R.string.tool_ui_extract_rendered_text_lists_and_links_8bdcdd)),
-                    ToolItemUi("browser_interact", context.getString(R.string.tool_ui_web_page_interaction_331b3f), context.getString(R.string.tool_ui_find_click_and_enter_page_elements_8f102d)),
-                    ToolItemUi("browser_screenshot", context.getString(R.string.tool_ui_page_screenshot_c823a2), context.getString(R.string.tool_ui_give_the_current_web_page_viewport_to_the_visual_f62274)),
-                ),
+                tools = listOf("browser_open", "browser_read", "browser_act").map(::typed),
             ),
             ToolGroupUi(
                 id = "app",
                 title = context.getString(R.string.state_applications_and_systems_9624e6),
-                tools = listOf(
-                    ToolItemUi("search_apps", context.getString(R.string.tool_ui_search_apps_897fdf), context.getString(R.string.tool_ui_query_installed_applications_by_name_or_package__32b004)),
-                    ToolItemUi("get_current_context", context.getString(R.string.tool_ui_time_and_location_693893), context.getString(R.string.tool_ui_read_system_time_and_recent_location_b9f4ae)),
-                    ToolItemUi("launch_app", context.getString(R.string.tool_ui_open_app_7c65e7), context.getString(R.string.tool_ui_start_the_specified_package_name_or_application__beabff)),
-                    ToolItemUi("open_uri", context.getString(R.string.tool_ui_open_with_app_32c24e), context.getString(R.string.tool_ui_explicitly_hand_over_links_or_deep_links_to_exte_35ff26)),
-                    ToolItemUi("press_key", context.getString(R.string.tool_ui_button_02eafa), context.getString(R.string.tool_ui_system_buttons_such_as_return_homepage_recent_ta_1b4cf0)),
-                    ToolItemUi("open_system_panel", context.getString(R.string.tool_ui_system_panel_b0f7a3), context.getString(R.string.tool_ui_open_the_notification_bar_quick_settings_and_oth_5e51cf)),
-                ),
+                tools = listOf("app_search", "app_open", "app_control", "setting_read", "setting_write", "device_toggle").map(::typed),
             ),
             ToolGroupUi(
                 id = "device_direct",
                 title = context.getString(R.string.state_direct_access_to_equipment_eda92c),
                 tools = listOf(
-                    ToolItemUi("set_alarm", context.getString(R.string.tool_ui_set_alarm_25ca3c), context.getString(R.string.tool_ui_create_a_system_alarm_directly_and_open_the_cloc_9aa214)),
-                    ToolItemUi("set_timer", context.getString(R.string.tool_ui_set_timer_aee60c), context.getString(R.string.tool_ui_directly_create_system_timers_up_to_24_hours_87c476)),
-                    ToolItemUi("device_status", context.getString(R.string.tool_ui_device_status_567a4c), context.getString(R.string.tool_ui_read_power_memory_storage_and_system_version_c501d5)),
-                    ToolItemUi("network_info", context.getString(R.string.tool_ui_network_status_6bd556), context.getString(R.string.tool_ui_read_networking_method_and_current_wi_fi_status_68016a)),
-                    ToolItemUi("media_control", context.getString(R.string.tool_ui_media_control_585edc), context.getString(R.string.tool_ui_play_pause_and_switch_songs_without_operating_th_311cb8)),
-                    ToolItemUi("set_volume", context.getString(R.string.tool_ui_set_volume_85a691), context.getString(R.string.tool_ui_set_by_media_alarm_clock_ringtone_and_other_chan_3fcc3e)),
-                    ToolItemUi("top_memory_apps", context.getString(R.string.tool_ui_memory_ranking_408ca1), context.getString(R.string.tool_ui_view_the_currently_most_occupied_processes_8646c4)),
-                    ToolItemUi("top_storage_apps", context.getString(R.string.tool_ui_storage_ranking_86a16c), context.getString(R.string.tool_ui_check_application_data_and_cache_usage_837e9f)),
-                ),
-            ),
-            ToolGroupUi(
-                id = "device_sensitive",
-                title = context.getString(R.string.state_sensitive_equipment_capabilities_fbdc4b),
-                tools = listOf(
-                    ToolItemUi("read_sms_code", context.getString(R.string.tool_ui_read_verification_code_7d1121), context.getString(R.string.tool_ui_only_extract_verification_codes_from_recent_sms__0fb8c1)),
-                    ToolItemUi("recent_notifications", context.getString(R.string.tool_ui_read_notification_7fdc09), context.getString(R.string.tool_ui_read_the_current_notification_title_and_text_0faee7)),
-                    ToolItemUi("search_notification_history", context.getString(R.string.tool_ui_notification_history_95d015), context.getString(R.string.tool_ui_retrieve_the_last_7_days_of_notifications_saved__643e43)),
-                    ToolItemUi("recent_app_activity", context.getString(R.string.tool_ui_recently_applied_08f74c), context.getString(R.string.tool_ui_view_recently_opened_apps_and_times_bf9d50)),
-                    ToolItemUi("app_usage_summary", context.getString(R.string.tool_ui_app_usage_statistics_ee20d3), context.getString(R.string.tool_ui_summarize_recent_app_usage_by_foreground_duratio_b346c8)),
-                    ToolItemUi("get_current_location", context.getString(R.string.tool_ui_current_location_b458ea), context.getString(R.string.tool_ui_read_the_closest_location_the_system_already_has_255a6c)),
-                    ToolItemUi("get_device_environment", context.getString(R.string.tool_ui_equipment_environment_1026ec), context.getString(R.string.tool_ui_read_lock_screen_do_not_disturb_audio_output_and_9260b8)),
-                    ToolItemUi("list_alarms", context.getString(R.string.tool_ui_alarm_clock_schedule_acae32), context.getString(R.string.tool_ui_read_the_alarm_clock_that_has_been_created_in_th_2320d6)),
-                    ToolItemUi("list_active_timers", context.getString(R.string.tool_ui_activity_timer_36f107), context.getString(R.string.tool_ui_read_running_or_paused_timers_3437c8)),
-                    ToolItemUi("search_clipboard_history", context.getString(R.string.tool_ui_clipboard_history_b377bb), context.getString(R.string.tool_ui_retrieve_clipboard_contents_saved_by_system_inpu_1dc9db)),
-                    ToolItemUi("get_health_summary", context.getString(R.string.tool_ui_health_summary_951c0b), context.getString(R.string.tool_ui_summarize_steps_sleep_exercise_and_body_metrics_6ff66f)),
-                    ToolItemUi("wifi_credentials", context.getString(R.string.tool_ui_wi_fi_password_80e9a4), context.getString(R.string.tool_ui_read_the_network_credentials_saved_by_the_phone_96d43a)),
-                    ToolItemUi("get_setting", context.getString(R.string.tool_ui_read_system_settings_d455ce), context.getString(R.string.tool_ui_read_the_specified_settings_key_496975)),
-                    ToolItemUi("set_setting", context.getString(R.string.tool_ui_modify_system_settings_ae1f4c), context.getString(R.string.tool_ui_modify_android_settings_keys_91a37e)),
-                    ToolItemUi("set_device_state", context.getString(R.string.tool_ui_network_switch_834347), context.getString(R.string.tool_ui_directly_control_wi_fi_or_bluetooth_4fa0b9)),
-                    ToolItemUi("app_state_control", context.getString(R.string.tool_ui_application_status_930ff0), context.getString(R.string.tool_ui_stop_freeze_or_unfreeze_apps_a27438)),
-                    ToolItemUi("get_logcat", context.getString(R.string.tool_ui_system_log_096733), context.getString(R.string.tool_ui_bounded_reading_and_filtering_of_recent_logs_0a268a)),
+                    typed("device_read"),
+                    typed("clock_create"),
+                    typed("clock_read"),
+                    item("media_control", R.string.tool_ui_media_control_585edc, R.string.tool_ui_play_pause_and_switch_songs_without_operating_th_311cb8),
+                    item("volume_set", R.string.tool_ui_set_volume_85a691, R.string.tool_ui_set_by_media_alarm_clock_ringtone_and_other_chan_3fcc3e),
+                    typed("device_diagnostics"),
                 ),
             ),
             ToolGroupUi(
                 id = "personal_data",
                 title = context.getString(R.string.state_direct_access_to_personal_data_387d7b),
                 tools = listOf(
-                    ToolItemUi("search_media", context.getString(R.string.tool_ui_album_pictures_23bcc2), context.getString(R.string.tool_ui_retrieve_pictures_by_file_name_or_album_path_c08236)),
-                    ToolItemUi("search_audio", context.getString(R.string.tool_ui_audio_file_1ccf2e), context.getString(R.string.tool_ui_search_audio_by_title_filename_or_author_82e20d)),
-                    ToolItemUi("search_recordings", context.getString(R.string.tool_ui_system_recording_15eb19), context.getString(R.string.tool_ui_retrieve_recording_files_from_system_media_libra_314c4d)),
-                    ToolItemUi("search_files", context.getString(R.string.tool_ui_share_files_a3b376), context.getString(R.string.tool_ui_retrieve_documents_and_files_from_shared_storage_7d6193)),
-                    ToolItemUi("search_calendar_events", context.getString(R.string.tool_ui_calendar_events_970349), context.getString(R.string.tool_ui_search_events_by_title_location_or_description_1afd77)),
-                    ToolItemUi("search_contacts", context.getString(R.string.tool_ui_address_book_9070cb), context.getString(R.string.tool_ui_retrieve_contact_name_and_open_address_6dacc5)),
-                    ToolItemUi("search_call_history", context.getString(R.string.tool_ui_call_history_88e57b), context.getString(R.string.tool_ui_retrieve_calls_by_number_or_contact_name_2ce431)),
-                    ToolItemUi("search_messages", context.getString(R.string.tool_ui_short_message_17e1a4), context.getString(R.string.tool_ui_search_text_messages_by_sender_or_text_keywords_e14363)),
-                    ToolItemUi("search_downloads", context.getString(R.string.tool_ui_download_history_8494d7), context.getString(R.string.tool_ui_retrieve_system_download_tasks_and_files_3301b9)),
-                    ToolItemUi("search_coloros_notes", context.getString(R.string.tool_ui_coloros_notes_6c324c), context.getString(R.string.tool_ui_retrieve_notes_to_dos_and_text_content_e806d7)),
-                    ToolItemUi("search_coloros_recordings", context.getString(R.string.tool_ui_coloros_recording_a4e425), context.getString(R.string.tool_ui_retrieve_normal_recordings_and_call_recordings_55c192)),
-                    ToolItemUi("search_recording_summaries", context.getString(R.string.tool_ui_recording_summary_2fe550), context.getString(R.string.tool_ui_retrieve_transcribed_summaries_and_notes_associa_9cb00f)),
-                    ToolItemUi("search_coloros_memories", context.getString(R.string.tool_ui_coloros_system_memory_eff961), context.getString(R.string.tool_ui_retrieve_collected_information_and_its_structure_9c1c71)),
-                    ToolItemUi("search_saved_places", context.getString(R.string.tool_ui_save_location_c29782), context.getString(R.string.tool_ui_retrieve_location_information_from_system_memory_52ea48)),
-                    ToolItemUi("search_personal_orders", context.getString(R.string.tool_ui_personal_order_25e4c9), context.getString(R.string.tool_ui_retrieve_takeout_shopping_express_delivery_ticke_f8d002)),
-                    ToolItemUi("search_qq_chat_images", context.getString(R.string.tool_ui_qq_chat_pictures_e21bf9), context.getString(R.string.tool_ui_retrieve_recent_pictures_in_qq_chat_picture_cach_b8f009)),
-                    ToolItemUi("search_wechat_chat_images", context.getString(R.string.tool_ui_wechat_chat_pictures_72b268), context.getString(R.string.tool_ui_retrieve_recent_pictures_in_wechat_chat_picture__ab66f7)),
-                ),
-            ),
-            ToolGroupUi(
-                id = "file_vision",
-                title = context.getString(R.string.state_document_vision_6a65a7),
-                tools = listOf(
-                    ToolItemUi("read_image", context.getString(R.string.tool_ui_read_pictures_ae993b), context.getString(R.string.tool_ui_read_pictures_of_known_paths_and_hand_them_over__7f9569)),
-                ),
-            ),
-            ToolGroupUi(
-                id = "memory",
-                title = context.getString(R.string.state_memory_b55ff5),
-                tools = listOf(
-                    ToolItemUi("memory_get", context.getString(R.string.tool_ui_read_memory_979135), context.getString(R.string.tool_ui_paged_to_read_or_retrieve_long_term_memory_in_me_88afc4)),
-                    ToolItemUi("memory_write", context.getString(R.string.tool_ui_organize_memory_2b08eb), context.getString(R.string.tool_ui_partially_update_append_or_clear_long_term_memor_c1bab6)),
-                    ToolItemUi("character_memory_get", "读取剧情记忆", "仅角色会话可用，读取当前角色的长期剧情和关系。"),
-                    ToolItemUi("character_memory_write", "整理剧情记忆", "仅角色会话可用，更新当前角色的剧情记忆，不写入现实 MEMORY.md。"),
+                    typed("personal_search"),
+                    item("sms_code_read", R.string.tool_ui_read_verification_code_7d1121, R.string.tool_ui_only_extract_verification_codes_from_recent_sms__0fb8c1),
+                    item("usage_read", R.string.tool_ui_app_usage_statistics_ee20d3, R.string.tool_ui_summarize_recent_app_usage_by_foreground_duratio_b346c8),
+                    item("health_read", R.string.tool_ui_health_summary_951c0b, R.string.tool_ui_summarize_steps_sleep_exercise_and_body_metrics_6ff66f),
+                    item("wifi_password_read", R.string.tool_ui_wi_fi_password_80e9a4, R.string.tool_ui_read_the_network_credentials_saved_by_the_phone_96d43a),
+                    typed("file_search"),
                 ),
             ),
             ToolGroupUi(
                 id = "terminal",
                 title = context.getString(R.string.state_terminal_and_files_ae7c54),
                 tools = listOf(
-                    ToolItemUi("terminal", context.getString(R.string.tool_ui_session_terminal_09c6e6), context.getString(R.string.tool_ui_user_root_shell_conversational_execution_and_asy_13c2ab)),
-                    ToolItemUi("run_command", context.getString(R.string.tool_ui_execute_command_bf1627), context.getString(R.string.tool_ui_directly_execute_a_single_shell_command_c40cef)),
-                    ToolItemUi("read_file", context.getString(R.string.tool_ui_read_file_dc995c), context.getString(R.string.tool_ui_read_the_contents_of_mobile_phone_files_bf3066)),
-                    ToolItemUi("write_file", context.getString(R.string.tool_ui_write_file_e620fd), context.getString(R.string.tool_ui_write_or_overwrite_mobile_files_29fae4)),
-                    ToolItemUi("list_directory", context.getString(R.string.tool_ui_list_directory_96e765), context.getString(R.string.tool_ui_list_directory_contents_feff30)),
+                    item("terminal_run", R.string.tool_ui_execute_command_bf1627, R.string.tool_ui_directly_execute_a_single_shell_command_c40cef),
+                    typed("terminal_job"),
+                    item("file_read", R.string.tool_ui_read_file_dc995c, R.string.tool_ui_read_the_contents_of_mobile_phone_files_bf3066),
+                    item("file_write", R.string.tool_ui_write_file_e620fd, R.string.tool_ui_write_or_overwrite_mobile_files_29fae4),
+                    item("file_list", R.string.tool_ui_list_directory_96e765, R.string.tool_ui_list_directory_contents_feff30),
                 ),
+            ),
+            ToolGroupUi(
+                id = "memory",
+                title = context.getString(R.string.state_memory_b55ff5),
+                tools = listOf(
+                    item("memory_read", R.string.tool_ui_read_memory_979135, R.string.tool_ui_paged_to_read_or_retrieve_long_term_memory_in_me_88afc4),
+                    item("memory_write", R.string.tool_ui_organize_memory_2b08eb, R.string.tool_ui_partially_update_append_or_clear_long_term_memor_c1bab6),
+                    typed("conversation_read"),
+                ),
+            ),
+            ToolGroupUi(
+                id = "skills",
+                title = context.getString(R.string.tool_typed_group_skills),
+                tools = listOf("skill_read", "skill_install").map(::typed),
+            ),
+            ToolGroupUi(
+                id = "monitor",
+                title = context.getString(R.string.tool_typed_group_monitor),
+                tools = listOf("monitor_start", "monitor_stop", "monitor_list", "notify_user").map(::typed),
+            ),
+            ToolGroupUi(
+                id = "meta",
+                title = context.getString(R.string.tool_typed_group_meta),
+                tools = listOf("ask_user", "tool_search", "mcp_find", "mcp_call").map(::typed),
             ),
         )
     )
+}
 
 private fun buildPermissionHealthState(context: Context): PermissionHealthUiState {
     val backgroundRunningEnabled = isIgnoringBatteryOptimizations(context)

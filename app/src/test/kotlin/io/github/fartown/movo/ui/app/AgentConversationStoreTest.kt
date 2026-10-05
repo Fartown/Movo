@@ -535,4 +535,70 @@ class AgentConversationStoreTest {
         assertTrue(snapshot.conversationsById.isEmpty())
         assertEquals(null, snapshot.selectedConversationId)
     }
+
+    @Test
+    fun monitorRowsKeepExitCodeLimitAndTailAndLegacyRowsAreNormalized() = runBlocking {
+        val rows = listOf(
+            io.github.fartown.movo.ui.model.MonitorEventMessageUi(
+                id = "monitor-m1-event-1", taskId = "m1", name = "下载", kind = io.github.fartown.movo.ui.model.MonitorEventKindUi.Event,
+                seq = 1, atMillis = 10L, text = "50%", startsTurn = true, historyAnchor = true, runStartedAtMillis = 11L, runFinishedAtMillis = 12L,
+            ),
+            io.github.fartown.movo.ui.model.MonitorEventMessageUi(
+                id = "monitor-m1-ended-1", taskId = "m1", name = "下载", kind = io.github.fartown.movo.ui.model.MonitorEventKindUi.Ended,
+                seq = 1, atMillis = 20L, text = "DONE\nbye", reason = "EXIT", exitCode = 1,
+            ),
+            io.github.fartown.movo.ui.model.MonitorEventMessageUi(
+                id = "monitor-m2-ended-4", taskId = "m2", name = "喝水", kind = io.github.fartown.movo.ui.model.MonitorEventKindUi.Ended,
+                seq = 4, atMillis = 30L, text = "", reason = "TIMEOUT", limitMs = 7_200_000L, startsTurn = true, historyAnchor = true,
+            ),
+        )
+        AgentConversationStore.save(
+            context, "conv-monitor",
+            mapOf("conv-monitor" to AgentChatHomeUiState(messages = rows, input = "", isStreaming = false, thinkingEnabled = false)),
+            mapOf("conv-monitor" to "监听"), mapOf("conv-monitor" to 1L),
+        )
+        assertEquals(rows, AgentConversationStore.load(context).conversationsById.getValue("conv-monitor").messages)
+
+        // 旧版本：到期行的时长存在正文里；「已停止」「已中断」也被记成了一轮的起点。
+        MovoDatabase.get(context).conversationDao().replaceAll(
+            conversations = listOf(ConversationEntity(id = "conv-legacy", title = "旧", thinkingEnabled = false, createdAt = 1L, updatedAt = 1L)),
+            messages = listOf(
+                ConversationMessageEntity(
+                    id = "monitor-m3-ended-2", conversationId = "conv-legacy", sortIndex = 0, type = "monitor", content = "1800000",
+                    toolName = "m3", argumentsSummary = "提醒", toolStatus = "Ended", resultSummary = "TIMEOUT", elapsedSeconds = 2,
+                    startedAt = 5L, toolsJson = "{\"starts_turn\":true,\"history_anchor\":true}",
+                ),
+                ConversationMessageEntity(
+                    id = "monitor-m4-ended-0", conversationId = "conv-legacy", sortIndex = 1, type = "monitor", content = "",
+                    toolName = "m4", argumentsSummary = "电量", toolStatus = "Ended", resultSummary = "STOPPED_BY_USER", elapsedSeconds = 0,
+                    startedAt = 6L, toolsJson = "{\"starts_turn\":true}",
+                ),
+            ),
+            state = ConversationStateEntity(selectedConversationId = "conv-legacy"),
+        )
+        val legacy = AgentConversationStore.load(context).conversationsById.getValue("conv-legacy").messages
+            .filterIsInstance<io.github.fartown.movo.ui.model.MonitorEventMessageUi>()
+        assertEquals(1_800_000L, legacy[0].limitMs)
+        assertEquals("", legacy[0].text)
+        assertTrue(legacy[0].startsTurn)
+        assertFalse(legacy[1].startsTurn)
+    }
+
+    @Test
+    fun queuedSavesAreCoalescedIntoTheLatestState() = runBlocking {
+        fun state(text: String) = mapOf(
+            "conv-c" to AgentChatHomeUiState(
+                messages = listOf(UserMessageUi(id = "u", content = text)), input = "", isStreaming = false, thinkingEnabled = false,
+            ),
+        )
+        val older = AgentConversationStore.request("conv-c", state("旧"), mapOf("conv-c" to "c"), mapOf("conv-c" to 1L))
+        val newer = AgentConversationStore.request("conv-c", state("新"), mapOf("conv-c" to "c"), mapOf("conv-c" to 2L))
+
+        // 先排队的那次提交直接写最新登记的状态；后面那次已经被它覆盖，不再整库重写。
+        AgentConversationStore.commit(context, older)
+        assertEquals("新", (AgentConversationStore.load(context).conversationsById.getValue("conv-c").messages.single() as UserMessageUi).content)
+        MovoDatabase.get(context).conversationDao().replaceAll(conversations = emptyList(), messages = emptyList(), state = null)
+        AgentConversationStore.commit(context, newer)
+        assertTrue(AgentConversationStore.load(context).conversationsById.isEmpty())
+    }
 }

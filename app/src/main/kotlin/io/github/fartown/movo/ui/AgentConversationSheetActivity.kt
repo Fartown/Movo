@@ -327,6 +327,10 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                                 }
                             }
                         }
+                        // 审批卡 / 提问卡（复用 App 内同一张卡）：浮层 resumed 时在这里显示，否则在主界面或悬浮卡显示——
+                        // 原来浮层在前台时两处都不出卡，在浮层或助手里发起的审批与提问看不到、只能等超时。
+                        // 锁屏上（助手入口可能盖在锁屏上）不在这里给出「允许」，由悬浮卡显示解锁提示。
+                        io.github.fartown.movo.agent.overlay.InteractionCardHost(enabled = !keyguardGate.locked)
                     }
                 }
             }

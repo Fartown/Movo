@@ -107,9 +107,12 @@ internal class UiInputTool(
         val element = input.element
         val target: TargetIdentity
         val pkg: String?
+        var stale: ToolError? = null
         if (element != null) {
-            target = TargetIdentity.Observed(element.observationId, registry.genOf(element.observationId) ?: -1L, element.index)
+            val gen = registry.genOf(element.observationId) ?: -1L
+            target = TargetIdentity.Observed(element.observationId, gen, element.index)
             pkg = registry.observationPackage(element.observationId)
+            stale = genError(registry, element.observationId, gen)
         } else {
             // 写当前焦点：仍是“有目标”动作（Named），用前台包做自我保护与归因。
             target = TargetIdentity.Named("focus", "")
@@ -128,7 +131,17 @@ internal class UiInputTool(
             sensitivity = Sensitivity.NORMAL,
             // 粘贴回退占用剪贴板。
             extraResources = setOf(ResourceKey(ToolResource.CLIPBOARD)),
+            stale = stale,
+            action = inputAction(input),
         )
+    }
+
+    /** 确认卡上的这一步：「输入「明天见」」，带 submit 时「输入「明天见」并提交」。 */
+    private fun inputAction(input: UiInputInput): String {
+        val oneLine = input.text.replace(Regex("\\s+"), " ").trim()
+        val preview = if (oneLine.length > 20) oneLine.take(20) + "…" else oneLine
+        val typed = if (preview.isEmpty()) "清空输入框" else "输入「$preview」"
+        return if (input.submit) "${typed}并提交" else typed
     }
 
     override fun execute(input: UiInputInput, resolution: CallResolution, ctx: ToolContext): Verdict<UiInputOutput> {

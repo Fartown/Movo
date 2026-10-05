@@ -30,13 +30,17 @@ internal data class AccessibilityNodeIdentity(
 
 /**
  * 窗口内容变化后，只有真正稳定且在观察范围内可证明唯一的身份才能继续使用。
- * 截断快照无法证明 text/desc 指纹在窗口其余部分不存在重复项。
+ * 截断快照无法证明 text/desc 指纹在窗口其余部分不存在重复项；这时用 [liveIdentityMatchCount]
+ * （动作前在当前整个窗口里按文字查到的同身份节点数）补证：整窗只有一个，才算唯一。
+ * 真机：设置首页很长、观察总被截断，页面上又有东西一直在变（轮播的搜索提示等），
+ * 每次点按都判过期，Agent 在首页原地转了 62 步。
  */
 internal object AccessibilityIdentityFreshnessPolicy {
     fun canBypassContentChange(
         hasUniqueId: Boolean,
         snapshotTruncated: Boolean,
         identityMatchCount: Int,
+        liveIdentityMatchCount: () -> Int? = { null },
     ): Boolean =
-        identityMatchCount == 1 && (hasUniqueId || !snapshotTruncated)
+        identityMatchCount == 1 && (hasUniqueId || !snapshotTruncated || liveIdentityMatchCount() == 1)
 }

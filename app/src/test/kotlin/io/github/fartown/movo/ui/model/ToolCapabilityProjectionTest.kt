@@ -27,10 +27,13 @@ class ToolCapabilityProjectionTest {
     }
 
     @Test fun browserCardsReferToTheRealBrowserTool() {
-        listOf("browser_use", "browser_read", "browser_interact", "browser_screenshot").forEach { id ->
+        listOf("browser_use", "browser_interact", "browser_screenshot").forEach { id ->
             assertEquals("browser_use", actualToolName(id))
             assertEquals(AgentToolRequirements.find("browser_use"), toolCardRequirement(id))
         }
+        // 类型化工具 browser_read 是真实工具名，不再映射到旧的 browser_use。
+        assertEquals("browser_read", actualToolName("browser_read"))
+        assertEquals(RootRequirement.NONE, toolCardRequirement("browser_read").rootRequirement)
     }
 
     @Test fun ordinaryPermissionsDoNotHideDiscoverableTools() {

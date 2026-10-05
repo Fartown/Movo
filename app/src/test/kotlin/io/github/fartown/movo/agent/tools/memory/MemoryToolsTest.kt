@@ -149,7 +149,9 @@ class MemoryToolsTest {
     @Test
     fun append_whenTainted_requiresApproval() {
         val p = pipeline(FakeMemory("x"), decline)
-        p.taint.mark("browser_read") // 本轮读过不可信内容
+        // 本轮既读过不可信内容、又读过个人数据：两类污点同时成立，追加记忆要确认。
+        p.taint.mark(io.github.fartown.movo.agent.tools.core.TaintKind.UNTRUSTED, "browser_read")
+        p.taint.mark(io.github.fartown.movo.agent.tools.core.TaintKind.PERSONAL, "personal_search")
         val r = p.execute(call("memory_write", """{"mode":"append","new_text":"y"}"""))
         assertEquals("USER_DECLINED", r.errorCode)
     }

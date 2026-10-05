@@ -1,6 +1,9 @@
 package io.github.fartown.movo.ui.components
 
+import android.content.Context
+import android.content.res.Resources
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,38 +15,67 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.fartown.movo.R
+import io.github.fartown.movo.agent.monitor.MonitorEndReason
+import io.github.fartown.movo.agent.monitor.MonitorRegistry
+import io.github.fartown.movo.agent.monitor.MonitorTime
 import io.github.fartown.movo.ui.components.movo.PressKind
 import io.github.fartown.movo.ui.components.movo.movoClickable
 import io.github.fartown.movo.ui.components.movo.trackVisibleHeightCap
 import io.github.fartown.movo.ui.model.MonitorEventKindUi
 import io.github.fartown.movo.ui.model.MonitorEventMessageUi
+import io.github.fartown.movo.ui.model.ThinkingMessageUi
 import io.github.fartown.movo.ui.theme.MovoColors
 import io.github.fartown.movo.ui.theme.MovoIcon
 import io.github.fartown.movo.ui.theme.MovoIcons
 import io.github.fartown.movo.ui.theme.MovoMotion
 import io.github.fartown.movo.ui.theme.MovoTypography
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+
+/**
+ * 监听行的上下留白（规范 8.12）：默认上下各 4（与「只有思考」的行内一行相同）；
+ * 接在另一条监听行后面时上面不留（叠放间距 4），后面接执行卡时下面不留（执行卡自带 8，间距 8）。
+ */
+internal data class MonitorRowSpacing(val top: Dp = 4.dp, val bottom: Dp = 4.dp)
+
+/** 对话列表里各监听行的留白（按 id），由 [AgentChatBody] 按前后条目算好提供。 */
+internal val LocalMonitorRowSpacings = androidx.compose.runtime.staticCompositionLocalOf<Map<String, MonitorRowSpacing>> { emptyMap() }
+
+/** 按时间线前后条目算每条监听行的留白：只有和默认不同的才在结果里。 */
+internal fun monitorRowSpacings(entries: List<AgentTimelineEntry>): Map<String, MonitorRowSpacing> {
+    val result = HashMap<String, MonitorRowSpacing>()
+    entries.forEachIndexed { index, entry ->
+        val row = (entry as? AgentTimelineEntry.Message)?.message as? MonitorEventMessageUi ?: return@forEachIndexed
+        val previous = entries.getOrNull(index - 1)
+        val next = entries.getOrNull(index + 1)
+        val stacked = (previous as? AgentTimelineEntry.Message)?.message is MonitorEventMessageUi
+        val beforeCard = next is AgentTimelineEntry.WorkProcess && !next.messages.all { it is ThinkingMessageUi }
+        if (stacked || beforeCard) {
+            result[row.id] = MonitorRowSpacing(top = if (stacked) 0.dp else 4.dp, bottom = if (beforeCard) 0.dp else 4.dp)
+        }
+    }
+    return result
+}
 
 /**
  * 后台监听在对话里的一行（规范 8.12，Figma「18」）：与「已思考」行内一行同一写法，左对齐 20、高 32、无底色。
- * 事件行：琥珀 clock 14 +「监听事件·名称·时间」`Label/Medium` 次要色 + ⌄，点开显示这次事件的原文（左竖线 + 三级色）。
- * 结束行：clock 改三级色、无 ⌄（已停止 / 结束 / 中断）。
+ * 事件行：琥珀 clock 14 +「监听事件·名称·时间」`Label/Medium` 次要色 + 6 + ⌄，点开显示这次事件的原文（左竖线 + 三级色）。
+ * 结束行：clock 改三级色（已停止 / 结束 / 中断）；命令自己结束时写退出码，最后的输出可展开。
  */
 @Composable
 internal fun MonitorEventRow(
@@ -51,24 +83,16 @@ internal fun MonitorEventRow(
     modifier: Modifier = Modifier,
 ) {
     val event = message.kind == MonitorEventKindUi.Event
-    val expandable = event && message.text.isNotBlank()
+    val expandable = message.text.isNotBlank()
     var expanded by rememberSaveable(message.id) { mutableStateOf(false) }
-    val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(message.atMillis))
-    val label = if (event) {
-        stringResource(R.string.monitor_row_event, message.name, time)
-    } else {
-        when (message.reason) {
-            "STOPPED_BY_USER" -> stringResource(R.string.monitor_row_stopped, message.name, time)
-            "TIMEOUT" -> stringResource(R.string.monitor_row_timeout, message.name, monitorDurationLabel(message.text.toLongOrNull() ?: 0L))
-            "RATE_LIMIT" -> stringResource(R.string.monitor_row_rate_limit, message.name)
-            "INTERRUPTED" -> stringResource(R.string.monitor_row_interrupted, message.name)
-            else -> stringResource(R.string.monitor_row_exit, message.name, time)
-        }
-    }
+    // 读一下配置：系统语言、12 / 24 小时制变化时重新组合。
+    LocalConfiguration.current
+    val label = MonitorRowLabels.label(LocalContext.current, message)
+    val spacing = LocalMonitorRowSpacings.current[message.id] ?: MonitorRowSpacing()
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 4.dp),
+            .padding(start = 20.dp, end = 20.dp, top = spacing.top, bottom = spacing.bottom),
     ) {
         Row(
             modifier = Modifier
@@ -85,7 +109,7 @@ internal fun MonitorEventRow(
             Spacer(Modifier.width(6.dp))
             Text(text = label, style = MovoTypography.labelMedium, color = MovoColors.textSecondary)
             if (expandable) {
-                Spacer(Modifier.width(4.dp))
+                Spacer(Modifier.width(6.dp))
                 val rotation = androidx.compose.animation.core.animateFloatAsState(
                     targetValue = if (expanded) 180f else 0f,
                     animationSpec = MovoMotion.fast(),
@@ -130,15 +154,45 @@ internal fun MonitorEventRow(
     }
 }
 
-/** 按界面语言写时长：「30 分钟」「2 小时」。 */
+/** 监听行的文案（对话里的行、会话列表的预览共用）。 */
+internal object MonitorRowLabels {
+    fun label(context: Context, row: MonitorEventMessageUi, nowMillis: Long = System.currentTimeMillis()): String {
+        val resources = context.resources
+        val time = MonitorTime.clock(context, row.atMillis, nowMillis)
+        if (row.kind == MonitorEventKindUi.Event) return resources.getString(R.string.monitor_row_event, row.name, time)
+        return when (row.reason) {
+            MonitorEndReason.STOPPED_BY_USER.name, MonitorEndReason.STOPPED_BY_AGENT.name, MonitorEndReason.SESSION_END.name ->
+                resources.getString(R.string.monitor_row_stopped, row.name, time)
+            MonitorEndReason.TIMEOUT.name ->
+                resources.getString(R.string.monitor_row_timeout, row.name, durationLabel(resources, row.limitMs ?: 0L))
+            MonitorEndReason.RATE_LIMIT.name -> resources.getString(R.string.monitor_row_rate_limit, row.name)
+            INTERRUPTED -> resources.getString(R.string.monitor_row_interrupted, row.name)
+            // 正常退出（0）不写退出码，用户看不懂也不需要；异常退出才写。
+            else -> row.exitCode?.takeIf { it != 0 }?.let { resources.getString(R.string.monitor_row_exit_code, row.name, it, time) }
+                ?: resources.getString(R.string.monitor_row_exit, row.name, time)
+        }
+    }
+
+    /** 「45 秒」「30 分钟」「2 小时」：不足 1 分钟按秒写。 */
+    fun durationLabel(resources: Resources, ms: Long): String {
+        if (ms < 60_000L) return resources.getString(R.string.monitor_duration_seconds, (ms / 1_000).coerceAtLeast(1).toInt())
+        val minutes = ms / 60_000
+        return if (minutes % 60 == 0L) {
+            resources.getString(R.string.monitor_duration_hours, (minutes / 60).toInt())
+        } else {
+            resources.getString(R.string.monitor_duration_minutes, minutes.toInt())
+        }
+    }
+
+    /** 进程被系统杀掉后补的「监听已中断」行的原因。 */
+    const val INTERRUPTED = "INTERRUPTED"
+}
+
+/** 按界面语言写时长：「45 秒」「30 分钟」「2 小时」。 */
 @Composable
 internal fun monitorDurationLabel(ms: Long): String {
-    val minutes = (ms / 60_000).coerceAtLeast(1)
-    return if (minutes % 60 == 0L) {
-        stringResource(R.string.monitor_duration_hours, (minutes / 60).toInt())
-    } else {
-        stringResource(R.string.monitor_duration_minutes, minutes.toInt())
-    }
+    LocalConfiguration.current
+    return MonitorRowLabels.durationLabel(LocalContext.current.resources, ms)
 }
 
 /** 当前对话 id，供输入框里的「监听」入口筛选本对话的监听。 */
@@ -154,7 +208,7 @@ internal fun AgentMonitorChip(
     modifier: Modifier = Modifier,
 ) {
     val conversationId = LocalMonitorConversationId.current ?: return
-    val all by io.github.fartown.movo.agent.monitor.MonitorRegistry.active.collectAsState()
+    val all by MonitorRegistry.active.collectAsState()
     val monitors = all.filter { it.conversationId == conversationId }
     androidx.compose.animation.AnimatedVisibility(
         visible = monitors.isNotEmpty(),
@@ -163,6 +217,8 @@ internal fun AgentMonitorChip(
         modifier = modifier,
     ) {
         var showList by remember { mutableStateOf(false) }
+        val context = LocalContext.current
+        LocalConfiguration.current
         androidx.compose.foundation.layout.Box {
             Row(
                 modifier = Modifier
@@ -208,10 +264,11 @@ internal fun AgentMonitorChip(
                         Column(Modifier.weight(1f)) {
                             Text(info.name, style = MovoTypography.bodyStrong, color = MovoColors.textPrimary, maxLines = 1)
                             Text(
-                                text = stringResource(
-                                    R.string.monitor_list_item_detail,
+                                text = pluralStringResource(
+                                    R.plurals.monitor_list_item_detail,
                                     info.eventCount,
-                                    SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(info.deadlineAtMillis)),
+                                    info.eventCount,
+                                    MonitorTime.clock(context, info.deadlineAtMillis),
                                 ),
                                 style = MovoTypography.labelRegular,
                                 color = MovoColors.textSecondary,
@@ -221,7 +278,7 @@ internal fun AgentMonitorChip(
                         Spacer(Modifier.width(12.dp))
                         io.github.fartown.movo.ui.components.movo.MovoPillButton(
                             label = stringResource(R.string.monitor_list_stop),
-                            onClick = { stopMonitorsInBackground(listOf(info.id)) },
+                            onClick = { stopMonitors(listOf(info.id)) },
                         )
                     }
                 }
@@ -239,7 +296,7 @@ internal fun AgentMonitorChip(
                             .height(44.dp)
                             .movoClickable(PressKind.Solid) {
                                 showList = false
-                                stopMonitorsInBackground(monitors.map { it.id })
+                                stopMonitors(monitors.map { it.id })
                             }
                             .padding(horizontal = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -252,13 +309,7 @@ internal fun AgentMonitorChip(
     }
 }
 
-/** 停止要结束子进程、等它退出（最长约 3 秒），不放在主线程。 */
-private fun stopMonitorsInBackground(ids: List<String>) {
-    kotlin.concurrent.thread(name = "movo-monitor-stop") {
-        ids.forEach {
-            io.github.fartown.movo.agent.monitor.MonitorRegistry.stop(
-                it, io.github.fartown.movo.agent.monitor.MonitorEndReason.STOPPED_BY_USER,
-            )
-        }
-    }
+/** 停止只做登记，结束进程在注册表自己的线程池里，不会卡住主线程。 */
+private fun stopMonitors(ids: List<String>) {
+    ids.forEach { MonitorRegistry.stop(it, MonitorEndReason.STOPPED_BY_USER) }
 }

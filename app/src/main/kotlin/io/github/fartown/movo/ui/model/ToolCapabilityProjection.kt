@@ -17,8 +17,9 @@ internal fun visibleOnCurrentDevice(id: String, rootGranted: Boolean, colorOs: B
         (colorOs || !requirement.colorOs)
 }
 
+/** 旧版把 browser_use 拆成几张说明卡；类型化工具的 browser_read 是真实工具名，不再映射。 */
 internal fun actualToolName(id: String): String = when (id) {
-    "browser_read", "browser_interact", "browser_screenshot" -> "browser_use"
+    "browser_interact", "browser_screenshot" -> "browser_use"
     else -> id
 }
 

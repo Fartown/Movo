@@ -55,6 +55,29 @@ internal object AgentToolRequirements {
             "search_recording_summaries", "search_coloros_memories", "search_saved_places",
             "search_qq_chat_images", "search_wechat_chat_images",
         )
+        // 类型化工具（重构后运行时只剩这些名字）：供「设置 → 全部工具」判断要不要 Root、权限。
+        // media_control、memory_write 与旧名相同，上面已登记。
+        register(
+            RootRequirement.NONE,
+            "ui_observe", "ui_tap", "ui_scroll", "ui_swipe", "ui_input", "ui_key", "ui_wait",
+            "clipboard_read", "clipboard_write", "app_search", "app_open", "device_read",
+            "clock_create", "volume_set", "usage_read", "browser_open", "browser_read", "browser_act",
+            "memory_read", "skill_read", "skill_install", "conversation_read", "ask_user", "tool_search",
+            "mcp_find", "mcp_call", "monitor_start", "monitor_stop", "monitor_list", "notify_user",
+        )
+        register(
+            RootRequirement.PARTIAL,
+            "device_toggle", "setting_read", "personal_search", "file_search", "file_read", "file_write",
+            "file_list", "terminal_run", "terminal_job",
+        )
+        register(
+            RootRequirement.REQUIRED,
+            "setting_write", "app_control", "device_diagnostics", "clock_read", "sms_code_read",
+            "health_read", "wifi_password_read",
+        )
+        listOf("ui_observe", "ui_tap", "ui_scroll", "ui_swipe", "ui_input", "ui_key", "ui_wait")
+            .forEach { name -> put(name, getValue(name).copy(accessibility = true)) }
+        put("usage_read", getValue("usage_read").copy(systemAccess = ToolSystemAccess.USAGE))
         listOf(
             "observe_screen", "tap", "tap_area", "tap_element", "long_press",
             "long_press_element", "swipe", "scroll", "scroll_element", "input_text",

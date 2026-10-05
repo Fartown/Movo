@@ -5,7 +5,6 @@ import io.github.fartown.movo.agent.tools.core.ApprovalNeed
 import io.github.fartown.movo.agent.tools.core.ApprovalReason
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.InjectionBackend
-import io.github.fartown.movo.agent.tools.core.ProtectedApps
 import io.github.fartown.movo.agent.tools.core.ResourceKey
 import io.github.fartown.movo.agent.tools.core.Risk
 import io.github.fartown.movo.agent.tools.core.SchemaBuilder
@@ -28,9 +27,8 @@ import org.json.JSONObject
  * 本领域最难的两点都落在这里：
  * 1. **观察代际绑定**（合同 §5.1）：index 必带 observation_id；坐标隐式绑最近一次 ui_observe 的 gen；
  *    gen 失效一律 STALE_OBSERVATION，不允许“默认最近观察”兜底。
- * 2. **backend-agnostic 确认**（合同 §5.3）：读不到可信节点就动作（纯坐标 / 受保护窗 / FLAG_SECURE /
- *    root 裸坐标）时 readableTarget=false，由 [CallResolution.requiresApproval] 中央派生确认——
- *    各工具只负责**正确声明**字段，不自己写确认逻辑。
+ * 2. **确认**统一由 [buildUiActionResolution] 声明：模型声明的发送 / 支付等后果、用户设的受保护应用；
+ *    读不到坐标点上的节点只记录（readableTarget），不单独确认（2026-10-05 用户反馈：这类界面每一步都弹卡）。
  */
 
 // ---------------------------------------------------------------------------
@@ -49,7 +47,26 @@ internal enum class UiKeyCode {
 internal enum class UiInputMode { APPEND, REPLACE }
 
 /** 模型声明的动作后果：只增加确认，不免除（合同 §0.6）。 */
-internal enum class UiEffect { SEND, PAY, TRANSFER, DELETE, SUBMIT }
+internal enum class UiEffect { SEND, PAY, TRANSFER, DELETE, SUBMIT;
+
+    fun label(): String = when (this) {
+        SEND -> "发送"
+        PAY -> "支付"
+        TRANSFER -> "转账"
+        DELETE -> "删除"
+        SUBMIT -> "提交"
+    }
+}
+
+/** 包名 → 应用名（取不到时用包名），审批卡上不出现包名。 */
+internal fun appLabel(pkg: String?): String {
+    if (pkg.isNullOrBlank()) return "当前应用"
+    val context = io.github.fartown.movo.agent.runtime.AgentAppContext.resolve() ?: return pkg
+    return runCatching {
+        val pm = context.packageManager
+        pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+    }.getOrDefault(pkg)
+}
 
 /** ui_wait 的文字匹配方式。 */
 internal enum class WaitMatch { CONTAINS, EXACT, PREFIX, REGEX }
@@ -105,6 +122,9 @@ internal interface UiObservationRegistry {
 
     /** 某次观察归属的包名；未知返回 null。 */
     fun observationPackage(observationId: String): String?
+
+    /** 某次观察里第 [index] 个节点（给确认卡写「点按「转账」」用）；未知返回 null。 */
+    fun observedNode(observationId: String, index: Int): UiNodeProbe? = null
 }
 
 /** ui_observe 的后端：观察并登记一次新代际。 */
@@ -279,11 +299,13 @@ internal fun parseFlatTarget(args: ToolArgs, allowCoordinates: Boolean = true, a
 // ---------------------------------------------------------------------------
 
 /**
- * 构造一次“有目标 ui_* 动作”的解析结果，统一声明 backend-agnostic 确认所需字段：
- * - [readableTarget]=false（纯坐标/受保护窗读不到可信节点）→ 中央派生 blindCoordinate 确认；
- * - pkg 为 null（无法归因前台包）+ 有目标 → 中央派生 PROTECTED_APP 确认；
- * - 受保护应用 / 声明 effect → 追加 toolApproval；
- * - [selfProtect] 且目标命中 Movo 自身 → 审批前直接 reject(POLICY_DENIED)。
+ * 构造一次“有目标 ui_* 动作”的解析结果。什么时候要确认（2026-10-05 用户反馈后收窄，只剩这三种）：
+ * - 模型声明了后果（发送、提交、删除；支付、转账为深色确认、不能「本次任务内都允许」）；
+ * - 目标在用户自己设的受保护应用里（默认没有）；
+ * - 用户设过受保护应用，但认不出当前是哪个应用。
+ * 读不到坐标点上的节点（地图、画布、游戏、节点很多的列表）不再单独确认，否则这类界面每一步都弹卡。
+ * [selfProtect] 且目标命中 Movo 自身 → 审批前直接 reject(POLICY_DENIED)。[action] 是写给用户的这一步，
+ * 例如「点按「转账」」「输入文字」，显示在确认卡灰底块第一行。
  */
 internal fun buildUiActionResolution(
     backend: InjectionBackend,
@@ -295,6 +317,9 @@ internal fun buildUiActionResolution(
     selfProtect: Boolean,
     sensitivity: Sensitivity = Sensitivity.NORMAL,
     extraResources: Set<ResourceKey> = emptySet(),
+    /** resolve 预检出的观察失效（[genError]）：在确认之前就拒绝。 */
+    stale: ToolError? = null,
+    action: String = "操作屏幕",
 ): CallResolution {
     val hasTarget = target != TargetIdentity.None
     val reject = if (selfProtect && hasTarget && pkg != null && pkg == selfPackage) {
@@ -304,18 +329,33 @@ internal fun buildUiActionResolution(
             hint = "切换到目标应用后再操作；home/back 等全局键不受此限制",
         )
     } else {
-        null
+        stale
     }
+    val protectedApps = io.github.fartown.movo.agent.tools.core.ProtectedApps
     val toolApproval = when {
-        effect != null -> ApprovalNeed(
-            reason = ApprovalReason.DECLARED_EFFECT,
-            title = "确认${effect.name.lowercase()}操作",
-            detail = "模型声明本次动作后果为 ${effect.name.lowercase()}",
-        )
-        pkg != null && ProtectedApps.isProtected(pkg) -> ApprovalNeed(
+        reject != null -> null
+        effect != null -> {
+            val payment = effect == UiEffect.PAY || effect == UiEffect.TRANSFER
+            ApprovalNeed(
+                reason = if (payment) ApprovalReason.PAYMENT else ApprovalReason.DECLARED_EFFECT,
+                title = "在「${appLabel(pkg)}」里${effect.label()}？",
+                detail = "下一步：$action\n确认后 Movo 才会${effect.label()}。",
+                taskScope = pkg,
+                allowTaskScope = !payment && effect != UiEffect.DELETE,
+            )
+        }
+        pkg != null && protectedApps.isProtected(pkg) -> ApprovalNeed(
             reason = ApprovalReason.PROTECTED_APP,
-            title = "在受保护应用中操作",
-            detail = "目标应用：$pkg",
+            title = "在「${appLabel(pkg)}」里继续操作？",
+            detail = "下一步：$action\n你把「${appLabel(pkg)}」设为了受保护应用，在里面每一步都会先问你。",
+            taskScope = pkg,
+            allowTaskScope = false,
+        )
+        pkg == null && hasTarget && protectedApps.anyConfigured() -> ApprovalNeed(
+            reason = ApprovalReason.PROTECTED_APP,
+            title = "继续操作屏幕？",
+            detail = "下一步：$action\n认不出现在是哪个应用，没法判断是不是你设的受保护应用。",
+            allowTaskScope = false,
         )
         else -> null
     }
@@ -329,34 +369,39 @@ internal fun buildUiActionResolution(
         packageAttributed = pkg != null,
         toolApproval = toolApproval,
         reject = reject,
-        // 界面点击/滑动/输入等是本地交互、本身不外发，污点不应逐个拦截它们（否则 ui_observe 打污点后每个动作都要确认，
-        // UI 自动化无法使用）。真正的外发/敏感风险由受保护应用名单、模型声明的 effect、自我保护三条定向防线兜底。
+        // 界面点击/滑动/输入是本地交互，污点不拦它们；发送、支付由声明的后果与受保护应用兜底。
         exfiltrates = false,
     )
 }
 
+/** 节点在确认卡上的叫法：文字 → 描述 → 无。超长截断，换行压成空格。 */
+internal fun UiNodeProbe.displayName(): String? =
+    (text ?: desc)?.replace(Regex("\\s+"), " ")?.trim()?.takeIf { it.isNotEmpty() }
+        ?.let { if (it.length > 20) it.take(20) + "…" else it }
+
 /** 代际再校验：失效返回 Verdict.Failed(STALE_OBSERVATION)，有效返回 null。 */
-internal fun checkGen(registry: UiObservationRegistry, observationId: String?, boundGen: Long): Verdict.Failed? {
+internal fun checkGen(registry: UiObservationRegistry, observationId: String?, boundGen: Long): Verdict.Failed? =
+    genError(registry, observationId, boundGen)?.let { Verdict.Failed(it) }
+
+/**
+ * 代际校验的错误本体。resolve 阶段先用它预检（观察不存在、已过期时直接拒绝，不先弹确认卡让用户白点一次），
+ * execute 前再用 [checkGen] 复核（确认期间页面可能变了）。
+ */
+internal fun genError(registry: UiObservationRegistry, observationId: String?, boundGen: Long): ToolError? {
     if (observationId.isNullOrEmpty()) {
-        return Verdict.Failed(
-            ToolError(ToolErrorCode.STALE_OBSERVATION, "没有可用的屏幕观察", hint = "先调用 ui_observe"),
-        )
+        return ToolError(ToolErrorCode.STALE_OBSERVATION, "没有可用的屏幕观察", hint = "先调用 ui_observe")
     }
     val live = registry.genOf(observationId)
-        ?: return Verdict.Failed(
-            ToolError(
-                ToolErrorCode.STALE_OBSERVATION,
-                "observation_id=$observationId 已过期",
-                hint = "重新 ui_observe 后再用新的 index/坐标",
-            ),
+        ?: return ToolError(
+            ToolErrorCode.STALE_OBSERVATION,
+            "observation_id=$observationId 已过期",
+            hint = "重新 ui_observe 后再用新的 index/坐标",
         )
     if (live != boundGen) {
-        return Verdict.Failed(
-            ToolError(
-                ToolErrorCode.STALE_OBSERVATION,
-                "observation_id=$observationId 的代际已变（$boundGen → $live）",
-                hint = "窗口内容/方向已变，重新 ui_observe",
-            ),
+        return ToolError(
+            ToolErrorCode.STALE_OBSERVATION,
+            "observation_id=$observationId 的代际已变（$boundGen → $live）",
+            hint = "窗口内容/方向已变，重新 ui_observe",
         )
     }
     return null

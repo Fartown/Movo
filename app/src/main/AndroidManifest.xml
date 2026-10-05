@@ -91,6 +91,15 @@
             android:theme="@style/Theme.MovoVoiceAssistBridge" />
 
         <!-- 系统分享面板里的「Movo」（规范 8.9.1）：不显示界面，复制内容后转交对话浮层。 -->
+        <!-- 锁屏时悬浮审批卡的「去解锁」：透明页面请求解锁，解锁后换回原卡。 -->
+        <activity
+            android:name=".agent.overlay.OverlayUnlockActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.MovoVoiceAssistBridge" />
+
         <activity
             android:name=".ui.share.ShareReceiverActivity"
             android:exported="true"

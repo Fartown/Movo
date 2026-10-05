@@ -44,6 +44,13 @@ internal class MetaToolProvider : ToolProvider {
         """.trimIndent(),
     )
 
+    /** 没有可加载的按需工具时 tool_search 不在目录里，不教模型去调它。 */
+    override fun promptSection(env: ToolEnvironment): PromptSection {
+        val searchAvailable = tools.first { it.name == "tool_search" }.availability(env) is ToolAvailability.Available
+        if (searchAvailable) return promptSection
+        return promptSection.copy(text = promptSection.text.lineSequence().filterNot { "tool_search" in it }.joinToString("\n"))
+    }
+
     private inner class ToolSearch : AgentTool {
         override val name = "tool_search"
         override val domain = ToolDomain.META
@@ -88,7 +95,7 @@ internal class MetaToolProvider : ToolProvider {
             val data = JSONObject()
                 .put("matches", JSONArray().also { array ->
                     matches.take(10).forEach { tool ->
-                        val availability = tool.availability(ctx.env)
+                        val availability = pipeline.registryView.availability(tool, ctx.env)
                         array.put(JSONObject()
                             .put("name", tool.name)
                             .put("summary", tool.description.take(160))
@@ -173,7 +180,7 @@ internal class MetaToolProvider : ToolProvider {
                     hint = "不要继续这一步；按已有信息结束或说明",
                 )
                 UserAnswer.TimedOut -> ToolOutcome.error(
-                    ToolErrorCode.APPROVAL_TIMEOUT,
+                    ToolErrorCode.ANSWER_TIMEOUT,
                     "用户没有回答",
                     hint = "结束本轮并说明需要什么信息",
                 )

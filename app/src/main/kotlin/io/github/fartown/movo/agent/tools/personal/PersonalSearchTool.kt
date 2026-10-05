@@ -21,6 +21,7 @@ import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.fail
 import io.github.fartown.movo.agent.tools.core.invalidArgs
 import io.github.fartown.movo.agent.tools.core.objectSchema
+import io.github.fartown.movo.agent.tools.core.TaintKind
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -187,13 +188,15 @@ internal class PersonalSearchTool(
 
     override fun resolve(input: PersonalSearchInput, env: ToolEnvironment): CallResolution {
         val approval = if (input.source.firstReadConfirm) {
-            // TODO(首读持久化)：真正的"仅首次确认"需要记录来源是否读过；当前每次读短信/通话都确认一次。
+            // 第一次读短信、通话记录先问一次；勾「以后不再询问」后本进程内不再问（持久化等「已允许的操作」管理页定稿）。
+            val label = sourceLabel(input.source)
             ApprovalNeed(
-                reason = ApprovalReason.PROTECTED_APP,
-                title = "读取${sourceLabel(input.source)}",
-                detail = "Movo 要读取你的${sourceLabel(input.source)}，仅用于完成本次任务。",
+                reason = ApprovalReason.PERSONAL_DATA,
+                title = "允许 Movo 读取你的$label？",
+                detail = "读取$label\n只用来完成这次任务，读到的内容不写进对话记录。",
                 scopeKey = "first_read:${input.source.wire}",
-                scopeLabel = "一直允许读取${sourceLabel(input.source)}",
+                scopeLabel = "以后读取${label}不再询问",
+                allowTaskScope = false,
             )
         } else {
             null
@@ -225,6 +228,12 @@ internal class PersonalSearchTool(
                 toolWarnings = result.warnings,
             ),
         )
+    }
+
+    /** 个人记录都算个人数据；通知、订单（来自通知）里还有别人写的内容，同时算不可信内容。 */
+    override fun taintKinds(input: PersonalSearchInput): Set<TaintKind> = when (input.source) {
+        PersonalSource.NOTIFICATIONS, PersonalSource.ORDERS -> setOf(TaintKind.PERSONAL, TaintKind.UNTRUSTED)
+        else -> setOf(TaintKind.PERSONAL)
     }
 
     override fun renderForModel(output: PersonalSearchOutput): ModelContent {

@@ -18,6 +18,8 @@ import io.github.fartown.movo.agent.tools.core.ToolInput
 import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.objectSchema
+import io.github.fartown.movo.agent.tools.core.ApprovalPreview
+import io.github.fartown.movo.agent.tools.core.ToolAvailability
 import org.json.JSONObject
 
 internal data class SettingWriteInput(
@@ -62,6 +64,22 @@ internal class SettingWriteTool(
         string("key", "设置键", required = true)
         string("value", "要写入的值（字符串）", required = true)
     }
+
+    /** 没有 Root 时不进目录（以前先弹确认卡、批完才报「需要 Root」）。 */
+    override fun availability(env: ToolEnvironment): ToolAvailability =
+        if (env.rootAvailable) {
+            ToolAvailability.Available
+        } else {
+            ToolAvailability.Unavailable(ToolErrorCode.ROOT_REQUIRED, "写系统设置需要 Root")
+        }
+
+    override fun approvalPreview(input: SettingWriteInput): ApprovalPreview = ApprovalPreview(
+        title = "修改系统设置？",
+        detail = "把「${settingLabel(input.key)}」改为 ${input.value.take(40)}\n这会改动系统设置。",
+    )
+
+    override fun approvalScope(input: SettingWriteInput): String =
+        "${input.namespace.name.lowercase()}/${input.key}"
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): SettingWriteInput =
         SettingWriteInput(
@@ -146,4 +164,29 @@ internal class SettingWriteTool(
             "install_non_market_apps",
         )
     }
+}
+
+/** 常见设置项的叫法；不认识的显示原键名。 */
+internal fun settingLabel(key: String): String = when (key.lowercase()) {
+    "screen_brightness" -> "屏幕亮度"
+    "screen_brightness_mode" -> "自动亮度"
+    "screen_off_timeout" -> "自动锁屏时间"
+    "accelerometer_rotation" -> "自动旋转"
+    "haptic_feedback_enabled" -> "触感反馈"
+    "sound_effects_enabled" -> "触摸提示音"
+    "airplane_mode_on" -> "飞行模式"
+    "bluetooth_on" -> "蓝牙"
+    "wifi_on" -> "Wi‑Fi"
+    "mobile_data" -> "移动数据"
+    "location_mode" -> "定位"
+    "zen_mode" -> "勿扰模式"
+    "font_scale" -> "字体大小"
+    "system_locales" -> "系统语言"
+    "time_12_24" -> "时间格式"
+    "auto_time" -> "自动设置时间"
+    "stay_on_while_plugged_in" -> "充电时保持亮屏"
+    "show_touches" -> "显示点按操作"
+    "development_settings_enabled" -> "开发者选项"
+    "adb_enabled" -> "USB 调试"
+    else -> key
 }

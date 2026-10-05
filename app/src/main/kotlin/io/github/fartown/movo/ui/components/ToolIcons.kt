@@ -25,6 +25,42 @@ import io.github.fartown.movo.ui.theme.MovoIcons
  * 同一语义只用一个图标；未知工具用扳手，动态 MCP 工具用插头。
  */
 internal fun toolIcon(toolId: String): MovoIconData = when (toolId) {
+    // 类型化工具（重构后运行时只出现这些名字），与下面旧名同一语义同一图标。
+    "ui_observe" -> MovoIcons.ScanEye
+    "ui_tap" -> MovoIcons.MousePointerClick
+    "ui_swipe" -> MovoIcons.Move
+    "ui_scroll" -> MovoIcons.ArrowDownUp
+    "ui_input" -> MovoIcons.Keyboard
+    "ui_key" -> MovoIcons.Command
+    "ui_wait" -> MovoIcons.Clock
+    "clipboard_read", "clipboard_write" -> MovoIcons.Clipboard
+    "app_search" -> MovoIcons.Search
+    "app_open" -> MovoIcons.LayoutGrid
+    "app_control" -> MovoIcons.AppWindow
+    "device_read", "device_toggle" -> MovoIcons.Smartphone
+    "device_diagnostics" -> MovoIcons.FileText
+    "setting_read", "setting_write" -> MovoIcons.Settings
+    "clock_create", "clock_read" -> MovoIcons.AlarmClock
+    "volume_set" -> MovoIcons.Volume2
+    "personal_search" -> MovoIcons.Contact
+    "sms_code_read" -> MovoIcons.KeyRound
+    "usage_read" -> MovoIcons.Activity
+    "health_read" -> MovoIcons.HeartPulse
+    "wifi_password_read" -> MovoIcons.Wifi
+    "file_read" -> MovoIcons.FileText
+    "file_write" -> MovoIcons.FilePenLine
+    "file_list" -> MovoIcons.FolderOpen
+    "terminal_run" -> MovoIcons.Terminal
+    "browser_open" -> MovoIcons.Globe
+    "browser_act" -> MovoIcons.MousePointerClick
+    "memory_read" -> MovoIcons.Brain
+    "skill_read", "skill_install" -> MovoIcons.Puzzle
+    "conversation_read" -> MovoIcons.History
+    "ask_user" -> MovoIcons.MessageSquare
+    "tool_search" -> MovoIcons.Search
+    "mcp_find" -> MovoIcons.Plug
+    "monitor_start", "monitor_stop", "monitor_list" -> MovoIcons.Clock
+    "notify_user" -> MovoIcons.Bell
     "observe", "observe_screen" -> MovoIcons.ScanEye
     "click", "tap", "tap_element" -> MovoIcons.MousePointerClick
     "tap_area" -> MovoIcons.Crosshair

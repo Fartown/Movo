@@ -79,13 +79,22 @@ internal object AgentOverlayVisibilityPolicy {
         "paste_text",
         "press_key",
         "open_system_panel",
+        // 类型化工具子系统的工具名（重构后只剩这些名字；漏登记会导致操作其他 App 时悬浮球、光晕、跨应用审批卡都不出现）
+        "app_open",
+        "ui_tap",
+        "ui_swipe",
+        "ui_scroll",
+        "ui_input",
+        "ui_key",
     )
 
     private val foregroundOperationTools = setOf(
         "observe_screen",
+        "ui_observe",
+        "ui_wait",
         *foregroundDrivingTools.toTypedArray(),
     )
 
     private val entrySurfaceDismissalTools =
-        foregroundOperationTools + setOf("set_alarm", "set_timer")
+        foregroundOperationTools + setOf("set_alarm", "set_timer", "clock_create")
 }

@@ -73,7 +73,7 @@ internal class AgentToolSubsystem(
         return listOf(
             DeviceToolProvider(context, root, rootAvailable),
             ClockMediaToolProvider(context, logger, root, rootAvailable),
-            UiToolProvider(context, logger, rootAvailable),
+            UiToolProvider(context, logger, rootAvailable, services.screenshotExcludedPackages),
             PersonalToolProvider(context, root, rootAvailable),
             FileToolProvider(context, root, rootAvailable),
             TerminalToolProvider(logger),
@@ -82,7 +82,8 @@ internal class AgentToolSubsystem(
             SkillToolProvider(context),
             ConversationToolProvider(conversationLoader),
             McpToolProvider(mcpCatalog),
-            MonitorToolProvider(context),
+            // 角色对话不提供后台监听与通知（事件会被当成对白）：环境里只有记忆作用域能看出角色会话，记忆关闭时看不出来。
+            MonitorToolProvider(context, isRoleplay = { characterId() != null }),
             meta,
         )
     }

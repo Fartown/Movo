@@ -19,8 +19,8 @@ import org.json.JSONObject
 
 /**
  * §10 ui_tap（送达型）。点击或长按一个目标（index / 点 / 区域）。ok 只代表已送达，需再观察确认。
- * 读不到可信节点就动作（纯坐标、受保护窗、FLAG_SECURE、root 裸坐标）→ readableTarget=false，
- * 由中央派生确认（合同 §5.3）。提交点识别见后端 readableNodeAtPoint（含 TODO）。
+ * 确认只在声明了发送 / 支付等后果、或在受保护应用里时发生（见 buildUiActionResolution）；
+ * 坐标点下的节点（readableNodeAtPoint）只用来在确认卡上写「点按「转账」」。
  */
 
 internal data class UiTapInput(
@@ -76,17 +76,25 @@ internal class UiTapTool(
                     readableTarget = true,
                     effect = input.effect,
                     selfProtect = true,
+                    stale = genError(registry, t.observationId, gen),
+                    action = tapAction(registry.observedNode(t.observationId, t.index), input.holdMs),
                 )
             }
-            is UiTarget.Point -> coordinateResolution(backendKind, t.x, t.y, input.effect)
-            is UiTarget.Area -> coordinateResolution(backendKind, t.centerX, t.centerY, input.effect)
+            is UiTarget.Point -> coordinateResolution(backendKind, t.x, t.y, input.effect, input.holdMs)
+            is UiTarget.Area -> coordinateResolution(backendKind, t.centerX, t.centerY, input.effect, input.holdMs)
         }
     }
 
-    private fun coordinateResolution(backendKind: InjectionBackend, x: Double, y: Double, effect: UiEffect?): CallResolution {
+    /** 确认卡上的这一步：「点按「转账」」「长按「消息」」；认不出节点时写「点按屏幕上的一个位置」。 */
+    private fun tapAction(node: UiNodeProbe?, holdMs: Int): String {
+        val verb = if (holdMs > 0) "长按" else "点按"
+        return node?.displayName()?.let { "$verb「$it」" } ?: "${verb}屏幕上的一个位置"
+    }
+
+    private fun coordinateResolution(backendKind: InjectionBackend, x: Double, y: Double, effect: UiEffect?, holdMs: Int): CallResolution {
         val latest = registry.latest()
         val pkg = registry.foregroundPackage()
-        // 纯坐标：实时抓树命中最深可点击节点判断提交点；读不到（TODO 占位→null）即 readableTarget=false。
+        // 纯坐标：实时抓树取该点下最深的节点，用来在确认卡上写「点按「转账」」；读不到时 readableTarget=false（只记录）。
         val probe = backend.readableNodeAtPoint(x, y)
         return buildUiActionResolution(
             backend = backendKind,
@@ -96,6 +104,8 @@ internal class UiTapTool(
             readableTarget = probe != null,
             effect = effect,
             selfProtect = true,
+            stale = genError(registry, latest?.observationId, latest?.gen ?: -1L),
+            action = tapAction(probe, holdMs),
         )
     }
 

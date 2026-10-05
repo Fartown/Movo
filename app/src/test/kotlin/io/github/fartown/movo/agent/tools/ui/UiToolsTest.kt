@@ -4,6 +4,7 @@ import androidx.test.core.app.ApplicationProvider
 import io.github.fartown.movo.agent.model.AgentModelClient
 import io.github.fartown.movo.agent.tools.core.AgentTool
 import io.github.fartown.movo.agent.tools.core.ApprovalDecision
+import io.github.fartown.movo.agent.tools.core.ApprovalReason
 import io.github.fartown.movo.agent.tools.core.ApprovalRequest
 import io.github.fartown.movo.agent.tools.core.ContractTool
 import io.github.fartown.movo.agent.tools.core.InjectionBackend
@@ -108,14 +109,53 @@ class UiToolsTest {
     }
 
     @Test
-    fun uiTap_blindCoordinate_requiresApproval_declinedBlocks() {
-        val backend = FakeUiBackend(readableProbe = null) // 读不到可信节点
+    fun uiTap_blindCoordinate_noApprovalWithoutProtectedApps() {
+        // 读不到坐标点上的节点（地图、画布、游戏）不再单独确认：否则这类界面每一步都弹卡（2026-10-05 用户反馈）。
+        val backend = FakeUiBackend(readableProbe = null)
         val result = pipeline(
             provider(ContractTool(UiTapTool(backend, backend))), accessibilityEnv, declineAll,
         ).execute(call("ui_tap", """{"x":100,"y":200}"""))
-        assertEquals("error", result.status)
+        assertEquals("ok", result.status)
+        assertTrue(backend.tapCalled)
+    }
+
+    @Test
+    fun uiTap_declaredPayment_requiresApprovalWithoutTaskScope() {
+        val backend = FakeUiBackend(observationPackageMap = mutableMapOf("obs1" to "com.example.pay"))
+        var seen: ApprovalRequest? = null
+        val capture = object : UserInteraction {
+            override val available = true
+            override fun ask(question: UserQuestion, timeoutMs: Long) = UserAnswer.Declined
+            override fun approve(request: ApprovalRequest, timeoutMs: Long): ApprovalDecision {
+                seen = request
+                return ApprovalDecision.Declined
+            }
+        }
+        val result = pipeline(provider(ContractTool(UiTapTool(backend, backend))), accessibilityEnv, capture)
+            .execute(call("ui_tap", """{"index":0,"observation_id":"obs1","effect":"pay"}"""))
         assertEquals("USER_DECLINED", result.errorCode)
-        assertFalse("读不到可信节点就动作必须先确认", backend.tapCalled)
+        assertEquals(ApprovalReason.PAYMENT, seen?.reason)
+        assertEquals("付款、转账不能勾「本次任务内都允许」", null, seen?.rememberScope)
+        assertFalse(seen!!.detail.contains("{"))
+    }
+
+    @Test
+    fun uiTap_declaredSend_offersTaskScopeAndRemembersIt() {
+        val backend = FakeUiBackend(observationPackageMap = mutableMapOf("obs1" to "com.example.chat"))
+        var asked = 0
+        val approveRemember = object : UserInteraction {
+            override val available = true
+            override fun ask(question: UserQuestion, timeoutMs: Long) = UserAnswer.Declined
+            override fun approve(request: ApprovalRequest, timeoutMs: Long): ApprovalDecision {
+                asked++
+                assertEquals("本次任务内，这类操作都允许", request.rememberScope)
+                return ApprovalDecision.Approved(remember = true)
+            }
+        }
+        val p = pipeline(provider(ContractTool(UiTapTool(backend, backend))), accessibilityEnv, approveRemember)
+        p.execute(call("ui_tap", """{"index":0,"observation_id":"obs1","effect":"send"}"""))
+        p.execute(call("ui_tap", """{"index":0,"observation_id":"obs1","effect":"send"}"""))
+        assertEquals("本次任务内勾选后同一应用里不再询问", 1, asked)
     }
 
     @Test
@@ -156,13 +196,27 @@ class UiToolsTest {
     }
 
     @Test
+    fun protectedApps_areEmptyByDefaultAndOnlyGateUserAddedApps() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val protectedApps = io.github.fartown.movo.agent.tools.core.ProtectedApps
+        protectedApps.setPackages(context, emptySet())
+        // 默认没有任何受保护应用：支付、设置里的点击都不因此弹确认。
+        assertFalse(protectedApps.isProtected("com.eg.android.AlipayGphone"))
+        assertFalse(protectedApps.isProtected("com.android.settings"))
+        protectedApps.add(context, "com.eg.android.AlipayGphone")
+        assertTrue(protectedApps.isProtected("com.eg.android.AlipayGphone"))
+        protectedApps.remove(context, "com.eg.android.AlipayGphone")
+        assertFalse(protectedApps.isProtected("com.eg.android.AlipayGphone"))
+    }
+
+    @Test
     fun uiScroll_isNeverGatedByTaint() {
         // 滚动不会外发：读过不可信内容（污点）后也不该弹「可能把内容发出去」的确认（后台监听每 15 秒下滑的真机回归）。
         val backend = FakeUiBackend(scrollResult = UiScrollResult.Finished(true, false, "com.example.app"))
         val resolution = UiScrollTool(backend, backend).let { tool ->
             tool.resolve(tool.parse(ToolArgs(JSONObject("""{"direction":"down"}""")), accessibilityEnv), accessibilityEnv)
         }
-        assertEquals(null, resolution.requiresApproval(taintedExternal = true))
+        assertEquals(null, resolution.requiresApproval(tainted = true))
     }
 
     @Test

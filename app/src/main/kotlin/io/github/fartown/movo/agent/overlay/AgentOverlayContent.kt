@@ -40,7 +40,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.wrapContentWidth
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -326,7 +325,15 @@ internal fun AgentOverlayOrb(
     }
     val tapLabel = stringResource(R.string.movo_overlay_orb)
     val scope = rememberCoroutineScope()
-    val gesture = remember { OrbGesture() }
+    val touchSlop = with(androidx.compose.ui.platform.LocalDensity.current) { 8.dp.toPx() }
+    val pointer = remember(scope, touchSlop) { OrbPointerHandler(scope, touchSlop) }
+    pointer.onTap = onTap
+    pointer.onLongPress = onLongPress
+    pointer.onDragStart = onDragStart
+    pointer.onDrag = onDrag
+    pointer.onDragEnd = onDragEnd
+    pointer.onPressedChange = { pressed = it }
+    pointer.onDraggingChange = { dragging = it }
     // 展开卡揭开时让真球淡出；收起时先保持隐藏，等卡片缩到末段再淡回，避免“真球 + 残卡”双影。
     val revealAlpha = remember { androidx.compose.animation.core.Animatable(1f) }
     LaunchedEffect(hideForReveal, reduced) {
@@ -345,7 +352,6 @@ internal fun AgentOverlayOrb(
         exit = fadeOut(tween(MovoMotion.STANDARD_EXIT, easing = MovoMotion.EasingExit)) +
             if (reduced) fadeOut(snap()) else scaleOut(tween(MovoMotion.STANDARD_EXIT, easing = MovoMotion.EasingExit), targetScale = 0.5f),
     ) {
-        val touchSlop = with(androidx.compose.ui.platform.LocalDensity.current) { 8.dp.toPx() }
         Box(
             modifier = Modifier
                 .size(44.dp)
@@ -359,48 +365,7 @@ internal fun AgentOverlayOrb(
                     onLongClick { onLongPress(); true }
                 }
                 .pointerInteropFilter { event ->
-                    when (event.actionMasked) {
-                        MotionEvent.ACTION_DOWN -> {
-                            gesture.down(event.rawX, event.rawY)
-                            pressed = true
-                            gesture.longPressJob = scope.launch {
-                                delay(MovoMotion.LONG_PRESS.toLong())
-                                if (gesture.state == OrbGesture.State.PENDING) {
-                                    gesture.state = OrbGesture.State.LONG_PRESSED
-                                    pressed = false
-                                    onLongPress()
-                                }
-                            }
-                        }
-                        MotionEvent.ACTION_MOVE -> {
-                            if (gesture.state == OrbGesture.State.PENDING && gesture.distanceFromDown(event.rawX, event.rawY) > touchSlop) {
-                                gesture.longPressJob?.cancel()
-                                gesture.state = OrbGesture.State.DRAGGING
-                                pressed = false
-                                dragging = true
-                                onDragStart()
-                            }
-                            if (gesture.state == OrbGesture.State.DRAGGING) {
-                                val (dx, dy) = gesture.moveTo(event.rawX, event.rawY)
-                                onDrag(dx, dy)
-                            } else {
-                                gesture.moveTo(event.rawX, event.rawY)
-                            }
-                        }
-                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                            gesture.longPressJob?.cancel()
-                            pressed = false
-                            when (gesture.state) {
-                                OrbGesture.State.PENDING -> if (event.actionMasked == MotionEvent.ACTION_UP) onTap()
-                                OrbGesture.State.DRAGGING -> {
-                                    dragging = false
-                                    onDragEnd()
-                                }
-                                else -> Unit
-                            }
-                            gesture.state = OrbGesture.State.IDLE
-                        }
-                    }
+                    pointer.onTouch(event)
                     true
                 },
             contentAlignment = Alignment.Center,
@@ -441,12 +406,23 @@ internal fun AgentOverlayOrb(
     }
 }
 
-/** 悬浮球的按下 / 长按 / 拖动判定（屏幕坐标）。 */
-private class OrbGesture {
+/**
+ * 悬浮球的按下 / 长按 / 拖动判定（屏幕坐标），纯状态机：悬浮球本身与展开卡的球侧通道共用同一套判定。
+ * 按住超过 [touchSlop] 进入拖动（不再触发长按）；长按由调用方计时后调 [longPressTimeout]。
+ */
+internal class OrbGesture(private val touchSlop: Float) {
     enum class State { IDLE, PENDING, LONG_PRESSED, DRAGGING }
 
+    sealed interface Action {
+        data object Tap : Action
+        data object LongPress : Action
+        data object DragStart : Action
+        data class Drag(val dx: Float, val dy: Float) : Action
+        data object DragEnd : Action
+    }
+
     var state = State.IDLE
-    var longPressJob: kotlinx.coroutines.Job? = null
+        private set
     private var downX = 0f
     private var downY = 0f
     private var lastX = 0f
@@ -457,14 +433,104 @@ private class OrbGesture {
         downX = x; downY = y; lastX = x; lastY = y
     }
 
-    fun distanceFromDown(x: Float, y: Float): Float = kotlin.math.hypot(x - downX, y - downY)
-
-    fun moveTo(x: Float, y: Float): Pair<Float, Float> {
-        val delta = (x - lastX) to (y - lastY)
+    /** 移动：超过触摸阈值时先给出 [Action.DragStart]，拖动中每次给出相对上一次的位移。 */
+    fun move(x: Float, y: Float): List<Action> {
+        val actions = mutableListOf<Action>()
+        if (state == State.PENDING && kotlin.math.hypot(x - downX, y - downY) > touchSlop) {
+            state = State.DRAGGING
+            actions += Action.DragStart
+        }
+        val dx = x - lastX
+        val dy = y - lastY
         lastX = x; lastY = y
-        return delta
+        if (state == State.DRAGGING) actions += Action.Drag(dx, dy)
+        return actions
+    }
+
+    /** 按住到长按时长：还在按下未移动时成为长按。 */
+    fun longPressTimeout(): Action? =
+        if (state == State.PENDING) {
+            state = State.LONG_PRESSED
+            Action.LongPress
+        } else {
+            null
+        }
+
+    /** 抬起（[cancelled] = 手势被取消）：按下未移动 → 点按；拖动中 → 拖动结束。 */
+    fun up(cancelled: Boolean): Action? {
+        val action = when (state) {
+            State.PENDING -> if (cancelled) null else Action.Tap
+            State.DRAGGING -> Action.DragEnd
+            else -> null
+        }
+        state = State.IDLE
+        return action
     }
 }
+
+/** 把触摸事件交给 [OrbGesture] 并回调；长按按 `MovoMotion.LONG_PRESS` 计时。回调每次重组时更新。 */
+private class OrbPointerHandler(
+    private val scope: kotlinx.coroutines.CoroutineScope,
+    touchSlop: Float,
+) {
+    private val gesture = OrbGesture(touchSlop)
+    private var longPressJob: kotlinx.coroutines.Job? = null
+    var onTap: () -> Unit = {}
+    var onLongPress: () -> Unit = {}
+    var onDragStart: () -> Unit = {}
+    var onDrag: (Float, Float) -> Unit = { _, _ -> }
+    var onDragEnd: () -> Unit = {}
+    var onPressedChange: (Boolean) -> Unit = {}
+    var onDraggingChange: (Boolean) -> Unit = {}
+
+    fun onTouch(event: MotionEvent) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                gesture.down(event.rawX, event.rawY)
+                onPressedChange(true)
+                longPressJob?.cancel()
+                longPressJob = scope.launch {
+                    delay(MovoMotion.LONG_PRESS.toLong())
+                    if (gesture.longPressTimeout() != null) {
+                        onPressedChange(false)
+                        onLongPress()
+                    }
+                }
+            }
+            MotionEvent.ACTION_MOVE -> gesture.move(event.rawX, event.rawY).forEach { action ->
+                when (action) {
+                    OrbGesture.Action.DragStart -> {
+                        longPressJob?.cancel()
+                        onPressedChange(false)
+                        onDraggingChange(true)
+                        onDragStart()
+                    }
+                    is OrbGesture.Action.Drag -> onDrag(action.dx, action.dy)
+                    else -> Unit
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                longPressJob?.cancel()
+                onPressedChange(false)
+                when (gesture.up(cancelled = event.actionMasked == MotionEvent.ACTION_CANCEL)) {
+                    OrbGesture.Action.Tap -> onTap()
+                    OrbGesture.Action.DragEnd -> {
+                        onDraggingChange(false)
+                        onDragEnd()
+                    }
+                    else -> Unit
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 展开卡球侧通道里的按下点是否落在悬浮球的命中区（球窗口 44，以球心为中心）。[orbCenter] 为屏幕坐标；没有球时为 false。
+ * 落在球上的按下按悬浮球处理（点按、长按、拖动），通道其余部分点一下收起展开卡。
+ */
+internal fun orbLaneHit(x: Float, y: Float, orbCenter: Offset?, halfSizePx: Float): Boolean =
+    orbCenter != null && kotlin.math.abs(x - orbCenter.x) <= halfSizePx && kotlin.math.abs(y - orbCenter.y) <= halfSizePx
 
 /**
  * 聆听态的波纹：44 淡环（Indigo 22%，1 宽）；听到说话时再有一道从 32 扩散到 44 并淡出的波纹（`ambient` 循环，
@@ -612,6 +678,7 @@ internal fun AgentOverlayRemoveZone(visible: Boolean) {
  * 上下文 → 操作行（左「切回文字」，右不变）；内容区交叉淡化、高度同步 `standard`，操作行原位不动。
  */
 @Composable
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 internal fun AgentOverlayBubble(
     state: AgentOverlayState,
     onCollapse: () -> Unit,
@@ -636,11 +703,31 @@ internal fun AgentOverlayBubble(
      * `null` 时按“球贴在卡片外沿正外侧”的默认几何近似。
      */
     orbCenterOnScreen: () -> Offset? = { null },
+    /**
+     * 展开卡的球侧通道盖住了（此时隐形的）真球：落在球上的点按、长按、拖动转给悬浮球的处理逻辑，
+     * 与没展开时点球一致（例如失败态点球打开结果、长按开始语音、拖动挪球）。
+     */
+    onOrbTap: () -> Unit = onCollapse,
+    onOrbLongPress: () -> Unit = {},
+    onOrbDragStart: () -> Unit = {},
+    onOrbDrag: (dx: Float, dy: Float) -> Unit = { _, _ -> },
+    onOrbDragEnd: () -> Unit = {},
 ) {
     val reduced = LocalReducedMotion.current
     var entered by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { entered = true }
     val scope = rememberCoroutineScope()
+    val laneTouchSlop = with(androidx.compose.ui.platform.LocalDensity.current) { 8.dp.toPx() }
+    val orbHalfPx = with(androidx.compose.ui.platform.LocalDensity.current) { 22.dp.toPx() }
+    val laneOrbPointer = remember(scope, laneTouchSlop) { OrbPointerHandler(scope, laneTouchSlop) }
+    laneOrbPointer.onTap = onOrbTap
+    laneOrbPointer.onLongPress = onOrbLongPress
+    laneOrbPointer.onDragStart = onOrbDragStart
+    laneOrbPointer.onDrag = onOrbDrag
+    laneOrbPointer.onDragEnd = onOrbDragEnd
+    val laneCollapseGesture = remember(laneTouchSlop) { OrbGesture(laneTouchSlop) }
+    /** 本次按下是否落在真球上（按下时判定，整个手势沿用）。 */
+    val laneTargetsOrb = remember { BooleanArray(1) }
     var supplementMode by remember { mutableStateOf(false) }
     var supplementText by remember { mutableStateOf("") }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -687,141 +774,163 @@ internal fun AgentOverlayBubble(
         }
     }
 
-    AnimatedVisibility(
-        visible = entered && visible,
-        // 进场不整体淡入：起点就是与球重合的玻璃圆（球在上层盖着），由下面的揭开过渡负责；
-        // 退场等揭开缩回球心后再移除。减少动画时只淡入淡出。
-        enter = if (reduced) fadeIn(MovoMotion.fast()) else EnterTransition.None,
-        // 退场期间整层保持不透明（容器缩回球心、内容在末段淡出由下面两个过渡负责），缩完那一刻才移除。
-        exit = if (reduced) fadeOut(MovoMotion.fastExit()) else fadeOut(tween(durationMillis = 1, delayMillis = PANEL_MORPH_OUT_MS)),
-    ) {
-        // 规范 9.5「展开卡」/ Figma 候选「动效全集」A1「揭开」：圆角容器（玻璃底 + 阴影）从球心 32 圆长到卡片边界，
-        // 卡片内容按最终布局原位绘制、不缩放不位移，随容器边缘露出。0 = 与球重合的 32 圆，1 = 卡片。
-        val reveal = transition.animateFloat(
-            transitionSpec = {
-                if (targetState == androidx.compose.animation.EnterExitState.Visible) {
-                    tween(PANEL_MORPH_IN_MS, easing = MovoMotion.EasingLinear)
-                } else {
-                    tween(PANEL_MORPH_OUT_MS, easing = MovoMotion.EasingLinear)
-                }
-            },
-            label = "panelReveal",
-        ) { if (it == androidx.compose.animation.EnterExitState.Visible || reduced) 1f else 0f }
-        val entering = transition.targetState == androidx.compose.animation.EnterExitState.Visible
-        // 展开卡窗口在球那一侧多留一条与球重叠的通道（PANEL_ORB_LANE，AgentRuntimeService.bubbleLayoutParams）：
-        // 容器从球心开始长，起点必须落在本窗口里，否则前几帧被窗口边缘裁掉，看起来是从边缘冒出来。
-        // 通道盖住了悬浮球，点它等同点球（收起）。
-        // 追踪卡片在窗口坐标系里的位置：把 orbCenterOnScreen 换算到卡片自身坐标，作为揭开起点。
-        var cardOriginInWindow by remember { mutableStateOf<Offset?>(null) }
-        val hostView = LocalView.current
-        val orbCenterInCard: () -> Offset? = orbCenterInCard@{
-            val onScreen = orbCenterOnScreen() ?: return@orbCenterInCard null
-            val origin = cardOriginInWindow ?: return@orbCenterInCard null
-            val loc = IntArray(2).also(hostView::getLocationOnScreen)
-            Offset(
-                onScreen.x - loc[0] - origin.x,
-                onScreen.y - loc[1] - origin.y,
-            )
-        }
-        Box {
-            Column(
-                modifier = Modifier
-                    .padding(
-                        start = if (anchorEnd) 12.dp else PANEL_ORB_LANE,
-                        end = if (anchorEnd) PANEL_ORB_LANE else 12.dp,
-                        top = 12.dp,
-                        bottom = 12.dp,
-                    )
-                    // 224dp is the visual baseline. Let the card grow for large system fonts so
-                    // the compact voice control and the two task actions never clip or collide.
-                    .widthIn(min = 224.dp, max = 280.dp)
-                    .onGloballyPositioned { cardOriginInWindow = it.positionInWindow() }
-                    // 容器的裁切、阴影、玻璃底与描边都按当前揭开矩形画，只在绘制阶段读进度，不重组。
-                    // 阴影用硬件阴影（RenderNode 按轮廓实时算），跟随揭开形状，过渡中不丢阴影、不出方角（审查 A10）。
-                    .orbReveal(
-                        progress = { reveal.value },
-                        anchorEnd = anchorEnd,
-                        orbCenter = orbCenterInCard,
-                    )
-                    .padding(4.dp)
-                    .graphicsLayer {
-                        // 先让玻璃形状从球边揭开，再淡入内容；收起一开始先淡出内容，避免末段文字跳闪。
-                        alpha = if (reduced) {
-                            1f
-                        } else if (entering) {
-                            ((reveal.value - PANEL_CONTENT_ENTER_START) /
-                                (PANEL_CONTENT_ENTER_END - PANEL_CONTENT_ENTER_START)).coerceIn(0f, 1f)
-                        } else {
-                            (reveal.value / PANEL_CONTENT_EXIT_END).coerceIn(0f, 1f)
-                        }
-                    },
-            ) {
-                val voiceMode = voice.active && !supplementMode
-                Crossfade(
-                    targetState = voiceMode,
-                    animationSpec = MovoMotion.standard(),
-                    modifier = Modifier.animateContentSize(MovoMotion.standard()),
-                    label = "panelVoiceMode",
-                ) { inVoice ->
-                    if (inVoice) PanelVoiceBody(state, voice) else PanelHeader(state)
-                }
-                PanelNotice(notice)
-                AnimatedVisibility(
-                    visible = supplementMode,
-                    enter = fadeIn(MovoMotion.fast()) + expandVertically(MovoMotion.standard()),
-                    exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
-                ) {
-                    SupplementInput(
-                        value = supplementText,
-                        onValueChange = { supplementText = it; onInteraction() },
-                        onCancel = ::closeSupplementMode,
-                        onSend = ::submitSupplement,
-                        onTap = onSupplementKeyboardRequested,
-                    )
-                }
-                AnimatedVisibility(
-                    visible = !supplementMode,
-                    enter = fadeIn(MovoMotion.fast()) + expandVertically(MovoMotion.standard()),
-                    exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
-                ) {
-                    Column {
-                        AnimatedVisibility(
-                            visible = !voiceMode,
-                            enter = fadeIn(MovoMotion.standard()) + expandVertically(MovoMotion.standard()),
-                            exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
-                        ) {
-                            // 失败与最近步骤之间交叉淡化，高度同步 `standard`（审查 B6）。
-                            Crossfade(
-                                targetState = state.phase == AgentOverlayPhase.FAILED,
-                                animationSpec = MovoMotion.fast(),
-                                modifier = Modifier.animateContentSize(MovoMotion.standard()),
-                                label = "panelFailure",
-                            ) { failed ->
-                                if (failed) PanelFailure(state, onOpenResult) else RecentSteps(state)
-                            }
-                        }
-                        PanelActions(
-                            phase = state.phase,
-                            voiceMode = voiceMode,
-                            onType = ::enterSupplementMode,
-                            onStartVoice = { onInteraction(); onStartVoice() },
-                            onEndVoice = { onInteraction(); onEndVoice() },
-                            onVoiceKeyboard = ::enterSupplementModeFromVoice,
-                            onPause = { onInteraction(); onPause() },
-                            onResume = { onInteraction(); onResume() },
-                            onStop = { onInteraction(); onStop() },
+    Box {
+        AnimatedVisibility(
+            visible = entered && visible,
+            // 进场不整体淡入：起点就是与球重合的玻璃圆（球在上层盖着），由下面的揭开过渡负责；
+            // 退场等揭开缩回球心后再移除。减少动画时只淡入淡出。
+            enter = if (reduced) fadeIn(MovoMotion.fast()) else EnterTransition.None,
+            // 退场期间整层保持不透明（容器缩回球心、内容在末段淡出由下面两个过渡负责），缩完那一刻才移除。
+            exit = if (reduced) fadeOut(MovoMotion.fastExit()) else fadeOut(tween(durationMillis = 1, delayMillis = PANEL_MORPH_OUT_MS)),
+        ) {
+            // 规范 9.5「展开卡」/ Figma 候选「动效全集」A1「揭开」：圆角容器（玻璃底 + 阴影）从球心 32 圆长到卡片边界，
+            // 卡片内容按最终布局原位绘制、不缩放不位移，随容器边缘露出。0 = 与球重合的 32 圆，1 = 卡片。
+            val reveal = transition.animateFloat(
+                transitionSpec = {
+                    if (targetState == androidx.compose.animation.EnterExitState.Visible) {
+                        tween(PANEL_MORPH_IN_MS, easing = MovoMotion.EasingLinear)
+                    } else {
+                        tween(PANEL_MORPH_OUT_MS, easing = MovoMotion.EasingLinear)
+                    }
+                },
+                label = "panelReveal",
+            ) { if (it == androidx.compose.animation.EnterExitState.Visible || reduced) 1f else 0f }
+            val entering = transition.targetState == androidx.compose.animation.EnterExitState.Visible
+            // 展开卡窗口在球那一侧多留一条与球重叠的通道（PANEL_ORB_LANE，AgentRuntimeService.bubbleLayoutParams）：
+            // 容器从球心开始长，起点必须落在本窗口里，否则前几帧被窗口边缘裁掉，看起来是从边缘冒出来。
+            // 通道盖住了悬浮球，落在球上的手势转给悬浮球（见下方通道）。
+            // 追踪卡片在窗口坐标系里的位置：把 orbCenterOnScreen 换算到卡片自身坐标，作为揭开起点。
+            var cardOriginInWindow by remember { mutableStateOf<Offset?>(null) }
+            val hostView = LocalView.current
+            val orbCenterInCard: () -> Offset? = orbCenterInCard@{
+                val onScreen = orbCenterOnScreen() ?: return@orbCenterInCard null
+                val origin = cardOriginInWindow ?: return@orbCenterInCard null
+                val loc = IntArray(2).also(hostView::getLocationOnScreen)
+                Offset(
+                    onScreen.x - loc[0] - origin.x,
+                    onScreen.y - loc[1] - origin.y,
+                )
+            }
+            Box {
+                Column(
+                    modifier = Modifier
+                        .padding(
+                            start = if (anchorEnd) 12.dp else PANEL_ORB_LANE,
+                            end = if (anchorEnd) PANEL_ORB_LANE else 12.dp,
+                            top = 12.dp,
+                            bottom = 12.dp,
                         )
+                        // 224dp is the visual baseline. Let the card grow for large system fonts so
+                        // the compact voice control and the two task actions never clip or collide.
+                        .widthIn(min = 224.dp, max = 280.dp)
+                        .onGloballyPositioned { cardOriginInWindow = it.positionInWindow() }
+                        // 容器的裁切、阴影、玻璃底与描边都按当前揭开矩形画，只在绘制阶段读进度，不重组。
+                        // 阴影用硬件阴影（RenderNode 按轮廓实时算），跟随揭开形状，过渡中不丢阴影、不出方角（审查 A10）。
+                        .orbReveal(
+                            progress = { reveal.value },
+                            anchorEnd = anchorEnd,
+                            orbCenter = orbCenterInCard,
+                        )
+                        .padding(4.dp)
+                        .graphicsLayer {
+                            // 先让玻璃形状从球边揭开，再淡入内容；收起一开始先淡出内容，避免末段文字跳闪。
+                            alpha = if (reduced) {
+                                1f
+                            } else if (entering) {
+                                ((reveal.value - PANEL_CONTENT_ENTER_START) /
+                                    (PANEL_CONTENT_ENTER_END - PANEL_CONTENT_ENTER_START)).coerceIn(0f, 1f)
+                            } else {
+                                (reveal.value / PANEL_CONTENT_EXIT_END).coerceIn(0f, 1f)
+                            }
+                        },
+                ) {
+                    val voiceMode = voice.active && !supplementMode
+                    Crossfade(
+                        targetState = voiceMode,
+                        animationSpec = MovoMotion.standard(),
+                        modifier = Modifier.animateContentSize(MovoMotion.standard()),
+                        label = "panelVoiceMode",
+                    ) { inVoice ->
+                        if (inVoice) PanelVoiceBody(state, voice) else PanelHeader(state)
+                    }
+                    PanelNotice(notice)
+                    AnimatedVisibility(
+                        visible = supplementMode,
+                        enter = fadeIn(MovoMotion.fast()) + expandVertically(MovoMotion.standard()),
+                        exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
+                    ) {
+                        SupplementInput(
+                            value = supplementText,
+                            onValueChange = { supplementText = it; onInteraction() },
+                            onCancel = ::closeSupplementMode,
+                            onSend = ::submitSupplement,
+                            onTap = onSupplementKeyboardRequested,
+                        )
+                    }
+                    AnimatedVisibility(
+                        visible = !supplementMode,
+                        enter = fadeIn(MovoMotion.fast()) + expandVertically(MovoMotion.standard()),
+                        exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
+                    ) {
+                        Column {
+                            AnimatedVisibility(
+                                visible = !voiceMode,
+                                enter = fadeIn(MovoMotion.standard()) + expandVertically(MovoMotion.standard()),
+                                exit = fadeOut(MovoMotion.fastExit()) + shrinkVertically(MovoMotion.standard()),
+                            ) {
+                                // 失败与最近步骤之间交叉淡化，高度同步 `standard`（审查 B6）。
+                                Crossfade(
+                                    targetState = state.phase == AgentOverlayPhase.FAILED,
+                                    animationSpec = MovoMotion.fast(),
+                                    modifier = Modifier.animateContentSize(MovoMotion.standard()),
+                                    label = "panelFailure",
+                                ) { failed ->
+                                    if (failed) PanelFailure(state, onOpenResult) else RecentSteps(state)
+                                }
+                            }
+                            PanelActions(
+                                phase = state.phase,
+                                voiceMode = voiceMode,
+                                onType = ::enterSupplementMode,
+                                onStartVoice = { onInteraction(); onStartVoice() },
+                                onEndVoice = { onInteraction(); onEndVoice() },
+                                onVoiceKeyboard = ::enterSupplementModeFromVoice,
+                                onPause = { onInteraction(); onPause() },
+                                onResume = { onInteraction(); onResume() },
+                                onStop = { onInteraction(); onStop() },
+                            )
+                        }
                     }
                 }
             }
-            Box(
-                Modifier
-                    .matchParentSize()
-                    .wrapContentWidth(if (anchorEnd) Alignment.End else Alignment.Start)
-                    .width(PANEL_ORB_LANE)
-                    .pointerInput(onCollapse) { detectTapGestures { onCollapse() } },
-            )
         }
+        // 球侧通道放在揭开 / 退场动画之外：从这里开始拖动球时展开卡随即收起，卡片内容退场后通道仍在，
+        // 同一次拖动不会因为内容被移除而中断（窗口由 Runtime 等拖动结束再移除）。
+        Box(
+            Modifier
+                .matchParentSize()
+                .wrapContentWidth(if (anchorEnd) Alignment.End else Alignment.Start)
+                .width(PANEL_ORB_LANE)
+                .pointerInteropFilter { event ->
+                    if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                        laneTargetsOrb[0] = orbLaneHit(event.rawX, event.rawY, orbCenterOnScreen(), orbHalfPx)
+                    }
+                    if (laneTargetsOrb[0]) {
+                        laneOrbPointer.onTouch(event)
+                    } else {
+                        // 通道其余部分（球上方的空白）：点一下收起展开卡。
+                        when (event.actionMasked) {
+                            MotionEvent.ACTION_DOWN -> laneCollapseGesture.down(event.rawX, event.rawY)
+                            MotionEvent.ACTION_MOVE -> laneCollapseGesture.move(event.rawX, event.rawY)
+                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                val action = laneCollapseGesture.up(cancelled = event.actionMasked == MotionEvent.ACTION_CANCEL)
+                                if (action == OrbGesture.Action.Tap) onCollapse()
+                            }
+                        }
+                    }
+                    true
+                },
+        )
     }
 }
 

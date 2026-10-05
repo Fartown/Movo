@@ -19,7 +19,7 @@ import org.json.JSONObject
 
 /**
  * §12 ui_swipe（送达型）。按手指轨迹从 (x,y) 滑到 (x2,y2)：轮播、拖动、解锁。浏览列表用 ui_scroll。
- * 起止点隐式绑最近一次 ui_observe 的 gen。提交点（滑动确认类）按起点节点识别 → 读不到可信节点即确认。
+ * 起止点隐式绑最近一次 ui_observe 的 gen。只在受保护应用里确认（见 buildUiActionResolution）。
  */
 
 internal data class UiSwipeInput(
@@ -62,7 +62,7 @@ internal class UiSwipeTool(
     override fun resolve(input: UiSwipeInput, env: ToolEnvironment): CallResolution {
         val latest = registry.latest()
         val pkg = registry.foregroundPackage()
-        // 提交点按起点节点识别；读不到（TODO 占位→null）即 readableTarget=false → 中央确认。
+        // 起点下的节点只作记录（readableTarget），不单独触发确认。
         val probe = backend.readableNodeAtPoint(input.x, input.y)
         return buildUiActionResolution(
             backend = backend.backend(env),
@@ -71,8 +71,10 @@ internal class UiSwipeTool(
             selfPackage = registry.selfPackage,
             readableTarget = probe != null,
             effect = null,
-            // 坐标手势：不走 index 自我保护拒绝（home/back 式全局手势不拒）；但纯坐标仍会中央确认。
+            // 坐标手势：不走 index 自我保护拒绝（home/back 式全局手势不拒）。
             selfProtect = false,
+            stale = genError(registry, latest?.observationId, latest?.gen ?: -1L),
+            action = "在屏幕上滑动",
         )
     }
 

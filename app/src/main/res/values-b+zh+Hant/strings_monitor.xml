@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="monitor_execution_label">背景監聽</string>
-    <string name="monitor_execution_summary">背景監聽 %1$d 個·%2$s，%3$s 自動結束</string>
+    <plurals name="monitor_execution_summary">
+        <item quantity="other">背景監聽 %1$d 個·%2$s，%3$s 自動結束</item>
+    </plurals>
+    <string name="monitor_execution_mixed">任務 %1$d 項·背景監聽 %2$d 個</string>
     <string name="monitor_stop_all">全部停止</string>
     <string name="monitor_notify_channel">Movo 通知</string>
     <string name="monitor_notify_stop">停止提醒</string>
@@ -12,15 +15,20 @@
     <string name="monitor_row_rate_limit">監聽已停止·%1$s·輸出太頻繁</string>
     <string name="monitor_row_interrupted">監聽已中斷·%1$s·Movo 被系統關閉</string>
     <string name="monitor_row_exit">監聽結束·%1$s·%2$s</string>
+    <string name="monitor_row_exit_code">監聽結束·%1$s·結束代碼 %2$d·%3$s</string>
     <string name="monitor_chip">監聽</string>
     <string name="monitor_chip_count">監聽 %1$d</string>
     <string name="monitor_list_title">背景監聽</string>
-    <string name="monitor_list_item_detail">已觸發 %1$d 次·%2$s 自動結束</string>
+    <plurals name="monitor_list_item_detail">
+        <item quantity="other">已觸發 %1$d 次·%2$s 自動結束</item>
+    </plurals>
     <string name="monitor_list_stop">停止</string>
     <string name="monitor_settings_group">背景監聽</string>
     <string name="monitor_settings_max_duration">最長監聽時長</string>
-    <string name="monitor_settings_footer">超過這個時長的監聽會自動停止。修改只影響之後新開始的監聽。</string>
+    <string name="monitor_settings_footer_1">超過這個時長的監聽會自動停止。</string>
+    <string name="monitor_settings_footer_2">修改只影響之後新開始的監聽。</string>
     <string name="monitor_settings_choice_desc">超過這個時長，監聽會自動停止</string>
+    <string name="monitor_duration_seconds">%1$d 秒</string>
     <string name="monitor_duration_minutes">%1$d 分鐘</string>
     <string name="monitor_duration_hours">%1$d 小時</string>
     <string name="tool_monitor_start">開始監聽</string>

@@ -153,7 +153,13 @@ internal class AgentRuntimeRunExecutor(
                 }
             }
             val typedSubsystem = AgentToolSubsystem(
-                services = ToolServices(appContext, AndroidAgentLogger, request.runId),
+                services = ToolServices(
+                    appContext,
+                    AndroidAgentLogger,
+                    request.runId,
+                    // 入口面板（对话浮层、小布 / 小爱面板）正在退场时，第一张截图把它排除掉（重构前的行为）。
+                    screenshotExcludedPackages = { entrySurfaceGuard?.consumeScreenshotExcludedPackages().orEmpty() },
+                ),
                 mcpCatalog = mcpCatalog,
                 environment = {
                     AgentToolCapabilities.capture(appContext).toToolEnvironment(
@@ -164,7 +170,7 @@ internal class AgentRuntimeRunExecutor(
                             sensitiveRead = request.config.deviceSensitiveReadTools,
                             sensitiveAction = request.config.deviceSensitiveActionTools,
                         ),
-                        linuxReady = false,
+                        linuxReady = linuxEnvironmentReady(appContext),
                         memoryScope = when {
                             !memoryEnabled -> MemoryScope.DISABLED
                             roleplayContext != null -> MemoryScope.CHARACTER
@@ -172,7 +178,9 @@ internal class AgentRuntimeRunExecutor(
                         },
                         conversationBound = conversationId != null,
                         conversationId = conversationId,
-                        interactive = true,
+                        // 后台监听唤醒的一轮在屏幕关着时没人能作答：不给 ask_user，审批立即返回「无法确认」。
+                        // 用户自己发起的任务照常等：亮屏后卡片出现（锁着时先出解锁提示）。
+                        interactive = userCanAnswer(request, appContext),
                         modelInputs = setOf(ModelInput.TEXT, ModelInput.IMAGE),
                     )
                 },
@@ -196,6 +204,7 @@ internal class AgentRuntimeRunExecutor(
                     onResolved = { requestId ->
                         dispatchInteractionEvent(AgentEvent.InteractionResolved(requestId))
                     },
+                    availableNow = { userCanAnswer(request, appContext) },
                 ),
                 cancelled = { runController.isCancelled },
                 characterId = { roleplayContext?.characterId },
@@ -207,6 +216,10 @@ internal class AgentRuntimeRunExecutor(
                     AgentInteractionRegistry.unregister(request.runId)
                     built.close()
                 }
+            }
+            // 后台监听唤醒的一轮：命令输出（日志、网页、通知等）是不可信内容（实施方案 5.1）。
+            if (request.isMonitorOrigin) {
+                typedSubsystem.pipeline.taint.mark(io.github.fartown.movo.agent.tools.core.TaintKind.UNTRUSTED, "monitor_event")
             }
             val effectiveExecutor = typedSubsystem.pipeline
             val typedCatalog: (AgentToolCapabilities) -> org.json.JSONArray = { _ -> typedSubsystem.pipeline.catalog() }
@@ -233,6 +246,11 @@ internal class AgentRuntimeRunExecutor(
                 prompt = request.prompt,
                 toolExecutor = effectiveExecutor,
                 typedCatalog = typedCatalog,
+                toolGuide = {
+                    (typedSubsystem.pipeline.promptSections().map { it.text.trim() } + switchNotes(request.config))
+                        .filter { it.isNotBlank() }
+                        .joinToString("\n\n")
+                },
                 images = request.images,
                 history = request.history,
                 runController = runController,
@@ -240,6 +258,10 @@ internal class AgentRuntimeRunExecutor(
                 memoryContext = memoryContext,
             ) { event ->
                 timing.accept(event)
+                // 运行中并入的监听事件进了模型上下文：同样算不可信内容。
+                if (event is AgentEvent.MonitorEventReceived) {
+                    typedSubsystem.pipeline.taint.mark(io.github.fartown.movo.agent.tools.core.TaintKind.UNTRUSTED, "monitor_event")
+                }
                 acceptEvent(
                     session,
                     event,
@@ -385,3 +407,54 @@ internal class AgentRuntimeRunExecutor(
             }
     }
 }
+
+/**
+ * 当前选中的 Linux 发行版能不能跑命令：装好了（与终端页的判断一致），且对应后端可用——
+ * 免 Root 方式要有 PRoot 组件，chroot 方式要有 Root。
+ */
+private fun linuxEnvironmentReady(context: android.content.Context): Boolean = runCatching {
+    val distribution = io.github.fartown.movo.data.repository.LinuxEnvironmentSettingsRepository.current(context)
+    val rootfs = io.github.fartown.movo.agent.terminal.LinuxEnvironmentPaths.rootfsDir(context, distribution).absolutePath
+    if (!io.github.fartown.movo.agent.terminal.LinuxEnvironmentPaths.rootfsReady(rootfs)) return@runCatching false
+    when (io.github.fartown.movo.agent.terminal.LinuxEnvironmentPaths.backendOf(rootfs)) {
+        io.github.fartown.movo.agent.terminal.LinuxExecutionBackend.PROOT ->
+            io.github.fartown.movo.agent.terminal.ProotCommandBuilder.available()
+        else -> io.github.fartown.movo.agent.terminal.TerminalRuntime.rootAvailable
+    }
+}.getOrDefault(false)
+
+/** 屏幕亮着才可能有人看到确认卡、提问卡。 */
+private fun screenInteractive(context: android.content.Context): Boolean = runCatching {
+    (context.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager).isInteractive
+}.getOrDefault(true)
+
+/**
+ * 这一步要确认或提问时，能不能等用户作答。用户自己发起的任务总是等：用户可能只是刚按了锁屏，
+ * 亮屏后卡片会出现（锁着时先出解锁提示），超时才按未确认处理。后台监听唤醒的一轮没人在旁边，
+ * 屏幕关着时直接按「无法确认」处理，不干等。
+ */
+internal fun userCanAnswer(isMonitorOrigin: Boolean, screenOn: () -> Boolean): Boolean =
+    !isMonitorOrigin || screenOn()
+
+private fun userCanAnswer(request: AgentRuntimeWire.RunRequest, context: android.content.Context): Boolean =
+    userCanAnswer(request.isMonitorOrigin) { screenInteractive(context) }
+
+/**
+ * 用户在「设置 → 工具」里关掉的能力：工具已经不进目录，这里再告诉模型不要换个办法（打开对应应用看屏幕、跑命令）绕过去。
+ * 真机上关了「读取敏感信息」后，模型曾打开系统通讯录 App 读出联系人。
+ */
+internal fun switchNotes(config: io.github.fartown.movo.agent.model.AgentModelClient.ModelConfig): String = buildList {
+    if (!config.deviceSensitiveReadTools) {
+        add(
+            "- 用户关闭了「读取敏感信息」：不要读取通知、位置、验证码、通讯录、短信、通话记录、剪贴板，" +
+                "也不要打开对应的应用看屏幕或用命令去读；需要这些信息时，告诉用户可以在 设置 → 工具 里开启。",
+        )
+    }
+    if (!config.deviceSensitiveActionTools) {
+        add(
+            "- 用户关闭了「敏感设备操作」：不要修改系统设置、开关网络与蓝牙、停止或冻结应用，" +
+                "也不要打开设置应用替用户改；需要时告诉用户可以在 设置 → 工具 里开启，或让用户自己操作。",
+        )
+    }
+    // 「设备直达」关掉只是不走直达捷径，仍可以在时钟、音乐等应用里操作界面完成，不需要额外说明。
+}.takeIf { it.isNotEmpty() }?.joinToString("\n", prefix = "## 用户关闭的能力\n").orEmpty()

@@ -20,6 +20,7 @@ import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.fail
 import io.github.fartown.movo.agent.tools.core.objectSchema
+import io.github.fartown.movo.agent.tools.core.ApprovalPreview
 import java.util.UUID
 import org.json.JSONObject
 
@@ -49,8 +50,8 @@ internal data class MemoryWriteOutput(
  * 风险/确认：
  * - append/replace → Risk.LOCAL，默认不确认、可撤销（角色记忆要频繁更新事实，每次确认不可用）。
  * - clear → Risk.EXTERNAL，中央派生一律确认（大段删除同样危险）。
- * - 「有污点时 append/replace 也确认」：由中央 requiresApproval(tainted) 的 TAINTED 分支覆盖——
- *   本轮读过不可信内容/个人数据后，LOCAL 写也会被要求确认，无需工具额外声明。
+ * - 本轮既读过不可信内容、又读过个人数据时（两类污点同时成立），append/replace 也确认：exfiltrates=true，
+ *   由中央 requiresApproval 的 TAINTED 分支派生。只读过其中一类不确认。
  *
  * 一致性：append/replace 不要求模型传 revision，但存储层仍在同一锁内按「写入前读到的版本」做 CAS，
  * 审批前后片段被改动时返回 CONFLICT。
@@ -106,6 +107,8 @@ internal class MemoryWriteTool(
         CallResolution(
             risk = if (input.mode == MemoryWriteMode.CLEAR) Risk.EXTERNAL else Risk.LOCAL,
             sensitivity = Sensitivity.PRIVATE,
+            // 长期记忆会带进以后的每次对话，是持久的注入通道：两类污点同时成立时，追加、替换也要确认（安全 G）。
+            exfiltrates = input.mode != MemoryWriteMode.CLEAR,
             resources = emptySet(), // 应独占 MEMORY 资源；串行基线下暂不声明（见返回报告）
             // mutation_id 支持中断查询与撤销：在 resolve 生成，execute 原样读出写进输出。
             recovery = RecoverySpec.Queryable(
@@ -114,6 +117,16 @@ internal class MemoryWriteTool(
                 retentionMs = RETENTION_MS,
             ),
         )
+
+    override fun approvalPreview(input: MemoryWriteInput): ApprovalPreview = when (input.mode) {
+        MemoryWriteMode.CLEAR -> ApprovalPreview("清空长期记忆？", "清空全部长期记忆\n清空后 Movo 不再记得你让它记住的内容。")
+        MemoryWriteMode.APPEND -> ApprovalPreview("写进长期记忆？", "记住：${input.newText.orEmpty().take(120)}")
+        MemoryWriteMode.REPLACE -> ApprovalPreview(
+            "修改长期记忆？",
+            if (input.newText.isNullOrEmpty()) "删掉：${input.oldText.orEmpty().take(120)}"
+            else "改为：${input.newText.take(120)}",
+        )
+    }
 
     override fun execute(
         input: MemoryWriteInput,

@@ -17,6 +17,7 @@ import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.fail
 import io.github.fartown.movo.agent.tools.core.objectSchema
+import io.github.fartown.movo.agent.tools.core.TaintKind
 import org.json.JSONObject
 
 /** PDF 读取方式；mode 仅对 PDF 生效。 */
@@ -200,6 +201,9 @@ internal class FileReadTool(
             .put("image_attached", true)
         return Verdict.Read(FileReadOutput(data, imageAttached = true))
     }
+
+    /** 用户的文件、照片算个人数据。 */
+    override fun taintKinds(input: FileReadInput): Set<TaintKind> = setOf(TaintKind.PERSONAL)
 
     override fun renderForModel(output: FileReadOutput): ModelContent = ModelContent.Json(output.data)
 

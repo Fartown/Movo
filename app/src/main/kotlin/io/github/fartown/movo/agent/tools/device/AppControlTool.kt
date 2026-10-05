@@ -19,6 +19,8 @@ import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.invalidArgs
 import io.github.fartown.movo.agent.tools.core.objectSchema
+import io.github.fartown.movo.agent.tools.core.ApprovalPreview
+import io.github.fartown.movo.agent.tools.core.ToolAvailability
 import org.json.JSONObject
 
 internal enum class AppControlAction { FORCE_STOP, FREEZE, UNFREEZE }
@@ -69,6 +71,25 @@ internal class AppControlTool(
             required = true, enum = AppControlAction.entries.map { it.name.lowercase() },
         )
     }
+
+    /** 没有 Root 时不进目录（以前先弹确认卡、批完才报「需要 Root」）。 */
+    override fun availability(env: ToolEnvironment): ToolAvailability =
+        if (env.rootAvailable) {
+            ToolAvailability.Available
+        } else {
+            ToolAvailability.Unavailable(ToolErrorCode.ROOT_REQUIRED, "停止、冻结应用需要 Root")
+        }
+
+    override fun approvalPreview(input: AppControlInput): ApprovalPreview {
+        val app = io.github.fartown.movo.agent.tools.ui.appLabel(input.packageName)
+        return when (input.action) {
+            AppControlAction.FORCE_STOP -> ApprovalPreview("强行停止「$app」？", "强行停止「$app」\n它会立刻退出，没保存的内容可能丢失。")
+            AppControlAction.FREEZE -> ApprovalPreview("冻结「$app」？", "冻结「$app」\n冻结后它不能打开、也收不到消息，解冻后恢复。")
+            AppControlAction.UNFREEZE -> ApprovalPreview("解冻「$app」？", "解冻「$app」\n解冻后它恢复正常使用。")
+        }
+    }
+
+    override fun approvalScope(input: AppControlInput): String = "${input.packageName}/${input.action.name.lowercase()}"
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): AppControlInput {
         val pkg = args.nonBlank("package")

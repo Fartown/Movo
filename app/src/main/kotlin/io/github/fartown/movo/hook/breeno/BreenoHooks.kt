@@ -1505,11 +1505,14 @@ internal object BreenoHooks {
         }
 
         private fun String.toBreenoToolLabel(): String =
-            when (this) {
-                "terminal",
-                "run_command" -> injected(AgentAppContext.resolve(), R.string.injected_system_tool, "system tool")
-                "open_app" -> injected(AgentAppContext.resolve(), R.string.injected_app_tool, "app tool")
-                "screenshot" -> injected(AgentAppContext.resolve(), R.string.injected_screen_tool, "screen tool")
+            when {
+                // 类型化工具名（重构后只剩这些）与旧名一起映射。
+                this == "terminal" || this == "run_command" || this == "terminal_run" || this == "terminal_job" ->
+                    injected(AgentAppContext.resolve(), R.string.injected_system_tool, "system tool")
+                this == "open_app" || this.startsWith("app_") ->
+                    injected(AgentAppContext.resolve(), R.string.injected_app_tool, "app tool")
+                this == "screenshot" || this.startsWith("ui_") ->
+                    injected(AgentAppContext.resolve(), R.string.injected_screen_tool, "screen tool")
                 else -> injected(AgentAppContext.resolve(), R.string.injected_tool, "tool")
             }
     }

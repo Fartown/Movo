@@ -104,11 +104,10 @@ internal interface AgentTool {
     fun approvalTitle(args: ToolArgs): String = name
 
     /**
-     * 执行成功后是否给本轮打污点，返回污点来源名。默认：结果敏感度不是 NORMAL 时以工具名为来源。
-     * 读网页、MCP 结果等不可信输入的工具应覆盖它。
+     * 执行成功后给本轮打哪类污点（实施方案 5.1）。默认不打；读到不可信内容或个人数据的工具才声明。
+     * 结果敏感度只决定脱敏，不再决定污点：终端输出、写记忆等工具自己的结果不污染后续调用。
      */
-    fun taintSource(args: ToolArgs, outcome: ToolOutcome): String? =
-        if ((outcome.sensitivity ?: Sensitivity.NORMAL) != Sensitivity.NORMAL) name else null
+    fun taintKinds(args: ToolArgs, outcome: ToolOutcome): Set<TaintKind> = emptySet()
 
     /** 执行。超时由工具自己处理：只读超时返回 TIMEOUT，动作超时返回 OUTCOME_UNKNOWN。 */
     fun execute(args: ToolArgs, ctx: ToolContext): ToolOutcome
@@ -118,6 +117,8 @@ internal interface AgentTool {
 internal interface ToolProvider : AutoCloseable {
     val tools: List<AgentTool>
     val promptSection: PromptSection? get() = null
+    /** 按当前环境给出用法分节；分节里提到的工具不可用时，提供方可以去掉相应的句子。 */
+    fun promptSection(env: ToolEnvironment): PromptSection? = promptSection
     override fun close() = Unit
 }
 

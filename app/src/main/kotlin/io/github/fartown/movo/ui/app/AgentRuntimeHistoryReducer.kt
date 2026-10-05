@@ -23,7 +23,12 @@ internal object AgentRuntimeHistoryReducer {
             return Outcome(state, alreadyApplied = true)
         }
         val validSnapshot = snapshot?.takeIf { it.operationId == runId }
-        val consumedSupplements = maxOf(additions.count { it.role == "user" }, validSnapshot?.consumedSupplementCount ?: 0)
+        // 只数补充（`user-<runId>-supplement-*`）：本轮读到的后台监听事件也是 user 条目，算进来会把没被消费的补充当成已消费丢掉。
+        val supplementPrefix = "user-$runId-supplement-"
+        val consumedSupplements = maxOf(
+            additions.count { it.role == "user" && it.messageId.startsWith(supplementPrefix) },
+            validSnapshot?.consumedSupplementCount ?: 0,
+        )
         val pendingSupplements = if (!retainPendingSupplements) emptyList() else state.messages.filterIsInstance<UserMessageUi>()
             .filter { it.id.startsWith("user-$runId-supplement-") }
             .sortedBy { it.id.substringAfterLast('-').toIntOrNull() ?: 0 }

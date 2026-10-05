@@ -77,10 +77,14 @@ data class MonitorEventMessageUi(
     val kind: MonitorEventKindUi,
     val seq: Int,
     val atMillis: Long,
-    /** 事件原文（展开时显示）；结束行为空。 */
+    /** 事件原文（展开时显示）；结束行为命令退出前最后的输出（可展开），没有时为空。 */
     val text: String,
     /** 结束原因（MonitorEndReason 名）；事件行为 null。 */
     val reason: String? = null,
+    /** 命令自己结束时的退出码（写进结束行）。 */
+    val exitCode: Int? = null,
+    /** 到期结束时这个监听的最长时长（「到 2 小时上限」）。 */
+    val limitMs: Long? = null,
     val startsTurn: Boolean = false,
     /** 模型历史里对应一条 user 条目（事件轮的第一行、运行中每批并入的第一行）。 */
     val historyAnchor: Boolean = false,

@@ -99,9 +99,11 @@ internal class BrokeredUserInteraction(
     private val cancelled: () -> Boolean = { false },
     private val onResolved: (String) -> Unit = {},
     private val idPrefix: String = "ix",
+    /** 现在有没有人能作答（屏幕亮着）。没有时审批、提问立即返回「无法确认」，不干等 120 秒。 */
+    private val availableNow: () -> Boolean = { true },
 ) : UserInteraction {
     private val seq = AtomicLong(0)
-    override val available: Boolean = true
+    override val available: Boolean get() = runCatching(availableNow).getOrDefault(true)
 
     private fun nextId(): String = "$idPrefix-${System.currentTimeMillis()}-${seq.incrementAndGet()}"
 
@@ -122,7 +124,10 @@ internal class BrokeredUserInteraction(
             kind = InteractionKind.QUESTION,
             title = question.question,
             detail = "",
-            options = question.options.map { it.label },
+            // 补充说明并进选项文字（定稿 16-03：「王伟 · 手机 138****2048」），否则用户看不出候选的区别。
+            options = question.options.map { option ->
+                option.detail?.takeIf { it.isNotBlank() }?.let { "${option.label} · $it" } ?: option.label
+            },
             allowFreeText = question.allowFreeText,
         )
         return when (val reply = awaitReply(prompt, timeoutMs)) {

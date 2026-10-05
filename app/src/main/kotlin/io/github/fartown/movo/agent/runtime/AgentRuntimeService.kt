@@ -4,9 +4,12 @@ import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import android.app.Service
 import android.app.ActivityOptions
+import android.app.KeyguardManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.os.Handler
@@ -62,12 +65,16 @@ import io.github.fartown.movo.agent.overlay.markPaused
 import io.github.fartown.movo.agent.overlay.markResumed
 import io.github.fartown.movo.agent.overlay.AgentOverlayStatus
 import io.github.fartown.movo.agent.overlay.AgentOverlayVisibilityPolicy
+import io.github.fartown.movo.agent.overlay.AgentOverlayUnlockPrompt
+import io.github.fartown.movo.agent.overlay.InteractionCardCoordinator
+import io.github.fartown.movo.agent.overlay.OverlayLifecyclePolicy
+import io.github.fartown.movo.agent.overlay.OverlayUnlockActivity
 import io.github.fartown.movo.agent.overlay.applyEvent
 import io.github.fartown.movo.config.Prefs
 import io.github.fartown.movo.agent.tools.interaction.AgentInteractionRegistry
 import io.github.fartown.movo.agent.tools.interaction.InteractionReply
 import io.github.fartown.movo.ui.components.movo.AgentInteractionOverlayContent
-import androidx.compose.runtime.collectAsState
+import io.github.fartown.movo.ui.model.AgentInteractionUiState
 import io.github.fartown.movo.core.AndroidAgentLogger
 import io.github.fartown.movo.core.ModuleConfig
 import io.github.fartown.movo.core.safeLogType
@@ -131,7 +138,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     /** 重建浮窗时沿用的悬浮球位置（用户可能拖过）。 */
     private var restoreOrbPosition: WindowManager.LayoutParams? = null
     private val onAccessibilityInstanceChanged: () -> Unit = {
-        mainHandler.post(::rebuildOverlayIfOwnerChanged)
+        mainHandler.post(::onAccessibilityInstanceChangedOnMain)
     }
     private var glowView: ComposeView? = null
     private var orbView: ComposeView? = null
@@ -139,12 +146,55 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private var glowParams: WindowManager.LayoutParams? = null
     private var orbParams: WindowManager.LayoutParams? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
-    // 跨应用审批卡悬浮宿主（实施方案 §6.1 + overlay-approval-card-plan）：Movo 不在前台时审批卡浮在目标应用上。
+    /** 光晕正在随结束淡出（之后移除窗口）；有新的前台操作时撤销。 */
+    private val glowRetired = mutableStateOf(false)
+    private val glowRetireToken = Any()
+    /**
+     * 无障碍断开 / 重连时按新 context 重建浮窗失败（例如无障碍刚断开、又没有悬浮窗权限）：记下需要的浮层，
+     * 下次无障碍实例变化时按原状态再建；否则悬浮球就此消失、不会自己回来。
+     */
+    private var pendingOverlayRestore: OverlayRestore? = null
+
+    private data class OverlayRestore(
+        val standby: Boolean,
+        val glow: Boolean,
+        val position: WindowManager.LayoutParams?,
+    )
+
+    /** 正在拖动悬浮球（可能从展开卡的球侧通道开始）：展开卡窗口等拖动结束再移除，否则这次拖动会被中断。 */
+    private var orbDragging = false
+    private var bubbleRemovalDeferred = false
+
+    /**
+     * 后台监听唤醒的一轮：悬浮层上有结果待查看（✓ / !）时，这一轮在需要前台操作之前不动悬浮层，
+     * 自己的状态先记在这里；要操作其他 App（揭开悬浮层）时才接管。
+     */
+    private var backgroundRun: BackgroundRun? = null
+
+    private class BackgroundRun(
+        val session: AgentRuntimeSession,
+        val conversationTarget: AgentConversationTarget?,
+        val runId: String,
+        var state: AgentOverlayState,
+    )
+
+    // 跨应用审批卡 / 提问卡的悬浮宿主（实施方案 §6.1 + overlay-approval-card-plan）：没有 App 内宿主（主界面、对话浮层 resumed）
+    // 时浮在目标应用上。显示哪一张、在哪一处由 [InteractionCardCoordinator] 决定：同一张卡任何时候只在一处。
     private var interactionView: ComposeView? = null
     private var interactionParams: WindowManager.LayoutParams? = null
-    private val overlayInteraction = kotlinx.coroutines.flow.MutableStateFlow<io.github.fartown.movo.ui.model.AgentInteractionUiState?>(null)
-    /** 是否有 Movo 自己的 Activity 处于前台：前台时审批卡走应用内渲染，不弹悬浮卡。 */
-    @Volatile private var appForeground = false
+    /** 悬浮卡窗口取自哪个 context；与当前 [overlayContext] 不同（无障碍重连）时旧窗口已被系统移除，要重建。 */
+    private var interactionOwner: Context? = null
+    private var interactionWindowManager: WindowManager? = null
+    /** 悬浮卡当前显示的是锁屏解锁提示（窗口只有卡片大小、不拦截卡片外的触摸，用户仍可在锁屏上解锁）。 */
+    private val interactionLocked = mutableStateOf(false)
+    private var interactionFocusable = false
+    /** 亮屏 / 息屏 / 解锁：锁屏状态变了，悬浮卡在审批卡与解锁提示之间切换。 */
+    private val keyguardReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val action = intent?.action
+            mainHandler.post { onKeyguardStateChanged(action) }
+        }
+    }
     /** 展开卡的原始位置（距屏幕底部）；键盘补充时抬到键盘上方，键盘收起后回到这里。 */
     private var bubbleBaseY = 0
     /**
@@ -203,12 +253,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     /** App 自己的页面进出前台时刷新待命悬浮球的显隐（前台判断用 [VoiceSurfaceTracker]，它从进程启动起就在计数）。 */
     private val appActivityCallbacks = object : android.app.Application.ActivityLifecycleCallbacks {
         override fun onActivityResumed(activity: android.app.Activity) {
-            appForeground = true
             mainHandler.removeCallbacksAndMessages(appLeaveToken)
             mainHandler.post(::updateStandbyOrbVisibility)
         }
         override fun onActivityPaused(activity: android.app.Activity) {
-            appForeground = false
             // 离开 Movo 的页面稍等再判断：Movo 页面之间切换（例如对话浮层「展开到 App」）时，旧页暂停到新页恢复之间有一段空档，
             // 立即判断会让悬浮球在全屏浮层上闪一下（真机约 10ms）。
             mainHandler.removeCallbacksAndMessages(appLeaveToken)
@@ -251,6 +299,22 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 if (notice != null && recent && !VoiceSessionManager.active) showPanelNotice(notice)
             }
         }
+        // 审批卡 / 提问卡：待作答的卡、App 内宿主（主界面 / 对话浮层 resumed）、「去解锁」任一变化都重新决定悬浮卡显隐，
+        // 前后台切换时卡片在 App 内与悬浮窗之间迁移。
+        lifecycleScope.launch { InteractionCardCoordinator.pending.collect { syncInteractionOverlay() } }
+        lifecycleScope.launch { InteractionCardCoordinator.activeHost.collect { syncInteractionOverlay() } }
+        lifecycleScope.launch { InteractionCardCoordinator.unlockInProgress.collect { syncInteractionOverlay() } }
+        runCatching {
+            registerReceiver(
+                keyguardReceiver,
+                IntentFilter().apply {
+                    addAction(Intent.ACTION_SCREEN_OFF)
+                    addAction(Intent.ACTION_SCREEN_ON)
+                    addAction(Intent.ACTION_USER_PRESENT)
+                },
+                Context.RECEIVER_NOT_EXPORTED,
+            )
+        }
     }
 
     override fun onBind(intent: Intent): IBinder? {
@@ -276,6 +340,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
      */
     private fun ensureStandbyOrb(): Boolean {
         if (!io.github.fartown.movo.agent.overlay.OrbPrefs.keepOrbAfterExit(this)) return false
+        // 上次重建失败留下的浮层（可能带着待查看的结果）优先按原状态恢复，不被待命外观覆盖。
+        if (orbView == null && pendingOverlayRestore != null) restorePendingOverlay()
         if (orbView != null) return true
         val wasVisible = VoiceSurfaceTracker.appVisible
         // App 在前台时建：先不播进场，离开 App 时直接出现在原位。
@@ -329,13 +395,19 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         pendingStartRequest = null
         activeSession?.cancel("Agent Runtime 服务已停止")
         activeSession = null
+        backgroundRun = null
+        pendingOverlayRestore = null
+        runCatching { unregisterReceiver(keyguardReceiver) }
         resultIo.shutdownNow()
         mainHandler.removeCallbacksAndMessages(null)
+        // 服务停了就没有在等作答的 run：卡片两处都收起。悬浮卡用它自己的窗口管理器移除（dismissAndStop 之后 windowManager 已为空），
+        // 否则会留下一个全屏、可获焦的透明窗口挡住触摸。
+        InteractionCardCoordinator.clearRun(null)
+        removeInteractionOverlay()
         bubbleView?.let { view -> runCatching { windowManager?.removeView(view) } }
         orbView?.let { view -> runCatching { windowManager?.removeView(view) } }
         glowView?.let { view -> runCatching { windowManager?.removeView(view) } }
         removeZoneView?.let { view -> runCatching { windowManager?.removeView(view) } }
-        interactionView?.let { view -> runCatching { windowManager?.removeView(view) } }
         bubbleView = null
         orbView = null
         glowView = null
@@ -543,6 +615,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                             },
                             replyTo,
                             incoming.request.runId,
+                            request = incoming.request,
                         )
                     },
                 )
@@ -555,14 +628,28 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         replyTo: Messenger? = null,
         fromResultCard: Boolean = false,
     ) {
-        clearResultHandoff()
-        resultConversationTarget = AgentConversationTarget.from(request.handoff)
-        activeRunConversation = AgentConversationTarget.from(request.handoff)
-            ?.takeIf { it.source == AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE }
+        val conversationTarget = AgentConversationTarget.from(request.handoff)
+        // 后台监听唤醒的一轮：悬浮层上有结果待查看（✓ / !）时先不动它——点开查看的目标、展开卡、外观都保留，
+        // 这一轮要操作其他 App（揭开悬浮层）时才接管。isIdle 的语义不变：仍是「没有在跑的 run」。
+        val keepPendingResult = OverlayLifecyclePolicy.keepsPendingResult(
+            monitorOrigin = request.isMonitorOrigin,
+            fromResultCard = fromResultCard,
+            resultPending = hasPendingResult(),
+        )
+        if (!keepPendingResult) {
+            clearResultHandoff()
+            resultConversationTarget = conversationTarget
+            resultConversationRunId = request.runId
+        }
+        // 只有 App 自己发起、并订阅着的一轮（replyTo 非空）才能并入后台监听事件；悬浮层「继续」发起的续跑没人订阅，
+        // 事件并进去 App 看不到，也补不回事件行。
+        activeRunConversation = conversationTarget
+            ?.takeIf { it.source == AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE && replyTo != null }
             ?.let { request.runId to it.key }
-        isResultConversation = fromResultCard || AgentConversationSheetActivity.isConversationVisible(resultConversationTarget)
-        resultConversationRunId = request.runId
+        isResultConversation = fromResultCard || AgentConversationSheetActivity.isConversationVisible(conversationTarget)
         activeSession?.controller?.cancel()
+        // 被替换的任务若在等审批 / 提问，它的等待已随取消结束：卡片（App 内与悬浮）一并收起，不等它迟到的「已处理」。
+        InteractionCardCoordinator.clearRun(activeSession?.runId)
         val session = AgentRuntimeSession(
             runId = request.runId,
             voiceSessionId = request.voiceSessionId,
@@ -583,7 +670,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             return
         }
         activeSession = session
-        lastCompletedRunContext = null
+        if (!keepPendingResult) lastCompletedRunContext = null
         runCatching {
             startService(Intent(this, AgentRuntimeService::class.java).setAction(ACTION_KEEP_ALIVE))
         }.onFailure { throwable ->
@@ -592,9 +679,16 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             }
         }
         mainHandler.removeCallbacksAndMessages(hideToken)
-        state.value = AgentOverlayState.Initial
-        collapsed.value = true
         hasExecutedForegroundTool = false
+        backgroundRun = if (keepPendingResult) {
+            BackgroundRun(session, conversationTarget, request.runId, AgentOverlayState.Initial)
+        } else {
+            state.value = AgentOverlayState.Initial
+            // 上一轮开着的展开卡（例如失败原因）要真正收起，不能只改标记：否则窗口还在、悬浮球却按「已收起」显示。
+            pausedForTyping = false
+            collapseBubble()
+            null
+        }
         synchronized(supplementsLock) {
             activeSupplements.clear()
             nextSupplementIndex = 1
@@ -659,6 +753,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         event: AgentEvent,
         entrySurfaceGuard: EntrySurfaceGuard?,
     ) {
+        // 「已处理」不论这一轮是否已结束或被替换都要收卡：从通知栏停止、被新任务替换时悬浮卡不残留。
+        // 与「请求作答」走同一个主线程队列，先后不乱（不会先收后出、留下一张没人等的卡）。
+        if (event is AgentEvent.InteractionResolved) {
+            mainHandler.post { InteractionCardCoordinator.resolve(event.requestId) }
+        }
         if (activeSession !== session) return
         val revealsForegroundOperation = AgentOverlayVisibilityPolicy.shouldRevealFor(event)
         val requiresEntrySurfaceDismissal =
@@ -679,16 +778,25 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             }
             if (session.isTerminal) return@post
             runCatching {
-                val phaseBefore = state.value.phase
-                state.value = state.value.applyEvent(event)
-                handleInteractionOverlayEvent(event)
-                // ✓ / ! 可能先由事件流（RunFinished / RunFailed）点亮，早于终态交付：从这一刻起算 3 秒保留（常驻关闭时）。
-                val phaseAfter = state.value.phase
-                if (phaseAfter != phaseBefore &&
-                    (phaseAfter == AgentOverlayPhase.FINISHED || phaseAfter == AgentOverlayPhase.FAILED)
-                ) {
-                    scheduleResultOrbHide()
-                    updateStandbyOrbVisibility()
+                if (event is AgentEvent.InteractionRequested) publishInteraction(session, event)
+                val background = backgroundRun?.takeIf { it.session === session }
+                if (background != null) {
+                    // 后台监听的一轮：先只记在自己的状态里，悬浮层继续显示上一轮待查看的结果。
+                    background.state = background.state.applyEvent(event)
+                    if (!(revealsForegroundOperation && entrySurfaceReady)) return@runCatching
+                    // 要操作其他 App 了：这一轮接管悬浮层。
+                    takeOverOverlay(background)
+                } else {
+                    val phaseBefore = state.value.phase
+                    state.value = state.value.applyEvent(event)
+                    // ✓ / ! 可能先由事件流（RunFinished / RunFailed）点亮，早于终态交付：从这一刻起算 3 秒保留（常驻关闭时）。
+                    val phaseAfter = state.value.phase
+                    if (phaseAfter != phaseBefore &&
+                        (phaseAfter == AgentOverlayPhase.FINISHED || phaseAfter == AgentOverlayPhase.FAILED)
+                    ) {
+                        scheduleResultOrbHide()
+                        updateStandbyOrbVisibility()
+                    }
                 }
                 if (revealsForegroundOperation && entrySurfaceReady) {
                     if (orbView == null) {
@@ -734,9 +842,17 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         completedContext: CompletedRunContext? = null,
     ) {
         mainHandler.post {
+            // 这一轮结束了，它的卡不会再有人等：不论会话是否已被替换都收起（作答的「已处理」可能因会话已结束被丢掉）。
+            InteractionCardCoordinator.clearRun(session.runId)
             if (activeSession !== session) return@post
-            lastCompletedRunContext = completedContext
             activeSession = null
+            if (backgroundRun?.session === session) {
+                // 后台监听的一轮没有操作其他 App：结果在对话里，悬浮层保持原样（上一轮的结果仍待查看，或用户已看过回到待命）。
+                backgroundRun = null
+                stopIfOverlayUnneeded()
+                return@post
+            }
+            lastCompletedRunContext = completedContext
             runCatching {
                 if (result.ok) {
                     enterFinalState(
@@ -954,12 +1070,17 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         message: String,
         replyTo: Messenger? = null,
         runId: String = "",
+        request: AgentRuntimeWire.RunRequest? = null,
     ) {
         sendResultTo(
             replyTo,
             AgentRuntimeWire.RunResult(runId = runId, ok = false, content = "", error = message, resultKind = "rejected"),
         )
         if (activeSession != null) return
+        // 后台监听的一轮没准备好：失败原因在对话里，悬浮层不动（上一轮的结果仍待查看）。
+        if (request?.isMonitorOrigin == true) return
+        // 这是新的一轮：不沿用上一轮的前台执行标记和会话目标，否则会弹「!」、点「查看」打开上一轮的对话。
+        resetRunOverlayContext(request, runId)
         enterFinalState(
             AgentOverlayState(
                 phase = AgentOverlayPhase.FAILED,
@@ -967,6 +1088,17 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 detailText = message
             )
         )
+    }
+
+    /** 新的一轮开始（含准备失败的一轮）：前台执行标记、结果对话目标都归这一轮，不沿用上一轮的。 */
+    private fun resetRunOverlayContext(request: AgentRuntimeWire.RunRequest?, runId: String) {
+        clearResultHandoff()
+        hasExecutedForegroundTool = false
+        isResultConversation = false
+        resultConversationTarget = AgentConversationTarget.from(request?.handoff)
+        resultConversationRunId = runId.ifBlank { null }
+        lastCompletedRunContext = null
+        backgroundRun = null
     }
 
     private fun requestStop() {
@@ -1083,10 +1215,16 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     /** 最近一次启动的 run 所属的 App 对话（runId → conversationId），用于把后台监听事件并入同一对话的这一轮。 */
     @Volatile private var activeRunConversation: Pair<String, String>? = null
 
-    private fun injectMonitorEventOnService(conversationId: String, modelText: String, events: List<AgentEvent>): Boolean {
+    private fun injectMonitorEventOnService(
+        conversationId: String,
+        expectedRunId: String,
+        modelText: String,
+        events: List<AgentEvent>,
+    ): Boolean {
         val session = activeSession?.takeUnless { it.isTerminal } ?: return false
         val (runId, runConversation) = activeRunConversation ?: return false
-        if (runId != session.runId || runConversation != conversationId) return false
+        // 三方核对：服务记的这一轮、正在跑的会话、App 以为自己订阅着的那一轮，必须是同一个。
+        if (runId != session.runId || runId != expectedRunId || runConversation != conversationId) return false
         return session.injectMonitorEvent(modelText, events)
     }
 
@@ -1111,8 +1249,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun showOverlay() {
         if (orbView != null && overlayOwner !== overlayContext()) rebuildOverlayIfOwnerChanged()
         if (orbView != null) {
-            // 悬浮球已常驻：只补上边缘光晕。
-            if (glowView == null) windowManager?.let(::showGlow)
+            // 悬浮球已常驻：只补上边缘光晕（正在淡出的撤销淡出）。
+            windowManager?.let(::showGlow)
             return
         }
         // TYPE_ACCESSIBILITY_OVERLAY 免 SYSTEM_ALERT_WINDOW 权限；仅回退态（无障碍未启用）才需检查
@@ -1169,9 +1307,18 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         publishOrbRect()
 
         // ── 小气泡窗口：展开态显示，跟随光球，窗口外触摸穿透 ─────────
-        if (!collapsed.value) {
-            showBubble(wm)
+        // 加不上就按收起处理：悬浮球不能因为「展开中」一直淡在透明。
+        if (!collapsed.value && !showBubble(wm)) {
+            collapsed.value = true
         }
+    }
+
+    /** 无障碍实例变化（连上 / 断开 / 重连成新实例）：浮窗按新 context 重建；之前重建失败的浮层此时再建一次。 */
+    private fun onAccessibilityInstanceChangedOnMain() {
+        rebuildOverlayIfOwnerChanged()
+        restorePendingOverlay()
+        // 审批卡 / 提问卡：旧实例名下的悬浮卡窗口已被系统移除，按新 context 重建（不然之后的新卡都加不出来，只能等超时）。
+        syncInteractionOverlay()
     }
 
     /**
@@ -1182,12 +1329,17 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         if (orbView == null || overlayOwner === overlayContext()) return
         AndroidAgentLogger.debug { "Agent runtime overlay owner changed; rebuilding overlay windows" }
         val wasStandby = standby.value
-        val hadGlow = glowView != null
+        // 正在淡出的光晕不重建（它马上就要撤掉）。
+        val hadGlow = glowView != null && !glowRetired.value
         // 先用新的 context 加好新窗口，再撤旧窗口：旧窗口还在屏幕上时（例如从普通悬浮窗换回无障碍浮窗）不留空档；
         // 新球沿用原位置、不播进场。
         val oldManager = windowManager
         val oldViews = listOfNotNull(orbView, bubbleView, glowView, removeZoneView)
+        val previousPosition = orbParams
         restoreOrbPosition = orbParams
+        mainHandler.removeCallbacksAndMessages(glowRetireToken)
+        glowRetired.value = false
+        bubbleRemovalDeferred = false
         removeZoneView = null
         orbView = null
         bubbleView = null
@@ -1205,22 +1357,60 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         orbEntrance = true
         restoreOrbPosition = null
         oldViews.forEach { view -> runCatching { oldManager?.removeView(view) } }
+        if (orbView == null) {
+            // 新 context 加不上窗口（例如无障碍刚断开、又没有悬浮窗权限）：记下需要的浮层，下次无障碍实例变化时再建。
+            pendingOverlayRestore = OverlayRestore(standby = wasStandby, glow = hadGlow, position = previousPosition)
+            collapsed.value = true
+            bubbleVisible.value = true
+            return
+        }
+        finishOverlayRestore(standby = wasStandby, glow = hadGlow)
+    }
+
+    /** 之前重建失败（[pendingOverlayRestore]）的浮层：按原状态（位置、待命、光晕）再建一次，仍建不出就继续等下次。 */
+    private fun restorePendingOverlay() {
+        val restore = pendingOverlayRestore ?: return
+        if (orbView != null) {
+            pendingOverlayRestore = null
+            return
+        }
+        restoreOrbPosition = restore.position
+        orbEntrance = false
+        showOverlay()
+        orbEntrance = true
+        restoreOrbPosition = null
         if (orbView == null) return
-        if (!hadGlow) {
+        AndroidAgentLogger.info("Agent runtime overlay restored after accessibility change")
+        finishOverlayRestore(standby = restore.standby, glow = restore.glow)
+    }
+
+    private fun finishOverlayRestore(standby: Boolean, glow: Boolean) {
+        pendingOverlayRestore = null
+        if (!glow) {
             glowView?.let { view -> runCatching { windowManager?.removeView(view) } }
             glowView = null
             glowParams = null
         }
-        if (wasStandby) standby.value = true
+        if (standby) this.standby.value = true
         // 重建出来的球默认可见：Movo 自己在前台时要重新按规则藏起来。
         updateStandbyOrbVisibility()
     }
 
     /** 氛围光窗口：全屏触摸穿透，彩虹光圈，截图时被 takeScreenshotOfWindow 过滤。 */
     private fun showGlow(wm: WindowManager) {
-        if (glowView != null) return
+        if (glowView != null) {
+            // 正在随上一轮结束淡出：又有前台操作了，撤销淡出、照常流动。
+            unretireGlow()
+            return
+        }
+        mainHandler.removeCallbacksAndMessages(glowRetireToken)
+        glowRetired.value = false
         val glow = createOverlayComposeView {
-            AgentOverlayGlow(state = state.value)
+            // 淡出中按结束态画（透明度随 `standard` 降到 0），不随状态复位成执行中重新满亮度流动。
+            val current = state.value
+            AgentOverlayGlow(
+                state = if (glowRetired.value) current.copy(phase = AgentOverlayPhase.FINISHED) else current,
+            )
         }
         val glowLp = glowLayoutParams()
         runCatching { wm.addView(glow, glowLp) }.onFailure { throwable ->
@@ -1231,6 +1421,26 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
         glowView = glow
         glowParams = glowLp
+    }
+
+    /** 光晕随这一轮结束淡出（`standard`），播完移除窗口；期间再有前台操作会撤销（[unretireGlow]）。 */
+    private fun retireGlow() {
+        val view = glowView ?: return
+        glowRetired.value = true
+        mainHandler.removeCallbacksAndMessages(glowRetireToken)
+        mainHandler.postDelayed({
+            if (glowView === view && glowRetired.value) {
+                runCatching { windowManager?.removeView(view) }
+                glowView = null
+                glowParams = null
+            }
+        }, glowRetireToken, GLOW_FADE_MS)
+    }
+
+    private fun unretireGlow() {
+        if (!glowRetired.value) return
+        mainHandler.removeCallbacksAndMessages(glowRetireToken)
+        glowRetired.value = false
     }
 
     /**
@@ -1244,13 +1454,41 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             return
         }
         val phase = state.value.phase
-        if ((phase == AgentOverlayPhase.FINISHED || phase == AgentOverlayPhase.FAILED) && activeSession == null) {
+        if ((phase == AgentOverlayPhase.FINISHED || phase == AgentOverlayPhase.FAILED) && !foregroundRunActive()) {
             collapseBubble()
             markSheetFromOrb()
             openResultConversation()
             return
         }
         toggleCollapse()
+    }
+
+    /** 有占着悬浮层的任务在跑（不算还没接管悬浮层的后台监听轮次：那时悬浮层仍显示上一轮待查看的结果）。 */
+    private fun foregroundRunActive(): Boolean {
+        val session = activeSession ?: return false
+        return backgroundRun?.session !== session
+    }
+
+    /** 悬浮层上有结果待查看：✓ / !（或用户停止后保留的结果），点开打开结果对话。 */
+    private fun hasPendingResult(): Boolean =
+        OverlayLifecyclePolicy.resultPending(
+            orbPresent = orbView != null,
+            standby = standby.value,
+            foregroundRunActive = foregroundRunActive(),
+            hasResultTarget = resultConversationTarget != null,
+            phase = state.value.phase,
+        )
+
+    /** 后台监听的一轮要操作其他 App 了：接管悬浮层，上一轮待查看的结果让位（结果仍在对话里）。 */
+    private fun takeOverOverlay(background: BackgroundRun) {
+        backgroundRun = null
+        clearResultHandoff()
+        resultConversationTarget = background.conversationTarget
+        resultConversationRunId = background.runId
+        lastCompletedRunContext = null
+        state.value = background.state
+        pausedForTyping = false
+        collapseBubble()
     }
 
     /**
@@ -1264,7 +1502,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 markSheetFromOrb()
                 MovoAssistantVoiceService.showAssistant(this, autoListen = true)
             }
-            activeSession == null && (phase == AgentOverlayPhase.FINISHED || phase == AgentOverlayPhase.FAILED) -> {
+            !foregroundRunActive() && (phase == AgentOverlayPhase.FINISHED || phase == AgentOverlayPhase.FAILED) -> {
                 collapseBubble()
                 markSheetFromOrb()
                 openResultConversation(autoListen = true)
@@ -1306,11 +1544,16 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun expandBubble() {
         // Movo 自己的界面在前台时悬浮球藏着，展开卡也不出现（例如 App 内开始语音、失败自动弹出）。
         if (VoiceSurfaceTracker.appVisible) return
-        collapsed.value = false
+        // 窗口加好了才算展开：没有窗口管理器或加窗失败时保持收起，悬浮球不会因「展开中」一直淡在透明。
         val wm = windowManager ?: return
         mainHandler.removeCallbacksAndMessages(bubbleRemovalToken)
+        bubbleRemovalDeferred = false
         bubbleVisible.value = true
-        if (bubbleView == null) showBubble(wm)
+        if (bubbleView == null && !showBubble(wm)) {
+            collapsed.value = true
+            return
+        }
+        collapsed.value = false
         scheduleBubbleAutoCollapse()
     }
 
@@ -1325,12 +1568,24 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         setBubbleInputMode(focusable = false)
         mainHandler.postDelayed({
             if (collapsed.value && bubbleView === view) {
-                runCatching { windowManager?.removeView(view) }
-                bubbleView = null
-                bubbleParams = null
-                panelNotice.value = null
+                // 从展开卡的球侧通道开始的拖动还没结束：移除窗口会中断这次拖动，等拖动结束再移除。
+                if (orbDragging) {
+                    bubbleRemovalDeferred = true
+                } else {
+                    removeCollapsedBubble()
+                }
             }
         }, bubbleRemovalToken, BUBBLE_EXIT_MS)
+    }
+
+    private fun removeCollapsedBubble() {
+        bubbleRemovalDeferred = false
+        val view = bubbleView ?: return
+        if (!collapsed.value) return
+        runCatching { windowManager?.removeView(view) }
+        bubbleView = null
+        bubbleParams = null
+        panelNotice.value = null
     }
 
     /** 展开卡 4s 无操作自动收回；暂停态、输入补充时不收回（规范 8.1）。 */
@@ -1345,8 +1600,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     private val bubbleRemovalToken = Any()
 
-    private fun showBubble(wm: WindowManager) {
-        if (bubbleView != null) return
+    /** 加展开卡窗口；返回展开卡窗口是否在（已有或刚加上）。 */
+    private fun showBubble(wm: WindowManager): Boolean {
+        if (bubbleView != null) return true
         val bubble = createOverlayComposeView {
             AgentOverlayBubble(
                 state = state.value,
@@ -1366,6 +1622,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 onOpenResult = ::onOrbTapped,
                 notice = panelNotice.value,
                 orbCenterOnScreen = { orbCenterOnScreen.value },
+                // 展开卡的球侧通道盖住了隐形的真球：落在球上的点按、长按、拖动按悬浮球处理。
+                onOrbTap = ::onOrbTapped,
+                onOrbLongPress = ::onOrbLongPressed,
+                onOrbDragStart = ::onOrbDragStart,
+                onOrbDrag = ::handleDrag,
+                onOrbDragEnd = ::onOrbDragEnd,
             )
         }
         val lp = bubbleLayoutParams()
@@ -1373,12 +1635,13 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             AndroidAgentLogger.warnThrottled("runtime_bubble_add_view_failed") {
                 "Agent runtime bubble addView failed: type=${throwable.safeLogType()}"
             }
-            return
+            return false
         }
         bubbleView = bubble
         bubbleParams = lp
         bubbleBaseY = lp.y
         bubbleTargetY = lp.y
+        return true
     }
 
     /**
@@ -1517,64 +1780,79 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             }
         }
 
-    /** 跨应用审批：Movo 不在前台时，把审批/提问卡渲染为悬浮窗浮在目标应用上；前台时交由应用内卡片处理。 */
-    private fun handleInteractionOverlayEvent(event: AgentEvent) {
-        when (event) {
-            is AgentEvent.InteractionRequested -> {
-                if (appForeground) return // 应用内由 AgentAppRoot 的卡片处理，不弹悬浮卡
-                overlayInteraction.value = io.github.fartown.movo.ui.model.AgentInteractionUiState(
-                    runId = activeSession?.runId.orEmpty(),
-                    requestId = event.requestId,
-                    isApproval = event.kind == "approval",
-                    title = event.title,
-                    detail = event.detail,
-                    options = event.options,
-                    allowFreeText = event.allowFreeText,
-                    rememberLabel = event.rememberLabel,
-                    reason = event.reason,
-                )
-                showInteractionOverlay()
-            }
-            is AgentEvent.InteractionResolved -> {
-                if (overlayInteraction.value?.requestId == event.requestId) {
-                    overlayInteraction.value = null
-                    removeInteractionOverlay()
+    /** 这一轮请求作答（审批 / 提问）：发布给 [InteractionCardCoordinator]，由它决定在 App 内还是悬浮窗显示。 */
+    private fun publishInteraction(session: AgentRuntimeSession, event: AgentEvent.InteractionRequested) {
+        InteractionCardCoordinator.publish(
+            AgentInteractionUiState(
+                runId = session.runId,
+                requestId = event.requestId,
+                isApproval = event.kind == "approval",
+                title = event.title,
+                detail = event.detail,
+                options = event.options,
+                allowFreeText = event.allowFreeText,
+                rememberLabel = event.rememberLabel,
+                reason = event.reason,
+            ),
+        )
+    }
+
+    /**
+     * 悬浮卡显隐（跨应用审批 / 提问）：有待作答的卡、且 App 内没有可显示它的页面（主界面 / 对话浮层 resumed）时浮在目标应用上，
+     * 否则撤下——同一张卡任何时候只在一处。锁屏时不给出「允许」，改显示解锁提示；「去解锁」进行中先撤下，不挡住系统解锁界面。
+     * 无障碍重连后旧实例名下的窗口已被系统移除，按新 context 重建。
+     */
+    private fun syncInteractionOverlay() {
+        val model = InteractionCardCoordinator.pending.value
+        val floating = InteractionCardCoordinator.currentPlacement == InteractionCardCoordinator.Placement.FLOATING &&
+            !InteractionCardCoordinator.unlockInProgress.value
+        if (model == null || !floating) {
+            removeInteractionOverlay()
+            return
+        }
+        val locked = isKeyguardLocked()
+        val focusable = InteractionCardCoordinator.floatingFocusable(model, locked)
+        if (interactionView != null && (interactionOwner !== overlayContext() || interactionLocked.value != locked)) {
+            removeInteractionOverlay()
+        }
+        interactionLocked.value = locked
+        if (interactionView == null) {
+            showInteractionOverlay(locked, focusable)
+        } else if (interactionFocusable != focusable) {
+            updateInteractionFocusable(focusable)
+        }
+    }
+
+    private fun showInteractionOverlay(locked: Boolean, focusable: Boolean) {
+        if (interactionView != null) return
+        // 窗口类型按无障碍是否可用决定（overlayType），窗口管理器必须取同一个上下文的：
+        // 悬浮层还没显示过时 windowManager 为空，用 Service 自己的去加 TYPE_ACCESSIBILITY_OVERLAY 会被拒，卡片出不来。
+        val owner = overlayContext()
+        val wm = owner.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
+        val view = createOverlayComposeView {
+            val model = InteractionCardCoordinator.pending.collectAsState().value
+            if (model != null) {
+                if (interactionLocked.value) {
+                    AgentOverlayUnlockPrompt(
+                        onCancel = { InteractionCardCoordinator.reply(model, InteractionReply.Cancelled) },
+                        onUnlock = ::requestUnlockForInteraction,
+                    )
+                } else {
+                    AgentInteractionOverlayContent(
+                        model = model,
+                        onApprove = { remember ->
+                            replyFromFloatingCard(model, InteractionReply.Approval(approved = true, remember = remember))
+                        },
+                        onDecline = {
+                            InteractionCardCoordinator.reply(model, InteractionReply.Approval(approved = false, remember = false))
+                        },
+                        onAnswer = { text, idx -> replyFromFloatingCard(model, InteractionReply.Answer(text, idx)) },
+                        onCancel = { InteractionCardCoordinator.reply(model, InteractionReply.Cancelled) },
+                    )
                 }
             }
-            else -> Unit
         }
-    }
-
-    /** 作答经本进程直接投递给等待中的 run（执行器同进程，无需 IPC）。 */
-    private fun deliverOverlayInteraction(reply: InteractionReply) {
-        val interaction = overlayInteraction.value ?: return
-        overlayInteraction.value = null
-        runCatching { AgentInteractionRegistry.deliver(interaction.runId, interaction.requestId, reply) }
-        removeInteractionOverlay()
-    }
-
-    private fun showInteractionOverlay() {
-        if (interactionView != null) return
-        val wm = windowManager
-            ?: (getSystemService(Context.WINDOW_SERVICE) as? WindowManager)?.also { windowManager = it }
-            ?: return
-        val view = createOverlayComposeView {
-            val model = overlayInteraction.collectAsState().value
-            if (model != null) {
-                AgentInteractionOverlayContent(
-                    model = model,
-                    onApprove = { remember ->
-                        deliverOverlayInteraction(InteractionReply.Approval(approved = true, remember = remember))
-                    },
-                    onDecline = {
-                        deliverOverlayInteraction(InteractionReply.Approval(approved = false, remember = false))
-                    },
-                    onAnswer = { text, idx -> deliverOverlayInteraction(InteractionReply.Answer(text, idx)) },
-                    onCancel = { deliverOverlayInteraction(InteractionReply.Cancelled) },
-                )
-            }
-        }
-        val lp = interactionLayoutParams()
+        val lp = interactionLayoutParams(locked, focusable)
         runCatching { wm.addView(view, lp) }.onFailure { throwable ->
             AndroidAgentLogger.warnThrottled("runtime_interaction_overlay_add_failed") {
                 "Agent runtime interaction overlay addView failed: type=${throwable.safeLogType()}"
@@ -1583,33 +1861,107 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
         interactionView = view
         interactionParams = lp
+        interactionOwner = owner
+        interactionWindowManager = wm
+        interactionFocusable = focusable
+    }
+
+    /** 允许 / 作答前再确认没锁屏：息屏后锁屏状态的广播可能晚于用户点按，锁着就换成解锁提示、这次不作答。拒绝与取消不受限。 */
+    private fun replyFromFloatingCard(model: AgentInteractionUiState, reply: InteractionReply) {
+        if (isKeyguardLocked()) {
+            syncInteractionOverlay()
+            return
+        }
+        InteractionCardCoordinator.reply(model, reply)
+    }
+
+    private fun updateInteractionFocusable(focusable: Boolean) {
+        val view = interactionView ?: return
+        val lp = interactionParams ?: return
+        val wm = interactionWindowManager ?: return
+        lp.flags = if (focusable) {
+            lp.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+        } else {
+            lp.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        }
+        runCatching { wm.updateViewLayout(view, lp) }
+        interactionFocusable = focusable
     }
 
     private fun removeInteractionOverlay() {
-        interactionView?.let { view -> runCatching { windowManager?.removeView(view) } }
+        interactionView?.let { view -> runCatching { (interactionWindowManager ?: windowManager)?.removeView(view) } }
+        interactionWindowManager = null
         interactionView = null
         interactionParams = null
+        interactionOwner = null
+        interactionFocusable = false
     }
 
-    private fun interactionLayoutParams(): WindowManager.LayoutParams =
+    private fun interactionLayoutParams(locked: Boolean, focusable: Boolean): WindowManager.LayoutParams =
         WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
+            // 锁屏解锁提示：窗口只有卡片大小，卡片外的触摸交给锁屏（用户仍可直接滑动解锁）；
+            // 平时全屏：轻度压暗的遮罩点一下 = 取消。
+            if (locked) WindowManager.LayoutParams.WRAP_CONTENT else WindowManager.LayoutParams.MATCH_PARENT,
             overlayType(),
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                // 审批卡不可获焦：可获焦的全屏窗口会抢走目标窗口的焦点、收起输入法，目标界面内容随之变化，
+                // 批准后工具执行时观察已过期，要再批一次。提问卡要自由输入时才可获焦。
+                (if (focusable) 0 else WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) or
+                (if (locked) WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL else 0),
             PixelFormat.TRANSLUCENT,
         ).apply {
-            // 可获焦（按钮/自由文本输入）；IME 弹出时缩放布局。
+            gravity = Gravity.BOTTOM
+            // 可获焦（提问卡自由输入）时 IME 弹出缩放布局。
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
             windowAnimations = 0
         }
+
+    private fun isKeyguardLocked(): Boolean =
+        runCatching { getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true }.getOrDefault(false)
+
+    /**
+     * 「去解锁」：先撤下悬浮卡（别挡住系统解锁界面），用透明页面请求解锁；解锁后 ACTION_USER_PRESENT 换回原卡，
+     * 取消解锁或页面没拉起来时重新显示解锁提示。
+     */
+    private fun requestUnlockForInteraction() {
+        InteractionCardCoordinator.setUnlockInProgress(true)
+        mainHandler.removeCallbacksAndMessages(unlockTimeoutToken)
+        // 解锁页面没有回报（被系统直接回收等）时兜底放开，卡片不会一直不出现。
+        mainHandler.postDelayed(
+            { InteractionCardCoordinator.setUnlockInProgress(false) },
+            unlockTimeoutToken,
+            UNLOCK_REQUEST_TIMEOUT_MS,
+        )
+        runCatching {
+            (AgentAccessibilityService.current() ?: this).startActivity(OverlayUnlockActivity.intent(this))
+        }.onFailure { throwable ->
+            AndroidAgentLogger.warnThrottled("runtime_unlock_request_failed") {
+                "Agent runtime unlock request failed: type=${throwable.safeLogType()}"
+            }
+            mainHandler.removeCallbacksAndMessages(unlockTimeoutToken)
+            InteractionCardCoordinator.setUnlockInProgress(false)
+        }
+    }
+
+    private val unlockTimeoutToken = Any()
+
+    /** 亮屏 / 息屏 / 解锁：解锁成功或息屏时解锁界面已不在，放开「解锁进行中」，卡片按当前锁屏状态重新显示。 */
+    private fun onKeyguardStateChanged(action: String?) {
+        if (action == Intent.ACTION_USER_PRESENT || action == Intent.ACTION_SCREEN_OFF) {
+            mainHandler.removeCallbacksAndMessages(unlockTimeoutToken)
+            InteractionCardCoordinator.setUnlockInProgress(false)
+        }
+        syncInteractionOverlay()
+    }
 
     /**
      * 开始拖动：收起展开卡；没有任务在跑时底部中间淡入「移除」区（规范 9.5「悬浮球 · 移除」）。
      * 执行中不给移除入口——悬浮球是 App 外唯一的暂停入口。
      */
     private fun onOrbDragStart() {
+        orbDragging = true
         if (!collapsed.value) collapseBubble()
         val lp = orbParams ?: return
         fingerX = lp.x.toFloat()
@@ -1645,16 +1997,27 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     /** 松手：在移除区里 → 缩小淡出后移除；否则吸附到最近的左右边缘。 */
     private fun onOrbDragEnd() {
+        orbDragging = false
         val remove = removeEngaged.value
         removeEngaged.value = false
         hideRemoveZone()
         if (remove) {
             orbShown.value = false
             collapseBubble()
-            mainHandler.postDelayed({ if (activeSession == null) dismissAndStop() else orbShown.value = true }, ORB_EXIT_MS)
+            mainHandler.postDelayed({
+                if (activeSession == null) {
+                    // 用户亲手移除：下次打开 Movo 前，无障碍重连等系统事件不再自动把待命球请回来。
+                    io.github.fartown.movo.agent.overlay.OrbPrefs.markRemovedByUser()
+                    dismissAndStop()
+                } else {
+                    orbShown.value = true
+                }
+            }, ORB_EXIT_MS)
         } else {
             snapOrbToEdge()
         }
+        // 拖动是从展开卡的球侧通道开始的：展开卡已收起，拖动结束后再移除它的窗口。
+        if (bubbleRemovalDeferred) removeCollapsedBubble()
     }
 
     private fun removeZoneCenterY(): Int =
@@ -1855,7 +2218,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     private fun openResultConversation(autoListen: Boolean = false) {
-        if (resultConversationOpening.value || activeSession != null || pendingStartRequest != null) return
+        // 后台监听的一轮还没接管悬浮层时，悬浮层上仍是上一轮待查看的结果，可以照常点开。
+        if (resultConversationOpening.value || foregroundRunActive() || pendingStartRequest != null) return
         val target = resultConversationTarget ?: return
         val runId = resultConversationRunId ?: return
         val token = Any()
@@ -1924,7 +2288,13 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         pausedForTyping = false
         state.value = finalState
 
-        if (hasExecutedForegroundTool || isResultConversation) {
+        val finish = OverlayLifecyclePolicy.finish(
+            executedForegroundTool = hasExecutedForegroundTool,
+            resultConversation = isResultConversation,
+            standbyOrbPresent = standby.value && orbView != null,
+            keepStandbyOrb = { activeSession == null && ensureStandbyOrb() },
+        )
+        if (finish == OverlayLifecyclePolicy.Finish.SHOW_RESULT) {
             // 规范 8.1 / 9.5：悬浮球不退场，完成保持 ✓（失败保持 !），用户点开才打开对话浮层查看结果；
             // 不自动弹出，避免打断用户正在看的 App。结果交付仍走原来的 handoff（点球时发起，带回执与失败提示）。
             // 屏幕边缘光晕随状态淡出后移除窗口。
@@ -1946,45 +2316,68 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 // 对话浮层已在前台（从浮层发起）：直接交付到浮层，与原来一致。
                 openResultConversation()
             }
-            glowView?.let { view ->
-                mainHandler.postDelayed({
-                    if (glowView === view && state.value.phase != AgentOverlayPhase.RUNNING && state.value.phase != AgentOverlayPhase.PAUSED) {
-                        runCatching { windowManager?.removeView(view) }
-                        glowView = null
-                        glowParams = null
-                    }
-                }, GLOW_FADE_MS)
-            }
+            retireGlow()
             mainHandler.removeCallbacksAndMessages(hideToken)
-        } else if (standby.value && orbView != null) {
-            // 常驻的待命悬浮球：这次没有操作其他 App，结果就在对话里，悬浮球保持待命。
-            state.value = AgentOverlayState.Initial
-        } else if (activeSession == null && ensureStandbyOrb()) {
-            // 常驻开：纯问答结束后也留下待命悬浮球（原来服务随即停止，离开 App 后没有悬浮球）。
-            // 这一轮没有操作其他 App，结果在对话里：回到待命外观，不带 ✓（真机：沿用了结束态的绿勾）。
-            state.value = AgentOverlayState.Initial
-            standby.value = true
-            updateStandbyOrbVisibility()
+        } else if (finish == OverlayLifecyclePolicy.Finish.RETIRE_TO_STANDBY) {
+            // 这一轮没有操作其他 App（纯问答；或流式阶段已按前台工具揭开了浮层，但工具没真正开始就被停止、流中断或改成纯文本回答）：
+            // 结果在对话里，常驻的悬浮球回到待命——不带 ✓（真机：沿用了结束态的绿勾），展开卡、光晕、提示一并撤掉。
+            retireRunOverlayToStandby()
         } else {
             dismissAndStop()
         }
+    }
+
+    /** 回到待命外观：收起展开卡（连同里面的提示）、光晕淡出撤掉、状态复位；常驻关时撤掉悬浮球并停服务。 */
+    private fun retireRunOverlayToStandby() {
+        collapseBubble()
+        retireGlow()
+        state.value = AgentOverlayState.Initial
+        standby.value = true
+        updateStandbyOrbVisibility()
+        stopIfOverlayUnneeded()
     }
 
     /** 看过结果后回到待命：绿环与角标淡出，悬浮球留在原处（规范 8.1 / 9.5「悬浮球 · 完成」）。 */
     private fun enterStandby() {
         clearResultHandoff()
         if (orbView == null) {
-            dismissAndStop()
+            // 后台监听的一轮还在跑（结果是在它没接管悬浮层时点开的）：不停服务。
+            if (activeSession == null) dismissAndStop()
             return
         }
         collapseBubble()
-        glowView?.let { view -> runCatching { windowManager?.removeView(view) } }
-        glowView = null
-        glowParams = null
-        isResultConversation = false
+        retireGlow()
+        if (activeSession == null) isResultConversation = false
         state.value = AgentOverlayState.Initial
         standby.value = true
         updateStandbyOrbVisibility()
+        // 常驻关：看完结果又没有任务时，藏着的悬浮球和服务都没有用处。
+        stopIfOverlayUnneeded()
+    }
+
+    /**
+     * 「常驻悬浮球」关、没有任务（含准备中）、也没有可查看的结果时，藏着的悬浮球与服务都没有用处：撤掉并停服务。
+     * 可查看的结果 = ✓ / ! 还在保留时长内、失败原因的展开卡开着、或正在打开结果对话。返回是否已停。
+     */
+    private fun stopIfOverlayUnneeded(): Boolean {
+        val policy = OverlayLifecyclePolicy
+        val unneeded = policy.overlayUnneeded(
+            keepOrbAfterExit = io.github.fartown.movo.agent.overlay.OrbPrefs.keepOrbAfterExit(this),
+            runActive = activeSession != null,
+            preparingRun = pendingStartRequest != null,
+            openingResult = resultConversationOpening.value,
+            resultViewable = policy.resultViewable(
+                orbPresent = orbView != null,
+                standby = standby.value,
+                phase = state.value.phase,
+                nowUptimeMillis = android.os.SystemClock.uptimeMillis(),
+                resultVisibleUntilUptimeMillis = resultOrbVisibleUntil,
+                panelOpen = !collapsed.value,
+            ),
+        )
+        if (!unneeded) return false
+        dismissAndStop()
+        return true
     }
 
     /**
@@ -2024,15 +2417,21 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
         // 失败时自动弹出的展开卡也一起收起：否则切回 Movo 后它留在键盘上，透明的阴影区还会吃掉点击。
         if (!collapsed.value) collapseBubble()
-        if (view.visibility != View.VISIBLE) return
+        // 常驻关：藏起后若已没有任务、也没有可查看的结果（✓ / ! 保留时长已过），悬浮球和服务都撤掉（先播完淡出）。
+        if (view.visibility != View.VISIBLE) {
+            stopIfOverlayUnneeded()
+            return
+        }
         if (VoiceSurfaceTracker.appVisible || io.github.fartown.movo.ui.theme.isReducedMotion(this)) {
             view.visibility = View.GONE
+            stopIfOverlayUnneeded()
             return
         }
         // 淡出 `standard-exit`，播完再藏起窗口内容。
         view.animate().alpha(0f).setDuration(MovoMotion.STANDARD_EXIT.toLong()).withEndAction {
             if (orbView === view) view.visibility = View.GONE
             view.alpha = 1f
+            if (orbView === view) stopIfOverlayUnneeded()
         }.start()
     }
 
@@ -2084,7 +2483,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             AgentEvent.ToolStarted(
                 round = 1,
                 toolCallId = "instrumentation-step",
-                name = "tap",
+                // 用类型化工具子系统的真实工具名（旧名 tap 已不会再出现），自检走与线上相同的揭开与显示名路径。
+                name = "ui_tap",
                 argsPreview = "正在验证悬浮层",
             ).also { it.atMillis = System.currentTimeMillis() },
         )
@@ -2183,11 +2583,28 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         orbParams = null
         bubbleParams = null
         glowParams = null
+        // 窗口撤了，展开卡与光晕的标记也复位：否则下次建出来的球按「展开中」淡在透明、展开卡也加不出来。
+        mainHandler.removeCallbacksAndMessages(bubbleRemovalToken)
+        mainHandler.removeCallbacksAndMessages(panelIdleToken)
+        mainHandler.removeCallbacksAndMessages(glowRetireToken)
+        mainHandler.removeCallbacks(trackImeForBubble)
+        bubbleYAnimator?.cancel()
+        collapsed.value = true
+        bubbleVisible.value = true
+        bubbleRemovalDeferred = false
+        orbDragging = false
+        glowRetired.value = false
+        panelNotice.value = null
+        // 悬浮审批卡用它自己的窗口管理器移除，不留全屏、可获焦的透明窗口挡住触摸。
+        removeInteractionOverlay()
     }
 
     private fun dismissAndStop() {
         clearResultHandoff()
         removeAmbientWindows()
+        pendingOverlayRestore = null
+        // 没有任务了：不会再有人等审批 / 提问的作答。
+        if (activeSession == null) InteractionCardCoordinator.clearRun(null)
         windowManager = null
         overlayOwner = null
         stopSelf()
@@ -2259,10 +2676,17 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
          * 后台监听事件：本对话正有一轮在执行时，并入它的下一步（不打断当前模型请求或工具）。
          * 返回 false 表示没有可并入的运行（空闲、别的对话在跑、或本轮已在收尾），由调用方排队或另开事件轮。主线程调用。
          */
-        internal fun injectMonitorEvent(conversationId: String, modelText: String, events: List<AgentEvent>): Boolean =
-            liveInstance?.injectMonitorEventOnService(conversationId, modelText, events) == true
+        internal fun injectMonitorEvent(
+            conversationId: String,
+            runId: String,
+            modelText: String,
+            events: List<AgentEvent>,
+        ): Boolean = liveInstance?.injectMonitorEventOnService(conversationId, runId, modelText, events) == true
 
-        /** Runtime 当前没有在执行或准备执行的 run（服务未启动也算空闲）。主线程调用。 */
+        /**
+         * Runtime 当前没有在执行或准备执行的 run（服务未启动也算空闲）。主线程调用。
+         * 悬浮层上有结果待查看不算忙：监听唤醒的一轮在需要前台操作之前不动它（见 [startRun]）。
+         */
         internal fun isIdle(): Boolean =
             liveInstance?.let { service -> service.activeSession?.isTerminal != false && service.pendingStartRequest == null } ?: true
 
@@ -2321,6 +2745,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         private const val OVERLAY_PREFS = "agent_overlay"
         private const val PREF_IME_HEIGHT = "ime_height_px"
         const val GLOW_FADE_MS = 300L
+        /** 「去解锁」后等解锁页面回报的上限；超过就重新显示悬浮卡（解锁提示或原卡）。 */
+        const val UNLOCK_REQUEST_TIMEOUT_MS = 30_000L
         const val ORB_EXIT_MS = 200L
         const val REMOVE_ZONE_DP = 48
         const val REMOVE_ZONE_SHADOW_DP = 12

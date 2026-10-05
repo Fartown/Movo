@@ -20,6 +20,7 @@ import io.github.fartown.movo.agent.tools.core.ToolResource
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.fail
 import io.github.fartown.movo.agent.tools.core.objectSchema
+import io.github.fartown.movo.agent.tools.core.TaintKind
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -197,6 +198,9 @@ internal class BrowserReadTool(
         info.keys().forEach { key -> data.put(key, info.get(key)) }
         return Verdict.Read(BrowserReadOutput(data, screenshot = null))
     }
+
+    /** 网页内容是不可信内容。 */
+    override fun taintKinds(input: BrowserReadInput): Set<TaintKind> = setOf(TaintKind.UNTRUSTED)
 
     override fun renderForModel(output: BrowserReadOutput): ModelContent = ModelContent.Json(output.data)
 

@@ -16,6 +16,7 @@ import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.fail
 import io.github.fartown.movo.agent.tools.core.objectSchema
+import io.github.fartown.movo.agent.tools.core.ApprovalPreview
 import org.json.JSONObject
 
 internal enum class FileWriteMode { OVERWRITE, APPEND }
@@ -92,6 +93,14 @@ internal class FileWriteTool(
             resources = emptySet(),
         )
     }
+
+    override fun approvalPreview(input: FileWriteInput): ApprovalPreview = ApprovalPreview(
+        title = if (input.mode == FileWriteMode.APPEND) "往这个文件末尾追加内容？" else "写入这个文件？",
+        detail = "${input.path.take(160)}\n这个位置在 Movo 的工作区以外，写入后不能自动撤销。",
+    )
+
+    /** 同一个目录本次任务内可以勾选不再询问。 */
+    override fun approvalScope(input: FileWriteInput): String = input.path.substringBeforeLast('/', input.path)
 
     override fun execute(
         input: FileWriteInput,
