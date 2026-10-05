@@ -168,11 +168,17 @@ internal class RealBrowserBackend(
                     .put("amount", request.amount ?: 600)
             }
             BrowserActionType.SELECT ->
-                // TODO(browser)：旧 DOM 脚本无 select，待补充后接线。
-                throw BrowserException(ToolErrorCode.UNSUPPORTED, "下拉选择暂未实现", detail = "browser_select_dom_todo")
+                args.put("action", "select").put(
+                    "option",
+                    request.option
+                        ?: throw BrowserException(ToolErrorCode.INVALID_ARGUMENTS, "select 需要 option（选项值或可见文字）"),
+                )
             BrowserActionType.KEY ->
-                // TODO(browser)：旧 DOM 脚本无独立按键派发（仅 type+submit 的 Enter），待补充。
-                throw BrowserException(ToolErrorCode.UNSUPPORTED, "按键暂未实现", detail = "browser_key_dom_todo")
+                args.put("action", "key").put(
+                    "key",
+                    request.key
+                        ?: throw BrowserException(ToolErrorCode.INVALID_ARGUMENTS, "key 需要 key（如 Enter/Tab/Escape/ArrowDown）"),
+                )
         }
         val result = AgentBrowserSession.execute(context, args, call.runId, call.toolCallId)
         val json = parse(result.content)

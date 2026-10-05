@@ -507,6 +507,54 @@ internal object BrowserDomScripts {
         """.trimIndent()
     }
 
+    /** 下拉选择：目标须是 <select>，按 value 或可见文字（精确优先、再包含）匹配选项并派发 change。 */
+    fun select(selector: String?, x: Int?, y: Int?, option: String): String =
+        targeted(selector, x, y) +
+            """
+            if (!target) throw new Error('TARGET_NOT_FOUND');
+            if (String(target.tagName || '').toLowerCase() !== 'select') throw new Error('TARGET_NOT_SELECT');
+            target.scrollIntoView({ block: 'center', inline: 'center' });
+            var want = ${JSONObject.quote(option)};
+            var chosen = null;
+            for (var i = 0; i < target.options.length; i++) {
+              var o = target.options[i];
+              if (o.value === want || (o.textContent || '').trim() === want) { chosen = o; break; }
+            }
+            if (!chosen) {
+              for (var j = 0; j < target.options.length; j++) {
+                var oj = target.options[j];
+                if ((oj.textContent || '').trim().indexOf(want) >= 0) { chosen = oj; break; }
+              }
+            }
+            if (!chosen) throw new Error('OPTION_NOT_FOUND');
+            target.value = chosen.value;
+            target.dispatchEvent(new Event('input', { bubbles: true }));
+            target.dispatchEvent(new Event('change', { bubbles: true }));
+            return { matched_element: describe(target), selected_value: chosen.value, selected_text: (chosen.textContent || '').trim() };
+            """.trimIndent()
+
+    /** 按键派发：有目标发给目标、无目标发给当前焦点元素；支持 Enter/Tab/Escape/方向键等命名键。 */
+    fun key(selector: String?, x: Int?, y: Int?, keyName: String): String {
+        val selectorLiteral = selector?.let(JSONObject::quote) ?: "null"
+        val xLiteral = x?.toString() ?: "null"
+        val yLiteral = y?.toString() ?: "null"
+        return """
+            var sel = $selectorLiteral;
+            var hasTarget = sel !== null || $xLiteral !== null;
+            var target = hasTarget ? resolveTarget(sel, $xLiteral, $yLiteral) : null;
+            var el = target || document.activeElement || document.body;
+            if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'center' });
+            if (el && el.focus) el.focus();
+            var key = ${JSONObject.quote(keyName)};
+            var codeMap = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39, Home: 36, End: 35, PageUp: 33, PageDown: 34 };
+            var kc = codeMap[key] || 0;
+            ['keydown', 'keypress', 'keyup'].forEach(function(t) {
+              el.dispatchEvent(new KeyboardEvent(t, { key: key, code: key, keyCode: kc, which: kc, bubbles: true, cancelable: true }));
+            });
+            return { matched_element: (el === document.body ? null : describe(el)), key: key };
+            """.trimIndent()
+    }
+
     fun pageInfo(): String =
         """
         var canonical = document.querySelector('link[rel="canonical"]');

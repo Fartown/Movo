@@ -315,6 +315,28 @@ class BrowserToolsTest {
         assertEquals("DISABLED", r.errorCode)
     }
 
+    @Test
+    fun act_select_withOption_reachesBackend() {
+        fake.inspectResult = { BrowserActTarget(exists = true, stale = false, visible = true, editable = false, summary = "下拉", submitPoint = false, searchRole = false) }
+        val r = pipeline().execute(call("browser_act", """{"action":"select","selector":"#country","option":"中国"}"""))
+        assertEquals("ok", r.status)
+        assertTrue(fake.performed)
+    }
+
+    @Test
+    fun act_select_missingOption_invalidArguments() {
+        val r = pipeline().execute(call("browser_act", """{"action":"select","selector":"#country"}"""))
+        assertEquals("INVALID_ARGUMENTS", r.errorCode)
+        assertFalse("缺 option 不得执行", fake.performed)
+    }
+
+    @Test
+    fun act_key_reachesBackend() {
+        val r = pipeline().execute(call("browser_act", """{"action":"key","key":"enter"}"""))
+        assertEquals("ok", r.status)
+        assertTrue(fake.performed)
+    }
+
     /** 直接产生污点的测试工具（raw AgentTool，覆盖 taintSource）。 */
     private class TaintingTool : AgentTool {
         override val name = "taint_fake"

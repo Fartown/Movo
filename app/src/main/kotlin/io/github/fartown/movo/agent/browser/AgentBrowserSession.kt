@@ -407,6 +407,8 @@ internal object AgentBrowserSession {
                             "find_elements" -> findElements(args)
                             "click" -> click(args)
                             "type" -> type(args)
+                            "select" -> select(args)
+                            "key" -> key(args)
                             "scroll" -> scroll(args)
                             "screenshot" -> screenshot(args)
                             "get_page_info" -> pageInfo()
@@ -545,6 +547,46 @@ internal object AgentBrowserSession {
         return toolResult(
             mergeValue(baseEnvelope("type", true, "ok"), value)
                 .put("side_effect", if (submit) "possible" else "local_input")
+        )
+    }
+
+    private fun select(args: JSONObject): BrowserToolResult {
+        val option = args.optString("option").takeIf { it.isNotBlank() }
+            ?: throw BrowserFailure("INVALID_ARGUMENT", "select 缺少 option")
+        val view = requirePage()
+        val target = targetFrom(args)
+        val value = evaluateObject(view, BrowserDomScripts.select(target.selector, target.x, target.y, option))
+        waitForPostAction()
+        return toolResult(
+            mergeValue(baseEnvelope("select", true, "ok"), value).put("side_effect", "possible"),
+        )
+    }
+
+    private fun key(args: JSONObject): BrowserToolResult {
+        val rawKey = args.optString("key").takeIf { it.isNotBlank() }
+            ?: throw BrowserFailure("INVALID_ARGUMENT", "key 缺少 key")
+        // 工具层用小写短名（enter/esc/tab），归一化为标准 KeyboardEvent.key 名。
+        val keyName = when (rawKey.lowercase(Locale.ROOT)) {
+            "enter" -> "Enter"
+            "esc", "escape" -> "Escape"
+            "tab" -> "Tab"
+            "backspace" -> "Backspace"
+            "delete", "del" -> "Delete"
+            "up", "arrowup" -> "ArrowUp"
+            "down", "arrowdown" -> "ArrowDown"
+            "left", "arrowleft" -> "ArrowLeft"
+            "right", "arrowright" -> "ArrowRight"
+            else -> rawKey
+        }
+        val view = requirePage()
+        // key 目标可选：给了 selector/坐标就发给它，否则发给当前焦点元素。
+        val hasTarget = validatedSelector(args, required = false) != null ||
+            (args.has("coordinate_x") && !args.isNull("coordinate_x"))
+        val target = if (hasTarget) targetFrom(args) else null
+        val value = evaluateObject(view, BrowserDomScripts.key(target?.selector, target?.x, target?.y, keyName))
+        waitForPostAction()
+        return toolResult(
+            mergeValue(baseEnvelope("key", true, "ok"), value).put("side_effect", "possible"),
         )
     }
 
@@ -1181,6 +1223,8 @@ internal object AgentBrowserSession {
         "find_elements",
         "click",
         "type",
+        "select",
+        "key",
         "scroll",
         "screenshot",
         "get_page_info",
