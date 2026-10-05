@@ -156,6 +156,16 @@ class UiToolsTest {
     }
 
     @Test
+    fun uiScroll_isNeverGatedByTaint() {
+        // 滚动不会外发：读过不可信内容（污点）后也不该弹「可能把内容发出去」的确认（后台监听每 15 秒下滑的真机回归）。
+        val backend = FakeUiBackend(scrollResult = UiScrollResult.Finished(true, false, "com.example.app"))
+        val resolution = UiScrollTool(backend, backend).let { tool ->
+            tool.resolve(tool.parse(ToolArgs(JSONObject("""{"direction":"down"}""")), accessibilityEnv), accessibilityEnv)
+        }
+        assertEquals(null, resolution.requiresApproval(taintedExternal = true))
+    }
+
+    @Test
     fun uiScroll_notMoved_returnsDispatched() {
         val backend = FakeUiBackend(scrollResult = UiScrollResult.Finished(false, true, "com.example.app"))
         val json = JSONObject(

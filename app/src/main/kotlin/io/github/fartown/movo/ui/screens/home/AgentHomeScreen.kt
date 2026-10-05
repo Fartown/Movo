@@ -30,6 +30,7 @@ internal fun AgentHomeScreen(
     key(chatConversationCompositionKey(conversationKey)) {
         CompositionLocalProvider(
             LocalConversationComposer provides AgentConversationDraftStore.shared.get(conversationKey, state.input),
+            io.github.fartown.movo.ui.components.LocalMonitorConversationId provides conversationKey,
         ) {
             AgentChatBody(
                 messages = state.messages,

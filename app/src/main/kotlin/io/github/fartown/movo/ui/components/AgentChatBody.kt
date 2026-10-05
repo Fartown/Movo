@@ -95,6 +95,8 @@ import io.github.fartown.movo.ui.model.AgentContextUsageUi
 import io.github.fartown.movo.ui.model.AgentMessageUi
 import io.github.fartown.movo.ui.model.AgentModelPickerUiState
 import io.github.fartown.movo.ui.model.MessageEditUiState
+import io.github.fartown.movo.ui.model.MonitorEventMessageUi
+import io.github.fartown.movo.ui.model.isTurnStart
 import io.github.fartown.movo.ui.model.PendingFileReferenceUi
 import io.github.fartown.movo.ui.model.PendingImageUi
 import io.github.fartown.movo.ui.model.SuggestionChipsMessageUi
@@ -1107,7 +1109,7 @@ internal fun workStepOffsets(entries: List<AgentTimelineEntry>): Map<String, Int
     var steps = 0
     entries.forEach { entry ->
         when (entry) {
-            is AgentTimelineEntry.Message -> if (entry.message is UserMessageUi) steps = 0
+            is AgentTimelineEntry.Message -> if (entry.message is UserMessageUi || entry.message.isTurnStart()) steps = 0
             is AgentTimelineEntry.WorkProcess -> {
                 offsets[entry.key] = steps
                 steps += entry.messages.count { it is ToolActivityMessageUi }
@@ -1122,7 +1124,7 @@ internal fun workStepOffsets(entries: List<AgentTimelineEntry>): Map<String, Int
  * 进行中 / 被暂停打断（Running、Unknown）的不算，与头部「第 N 步」同一口径（暂停在第 41 步 = 已完成 40 步）。
  */
 internal fun currentTurnCompletedSteps(entries: List<AgentTimelineEntry>): Int {
-    val start = entries.indexOfLast { it is AgentTimelineEntry.Message && it.message is UserMessageUi }
+    val start = entries.indexOfLast { it is AgentTimelineEntry.Message && (it.message is UserMessageUi || it.message.isTurnStart()) }
     return entries.drop(start + 1).sumOf { entry ->
         (entry as? AgentTimelineEntry.WorkProcess)?.messages?.count {
             it is ToolActivityMessageUi && (it.status == ToolActivityStatusUi.Success || it.status == ToolActivityStatusUi.Failed)
@@ -1175,7 +1177,7 @@ internal fun workOutcomes(entries: List<AgentTimelineEntry>): Map<String, WorkOu
                 tools.mapNotNull { it.finishedAtMillis }.maxOrNull()?.let { turnEnd = maxOf(turnEnd ?: it, it) }
             }
             is AgentTimelineEntry.Message -> when (val message = entry.message) {
-                is UserMessageUi -> if (!message.isRunSupplement()) {
+                is UserMessageUi, is MonitorEventMessageUi -> if (message.isTurnStart()) {
                     pending = null
                     turnSteps = 0
                     turnStart = null
@@ -1216,6 +1218,8 @@ internal fun workTurnSpans(entries: List<AgentTimelineEntry>): Map<String, WorkT
                 val message = entry.message
                 if (message is UserMessageUi && !message.isRunSupplement()) {
                     span = message.runStartedAtMillis?.let { WorkTurnSpan(it, message.runFinishedAtMillis) }
+                } else if (message is MonitorEventMessageUi && message.startsTurn) {
+                    span = message.runStartedAtMillis?.let { WorkTurnSpan(it, message.runFinishedAtMillis) }
                 }
             }
         }
@@ -1231,7 +1235,7 @@ internal fun stoppedNoticesWithoutWork(entries: List<AgentTimelineEntry>): Set<S
         when (entry) {
             is AgentTimelineEntry.WorkProcess -> turnHasWork = true
             is AgentTimelineEntry.Message -> when (val message = entry.message) {
-                is UserMessageUi -> if (!message.isRunSupplement()) turnHasWork = false
+                is UserMessageUi, is MonitorEventMessageUi -> if (message.isTurnStart()) turnHasWork = false
                 is SystemNoticeMessageUi -> if (message.code == SystemNoticeCode.Stopped && !turnHasWork) result += message.id
                 else -> Unit
             }
@@ -1316,7 +1320,7 @@ internal fun arrangeTurnsForTimeline(messages: List<AgentChatMessageUi>): List<A
         turn = ArrayList()
     }
     for (message in messages) {
-        if (message is UserMessageUi && !message.isRunSupplement()) {
+        if (message.isTurnStart()) {
             flushTurn()
             result += message
         } else {
@@ -1349,6 +1353,10 @@ internal fun resolveFinalResultMessageIds(
     messages.forEach { message ->
         when (message) {
             is UserMessageUi -> {
+                lastAgentMessageId?.let(ids::add)
+                lastAgentMessageId = null
+            }
+            is MonitorEventMessageUi -> if (message.startsTurn) {
                 lastAgentMessageId?.let(ids::add)
                 lastAgentMessageId = null
             }

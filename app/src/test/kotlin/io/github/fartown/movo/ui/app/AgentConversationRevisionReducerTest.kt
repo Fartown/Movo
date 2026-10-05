@@ -37,7 +37,7 @@ class AgentConversationRevisionReducerTest {
 
         val boundary = AgentConversationRevisionReducer.boundary(state, "assistant-2")!!
 
-        assertEquals("user-2", boundary.userMessage.id)
+        assertEquals("user-2", boundary.userMessage?.id)
         assertEquals(4, boundary.userMessageIndex)
         assertEquals(1, boundary.laterTurnCount)
         assertFalse(boundary.contextWasCompacted)
@@ -103,6 +103,52 @@ class AgentConversationRevisionReducerTest {
             state.messages,
             AgentConversationRevisionReducer.visibleMessagesForEdit(state.messages, "missing"),
         )
+    }
+
+    @Test
+    fun monitorEventTurnsCountAsHistoryAnchorsSoEarlierTurnsStayAligned() {
+        // 第一轮用户问答 → 一轮由后台监听唤醒的事件轮（历史里是一条 user 系统通知）→ 第二轮用户问答。
+        val event = io.github.fartown.movo.ui.model.MonitorEventMessageUi(
+            id = "monitor-m1-event-1", taskId = "m1", name = "喝水提醒",
+            kind = io.github.fartown.movo.ui.model.MonitorEventKindUi.Event, seq = 1, atMillis = 0L, text = "tick",
+            startsTurn = true, historyAnchor = true,
+        )
+        val state = AgentChatUiState(
+            messages = listOf(
+                UserMessageUi(id = "user-1", content = "每 3 分钟提醒我喝水"),
+                AgentMessageUi(id = "assistant-1", content = "好的"),
+                event,
+                AgentMessageUi(id = "assistant-e", content = "该喝水了"),
+                UserMessageUi(id = "user-2", content = "谢谢"),
+                AgentMessageUi(id = "assistant-2", content = "不客气"),
+            ),
+            history = listOf(
+                AgentModelClient.ConversationMessage(role = "user", content = "每 3 分钟提醒我喝水"),
+                AgentModelClient.ConversationMessage(role = "assistant", content = "好的"),
+                AgentModelClient.ConversationMessage(role = "user", content = "[系统通知 - 非用户输入] …"),
+                AgentModelClient.ConversationMessage(role = "assistant", content = "该喝水了"),
+                AgentModelClient.ConversationMessage(role = "user", content = "谢谢"),
+                AgentModelClient.ConversationMessage(role = "assistant", content = "不客气"),
+            ),
+            input = "", isStreaming = false, thinkingEnabled = false,
+        )
+
+        val first = AgentConversationRevisionReducer.boundary(state, "assistant-1")!!
+        assertEquals("user-1", first.userMessage?.id)
+        assertTrue(first.historyPrefix.isEmpty())
+        assertEquals(2, first.laterTurnCount)
+
+        val second = AgentConversationRevisionReducer.boundary(state, "assistant-2")!!
+        assertEquals("user-2", second.userMessage?.id)
+        assertEquals(4, second.historyPrefix.size)
+
+        // 事件轮没有用户原话：边界存在（可删除），但没有可编辑 / 重新生成的用户消息。
+        val eventTurn = AgentConversationRevisionReducer.boundary(state, "assistant-e")!!
+        assertNull(eventTurn.userMessage)
+        assertEquals(2, eventTurn.historyPrefix.size)
+        val deleted = AgentConversationRevisionReducer.deleteFromTurn(state, "assistant-e")!!
+        assertEquals(listOf("user-1", "assistant-1"), deleted.messages.map { it.id })
+        assertEquals(2, deleted.history.size)
     }
 
     private fun conversationState(): AgentChatUiState = AgentChatUiState(

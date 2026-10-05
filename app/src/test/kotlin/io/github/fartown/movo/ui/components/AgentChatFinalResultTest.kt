@@ -25,6 +25,32 @@ class AgentChatFinalResultTest {
     }
 
     @Test
+    fun monitorEventTurnIsItsOwnTurn() {
+        val event = io.github.fartown.movo.ui.model.MonitorEventMessageUi(
+            id = "monitor-m1-event-1", taskId = "m1", name = "喝水提醒",
+            kind = io.github.fartown.movo.ui.model.MonitorEventKindUi.Event, seq = 1, atMillis = 0L, text = "tick",
+            startsTurn = true, historyAnchor = true,
+        )
+        val injected = event.copy(id = "monitor-m1-event-2", seq = 2, startsTurn = false, historyAnchor = true)
+        val messages = listOf(
+            UserMessageUi(id = "user-1", content = "每 3 分钟提醒我喝水"),
+            toolActivity("tool-start"),
+            AgentMessageUi(id = "agent-1", content = "好的"),
+            event,
+            toolActivity("tool-notify"),
+            injected,
+            AgentMessageUi(id = "agent-2", content = "该喝水了"),
+        )
+        // 事件轮有自己的最终结果；运行中并入的事件不会把这一轮切开。
+        assertEquals(setOf("agent-1", "agent-2"), resolveFinalResultMessageIds(messages))
+        val entries = messages.toTimelineEntries()
+        val work = entries.filterIsInstance<AgentTimelineEntry.WorkProcess>()
+        assertEquals(2, work.size)
+        // 两张执行卡各自从第 1 步数起（事件轮是新的一轮）。
+        assertEquals(listOf(0, 0), work.map { workStepOffsets(entries).getValue(it.key) })
+    }
+
+    @Test
     fun multipleTurnsEachHaveTheirOwnFinalResult() {
         val messages = listOf(
             UserMessageUi(id = "user-1", content = "第一问"),

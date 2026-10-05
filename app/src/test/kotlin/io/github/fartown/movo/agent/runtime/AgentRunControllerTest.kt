@@ -50,9 +50,24 @@ class AgentRunControllerTest {
         assertTrue(controller.steer("second"))
 
         assertEquals(0, cancellations.get())
-        assertEquals("first", controller.pollSteeringMessage())
-        assertEquals("second", controller.pollSteeringMessage())
+        assertEquals("first", controller.pollSteeringMessage()?.text)
+        assertEquals("second", controller.pollSteeringMessage()?.text)
         assertNull(controller.pollSteeringMessage())
+    }
+
+    @Test
+    fun monitorEventsShareTheSteeringQueueInArrivalOrder() {
+        val controller = AgentRunController()
+        assertTrue(controller.steer("补充"))
+        assertTrue(controller.injectEvent("[系统通知 - 非用户输入] 事件"))
+        val first = controller.pollSteeringMessage()
+        val second = controller.pollSteeringMessage()
+        assertTrue(first is SteeringItem.User)
+        assertTrue(second is SteeringItem.Event)
+        assertEquals("[系统通知 - 非用户输入] 事件", second?.text)
+        // 收尾封口后不再接收事件：调用方改为另开事件轮。
+        assertNull(controller.pollSteeringOrSeal())
+        assertFalse(controller.injectEvent("late"))
     }
 
     @Test
@@ -145,7 +160,7 @@ class AgentRunControllerTest {
             assertTrue(entered.await(1, TimeUnit.SECONDS))
             assertTrue(controller.steer("补充条件"))
             assertFalse(finished.await(100, TimeUnit.MILLISECONDS))
-            assertEquals("补充条件", controller.pollSteeringMessage())
+            assertEquals("补充条件", controller.pollSteeringMessage()?.text)
             controller.resume()
             assertTrue(finished.await(1, TimeUnit.SECONDS))
         } finally {

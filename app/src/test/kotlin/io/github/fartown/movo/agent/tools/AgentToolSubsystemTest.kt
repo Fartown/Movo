@@ -24,6 +24,7 @@ class AgentToolSubsystemTest {
         colorOs = true,
         linuxReady = true,
         conversationBound = true,
+        conversationId = "conversation-test",
         memoryScope = MemoryScope.REAL,
         interactive = true,
     )
@@ -58,6 +59,8 @@ class AgentToolSubsystemTest {
         "memory_read", "memory_write", "skill_read", "skill_install", "conversation_read",
         // J 交互/元工具
         "ask_user", "tool_search",
+        // K 后台监听与通知
+        "monitor_start", "monitor_stop", "monitor_list", "notify_user",
     )
 
     @Test

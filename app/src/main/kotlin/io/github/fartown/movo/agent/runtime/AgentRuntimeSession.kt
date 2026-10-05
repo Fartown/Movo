@@ -102,6 +102,17 @@ internal class AgentRuntimeSession(
         }
     }
 
+    /** 后台监听事件并入本轮下一步；接收后把界面事件记入重放并发给订阅者。 */
+    fun injectMonitorEvent(text: String, events: List<AgentEvent>): Boolean =
+        lock.withLock {
+            if (state != State.RUNNING || operation != AgentRuntimeWire.OP_CHAT || !controller.injectEvent(text)) return false
+            events.forEach { event ->
+                recordForReplay(event)
+                subscribers.forEach { it.eventSink(event) }
+            }
+            true
+        }
+
     fun <T : AgentEvent> steer(
         text: String,
         eventFactory: () -> T,

@@ -171,6 +171,7 @@ internal class AgentRuntimeRunExecutor(
                             else -> MemoryScope.REAL
                         },
                         conversationBound = conversationId != null,
+                        conversationId = conversationId,
                         interactive = true,
                         modelInputs = setOf(ModelInput.TEXT, ModelInput.IMAGE),
                     )

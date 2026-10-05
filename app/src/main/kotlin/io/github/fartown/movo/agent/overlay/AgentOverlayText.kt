@@ -133,5 +133,35 @@ internal fun toolDisplayNameResource(name: String): Int? = when (name) {
     "set_device_state" -> R.string.tool_set_device_state
     "app_state_control" -> R.string.tool_app_state_control
     "get_logcat" -> R.string.tool_get_logcat
+    // 类型化工具子系统的工具名（悬浮层「第 N 步·动作」与诊断用）
+    "ui_observe" -> R.string.tool_observe_screen
+    "ui_tap" -> R.string.tool_tap
+    "ui_swipe" -> R.string.tool_swipe
+    "ui_scroll" -> R.string.tool_scroll
+    "ui_input" -> R.string.tool_input_text
+    "ui_key" -> R.string.tool_press_key
+    "ui_wait" -> R.string.tool_wait
+    "clipboard_read" -> R.string.tool_get_clipboard
+    "clipboard_write" -> R.string.tool_set_clipboard
+    "app_search" -> R.string.tool_search_apps
+    "app_open" -> R.string.tool_launch_app
+    "app_control" -> R.string.tool_app_state_control
+    "device_read" -> R.string.tool_device_status
+    "device_toggle" -> R.string.tool_set_device_state
+    "setting_read" -> R.string.tool_get_setting
+    "setting_write" -> R.string.tool_set_setting
+    "volume_set" -> R.string.tool_set_volume
+    "sms_code_read" -> R.string.tool_read_sms_code
+    "wifi_password_read" -> R.string.tool_wifi_credentials
+    "file_read" -> R.string.tool_read_file
+    "file_write" -> R.string.tool_write_file
+    "file_list" -> R.string.tool_list_directory
+    "terminal_run", "terminal_job" -> R.string.tool_terminal
+    "browser_open", "browser_read", "browser_act" -> R.string.tool_browser_use
+    "memory_read" -> R.string.tool_memory_get
+    "monitor_start" -> R.string.tool_monitor_start
+    "monitor_stop" -> R.string.tool_monitor_stop
+    "monitor_list" -> R.string.tool_monitor_list
+    "notify_user" -> R.string.tool_notify_user
     else -> null
 }

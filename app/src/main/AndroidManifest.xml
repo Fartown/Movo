@@ -209,6 +209,10 @@
             android:exported="true"
             tools:ignore="ExportedService" />
 
+        <receiver
+            android:name=".agent.monitor.MonitorActionReceiver"
+            android:exported="false" />
+
         <service
             android:name=".agent.runtime.AgentExecutionService"
             android:exported="false"

@@ -502,6 +502,7 @@ internal fun ChatMessageItem(
         )
         is ToolSummaryMessageUi -> ToolSummaryInline(message = message, modifier = modifier, compact = compact)
         is SuggestionChipsMessageUi -> SuggestionChipsRow(message = message, onSuggestionClick = onSuggestionClick, modifier = modifier)
+        is io.github.fartown.movo.ui.model.MonitorEventMessageUi -> MonitorEventRow(message = message, modifier = modifier)
     }
 }
 
@@ -3969,7 +3970,7 @@ private val THINKING_BODY_LINE_HEIGHT = 20.sp
  * 调用方在 AnimatedVisibility 上挂 `trackVisibleHeightCap(cap)`）。
  */
 @Composable
-private fun expandContentEnter(
+internal fun expandContentEnter(
     cap: io.github.fartown.movo.ui.components.movo.VisibleHeightCap,
 ): androidx.compose.animation.EnterTransition = fadeIn(
     tween(
@@ -3980,7 +3981,7 @@ private fun expandContentEnter(
 
 /** 收起：内容先淡出 120ms，高度同时收起 `standard`（同样只按可见区以内的部分过渡）。 */
 @Composable
-private fun expandContentExit(
+internal fun expandContentExit(
     cap: io.github.fartown.movo.ui.components.movo.VisibleHeightCap,
 ): androidx.compose.animation.ExitTransition =
     fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) +

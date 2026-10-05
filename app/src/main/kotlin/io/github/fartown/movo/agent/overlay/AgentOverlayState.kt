@@ -110,6 +110,8 @@ internal fun AgentOverlayState.applyEvent(event: AgentEvent): AgentOverlayState 
 }
 
 private fun AgentOverlayState.reduce(event: AgentEvent): AgentOverlayState = when (event) {
+    // 后台监听事件只出现在对话里，不改变悬浮层状态。
+    is AgentEvent.MonitorEventReceived -> this
     is AgentEvent.ContextCompaction -> copy(status = AgentOverlayStatus.RequestingModel, detailText = event.displayMessage)
     is AgentEvent.RunStarted -> copy(
         phase = AgentOverlayPhase.RUNNING,

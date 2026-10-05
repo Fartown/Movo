@@ -154,6 +154,25 @@ internal sealed interface AgentEvent {
             "user_supplement_received index=$index, chars=${text.length}"
     }
 
+    /**
+     * 后台监听的事件 / 结束通知已并入本轮（运行中注入，或作为事件轮的起点）。
+     * [kind] = event | ended；[reason] 只在 ended 时有值（MonitorEndReason 名）。
+     */
+    data class MonitorEventReceived(
+        val taskId: String,
+        val name: String,
+        val kind: String,
+        val seq: Int,
+        val atMillis: Long,
+        val text: String,
+        val reason: String = "",
+        /** 这一批并入的第一条：模型历史里对应一条 user 条目（编辑 / 删除轮次时按它对齐）。 */
+        val anchor: Boolean = false,
+    ) : AgentEvent {
+        override fun toLogLine(): String =
+            "monitor_event_received kind=$kind, seq=$seq, chars=${text.length}"
+    }
+
     data class ToolStarted(
         val round: Int,
         val toolCallId: String,

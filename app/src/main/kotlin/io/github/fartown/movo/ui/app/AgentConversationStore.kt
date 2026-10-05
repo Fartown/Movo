@@ -15,6 +15,8 @@ import io.github.fartown.movo.data.model.ReasoningEffort
 import io.github.fartown.movo.ui.model.AgentChatHomeUiState
 import io.github.fartown.movo.ui.model.AgentChatMessageUi
 import io.github.fartown.movo.ui.model.AgentMessageUi
+import io.github.fartown.movo.ui.model.MonitorEventKindUi
+import io.github.fartown.movo.ui.model.MonitorEventMessageUi
 import io.github.fartown.movo.ui.model.SuggestionChipsMessageUi
 import io.github.fartown.movo.ui.model.ThinkingMessageUi
 import io.github.fartown.movo.ui.model.SystemNoticeCode
@@ -268,6 +270,31 @@ internal object AgentConversationStore {
                 toolsJson = tools.toJsonArrayString(),
             )
 
+            // 后台监听行复用已有列（不改表结构）：toolName=task id、argumentsSummary=名称、toolStatus=种类、
+            // resultSummary=结束原因、elapsedSeconds=序号、startedAt=发生时刻；轮起点与整轮起止时刻存在 toolsJson。
+            is MonitorEventMessageUi -> ConversationMessageEntity(
+                id = id,
+                conversationId = conversationId,
+                sortIndex = sortIndex,
+                type = TYPE_MONITOR,
+                content = text,
+                toolName = taskId,
+                argumentsSummary = name,
+                toolStatus = kind.name,
+                resultSummary = reason,
+                elapsedSeconds = seq,
+                startedAt = atMillis,
+                toolsJson = org.json.JSONObject()
+                    .put("starts_turn", startsTurn)
+                    .put("history_anchor", historyAnchor)
+                    .apply {
+                        runStartedAtMillis?.let { put("run_started_at", it) }
+                        runFinishedAtMillis?.let { put("run_finished_at", it) }
+                    }
+                    .toString(),
+                renderMarkdown = false,
+            )
+
             // 推荐追问沿用工具列表字段存文字；旧版本不认识该类型，读取时直接跳过。
             is SuggestionChipsMessageUi -> ConversationMessageEntity(
                 id = id,
@@ -344,6 +371,24 @@ internal object AgentConversationStore {
                 SuggestionChipsMessageUi(id = id, prompts = prompts)
             }
 
+            TYPE_MONITOR -> {
+                val extra = runCatching { org.json.JSONObject(toolsJson) }.getOrNull()
+                MonitorEventMessageUi(
+                    id = id,
+                    taskId = toolName.orEmpty(),
+                    name = argumentsSummary.orEmpty(),
+                    kind = runCatching { MonitorEventKindUi.valueOf(toolStatus.orEmpty()) }.getOrDefault(MonitorEventKindUi.Event),
+                    seq = elapsedSeconds ?: 0,
+                    atMillis = startedAt ?: 0L,
+                    text = content,
+                    reason = resultSummary,
+                    startsTurn = extra?.optBoolean("starts_turn") == true,
+                    historyAnchor = extra?.optBoolean("history_anchor") == true,
+                    runStartedAtMillis = extra?.takeIf { it.has("run_started_at") }?.optLong("run_started_at"),
+                    runFinishedAtMillis = extra?.takeIf { it.has("run_finished_at") }?.optLong("run_finished_at"),
+                )
+            }
+
             else -> null
         }
 
@@ -395,6 +440,7 @@ internal object AgentConversationStore {
     private const val TYPE_TOOL = "tool"
     private const val TYPE_TOOL_SUMMARY = "tool_summary"
     private const val TYPE_SUGGESTIONS = "suggestions"
+    private const val TYPE_MONITOR = "monitor"
     private const val MESSAGE_LOAD_PAGE_SIZE = 128
     private const val LEGACY_UNNAMED_TITLE = "新对话"
 }

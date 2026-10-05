@@ -15,6 +15,7 @@ import io.github.fartown.movo.agent.tools.device.DeviceToolProvider
 import io.github.fartown.movo.agent.tools.file.FileToolProvider
 import io.github.fartown.movo.agent.tools.mcp.McpCatalog
 import io.github.fartown.movo.agent.tools.mcp.McpToolProvider
+import io.github.fartown.movo.agent.monitor.MonitorToolProvider
 import io.github.fartown.movo.agent.tools.memory.MemoryToolProvider
 import io.github.fartown.movo.agent.tools.meta.MetaToolProvider
 import io.github.fartown.movo.agent.tools.personal.PersonalToolProvider
@@ -81,6 +82,7 @@ internal class AgentToolSubsystem(
             SkillToolProvider(context),
             ConversationToolProvider(conversationLoader),
             McpToolProvider(mcpCatalog),
+            MonitorToolProvider(context),
             meta,
         )
     }

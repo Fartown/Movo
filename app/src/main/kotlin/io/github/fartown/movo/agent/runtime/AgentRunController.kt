@@ -19,7 +19,7 @@ internal class AgentRunController {
 
     private val lock = ReentrantLock()
     private val pauseCondition = lock.newCondition()
-    private val steeringMessages = ArrayDeque<String>()
+    private val steeringMessages = ArrayDeque<SteeringItem>()
     private var acceptingSteering = true
     @Volatile
     private var paused = false
@@ -45,20 +45,33 @@ internal class AgentRunController {
         if (prompt.isBlank()) return false
         lock.withLock {
             if (cancelled || !acceptingSteering) return false
-            steeringMessages.addLast(prompt)
+            steeringMessages.addLast(SteeringItem.User(prompt))
+        }
+        return true
+    }
+
+    /**
+     * 后台监听的事件（已按系统通知格式写好）排入下一个边界，与用户补充同一队列、按到达顺序消费。
+     * 不取消当前模型请求或工具批次；本 run 已在收尾（不再接收）时返回 false，由调用方另开事件轮。
+     */
+    fun injectEvent(text: String): Boolean {
+        if (text.isBlank()) return false
+        lock.withLock {
+            if (cancelled || !acceptingSteering) return false
+            steeringMessages.addLast(SteeringItem.Event(text))
         }
         return true
     }
 
     /** 默认逐条消费，避免后来的补充指令越过前一条的模型回合。 */
-    fun pollSteeringMessage(): String? =
+    fun pollSteeringMessage(): SteeringItem? =
         lock.withLock { steeringMessages.pollFirst() }
 
     /**
      * 自然结束前原子地消费最后一条 steering；若队列为空则永久关闭本 run 的接收入口。
      * 这样 Service 不会在 loop 已返回后仍把补充指令误报为已接收。
      */
-    fun pollSteeringOrSeal(): String? =
+    fun pollSteeringOrSeal(): SteeringItem? =
         lock.withLock {
             steeringMessages.pollFirst()?.let { return it }
             acceptingSteering = false
@@ -139,6 +152,13 @@ internal class AgentRunController {
             if (cancelled.compareAndSet(false, true)) cancelBlock()
         }
     }
+}
+
+/** steering 队列里的一项：用户补充，或后台监听事件。 */
+internal sealed interface SteeringItem {
+    val text: String
+    data class User(override val text: String) : SteeringItem
+    data class Event(override val text: String) : SteeringItem
 }
 
 internal class AgentRunCancelledException : RuntimeException("Agent run cancelled")

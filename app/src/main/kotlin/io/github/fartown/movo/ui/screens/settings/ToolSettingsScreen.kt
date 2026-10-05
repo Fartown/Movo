@@ -7,6 +7,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.res.stringResource
 import io.github.fartown.movo.R
+import io.github.fartown.movo.agent.monitor.MonitorSettings
 import io.github.fartown.movo.config.Prefs
 import io.github.fartown.movo.ui.components.movo.CardFooter
 import io.github.fartown.movo.ui.components.movo.CardTitle
@@ -28,6 +29,9 @@ internal fun ToolSettingsScreen(
 ) {
     val agentPrefs = remember { Prefs.localAgentPreferences() }
     var pendingConfirm by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var monitorMaxMs by remember { mutableStateOf(MonitorSettings.maxDurationMs(context)) }
+    var showMonitorChoice by remember { mutableStateOf(false) }
 
     MovoListPage(title = stringResource(R.string.movo_settings_tools), onBack = onBack) {
         item(key = "basic") {
@@ -79,6 +83,19 @@ internal fun ToolSettingsScreen(
                 )
             }
         }
+        // 后台监听（规范 8.12，Figma「18-13」）：最长监听时长，默认 2 小时；修改只影响之后新开始的监听。
+        item(key = "monitor") {
+            MovoCard {
+                CardTitle(stringResource(R.string.monitor_settings_group))
+                SettingsRow(
+                    title = stringResource(R.string.monitor_settings_max_duration),
+                    trailing = io.github.fartown.movo.ui.components.movo.RowTrailing.Arrow(io.github.fartown.movo.ui.components.monitorDurationLabel(monitorMaxMs)),
+                    showDivider = false,
+                    onClick = { showMonitorChoice = true },
+                )
+                CardFooter(listOf(stringResource(R.string.monitor_settings_footer)))
+            }
+        }
         item(key = "environment") {
             MovoCard {
                 CardTitle(stringResource(R.string.movo_tools_group_environment))
@@ -94,6 +111,20 @@ internal fun ToolSettingsScreen(
             }
         }
     }
+
+    io.github.fartown.movo.ui.components.movo.MovoChoiceDialog(
+        show = showMonitorChoice,
+        title = stringResource(R.string.monitor_settings_max_duration),
+        description = stringResource(R.string.monitor_settings_choice_desc),
+        options = MonitorSettings.MAX_CHOICES_MS.map { io.github.fartown.movo.ui.components.monitorDurationLabel(it) },
+        selectedIndex = MonitorSettings.MAX_CHOICES_MS.indexOf(monitorMaxMs),
+        onSelect = { index ->
+            val value = MonitorSettings.MAX_CHOICES_MS[index]
+            MonitorSettings.setMaxDurationMs(context, value)
+            monitorMaxMs = value
+        },
+        onDismissRequest = { showMonitorChoice = false },
+    )
 
     MovoConfirmDialog(
         show = pendingConfirm != null,

@@ -105,14 +105,23 @@ internal class AgentExecutionService : Service() {
             this, 1, Intent(this, AgentExecutionService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        // 只剩后台监听时写明监听名称与结束时间，按钮是「全部停止」（规范 8.12）。
+        val monitorsOnly = leases.sharedLabel() == R.string.monitor_execution_label
+        val text = if (monitorsOnly) {
+            io.github.fartown.movo.agent.monitor.MonitorRegistry.executionSummary(this)
+                ?: getString(R.string.monitor_execution_label)
+        } else {
+            leases.sharedLabel()?.let(::getString) ?: getString(R.string.execution_summary, leases.taskCount())
+        }
+        val stopLabel = getString(if (monitorsOnly) R.string.monitor_stop_all else R.string.execution_stop)
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(getString(R.string.execution_title))
-            .setContentText(leases.sharedLabel()?.let(::getString) ?: getString(R.string.execution_summary, leases.taskCount()))
+            .setContentText(text)
             .setContentIntent(open)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .addAction(Notification.Action.Builder(null, getString(R.string.execution_stop), stop).build())
+            .addAction(Notification.Action.Builder(null, stopLabel, stop).build())
             .build()
     }
 
@@ -150,6 +159,11 @@ internal class AgentExecutionService : Service() {
 
         fun release(id: String) {
             leases.release(id)
+            mainHandler.post { instance?.refreshNotification() }
+        }
+
+        /** 任务内容变了（如后台监听增减）时刷新常驻通知。 */
+        fun refresh() {
             mainHandler.post { instance?.refreshNotification() }
         }
     }

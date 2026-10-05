@@ -115,6 +115,16 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import io.github.fartown.movo.agent.monitor.MonitorEndReason
+import io.github.fartown.movo.agent.monitor.MonitorEventFormatter
+import io.github.fartown.movo.agent.monitor.MonitorNotice
+import io.github.fartown.movo.agent.monitor.MonitorNoticeSink
+import io.github.fartown.movo.agent.monitor.MonitorRegistry
+import io.github.fartown.movo.agent.runtime.AgentRuntimeService
+import io.github.fartown.movo.ui.model.MonitorEventKindUi
+import io.github.fartown.movo.ui.model.MonitorEventMessageUi
+import io.github.fartown.movo.ui.model.isTurnStart
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.Mutex
@@ -249,14 +259,26 @@ internal class AgentAppState(
     var activeInteraction: AgentInteractionUiState? by mutableStateOf(null)
         private set
 
+    // 后台监听的待投递队列：必须声明在 init 之前（init 里的收集器会立刻调用 pumpMonitorNotices）。
+    /** 每个对话还没投递给 Movo 的监听通知（按到达顺序）。 */
+    private val pendingMonitorNotices = LinkedHashMap<String, MutableList<MonitorNotice>>()
+    /** 运行中的对话里用户停掉监听：结束行等这一轮结束再补，不把正在执行的一轮切开。 */
+    private val deferredMonitorRows = LinkedHashMap<String, MutableList<MonitorEventMessageUi>>()
+    private var monitorRetryJob: Job? = null
+
     init {
         refreshConversationSummaries()
         observeRuntimeSelection()
         scope.launch {
             snapshotFlow { voiceRuntimeBusy }.distinctUntilChanged().collect { busy ->
-                if (!busy) drainQueuedText()
+                if (!busy) {
+                    drainQueuedText()
+                    pumpMonitorNotices()
+                }
             }
         }
+        MonitorRegistry.sink = MonitorNoticeSink { notice -> onMonitorNotice(notice) }
+        recordInterruptedMonitors()
         scope.launch {
             RootAccess.state.collectLatest { refreshPermissionHealth() }
         }
@@ -1009,6 +1031,8 @@ internal class AgentAppState(
     }
 
     fun deleteConversation(conversationId: String) {
+        MonitorRegistry.stopConversation(conversationId, MonitorEndReason.STOPPED_BY_AGENT)
+        pendingMonitorNotices.remove(conversationId)
         if (voiceSession.ownsConversation(conversationId)) voiceSession.end("对话已删除，语音已结束")
         if (queuedTextSubmission?.conversationId == conversationId) queuedTextSubmission = null
         followUpJobs.remove(conversationId)?.cancel()
@@ -1378,18 +1402,20 @@ internal class AgentAppState(
             return
         }
         val boundary = AgentConversationRevisionReducer.boundary(homeState, messageId) ?: return
-        val images = boundary.userMessage.images.mapIndexed { index, dataUrl ->
+        // 事件轮没有用户原话：不能编辑 / 重新生成。
+        val turnMessage = boundary.userMessage ?: return
+        val images = turnMessage.images.mapIndexed { index, dataUrl ->
             PendingImageUi(
-                id = "edit-${boundary.userMessage.id}-$index",
+                id = "edit-${turnMessage.id}-$index",
                 uri = dataUrl,
                 dataUrl = dataUrl,
                 mimeType = dataUrl.imageMimeType(),
             )
         }
-        val parsedPrompt = AgentFileReferencePromptCodec.parse(boundary.userMessage.content)
+        val parsedPrompt = AgentFileReferencePromptCodec.parse(turnMessage.content)
         val fileReferences = parsedPrompt.references.mapIndexed { index, reference ->
             PendingFileReferenceUi(
-                id = "edit-${boundary.userMessage.id}-file-$index",
+                id = "edit-${turnMessage.id}-file-$index",
                 reference = reference,
             )
         }
@@ -1399,7 +1425,7 @@ internal class AgentAppState(
                 pendingImages = images,
                 pendingFileReferences = fileReferences,
                 messageEdit = MessageEditUiState(
-                    targetMessageId = boundary.userMessage.id,
+                    targetMessageId = turnMessage.id,
                     previousInput = io.github.fartown.movo.ui.components.AgentConversationDraftStore.shared.get(selectedConversationId, homeState.input).text.toString(),
                     previousImages = homeState.pendingImages,
                     previousFileReferences = homeState.pendingFileReferences,
@@ -1486,9 +1512,11 @@ internal class AgentAppState(
             return
         }
         val boundary = AgentConversationRevisionReducer.boundary(homeState, messageId) ?: return
-        val images = boundary.userMessage.images.mapIndexed { index, dataUrl ->
+        // 事件轮没有用户原话：不能编辑 / 重新生成。
+        val turnMessage = boundary.userMessage ?: return
+        val images = turnMessage.images.mapIndexed { index, dataUrl ->
             PendingImageUi(
-                id = "regenerate-${boundary.userMessage.id}-$index",
+                id = "regenerate-${turnMessage.id}-$index",
                 uri = dataUrl,
                 dataUrl = dataUrl,
                 mimeType = dataUrl.imageMimeType(),
@@ -1496,13 +1524,13 @@ internal class AgentAppState(
         }
         val runId = "run-${UUID.randomUUID()}"
         val userHistoryMessage = AgentModelClient.buildUserHistoryMessage(
-            text = boundary.userMessage.content,
+            text = turnMessage.content,
             images = images.toHistoryImages(),
         )
         launchConversationRun(
             conversationId = conversationId,
             runId = runId,
-            prompt = boundary.userMessage.content,
+            prompt = turnMessage.content,
             images = images,
             history = boundary.historyPrefix,
             userHistoryMessage = userHistoryMessage,
@@ -1537,6 +1565,7 @@ internal class AgentAppState(
         operation: String = AgentRuntimeWire.OP_CHAT,
         rewriteTargetMessageId: String? = null,
         voiceSessionId: String = "",
+        origin: String = "",
     ) {
         runConversationIds[runId] = conversationId
         currentRunId = runId
@@ -1645,7 +1674,8 @@ internal class AgentAppState(
                 )
             }
             // 语音对话靠说不靠点、角色扮演是剧情而非设备动作，这两类不出推荐追问。
-            if (operation == AgentRuntimeWire.OP_CHAT && voiceSessionId.isBlank() && state.roleplay == null) {
+            if (operation == AgentRuntimeWire.OP_CHAT && voiceSessionId.isBlank() && state.roleplay == null &&
+                origin != AgentRuntimeWire.ORIGIN_MONITOR) {
                 followUpRunConfigs[runId] = config
             }
             if (withContext(Dispatchers.Main) { runId in stopRequestedRunIds }) {
@@ -1663,6 +1693,7 @@ internal class AgentAppState(
                         prompt = prompt,
                         config = config,
                         voiceSessionId = voiceSessionId,
+                        origin = origin,
                         modelSessionId = conversationId,
                         images = modelImages,
                         history = history,
@@ -2401,6 +2432,10 @@ internal class AgentAppState(
                 insertSupplementMessage(runId, event.index, event.text, persist = persistSupplement)
             }
 
+            is AgentEvent.MonitorEventReceived -> {
+                insertMonitorRow(runId, event, persist = persistSupplement)
+            }
+
             AgentEvent.RunPaused, AgentEvent.RunResumed -> {
                 val paused = event == AgentEvent.RunPaused
                 conversationIdForRun(runId)?.let { id ->
@@ -2560,20 +2595,29 @@ internal class AgentAppState(
 
     /** 这一轮开始：给发起它的用户消息记下开始时刻（执行卡按整轮计时，与运行日志一致）。 */
     private fun stampTurnStarted(messages: List<AgentChatMessageUi>): List<AgentChatMessageUi> {
-        val index = messages.indexOfLast { it is UserMessageUi && !it.isRunSupplement() }
+        val index = messages.indexOfLast { it.isTurnStart() }
         if (index < 0) return messages
         val now = System.currentTimeMillis()
         return messages.mapIndexed { i, message ->
-            if (i == index && message is UserMessageUi) message.copy(runStartedAtMillis = now, runFinishedAtMillis = null) else message
+            when {
+                i != index -> message
+                message is UserMessageUi -> message.copy(runStartedAtMillis = now, runFinishedAtMillis = null)
+                message is MonitorEventMessageUi -> message.copy(runStartedAtMillis = now, runFinishedAtMillis = null)
+                else -> message
+            }
         }
     }
 
     /** 这一轮结束：给最近一轮已记开始、未记结束的用户消息记下结束时刻。 */
     private fun stampTurnFinished(messages: List<AgentChatMessageUi>): List<AgentChatMessageUi> {
-        val index = messages.indexOfLast { it is UserMessageUi && !it.isRunSupplement() }
-        val target = messages.getOrNull(index) as? UserMessageUi ?: return messages
-        if (target.runStartedAtMillis == null || target.runFinishedAtMillis != null) return messages
-        val finished = target.copy(runFinishedAtMillis = System.currentTimeMillis())
+        val index = messages.indexOfLast { it.isTurnStart() }
+        val finished = when (val target = messages.getOrNull(index)) {
+            is UserMessageUi -> if (target.runStartedAtMillis == null || target.runFinishedAtMillis != null) return messages
+                else target.copy(runFinishedAtMillis = System.currentTimeMillis())
+            is MonitorEventMessageUi -> if (target.runStartedAtMillis == null || target.runFinishedAtMillis != null) return messages
+                else target.copy(runFinishedAtMillis = System.currentTimeMillis())
+            else -> return messages
+        }
         return messages.mapIndexed { i, message -> if (i == index) finished else message }
     }
 
@@ -2733,6 +2777,180 @@ internal class AgentAppState(
                 }
             }
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // 后台监听（docs/research/agent-monitor.md 第 4 节、规范 8.12）
+    // ---------------------------------------------------------------------------
+
+    /**
+     * 监听通知到达（主线程）：本对话正在执行就并入它的下一步；空闲就开一轮事件轮；
+     * 别处在执行、语音进行中等忙碌时排队，空闲后一并交给 Movo（积压的多条在同一轮里）。
+     * 用户手动停止只插「已停止监听」，不唤醒；Movo 自己停止的不插行（执行卡里已有这一步）。
+     */
+    private fun onMonitorNotice(notice: MonitorNotice) {
+        val conversationId = notice.conversationId
+        if (conversationsById[conversationId] == null) return
+        AndroidAgentLogger.info(
+            "Monitor notice: kind=${if (notice is MonitorNotice.Ended) "ended:" + notice.reason.name else "event"}, " +
+                "streaming=${conversationsById[conversationId]?.isStreaming}",
+        )
+        if (notice is MonitorNotice.Ended && !notice.reason.wakesAgent) {
+            pendingMonitorNotices[conversationId]?.removeAll { it.taskId == notice.taskId }
+            if (notice.reason == MonitorEndReason.STOPPED_BY_USER) {
+                val row = notice.toMonitorRow(startsTurn = true)
+                if (conversationsById[conversationId]?.isStreaming == true) {
+                    deferredMonitorRows.getOrPut(conversationId) { mutableListOf() } += row
+                } else {
+                    appendMonitorRows(conversationId, listOf(row))
+                }
+            }
+            return
+        }
+        pendingMonitorNotices.getOrPut(conversationId) { mutableListOf() } += notice
+        pumpMonitorNotices()
+    }
+
+    private fun pumpMonitorNotices() {
+        for ((conversationId, rows) in deferredMonitorRows.entries.toList()) {
+            if (conversationsById[conversationId]?.isStreaming == true) continue
+            deferredMonitorRows.remove(conversationId)
+            appendMonitorRows(conversationId, rows)
+        }
+        for ((conversationId, notices) in pendingMonitorNotices.entries.toList()) {
+            if (notices.isEmpty() || conversationsById[conversationId] == null) {
+                pendingMonitorNotices.remove(conversationId)
+                continue
+            }
+            val batch = notices.toList()
+            val text = MonitorEventFormatter.format(batch)
+            val events = batch.mapIndexed { index, notice -> notice.toRuntimeEvent().copy(anchor = index == 0) }
+            if (AgentRuntimeService.injectMonitorEvent(conversationId, text, events)) {
+                pendingMonitorNotices.remove(conversationId)
+                continue
+            }
+            if (canStartMonitorRun()) {
+                pendingMonitorNotices.remove(conversationId)
+                startMonitorEventRun(conversationId, batch, text)
+                break
+            }
+        }
+        if (pendingMonitorNotices.isNotEmpty() || deferredMonitorRows.isNotEmpty()) scheduleMonitorRetry()
+    }
+
+    private fun canStartMonitorRun(): Boolean =
+        currentRunId == null &&
+            conversationsById.values.none { it.isStreaming || it.isCompacting } &&
+            !modelPickerState.isChanging &&
+            !io.github.fartown.movo.agent.voice.session.VoiceSessionManager.active &&
+            AgentRuntimeService.isIdle()
+
+    /** 语音结束、外部入口的任务结束等不经过本状态的变化：隔几秒再试一次。 */
+    private fun scheduleMonitorRetry() {
+        if (monitorRetryJob?.isActive == true) return
+        monitorRetryJob = scope.launch {
+            kotlinx.coroutines.delay(MONITOR_RETRY_MS)
+            monitorRetryJob = null
+            pumpMonitorNotices()
+        }
+    }
+
+    /** 事件轮：本轮的起点是事件行（不是用户消息），给模型的是系统通知正文。 */
+    private fun startMonitorEventRun(conversationId: String, notices: List<MonitorNotice>, prompt: String) {
+        val state = conversationsById[conversationId] ?: return
+        val runId = UUID.randomUUID().toString()
+        val rows = notices.mapIndexed { index, notice -> notice.toMonitorRow(startsTurn = index == 0).copy(historyAnchor = index == 0) }
+            .filterNot { row -> state.messages.any { it.id == row.id } }
+        launchConversationRun(
+            conversationId = conversationId,
+            runId = runId,
+            prompt = prompt,
+            images = emptyList(),
+            history = state.history,
+            userHistoryMessage = AgentModelClient.buildUserHistoryMessage(prompt, emptyList()).copy(messageId = "user-$runId"),
+            messages = state.messages + rows,
+            state = state,
+            reasoningEffort = state.reasoningEffort,
+            origin = AgentRuntimeWire.ORIGIN_MONITOR,
+        )
+    }
+
+    /** 运行中并入的事件：插在本轮当前位置之后，不作为新一轮的起点。重放时按 id 去重。 */
+    private fun insertMonitorRow(runId: String, event: AgentEvent.MonitorEventReceived, persist: Boolean) {
+        val row = MonitorEventMessageUi(
+            id = monitorRowId(event.taskId, event.seq, event.kind),
+            taskId = event.taskId,
+            name = event.name,
+            kind = if (event.kind == "ended") MonitorEventKindUi.Ended else MonitorEventKindUi.Event,
+            seq = event.seq,
+            atMillis = event.atMillis,
+            text = event.text,
+            reason = event.reason.ifBlank { null },
+            startsTurn = false,
+            historyAnchor = event.anchor,
+        )
+        updateMessages(runId) { messages -> if (messages.any { it.id == row.id }) messages else messages + row }
+        if (persist) persistConversations()
+    }
+
+    private fun appendMonitorRows(conversationId: String, rows: List<MonitorEventMessageUi>) {
+        val state = conversationsById[conversationId] ?: return
+        val fresh = rows.filterNot { row -> state.messages.any { it.id == row.id } }
+        AndroidAgentLogger.info("Monitor rows appended: count=${fresh.size}")
+        if (fresh.isEmpty()) return
+        updateConversation(conversationId, state.copy(messages = state.messages + fresh))
+        refreshConversationSummaries()
+        persistConversations()
+    }
+
+    /** 上个进程里被系统杀掉时还在运行的监听：在各自对话里补一行「监听已中断」，不唤醒。 */
+    private fun recordInterruptedMonitors() {
+        val interrupted = MonitorRegistry.takeInterrupted(appContext)
+        if (interrupted.isEmpty()) return
+        scope.launch {
+            // 等会话从数据库载入后再补行。
+            snapshotFlow { conversationsById.keys }.first { keys: Set<String> -> interrupted.any { it.conversationId in keys } }
+            interrupted.groupBy { it.conversationId }.forEach { (conversationId, items) ->
+                appendMonitorRows(conversationId, items.map { item ->
+                    MonitorEventMessageUi(
+                        id = monitorRowId(item.taskId, 0, "interrupted"),
+                        taskId = item.taskId,
+                        name = item.name,
+                        kind = MonitorEventKindUi.Ended,
+                        seq = 0,
+                        atMillis = System.currentTimeMillis(),
+                        text = "",
+                        reason = "INTERRUPTED",
+                        startsTurn = true,
+                    )
+                })
+            }
+        }
+    }
+
+    private fun monitorRowId(taskId: String, seq: Int, kind: String) = "monitor-$taskId-$kind-$seq"
+
+    private fun MonitorNotice.toMonitorRow(startsTurn: Boolean): MonitorEventMessageUi = when (this) {
+        is MonitorNotice.Event -> MonitorEventMessageUi(
+            id = monitorRowId(taskId, seq, "event"),
+            taskId = taskId, name = name, kind = MonitorEventKindUi.Event, seq = seq, atMillis = atMillis,
+            text = text, startsTurn = startsTurn,
+        )
+        is MonitorNotice.Ended -> MonitorEventMessageUi(
+            id = monitorRowId(taskId, eventCount, "ended"),
+            taskId = taskId, name = name, kind = MonitorEventKindUi.Ended, seq = eventCount, atMillis = atMillis,
+            // 到期行存时长毫秒数，显示时按界面语言格式化。
+            text = if (reason == MonitorEndReason.TIMEOUT) timeoutMs.toString() else "",
+            reason = reason.name, startsTurn = startsTurn,
+        )
+    }
+
+    private fun MonitorNotice.toRuntimeEvent(): AgentEvent.MonitorEventReceived {
+        val row = toMonitorRow(startsTurn = false)
+        return AgentEvent.MonitorEventReceived(
+            taskId = taskId, name = name, kind = if (row.kind == MonitorEventKindUi.Ended) "ended" else "event",
+            seq = row.seq, atMillis = atMillis, text = row.text, reason = row.reason.orEmpty(),
+        )
     }
 
     private fun insertSupplementMessage(
@@ -3025,6 +3243,7 @@ internal class AgentAppState(
 
     private companion object {
         const val MAX_TITLE_CHARS = 24
+        const val MONITOR_RETRY_MS = 3_000L
         const val MAX_PREVIEW_CHARS = 48
         const val LEGACY_STOPPED_ERROR = "已停止"
         const val SYNTHETIC_STATUS_STOPPED = "movo_status:stopped"

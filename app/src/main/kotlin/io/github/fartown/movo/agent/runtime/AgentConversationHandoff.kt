@@ -53,6 +53,15 @@ internal object AgentConversationHandoff {
             .putExtra(EXTRA_RECEIVER, receiver)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
 
+    /** 从系统通知打开 App 内某个已有对话（后台监听的通知等），不需要结果回传。 */
+    fun openConversationIntent(context: Context, conversationId: String): Intent =
+        Intent(context, MainActivity::class.java)
+            .setAction(ACTION_OPEN)
+            .putExtra(EXTRA_SOURCE, AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE)
+            .putExtra(EXTRA_KEY, conversationId)
+            .putExtra(EXTRA_CURRENT_CONVERSATION, true)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+
     fun from(intent: Intent?): Request? {
         if (intent?.action != ACTION_OPEN) return null
         val source = intent.getStringExtra(EXTRA_SOURCE)?.takeIf(String::isNotBlank) ?: return null

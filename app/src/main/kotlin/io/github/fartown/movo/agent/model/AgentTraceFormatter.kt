@@ -49,8 +49,13 @@ internal class AgentTraceFormatter {
             "skills_list_curated" -> "浏览精选技能"
             "skills_inspect_github" -> "查看技能详情"
             "skills_install_from_github" -> "安装技能"
+            // 后台监听与通知：步骤标题带上监听名字 / 通知标题（规范 8.12）。
+            "monitor_start" -> labelWithArgument("开始监听", toolCall.argumentsJson, "description")
+            "monitor_stop" -> "停止监听"
+            "monitor_list" -> "查看后台监听"
+            "notify_user" -> labelWithArgument("发送通知", toolCall.argumentsJson, "title")
             else -> {
-                val label = DEVICE_ACTION_LABELS[toolCall.name]
+                val label = DEVICE_ACTION_LABELS[toolCall.name] ?: TYPED_TOOL_LABELS[toolCall.name]
                 when {
                     label == null -> "准备执行"
                     toolCall.name.startsWith("search_") ->
@@ -62,7 +67,7 @@ internal class AgentTraceFormatter {
 
     /** 命令以脱敏后的用户可见投影进入运行轨迹；日志仍只记录长度。 */
     fun displayCommand(toolCall: AgentModelClient.ToolCall): String? =
-        if (toolCall.name == "terminal" || toolCall.name == "run_command") {
+        if (toolCall.name in COMMAND_TOOLS) {
             runCatching {
                 JSONObject(toolCall.argumentsJson)
                     .optString("command")
@@ -84,6 +89,13 @@ internal class AgentTraceFormatter {
             .replace(SENSITIVE_HEADER) { match ->
                 "${match.groupValues[1]}${match.groupValues[2]}<已隐藏>"
             }
+
+    /** 「开始监听·喝水提醒」：标题后接一个短参数（名字 / 标题），取不到时只写标题。 */
+    private fun labelWithArgument(label: String, argumentsJson: String, key: String): String =
+        runCatching { JSONObject(argumentsJson).optString(key).trim().take(24) }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "$label·$it" } ?: label
 
     /** 外部 URI 摘要不记录 path、query、fragment 或用户信息。 */
     fun summarizeOpenUriArguments(argumentsJson: String): String =
@@ -539,6 +551,55 @@ internal class AgentTraceFormatter {
             "wait_for_selector",
         )
         val BROWSER_TEXT_ACTIONS = setOf("get_readable", "get_text")
+
+        /** 会把命令原文作为可核对字段展示给用户的工具。 */
+        val COMMAND_TOOLS = setOf("terminal", "run_command", "terminal_run", "monitor_start")
+
+        /** 类型化工具子系统的工具名 → 步骤标题（只展示动作，不暴露参数）。 */
+        val TYPED_TOOL_LABELS = mapOf(
+            "device_read" to "查看设备状态",
+            "device_toggle" to "切换设备开关",
+            "setting_read" to "读取系统设置",
+            "setting_write" to "修改系统设置",
+            "device_diagnostics" to "设备诊断",
+            "app_search" to "搜索应用",
+            "app_open" to "打开应用",
+            "app_control" to "管理应用",
+            "ui_observe" to "查看屏幕",
+            "ui_tap" to "点击屏幕",
+            "ui_scroll" to "滚动屏幕",
+            "ui_swipe" to "滑动屏幕",
+            "ui_input" to "输入文本",
+            "ui_key" to "按键",
+            "ui_wait" to "等待界面",
+            "clipboard_read" to "读取剪贴板",
+            "clipboard_write" to "写入剪贴板",
+            "clock_create" to "设置闹钟或计时器",
+            "clock_read" to "查看闹钟和计时器",
+            "volume_set" to "调整音量",
+            "personal_search" to "搜索个人数据",
+            "sms_code_read" to "读取验证码",
+            "usage_read" to "查看应用使用情况",
+            "health_read" to "读取健康数据",
+            "wifi_password_read" to "读取 Wi-Fi 密码",
+            "file_search" to "搜索文件",
+            "file_read" to "读取文件",
+            "file_write" to "写入文件",
+            "file_list" to "列出目录",
+            "terminal_run" to "执行命令",
+            "terminal_job" to "管理后台命令",
+            "browser_open" to "打开网页",
+            "browser_read" to "读取网页",
+            "browser_act" to "操作网页",
+            "memory_read" to "读取记忆",
+            "skill_read" to "读取技能",
+            "skill_install" to "安装技能",
+            "conversation_read" to "读取会话历史",
+            "ask_user" to "询问你",
+            "tool_search" to "查找工具",
+            "mcp_call" to "调用 MCP 工具",
+            "mcp_find" to "查找 MCP 工具",
+        )
 
         /** 结构化设备工具只展示动作标签，不暴露任何参数。 */
         val DEVICE_ACTION_LABELS = mapOf(

@@ -181,6 +181,7 @@ private fun ChatBody(
     }
     CompositionLocalProvider(
         LocalConversationComposer provides AgentConversationDraftStore.shared.get(frame.conversationKey, state.input),
+        io.github.fartown.movo.ui.components.LocalMonitorConversationId provides frame.conversationKey,
         io.github.fartown.movo.ui.components.LocalRunControls provides io.github.fartown.movo.ui.components.RunControls(
             isPaused = paused,
             completedSteps = completedSteps,

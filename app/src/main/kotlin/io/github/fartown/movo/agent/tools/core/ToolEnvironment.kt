@@ -43,6 +43,8 @@ internal data class ToolEnvironment(
     val memoryScope: MemoryScope = MemoryScope.DISABLED,
     /** 当前运行绑定了一个持久会话，可读取其历史。 */
     val conversationBound: Boolean = false,
+    /** 绑定会话的 id；后台监听等需要把结果送回这个会话。 */
+    val conversationId: String? = null,
     /** 当前入口可以向用户提问与请求确认（后台定时任务等不行）。 */
     val interactive: Boolean = true,
     val modelInputs: Set<ModelInput> = setOf(ModelInput.TEXT, ModelInput.IMAGE),

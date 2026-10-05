@@ -231,18 +231,27 @@ internal class AgentLoop(
     }
 
     private fun appendPendingSteeringMessage(): Boolean {
-        val supplement = runController.pollSteeringMessage() ?: return false
-        appendMessage(steeringMessage(supplement))
+        val item = runController.pollSteeringMessage() ?: return false
+        appendMessage(steeringMessage(item))
         context.userAppended()
         return true
     }
 
     private fun appendPendingSteeringOrSeal(): Boolean {
-        val supplement = runController.pollSteeringOrSeal() ?: return false
-        appendMessage(steeringMessage(supplement))
+        val item = runController.pollSteeringOrSeal() ?: return false
+        appendMessage(steeringMessage(item))
         context.userAppended()
         return true
     }
+
+    private fun steeringMessage(item: io.github.fartown.movo.agent.runtime.SteeringItem): JSONObject = when (item) {
+        is io.github.fartown.movo.agent.runtime.SteeringItem.User -> steeringMessage(item.text)
+        // 后台监听事件：正文已按「系统通知 - 非用户输入」写好，不包装成用户补充指令。
+        is io.github.fartown.movo.agent.runtime.SteeringItem.Event -> AgentConversationCodec.userTextMessage(item.text)
+            .put("_movo_message_id", "monitor-$operationId-${++monitorEventIndex}")
+    }
+
+    private var monitorEventIndex = 0
 
     private fun steeringPrompt(supplement: String): String =
         "用户补充指令：$supplement\n\n请基于当前任务上下文继续执行，不要从头重复已经完成或已经验证过的操作。"

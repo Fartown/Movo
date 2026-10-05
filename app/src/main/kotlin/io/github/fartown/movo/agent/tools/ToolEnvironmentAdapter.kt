@@ -19,6 +19,7 @@ internal fun AgentToolCapabilities.toToolEnvironment(
     memoryScope: MemoryScope,
     conversationBound: Boolean,
     interactive: Boolean,
+    conversationId: String? = null,
     modelInputs: Set<ModelInput>,
 ): ToolEnvironment = ToolEnvironment(
     rootAvailable = rootAvailable,
@@ -33,6 +34,7 @@ internal fun AgentToolCapabilities.toToolEnvironment(
     switches = switches,
     memoryScope = memoryScope,
     conversationBound = conversationBound,
+    conversationId = conversationId,
     interactive = interactive,
     modelInputs = modelInputs,
 )

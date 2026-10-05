@@ -458,7 +458,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         val preparing = pendingStartRequest?.incoming?.request
         // Voice turns must never replace a running tool task, including one from another entry.
         val admission = AgentRuntimeAdmission.decide(
-            AgentRuntimeAdmission.Owner(request.runId, request.voiceSessionId.isNotBlank()),
+            // 后台监听唤醒的一轮与语音同样不得取代正在执行的任务：忙时返回 BUSY，由 App 层排队稍后再发。
+            AgentRuntimeAdmission.Owner(request.runId, request.voiceSessionId.isNotBlank() || request.isMonitorOrigin),
             running?.let { AgentRuntimeAdmission.Owner(it.runId, it.voiceSessionId.isNotBlank()) },
             preparing?.let { AgentRuntimeAdmission.Owner(it.runId, it.voiceSessionId.isNotBlank()) },
         )
@@ -556,6 +557,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     ) {
         clearResultHandoff()
         resultConversationTarget = AgentConversationTarget.from(request.handoff)
+        activeRunConversation = AgentConversationTarget.from(request.handoff)
+            ?.takeIf { it.source == AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE }
+            ?.let { request.runId to it.key }
         isResultConversation = fromResultCard || AgentConversationSheetActivity.isConversationVisible(resultConversationTarget)
         resultConversationRunId = request.runId
         activeSession?.controller?.cancel()
@@ -1074,6 +1078,16 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         )
         startRun(continuationRequest, fromResultCard = true)
         return true
+    }
+
+    /** 最近一次启动的 run 所属的 App 对话（runId → conversationId），用于把后台监听事件并入同一对话的这一轮。 */
+    @Volatile private var activeRunConversation: Pair<String, String>? = null
+
+    private fun injectMonitorEventOnService(conversationId: String, modelText: String, events: List<AgentEvent>): Boolean {
+        val session = activeSession?.takeUnless { it.isTerminal } ?: return false
+        val (runId, runConversation) = activeRunConversation ?: return false
+        if (runId != session.runId || runConversation != conversationId) return false
+        return session.injectMonitorEvent(modelText, events)
     }
 
     private fun recordSupplementEvent(text: String): AgentEvent.UserSupplementReceived {
@@ -2240,6 +2254,17 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     internal companion object {
         @Volatile private var liveInstance: AgentRuntimeService? = null
+
+        /**
+         * 后台监听事件：本对话正有一轮在执行时，并入它的下一步（不打断当前模型请求或工具）。
+         * 返回 false 表示没有可并入的运行（空闲、别的对话在跑、或本轮已在收尾），由调用方排队或另开事件轮。主线程调用。
+         */
+        internal fun injectMonitorEvent(conversationId: String, modelText: String, events: List<AgentEvent>): Boolean =
+            liveInstance?.injectMonitorEventOnService(conversationId, modelText, events) == true
+
+        /** Runtime 当前没有在执行或准备执行的 run（服务未启动也算空闲）。主线程调用。 */
+        internal fun isIdle(): Boolean =
+            liveInstance?.let { service -> service.activeSession?.isTerminal != false && service.pendingStartRequest == null } ?: true
 
         internal fun beginInstrumentationFixture(): Boolean =
             liveInstance?.beginInstrumentationFixtureOnService() == true

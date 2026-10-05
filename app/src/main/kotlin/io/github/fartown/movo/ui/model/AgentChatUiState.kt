@@ -64,6 +64,40 @@ data class AgentMessageUi(
     val selectedCandidate: Int = 0,
 ) : AgentChatMessageUi
 
+/**
+ * 后台监听的一行（规范 8.12）：事件行「监听事件·名称·时间」或结束行（已停止 / 结束 / 中断）。
+ * [startsTurn] = 这一行唤醒了新的一轮（事件轮的起点，按「轮」聚合时与用户消息同等对待）；
+ * 运行中并入当前轮的事件不是起点，像补充一样留在本轮里。
+ */
+@Immutable
+data class MonitorEventMessageUi(
+    override val id: String,
+    val taskId: String,
+    val name: String,
+    val kind: MonitorEventKindUi,
+    val seq: Int,
+    val atMillis: Long,
+    /** 事件原文（展开时显示）；结束行为空。 */
+    val text: String,
+    /** 结束原因（MonitorEndReason 名）；事件行为 null。 */
+    val reason: String? = null,
+    val startsTurn: Boolean = false,
+    /** 模型历史里对应一条 user 条目（事件轮的第一行、运行中每批并入的第一行）。 */
+    val historyAnchor: Boolean = false,
+    /** 作为事件轮起点时，这一轮的起止时刻（与 [UserMessageUi.runStartedAtMillis] 同义）。 */
+    val runStartedAtMillis: Long? = null,
+    val runFinishedAtMillis: Long? = null,
+) : AgentChatMessageUi
+
+enum class MonitorEventKindUi { Event, Ended }
+
+/** 一轮任务的起点：用户发出的消息（不含执行中的补充），或唤醒事件轮的监听事件。 */
+fun AgentChatMessageUi.isTurnStart(): Boolean = when (this) {
+    is UserMessageUi -> !(id.startsWith("user-") && id.contains("-supplement-"))
+    is MonitorEventMessageUi -> startsTurn
+    else -> false
+}
+
 enum class SystemNoticeCode(val wireValue: String) {
     Stopped("stopped"),
     EmptyResult("empty_result"),

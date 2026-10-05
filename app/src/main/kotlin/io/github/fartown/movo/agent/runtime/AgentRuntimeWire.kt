@@ -32,6 +32,8 @@ import kotlinx.serialization.json.Json
 internal object AgentRuntimeWire {
     const val MSG_READ_CONTEXT_RESULT = 15
     const val OP_CHAT = "chat"
+    /** RunRequest.origin：后台监听事件唤醒的一轮。 */
+    const val ORIGIN_MONITOR = "monitor"
     const val OP_COMPACT = "compact"
     const val OP_REWRITE_REPLY = "rewrite_reply"
 
@@ -178,7 +180,11 @@ internal object AgentRuntimeWire {
         val operation: String = OP_CHAT,
         val rewriteTargetMessageId: String? = null,
         val voiceSessionId: String = "",
+        /** 由谁发起：空 = 用户；[ORIGIN_MONITOR] = 后台监听事件唤醒，忙时不得取代正在执行的任务。 */
+        val origin: String = "",
     ) {
+        val isMonitorOrigin: Boolean get() = origin == ORIGIN_MONITOR
+
         // 旧入口沿用会话 handoff；无持久会话的入口以首个 run 为会话起点。
         val effectiveModelSessionId: String
             get() = modelSessionId.ifBlank {
@@ -308,6 +314,7 @@ internal object AgentRuntimeWire {
         putString(KEY_MODEL_DISPLAY_NAME, request.config.modelDisplayName)
         putString("operation", request.operation)
         putString("voice_session_id", request.voiceSessionId)
+        putString("origin", request.origin)
         request.rewriteTargetMessageId?.let { putString("rewrite_target_message_id", it) }
         request.config.contextWindow?.let { putInt(KEY_CONTEXT_WINDOW, it) }
         AgentWireText.put(this, KEY_SYSTEM_PROMPT, request.config.systemPrompt, payloadDirectory)
@@ -426,6 +433,7 @@ internal object AgentRuntimeWire {
             },
             modelSessionId = bundle.getString(KEY_MODEL_SESSION_ID).orEmpty(),
             voiceSessionId = bundle.getString("voice_session_id").orEmpty(),
+            origin = bundle.getString("origin").orEmpty(),
             config = AgentModelClient.ModelConfig(
                 providerId = bundle.getString(KEY_PROVIDER_ID).orEmpty(),
                 providerName = bundle.getString(KEY_PROVIDER_NAME).orEmpty(),
@@ -779,6 +787,18 @@ internal object AgentRuntimeWire {
                 putString("text", event.text)
             }
 
+            is AgentEvent.MonitorEventReceived -> {
+                putString(KEY_TYPE, "monitor_event_received")
+                putString("task_id", event.taskId)
+                putString("name", event.name)
+                putString("kind", event.kind)
+                putInt("seq", event.seq)
+                putLong("at_millis", event.atMillis)
+                putString("text", event.text)
+                putString("reason", event.reason)
+                putBoolean("anchor", event.anchor)
+            }
+
             AgentEvent.RunPaused -> putString(KEY_TYPE, "run_paused")
 
             AgentEvent.RunResumed -> putString(KEY_TYPE, "run_resumed")
@@ -945,6 +965,17 @@ internal object AgentRuntimeWire {
         "user_supplement_received" -> AgentEvent.UserSupplementReceived(
             index = bundle.getInt("index"),
             text = bundle.getString("text").orEmpty(),
+        )
+
+        "monitor_event_received" -> AgentEvent.MonitorEventReceived(
+            taskId = bundle.getString("task_id").orEmpty(),
+            name = bundle.getString("name").orEmpty(),
+            kind = bundle.getString("kind").orEmpty(),
+            seq = bundle.getInt("seq"),
+            atMillis = bundle.getLong("at_millis"),
+            text = bundle.getString("text").orEmpty(),
+            reason = bundle.getString("reason").orEmpty(),
+            anchor = bundle.getBoolean("anchor"),
         )
 
         "run_paused" -> AgentEvent.RunPaused

@@ -667,6 +667,8 @@ internal fun AgentChatInputBar(
                             onEffortChange = onReasoningEffortChange,
                         )
                     }
+                    // 后台监听入口（规范 8.12）：本对话有运行中的监听时出现；语音模式不在这个分支里，自然隐藏。
+                    AgentMonitorChip(popupAnchorTopPx = inputContainerTopPx)
                 }
 
                 if (!voice.active) Spacer(modifier = Modifier.weight(1f))
