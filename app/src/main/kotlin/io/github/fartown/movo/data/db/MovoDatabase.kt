@@ -27,7 +27,7 @@ import androidx.room.migration.Migration
         UserPersonaEntity::class,
     ],
     version = 23,
-    exportSchema = false,
+    exportSchema = true,
 )
 internal abstract class MovoDatabase : RoomDatabase() {
     abstract fun conversationDao(): ConversationDao
