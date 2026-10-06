@@ -58,6 +58,9 @@ internal object FlavorModule : Flavor {
     /** 电视回答完 10 秒没人说话就收起：会话期间节目是暂停的（连续对话规则，见实施方案）。 */
     override val voiceIdleTimeoutMs: Long = 10_000L
 
+    /** 打开了其他 App（含直达视频搜索）后，回答念完就结束会话：不留在后台把节目声音当成你在说话。 */
+    override val voiceHandoffTools: Set<String> = setOf("app_open", "video_search")
+
     /** 「看全文」在本地打开阅读页，不交给模型。 */
     override val voiceLocalCommands: Set<String> = setOf("看全文", "看看全文", "打开全文", "全文", "放大看看", "看完整的")
 

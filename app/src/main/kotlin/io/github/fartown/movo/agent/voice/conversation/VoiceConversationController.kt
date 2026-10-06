@@ -45,6 +45,8 @@ internal class VoiceConversationController(
     private var idleSince = 0L
     private var utteranceSince = 0L
     private var commit: Runnable? = null
+    /** 本轮里 [FlavorModule.voiceHandoffTools] 中的工具已成功：回答念完（或没有回答）就结束会话。 */
+    private var handoff = false
     override val active: Boolean get() = turns.active
     override val busy: Boolean get() = engine != null || turns.running != null
 
@@ -64,6 +66,8 @@ internal class VoiceConversationController(
             override fun onReady() { if (valid()) { status = "我在听，说完会自动发送"; publish("listening"); tick(current) } }
             override fun onSpeechStarted(turn: Long) {
                 if (!valid()) return
+                // 你接着说了，说明还要继续，不按「打开 App 就结束」处理。
+                handoff = false
                 commit?.let(main::removeCallbacks)
                 utteranceSince = SystemClock.elapsedRealtime()
                 idleSince = 0
@@ -112,6 +116,7 @@ internal class VoiceConversationController(
             override fun onPlaybackFinished(turn: Long) {
                 if (!valid()) return
                 turns.playbackFinished(turn)
+                if (handoff && turns.running == null && turns.speaking == null) { handoff = false; end(APP_HANDOFF_NOTICE); return }
                 status = idleStatus()
                 publish("listening", turn)
             }
@@ -136,14 +141,18 @@ internal class VoiceConversationController(
         apply(turns.runtimeFinished(turn, answer))
         if (active && turns.speaking == null) status = failure?.takeIf { turns.running == null } ?: idleStatus()
         publish("result", turn)
+        // 打开了其他 App 但没有要念的回答：直接结束，不留在后台听节目。
+        if (handoff && active && answer.isBlank() && turns.running == null && turns.speaking == null) { handoff = false; end(APP_HANDOFF_NOTICE) }
     }
 
     override fun runtimeEvent(turn: Long, event: io.github.fartown.movo.agent.runtime.AgentEvent) {
         when (event) {
             is io.github.fartown.movo.agent.runtime.AgentEvent.ToolStarted ->
                 observer?.invoke("tool.started", turn, event.name, "")
-            is io.github.fartown.movo.agent.runtime.AgentEvent.ToolFinished ->
+            is io.github.fartown.movo.agent.runtime.AgentEvent.ToolFinished -> {
+                if (event.success == true && event.name in FlavorModule.voiceHandoffTools) handoff = true
                 observer?.invoke("tool.finished", turn, event.name, event.success.toString())
+            }
             is io.github.fartown.movo.agent.runtime.AgentEvent.AssistantBlockDelta ->
                 if (event.kind == io.github.fartown.movo.agent.runtime.AgentEvent.AssistantBlockKind.TEXT)
                     observer?.invoke("text.delta", turn, event.delta, "${event.round}:${event.index}")
@@ -250,6 +259,9 @@ internal class VoiceConversationController(
 
         /** 空闲超时结束时的状态文案。 */
         const val IDLE_END_MESSAGE = "暂时没有听到说话，语音已结束，可再次唤醒"
+
+        /** 打开了其他 App 后结束会话的提示。 */
+        const val APP_HANDOFF_NOTICE = "已打开，语音已结束"
 
         /**
          * 当前会话空闲到期的时刻（elapsedRealtime，毫秒）；不在空闲时为 0。电视胶囊据此在最后 3 秒变暗。

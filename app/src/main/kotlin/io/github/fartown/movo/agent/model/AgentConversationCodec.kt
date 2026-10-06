@@ -226,7 +226,7 @@ internal object AgentConversationCodec {
             val call = calls.optJSONObject(index) ?: continue
             if (call.optString("id") !in sensitiveToolCallIds) continue
             call.optJSONObject("function")
-                ?.put("arguments", JSONObject().put("redacted", true).toString())
+                ?.put("arguments", JSONObject().put(AgentToolCallValidator.REDACTION_MARKER, true).toString())
         }
         return copy
     }

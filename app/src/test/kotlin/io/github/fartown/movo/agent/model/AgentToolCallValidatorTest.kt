@@ -2,6 +2,8 @@ package io.github.fartown.movo.agent.model
 
 import org.json.JSONArray
 import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -102,6 +104,18 @@ class AgentToolCallValidatorTest {
 
         assertNull(validator.validate(call("""{"allowed":{"anything":true}}""")))
         assertNotNull(validator.validate(call("""{"blocked":1}""")))
+    }
+
+    @Test
+    fun copiedRedactionMarkerIsDroppedInsteadOfFailingTheCall() {
+        val validator = validator(JSONObject().put("type", "object").put("additionalProperties", false)
+            .put("properties", JSONObject().put("max_nodes", JSONObject().put("type", "integer"))))
+        val copied = call("""{"redacted":true,"max_nodes":40}""")
+        assertNotNull("未去掉时仍按额外字段报错", validator.validate(copied))
+        val normalized = validator.normalize(copied)
+        assertNull(validator.validate(normalized))
+        assertEquals(40, JSONObject(normalized.argumentsJson).getInt("max_nodes"))
+        assertFalse(JSONObject(normalized.argumentsJson).has("redacted"))
     }
 
     private fun validator(parameters: JSONObject): AgentToolCallValidator =

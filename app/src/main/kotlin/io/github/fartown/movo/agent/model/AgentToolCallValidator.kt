@@ -20,6 +20,20 @@ internal class AgentToolCallValidator(tools: JSONArray) {
         }
     }
 
+    /**
+     * 历史里涉及隐私的工具调用参数被替换成 `{"redacted":true}`（[AgentConversationCodec]）；模型会照着学，
+     * 在新调用里也带上这个标记（2026-10-06 电视真机：ui_observe 连续因「不允许额外字段 redacted」失败）。
+     * 工具本身没有这个参数时，执行前去掉它。
+     */
+    fun normalize(call: AgentModelClient.ToolCall): AgentModelClient.ToolCall {
+        val schema = schemasByName[call.name] ?: return call
+        if (schema.parameters.optJSONObject("properties")?.has(REDACTION_MARKER) == true) return call
+        val arguments = runCatching { JSONObject(call.argumentsJson.ifBlank { "{}" }) }.getOrNull() ?: return call
+        if (!arguments.has(REDACTION_MARKER)) return call
+        arguments.remove(REDACTION_MARKER)
+        return call.copy(argumentsJson = arguments.toString())
+    }
+
     fun validate(call: AgentModelClient.ToolCall): String? {
         val toolSchema = schemasByName[call.name]
             ?: return "工具未在本次运行的能力目录中声明"
@@ -342,7 +356,9 @@ internal class AgentToolCallValidator(tools: JSONArray) {
 
     private fun isJsonNull(value: Any?): Boolean = value == null || value == JSONObject.NULL
 
-    private companion object {
-        const val MAX_SCHEMA_DEPTH = 256
+    companion object {
+        /** 历史里脱敏工具调用的参数标记。 */
+        const val REDACTION_MARKER = "redacted"
+        private const val MAX_SCHEMA_DEPTH = 256
     }
 }
