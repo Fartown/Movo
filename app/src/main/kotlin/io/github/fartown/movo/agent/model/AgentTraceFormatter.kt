@@ -314,6 +314,8 @@ internal class AgentTraceFormatter {
                 add("code=${error.code.name}")
             }.joinToString(" · ")
         }
+        // 工具给了界面视图的，用它的摘要（一个关键结果）。
+        outcome.view?.summary?.takeIf { it.isNotBlank() }?.let { return it }
         val data = outcome.data
         if (toolName == "terminal_run" || toolName == "terminal_job") {
             if (data?.optBoolean("running", false) == true && data.has("job_id")) return "已转入后台"

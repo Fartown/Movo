@@ -294,4 +294,28 @@ class DeviceToolContractTest {
             override fun readState(packageName: String, action: AppControlAction) =
                 AppControlState(stopped = stopped, frozen = frozen)
         }
+
+    // ---- 执行卡视图 ----
+
+    @Test
+    fun view_settingWriteShowsBeforeAndAfter() {
+        var stored: String? = "100"
+        val backend = object : SettingWriteBackend {
+            override fun write(namespace: SettingNamespace, key: String, value: String): ToggleDispatch {
+                stored = value
+                return ToggleDispatch.OK
+            }
+            override fun read(namespace: SettingNamespace, key: String): String? = stored
+        }
+        val p = pipeline(SettingWriteTool(backend), ToolEnvironment(rootAvailable = true), approveAll)
+        val call = io.github.fartown.movo.agent.model.AgentModelClient.ToolCall(
+            "c1", "setting_write", """{"namespace":"system","key":"screen_brightness","value":"80"}""",
+        )
+        assertEquals("修改设置 · 屏幕亮度", p.stepTitle(call))
+        val view = p.execute(call).outcome!!.view!!
+        assertEquals("100 → 80", view.summary)
+        val change = view.blocks.single() as io.github.fartown.movo.agent.tools.core.ToolUiBlock.Change
+        assertEquals("100", change.before)
+        assertEquals("80", change.after)
+    }
 }

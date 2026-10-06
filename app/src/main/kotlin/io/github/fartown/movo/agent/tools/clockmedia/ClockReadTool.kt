@@ -1,5 +1,8 @@
 package io.github.fartown.movo.agent.tools.clockmedia
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.Risk
@@ -93,6 +96,29 @@ internal class ClockReadTool(
                 ToolError(ToolErrorCode.SOURCE_UNAVAILABLE, result.reason),
             )
         }
+    }
+
+    override fun uiTitle(input: ClockReadInput): String = when (input.type) {
+        ClockType.ALARM -> "查看闹钟"
+        ClockType.TIMER -> "查看计时器"
+        null -> "查看闹钟和计时器"
+    }
+
+    override fun renderForUi(input: ClockReadInput, output: ClockReadOutput): ToolUiView {
+        val items = (0 until output.items.length()).mapNotNull { output.items.optJSONObject(it) }.map { item ->
+            val time = item.optString("trigger_clock").takeIf { it.isNotBlank() }
+                ?: "%02d:%02d".format(item.optInt("hour"), item.optInt("minute"))
+            val kind = if (item.optString("kind") == "timer") "计时器" else "闹钟"
+            ToolUiBlock.Item(
+                title = time,
+                subtitle = listOfNotNull(kind, item.optString("label").takeIf { item.has("label") && !item.isNull("label") && it.isNotBlank() })
+                    .joinToString(" · "),
+            )
+        }
+        return ToolUiView(
+            summary = if (items.isEmpty()) "没有" else "${items.size} 个",
+            blocks = listOf(ToolUiBlock.Items(items)).filter { items.isNotEmpty() },
+        )
     }
 
     override fun renderForModel(output: ClockReadOutput): ModelContent = ModelContent.Json(

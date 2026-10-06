@@ -1,5 +1,8 @@
 package io.github.fartown.movo.agent.tools.clockmedia
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.Risk
@@ -94,6 +97,17 @@ internal class MediaControlTool(
         val session = (state as? MediaSessionState.Active)?.packageName
         return Verdict.Dispatched(MediaControlOutput(input.action, session))
     }
+
+    override fun uiTitle(input: MediaControlInput): String = when (input.action) {
+        MediaAction.PLAY -> "播放"
+        MediaAction.PAUSE -> "暂停"
+        MediaAction.TOGGLE -> "播放 / 暂停"
+        MediaAction.NEXT -> "下一首"
+        MediaAction.PREVIOUS -> "上一首"
+    }
+
+    override fun renderForUi(input: MediaControlInput, output: MediaControlOutput): ToolUiView =
+        ToolUiView(summary = output.session?.let { "已发送给「${io.github.fartown.movo.agent.tools.ui.appLabel(it)}」" } ?: "已发送")
 
     override fun renderForModel(output: MediaControlOutput): ModelContent {
         val json = JSONObject().put("action", output.action.name.lowercase())

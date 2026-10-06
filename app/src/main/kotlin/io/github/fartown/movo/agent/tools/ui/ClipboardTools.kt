@@ -1,5 +1,8 @@
 package io.github.fartown.movo.agent.tools.ui
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
 import io.github.fartown.movo.agent.tools.core.ModelContent
@@ -95,6 +98,19 @@ internal class ClipboardReadTool(
         }
     }
 
+    override fun uiTitle(input: ClipboardReadInput): String = "读取剪贴板"
+
+    /** 标了敏感的（密码管理器等复制的）只写字数。 */
+    override fun renderForUi(input: ClipboardReadInput, output: ClipboardReadOutput): ToolUiView = when {
+        output.text.isEmpty() -> ToolUiView(summary = "剪贴板是空的")
+        output.sensitive -> ToolUiView(summary = "${output.text.length} 个字（敏感内容，不显示）")
+        else -> ToolUiView(
+            summary = "${output.text.length} 个字",
+            blocks = listOf(ToolUiBlock.Preview(output.text, more = output.truncated)),
+            transient = true,
+        )
+    }
+
     override fun renderForModel(output: ClipboardReadOutput): ModelContent =
         ModelContent.Json(JSONObject().put("text", output.text).put("truncated", output.truncated))
 }
@@ -159,6 +175,12 @@ internal class ClipboardWriteTool(
             )
         }
     }
+
+    override fun uiTitle(input: ClipboardWriteInput): String =
+        if (input.sensitive) "复制 ${input.text.length} 个字到剪贴板" else "复制「${input.text.forTitle()}」"
+
+    override fun renderForUi(input: ClipboardWriteInput, output: ClipboardWriteOutput): ToolUiView =
+        ToolUiView(summary = "已复制 · ${output.chars} 个字")
 
     override fun renderForModel(output: ClipboardWriteOutput): ModelContent =
         ModelContent.Json(JSONObject().put("chars", output.chars))

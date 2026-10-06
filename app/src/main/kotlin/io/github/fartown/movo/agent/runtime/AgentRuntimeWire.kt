@@ -688,7 +688,11 @@ internal object AgentRuntimeWire {
     }
 
     /** 将 [AgentEvent] 打包为可跨进程传递的 [Bundle]。 */
-    fun eventToBundle(event: AgentEvent): Bundle = Bundle().apply {
+    /**
+     * [forArchive] 为 true 时（写进运行归档 / checkpoint）不带只在本次运行中显示的工具视图
+     * （截图、个人数据，工具可视化方案 §6 决策 1、2）；发给界面时带上。
+     */
+    fun eventToBundle(event: AgentEvent, forArchive: Boolean = false): Bundle = Bundle().apply {
         when (event) {
             is AgentEvent.RunStarted -> {
                 putString(KEY_TYPE, "run_started")
@@ -818,6 +822,7 @@ internal object AgentRuntimeWire {
                 putInt("image_count", event.imageCount)
                 putInt("image_bytes", event.imageBytes)
                 event.success?.let { putBoolean("success", it) }
+                event.view?.takeUnless { forArchive && it.transient }?.let { putString("tool_view", it.toJson().toString()) }
             }
 
             is AgentEvent.HostedToolStarted -> {
@@ -994,6 +999,7 @@ internal object AgentRuntimeWire {
             imageBytes = bundle.getInt("image_bytes"),
             // 旧版本 Runtime 不发送 success，缺省为 null 由消费端回退判断
             success = if (bundle.containsKey("success")) bundle.getBoolean("success") else null,
+            view = io.github.fartown.movo.agent.tools.core.ToolUiView.fromJsonString(bundle.getString("tool_view")),
         ).apply { atMillis = bundle.getLong("at_millis") }
 
         "hosted_tool_started" -> AgentEvent.HostedToolStarted(

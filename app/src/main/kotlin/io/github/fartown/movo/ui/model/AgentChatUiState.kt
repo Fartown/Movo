@@ -189,6 +189,8 @@ data class ToolActivityMessageUi(
     /** 工具开始 / 结束时刻（毫秒）；旧数据或旧版本 Runtime 没有时为 null，界面不显示用时。 */
     val startedAtMillis: Long? = null,
     val finishedAtMillis: Long? = null,
+    /** 展开后的结构化内容（工具可视化方案）；旧数据、非类型化工具、重启后的临时视图为 null。 */
+    val view: io.github.fartown.movo.agent.tools.core.ToolUiView? = null,
 ) : AgentChatMessageUi
 
 enum class ToolActivityStatusUi {

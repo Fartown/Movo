@@ -1,5 +1,8 @@
 package io.github.fartown.movo.agent.tools.ui
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.ResourceKey
@@ -114,6 +117,23 @@ internal class UiWaitTool(
             )
         }
     }
+
+    override fun uiTitle(input: UiWaitInput): String = when (val c = input.condition) {
+        is UiWaitCondition.Text -> "等「${c.text.forTitle()}」${if (c.gone) "消失" else "出现"}"
+        is UiWaitCondition.Package -> "等「${appLabel(c.packageName)}」打开"
+        is UiWaitCondition.Duration -> "等 ${seconds(c.durationMs.toLong())}"
+    }
+
+    override fun renderForUi(input: UiWaitInput, output: UiWaitOutput): ToolUiView = ToolUiView(
+        summary = when {
+            input.condition is UiWaitCondition.Duration -> "已等 ${seconds(output.elapsedMs)}"
+            output.matched -> "等到了 · ${seconds(output.elapsedMs)}"
+            else -> "没等到 · ${seconds(output.elapsedMs)}后超时"
+        },
+    )
+
+    private fun seconds(ms: Long): String =
+        if (ms < 10_000) String.format(java.util.Locale.US, "%.1f 秒", ms / 1000.0).replace(".0 秒", " 秒") else "${ms / 1000} 秒"
 
     override fun renderForModel(output: UiWaitOutput): ModelContent {
         val json = JSONObject().put("matched", output.matched).put("elapsed_ms", output.elapsedMs)

@@ -1,5 +1,7 @@
 package io.github.fartown.movo.agent.tools.conversation
 
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.ToolUiView
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.Risk
@@ -126,6 +128,22 @@ internal class ConversationReadTool(
                 hasMore = hasMore,
                 nextCursor = if (hasMore) ConversationCursor(index, total) else null,
             ),
+        )
+    }
+
+    override fun uiTitle(input: ConversationReadInput): String =
+        input.query?.takeIf { it.isNotBlank() }?.let { "在这次对话里找「${it.forTitle()}」" } ?: "翻看这次对话"
+
+    /** 只写读到哪几条，不把正文再贴一遍。 */
+    override fun renderForUi(input: ConversationReadInput, output: ConversationReadOutput): ToolUiView {
+        val first = output.entries.minOfOrNull { it.index }
+        val last = output.entries.maxOfOrNull { it.index }
+        return ToolUiView(
+            summary = when {
+                first == null || last == null -> "没有找到"
+                first == last -> "第 ${first + 1} 条"
+                else -> "第 ${first + 1}–${last + 1} 条，共 ${output.totalMessages} 条"
+            },
         )
     }
 

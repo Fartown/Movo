@@ -6,6 +6,8 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock as B
 import io.github.fartown.movo.data.model.AppearanceSettings
 import io.github.fartown.movo.ui.app.AgentAppTheme
 import io.github.fartown.movo.ui.model.PermissionHealthItemUi
@@ -258,5 +260,93 @@ class DesignShotsTest {
                 ),
             )
         }
+    }
+
+    // ---- 定稿 20 · 工具步骤可视化：默认折叠，点一步原地展开 ----
+
+    private fun capture(name: String) {
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.waitForIdle()
+        val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
+        val dir = File(System.getProperty("movo.shots.dir") ?: "build/shots").apply { mkdirs() }
+        File(dir, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    private fun settingsShot(): io.github.fartown.movo.agent.model.AgentModelClient.ModelImage {
+        val bmp = Bitmap.createBitmap(390, 844, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bmp)
+        canvas.drawColor(android.graphics.Color.rgb(244, 243, 240))
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { textSize = 26f; color = android.graphics.Color.rgb(21, 21, 21) }
+        val card = android.graphics.Paint().apply { color = android.graphics.Color.WHITE }
+        canvas.drawRoundRect(20f, 60f, 320f, 116f, 28f, 28f, android.graphics.Paint().apply { color = android.graphics.Color.rgb(228, 228, 228) })
+        canvas.drawText("蓝牙", 70f, 98f, paint)
+        canvas.drawRoundRect(20f, 150f, 370f, 710f, 28f, 28f, card)
+        listOf("蓝牙", "蓝牙设备黑名单", "显示没有名称的蓝牙设备", "始终保持蓝牙开启", "蓝牙设备解锁").forEachIndexed { i, t ->
+            canvas.drawText(t, 40f, 210f + i * 104f, paint)
+        }
+        val out = java.io.ByteArrayOutputStream(); bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+        return io.github.fartown.movo.agent.model.AgentModelClient.ModelImage(
+            reference = "data:image/png;base64," + android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP),
+            mimeType = "image/png", bytes = out.size(), source = "screen",
+        )
+    }
+
+    @Test
+    fun toolSteps() {
+        io.github.fartown.movo.agent.media.ToolStepImages.clearForTests()
+        val key = io.github.fartown.movo.agent.media.ToolStepImages.put("obs-1", 0, settingsShot())!!
+        val t = System.currentTimeMillis() - 60_000
+        fun step(id: String, tool: String, title: String, summary: String, view: io.github.fartown.movo.agent.tools.core.ToolUiView?, at: Long, ms: Long,
+                 status: ToolActivityStatusUi = ToolActivityStatusUi.Success, command: String? = null, images: Int = 0) =
+            ToolActivityMessageUi(id, tool, status, title, command = command, resultSummary = summary, imageCount = images,
+                startedAtMillis = t + at, finishedAtMillis = t + at + ms, view = view)
+        fun view(summary: String, vararg blocks: io.github.fartown.movo.agent.tools.core.ToolUiBlock, transient: Boolean = false) =
+            io.github.fartown.movo.agent.tools.core.ToolUiView(summary, blocks.toList(), transient)
+        val messages = listOf(
+            step("s1", "app_open", "打开「设置」", "已打开「设置」", view("已打开「设置」"), 0, 300),
+            step("s2", "ui_observe", "查看屏幕", "「设置」 · 28 个元素 · 截图", view("「设置」 · 28 个元素 · 截图", B.Images(listOf(key)), transient = true), 400, 400, images = 1),
+            step("s3", "ui_tap", "点按「搜索系统设置项」", "已点按", view("已点按"), 900, 8000),
+            step("s4", "ui_input", "输入「蓝牙」", "已输入", view("已输入"), 9000, 300),
+            step("s5", "terminal_run", "运行 · find /sdcard/Download -name '*…", "退出码 0 · 输出 3 行",
+                view("退出码 0 · 输出 3 行", B.Output("/sdcard/Download/run-1001.log\n/sdcard/Download/run-1002.log\n/sdcard/Download/crash.log", label = "输出")),
+                9400, 1200, command = "find /sdcard/Download -name '*.log' -mtime +7"),
+            step("s6", "personal_search", "搜索短信「快递」", "找到 3 条", view("找到 3 条",
+                B.Items(listOf(B.Item("【菜鸟驿站】取件通知", "10086 · 今天 14:05"), B.Item("【顺丰】派送中", "95338 · 今天 09:12"), B.Item("【京东】已签收", "10月5日 18:40"))), transient = true), 10700, 600),
+            step("s7", "setting_write", "修改设置 · 屏幕亮度", "100 → 80", view("100 → 80", B.Change("100", "80", label = "屏幕亮度")), 11400, 300),
+            step("s8", "memory_write", "记住一条", "已记住", view("已记住", B.Preview("我对花生过敏，点外卖时避开含花生的菜。", label = "记住"), transient = true), 11800, 100),
+            step("s9", "terminal_run", "运行 · ls /sdcard/no_such_dir", "失败 · 退出码 1",
+                view("失败 · 退出码 1", B.Output("ls: /sdcard/no_such_dir: No such file or directory", label = "错误输出")), 12000, 100,
+                status = ToolActivityStatusUi.Failed, command = "ls /sdcard/no_such_dir"),
+            step("s10", "sms_code_read", "读取验证码", "找到 1 个 · 来自 10086", view("找到 1 个 · 来自 10086", transient = true), 12200, 300),
+            step("s11", "ui_observe", "查看屏幕", "「设置」 · 25 个元素 · 截图", null, 12600, 200, images = 1),
+        )
+        compose.setContent {
+            AgentAppTheme(appearance = AppearanceSettings(), applyInterfaceScale = false) {
+                Column(Modifier.fillMaxSize().background(MovoColors.bgCanvas).padding(top = 24.dp)) {
+                    AgentWorkProcess(id = "w-steps", messages = messages, onOpenBrowser = {}, currentBrowserMessageId = null, retainedStreamingStates = emptyMap())
+                }
+            }
+        }
+        compose.mainClock.advanceTimeBy(2_000)
+        compose.waitForIdle()
+        capture("20-01-collapsed-card")
+        compose.onAllNodes(androidx.compose.ui.test.hasText("已完成", substring = true))[0].performClick()
+        capture("20-02-steps-all-collapsed")
+        compose.onAllNodes(androidx.compose.ui.test.hasText("查看屏幕"))[0].performClick()
+        capture("20-03-screenshot-expanded")
+        compose.onAllNodes(androidx.compose.ui.test.hasText("运行 · find", substring = true))[0].performClick()
+        capture("20-04-output-expanded-only-one")
+        compose.onAllNodes(androidx.compose.ui.test.hasText("搜索短信「快递」"))[0].performClick()
+        capture("20-05-list")
+        compose.onAllNodes(androidx.compose.ui.test.hasText("修改设置 · 屏幕亮度"))[0].performClick()
+        capture("20-06-change")
+        compose.onAllNodes(androidx.compose.ui.test.hasText("记住一条"))[0].performClick()
+        capture("20-07-preview")
+        compose.onAllNodes(androidx.compose.ui.test.hasText("运行 · ls", substring = true))[0].performClick()
+        capture("20-08-failed")
+        compose.onAllNodes(androidx.compose.ui.test.hasText("读取验证码"))[0].performClick()
+        capture("20-09-secret-not-expandable")
+        compose.onAllNodes(androidx.compose.ui.test.hasText("查看屏幕"))[1].performClick()
+        capture("20-10-restart-placeholder")
     }
 }

@@ -1,5 +1,9 @@
 package io.github.fartown.movo.agent.tools.skill
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiFields
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.Risk
@@ -124,6 +128,19 @@ internal class SkillReadTool(
         val next = if (end < full.length) end else null
         return Verdict.Read(output.copy(content = slice, nextCursor = next))
     }
+
+    override fun uiTitle(input: SkillReadInput): String =
+        "读取技能 · ${input.skill.forTitle()}" + input.path?.takeIf { it.isNotBlank() }?.let { " / ${it.forTitle()}" }.orEmpty()
+
+    override fun renderForUi(input: SkillReadInput, output: SkillReadOutput): ToolUiView = ToolUiView(
+        summary = if (output.content.isNotBlank()) "${output.content.lines().size} 行" else "${output.files.size} 个文件",
+        blocks = listOfNotNull(
+            output.content.takeIf { it.isNotBlank() }?.let { ToolUiBlock.Preview(it, more = output.nextCursor != null) },
+            output.files.takeIf { output.content.isBlank() && it.isNotEmpty() }?.let { files ->
+                ToolUiBlock.Items(files.map { ToolUiBlock.Item(it) })
+            },
+        ),
+    )
 
     override fun renderForModel(output: SkillReadOutput): ModelContent = ModelContent.Json(
         JSONObject()

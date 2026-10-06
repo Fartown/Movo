@@ -1,5 +1,12 @@
 package io.github.fartown.movo.agent.tools.file
 
+import io.github.fartown.movo.agent.tools.core.TerminalBody
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.fileName
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiBytes
+import io.github.fartown.movo.agent.tools.core.uiTime
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.ModelInput
@@ -199,6 +206,26 @@ internal class FileReadTool(
             .put("height", image.height)
             .put("image_attached", true)
         return Verdict.Read(FileReadOutput(data, imageAttached = true))
+    }
+
+    override fun uiTitle(input: FileReadInput): String = "读取文件 · ${input.file.fileName().forTitle(30)}"
+
+    override fun renderForUi(input: FileReadInput, output: FileReadOutput): ToolUiView {
+        val data = output.data
+        val path = data.optString("path").ifBlank { input.file }
+        return when (data.optString("kind")) {
+            "text" -> {
+                val content = data.optString("content")
+                val shown = content.lines().size
+                val total = data.optJSONObject("truncated")?.optInt("total")?.takeIf { it > shown }
+                ToolUiView(
+                    summary = if (total != null) "$shown / $total 行" else "$shown 行",
+                    blocks = listOf(ToolUiBlock.Output(content, label = path)).filter { content.isNotBlank() },
+                )
+            }
+            "image" -> ToolUiView(summary = "图片 · ${data.optInt("width")}×${data.optInt("height")}")
+            else -> ToolUiView(summary = "已读取")
+        }
     }
 
     override fun renderForModel(output: FileReadOutput): ModelContent = ModelContent.Json(output.data)

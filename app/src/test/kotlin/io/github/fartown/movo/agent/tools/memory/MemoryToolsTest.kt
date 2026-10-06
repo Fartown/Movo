@@ -162,4 +162,20 @@ class MemoryToolsTest {
         val p = pipeline(FakeMemory("x"), decline)
         assertEquals("ok", p.execute(call("memory_write", """{"mode":"append","new_text":"y"}""")).status)
     }
+
+    // ---- 执行卡：标题不写记忆内容（标题会存进对话记录），内容只在展开里 ----
+
+    @Test
+    fun stepTitle_memoryWriteHasNoContent_viewHasIt() {
+        val p = pipeline(FakeMemory("x"))
+        val append = io.github.fartown.movo.agent.model.AgentModelClient.ToolCall(
+            "c1", "memory_write", """{"mode":"append","new_text":"我对花生过敏"}""",
+        )
+        assertEquals("记住一条", p.stepTitle(append))
+        val view = p.execute(append).outcome!!.view!!
+        assertEquals("已记住", view.summary)
+        assertEquals("我对花生过敏", (view.blocks.single() as io.github.fartown.movo.agent.tools.core.ToolUiBlock.Preview).text)
+        // 记忆是用户自己说给 Movo 的（原话本来就在对话里），展开内容重启后仍在；标题不写内容，折叠时看不到。
+        assertFalse(view.transient)
+    }
 }

@@ -1,5 +1,12 @@
 package io.github.fartown.movo.agent.tools.terminal
 
+import io.github.fartown.movo.agent.tools.core.TerminalBody
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.fileName
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiBytes
+import io.github.fartown.movo.agent.tools.core.uiTime
 import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.ApprovalPreview
 import io.github.fartown.movo.agent.tools.core.CallResolution
@@ -138,6 +145,21 @@ internal class TerminalRunTool(
                 ),
             )
         }
+    }
+
+    override fun uiTitle(input: TerminalRunInput): String {
+        // 一行放得下（执行卡标题区约 30 个英文字符宽）；完整命令在展开的命令块里。
+        val what = input.description?.takeIf { it.isNotBlank() }?.forTitle(20)
+            ?: input.command.lineSequence().first().forTitle(28)
+        return if (input.identity == TerminalIdentity.ROOT) "以 Root 运行 · $what" else "运行 · $what"
+    }
+
+    override fun renderForUi(input: TerminalRunInput, output: TerminalRunOutput): ToolUiView {
+        val body = TerminalBody.parse(output.textBody)
+        if (body == null || (body.exitCode == null && !output.textBody.contains("--- stdout ---"))) {
+            return ToolUiView(summary = "已转到后台运行")
+        }
+        return ToolUiView(summary = body.summary(), blocks = body.outputBlocks())
     }
 
     override fun renderForModel(output: TerminalRunOutput): ModelContent = ModelContent.Text(output.textBody)

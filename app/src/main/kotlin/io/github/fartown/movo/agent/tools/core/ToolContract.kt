@@ -49,8 +49,17 @@ internal interface ToolContract<I : ToolInput, O : ToolOutput> {
     /** 要附给模型本回合的图片（file_read 图片、截图、mcp 图片附件）；默认无。 */
     fun images(output: O): List<io.github.fartown.movo.agent.model.AgentModelClient.ModelImage> = emptyList()
 
-    /** 结构化输出 → 给 UI 的详情（占位，脱敏历史复用 Sensitivity，延后）。 */
-    fun renderForUi(output: O): JSONObject = JSONObject()
+    /**
+     * 执行卡这一步的标题：动作 + 对象（「点按「搜索系统设置项」」「读取文件 · notes.txt」）。
+     * 只用输入、不调后端，在执行前就能算出；为空时用工具的通用叫法。
+     */
+    fun uiTitle(input: I): String? = null
+
+    /**
+     * 结构化输出 → 给界面的视图（摘要一行 + 展开的内容块，工具可视化方案 §4）。从 [O] 派生，与 [renderForModel] 分开。
+     * 图片由 [ContractTool] 统一加进视图；机密（SECRET）结果只保留摘要；为空时界面只显示通用的结果摘要。
+     */
+    fun renderForUi(input: I, output: O): ToolUiView? = null
 
     /**
      * 手动审批模式下给确认卡的可读预览：标题（卡片大标题）+ 预览盒正文（要执行的动作/关键参数）。

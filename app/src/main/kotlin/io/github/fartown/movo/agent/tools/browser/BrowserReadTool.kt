@@ -1,6 +1,9 @@
 package io.github.fartown.movo.agent.tools.browser
 
 import io.github.fartown.movo.agent.model.AgentModelClient
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.ResourceKey
@@ -196,6 +199,39 @@ internal class BrowserReadTool(
         val data = base(state)
         info.keys().forEach { key -> data.put(key, info.get(key)) }
         return Verdict.Read(BrowserReadOutput(data, screenshot = null))
+    }
+
+    override fun uiTitle(input: BrowserReadInput): String = when (input.mode) {
+        BrowserReadMode.READABLE -> "读取网页正文"
+        BrowserReadMode.TEXT -> "读取网页文字"
+        BrowserReadMode.ELEMENTS -> "查看网页上能点的元素"
+        BrowserReadMode.SCREENSHOT -> "网页截图"
+        BrowserReadMode.INFO -> "查看网页信息"
+    }
+
+    override fun renderForUi(input: BrowserReadInput, output: BrowserReadOutput): ToolUiView {
+        val data = output.data
+        val page = data.optString("title").takeIf { it.isNotBlank() }?.let { "《${it.forTitle(24)}》" }
+            ?: data.optString("url").takeIf { it.isNotBlank() }?.let(::uiHost)
+        val blocks = mutableListOf<ToolUiBlock>()
+        val summary = when {
+            data.has("elements") -> {
+                val elements = data.optJSONArray("elements")
+                val items = (0 until (elements?.length() ?: 0)).mapNotNull { elements?.optJSONObject(it) }.map { e ->
+                    ToolUiBlock.Item(e.optString("text").ifBlank { e.optString("role") }, subtitle = e.optString("role").takeIf { e.optString("text").isNotBlank() })
+                }
+                if (items.isNotEmpty()) blocks += ToolUiBlock.Items(items)
+                "${data.optInt("element_count", items.size)} 个元素"
+            }
+            data.has("text") -> {
+                val text = data.optString("text")
+                if (text.isNotBlank()) blocks += ToolUiBlock.Preview(text, more = data.optBoolean("truncated"))
+                "${data.optInt("returned_chars", text.length)} 字"
+            }
+            output.screenshot != null -> "截图"
+            else -> "已读取"
+        }
+        return ToolUiView(summary = listOfNotNull(page, summary).joinToString(" · "), blocks = blocks)
     }
 
     override fun renderForModel(output: BrowserReadOutput): ModelContent = ModelContent.Json(output.data)

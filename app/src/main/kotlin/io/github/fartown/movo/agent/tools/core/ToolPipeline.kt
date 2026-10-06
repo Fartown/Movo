@@ -69,6 +69,12 @@ internal class ToolPipeline(
         }
     }
 
+    override fun stepTitle(toolCall: AgentModelClient.ToolCall): String? {
+        val tool = registry.find(toolCall.name) ?: return null
+        val args = runCatching { ToolArgs.parse(toolCall.argumentsJson) }.getOrNull() ?: return null
+        return runCatching { tool.stepTitle(args, currentEnvironment) }.getOrNull()?.takeIf { it.isNotBlank() }
+    }
+
     override fun execute(toolCall: AgentModelClient.ToolCall): AgentModelClient.ToolResult {
         val tool = registry.find(toolCall.name)
             ?: return result(

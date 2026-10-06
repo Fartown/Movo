@@ -344,4 +344,13 @@ class BrowserToolsTest {
         assertEquals("ok", r.status)
         assertTrue(fake.performed)
     }
+
+    // ---- 执行卡标题：网页输入框可能是密码框，只写字数 ----
+
+    @Test
+    fun stepTitle_browserTypeNeverShowsTheText() {
+        val title = pipeline().stepTitle(call("browser_act", """{"action":"type","selector":"#pw","text":"secret"}"""))
+        assertEquals("网页上输入 6 个字", title)
+        assertEquals("打开网页 · example.com", pipeline().stepTitle(call("browser_open", """{"url":"https://www.example.com/a?b=1"}""")))
+    }
 }

@@ -76,4 +76,14 @@
     <string name="tool_typed_group_skills">Skills</string>
     <string name="tool_typed_group_monitor">Background monitors and notifications</string>
     <string name="tool_typed_group_meta">Other</string>
+    <string name="tool_step_open_image">Tap to enlarge</string>
+    <string name="tool_step_image_gone">Screenshots are only kept for the current run</string>
+    <string name="tool_step_more_items" formatted="true">%d more</string>
+    <string name="tool_step_more_lines" formatted="true">%d more lines not shown</string>
+    <string name="tool_step_show_all" formatted="true">Show all (%d lines)</string>
+    <string name="tool_step_more_content">More not shown</string>
+    <string name="tool_step_before">Before</string>
+    <string name="tool_step_after">Now</string>
+    <string name="tool_step_close_image">Close</string>
+    <string name="tool_step_command">Command</string>
 </resources>

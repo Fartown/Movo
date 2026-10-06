@@ -1,5 +1,12 @@
 package io.github.fartown.movo.agent.tools.file
 
+import io.github.fartown.movo.agent.tools.core.TerminalBody
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.fileName
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiBytes
+import io.github.fartown.movo.agent.tools.core.uiTime
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.Risk
@@ -83,6 +90,26 @@ internal class FileListTool(
         ctx.checkCancelled()
         val output = backend.list(input.path, input.hidden, input.limit, input.cursor)
         return Verdict.Read(output)
+    }
+
+    override fun uiTitle(input: FileListInput): String =
+        "列出目录" + input.path?.takeIf { it.isNotBlank() }?.let { " · ${it.forTitle(30)}" }.orEmpty()
+
+    override fun renderForUi(input: FileListInput, output: FileListOutput): ToolUiView {
+        val items = output.entries.map { entry ->
+            ToolUiBlock.Item(
+                title = entry.name,
+                subtitle = listOfNotNull(
+                    if (entry.type == "dir") "文件夹" else uiBytes(entry.sizeBytes),
+                    entry.modifiedAtMillis.takeIf { it > 0 }?.let { uiTime(it) },
+                ).joinToString(" · "),
+            )
+        }
+        val more = if (output.nextCursor != null) " · 还有更多" else ""
+        return ToolUiView(
+            summary = if (items.isEmpty()) "空目录" else "${items.size} 项$more",
+            blocks = listOf(ToolUiBlock.Items(items)).filter { items.isNotEmpty() },
+        )
     }
 
     override fun renderForModel(output: FileListOutput): ModelContent {

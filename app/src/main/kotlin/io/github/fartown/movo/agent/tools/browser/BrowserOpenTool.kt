@@ -1,5 +1,8 @@
 package io.github.fartown.movo.agent.tools.browser
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
 import io.github.fartown.movo.agent.tools.core.ApprovalPreview
 import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.CallResolution
@@ -135,6 +138,27 @@ internal class BrowserOpenTool(
         is BrowserOpenTarget.Url -> ApprovalPreview(title = "在浏览器打开这个链接？", detail = target.url)
         is BrowserOpenTarget.History -> null
     }
+
+    override fun uiTitle(input: BrowserOpenInput): String = when (val t = input.target) {
+        is BrowserOpenTarget.Url -> "打开网页 · ${uiHost(t.url)}"
+        is BrowserOpenTarget.History -> when (t.nav) {
+            BrowserNav.BACK -> "网页后退"
+            BrowserNav.FORWARD -> "网页前进"
+            BrowserNav.RELOAD -> "刷新网页"
+        }
+    }
+
+    override fun renderForUi(input: BrowserOpenInput, output: BrowserOpenOutput): ToolUiView = ToolUiView(
+        summary = output.page.title.takeIf { it.isNotBlank() }?.let { "《${it.forTitle(30)}》" } ?: uiHost(output.page.url),
+        blocks = listOf(
+            ToolUiBlock.Fields(
+                listOfNotNull(
+                    ToolUiBlock.Field("网址", output.page.url),
+                    output.page.httpStatus?.takeIf { it >= 400 }?.let { ToolUiBlock.Field("状态", "HTTP $it") },
+                ),
+            ),
+        ),
+    )
 
     override fun renderForModel(output: BrowserOpenOutput): ModelContent {
         val page = output.page

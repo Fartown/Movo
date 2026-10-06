@@ -1,5 +1,8 @@
 package io.github.fartown.movo.agent.tools.ui
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
 import io.github.fartown.movo.agent.tools.core.InjectionBackend
@@ -138,6 +141,20 @@ internal class UiScrollTool(
             )
         }
     }
+
+    override fun uiTitle(input: UiScrollInput): String {
+        val base = "${input.direction.label()}滚动"
+        return input.untilText?.takeIf { it.isNotBlank() }?.let { "$base，找「${it.forTitle()}」" } ?: base
+    }
+
+    override fun renderForUi(input: UiScrollInput, output: UiScrollOutput): ToolUiView = ToolUiView(
+        summary = when {
+            output.moved && output.atBoundary == true -> "已滚动 · 到头了"
+            output.moved -> "已滚动"
+            output.atBoundary == true -> "到头了，没有再滚动"
+            else -> "没有滚动"
+        },
+    )
 
     override fun renderForModel(output: UiScrollOutput): ModelContent {
         val json = JSONObject().put("moved", output.moved)

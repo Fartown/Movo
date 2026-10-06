@@ -55,6 +55,7 @@ class MovoDatabaseMigrationTest {
                 MovoDatabase.MIGRATION_19_20,
                 MovoDatabase.MIGRATION_20_21,
                 MovoDatabase.MIGRATION_21_22,
+                MovoDatabase.MIGRATION_22_23,
             )
             .build()
         try {
@@ -97,6 +98,8 @@ class MovoDatabaseMigrationTest {
             // v22：工具步骤时刻列为空，旧消息照常读出（界面不显示用时）。
             assertEquals(null, migratedMessage.startedAt)
             assertEquals(null, migratedMessage.finishedAt)
+            // v23：工具步骤视图列为空，旧消息照常读出（展开只显示原来的摘要）。
+            assertEquals(null, migratedMessage.toolViewJson)
             assertEquals("保留的结果", result.content)
             assertEquals("[]", result.transcriptJson)
             assertEquals("保留的归档", archive.content)

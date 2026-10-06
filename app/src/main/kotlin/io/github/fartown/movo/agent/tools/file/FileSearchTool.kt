@@ -1,5 +1,12 @@
 package io.github.fartown.movo.agent.tools.file
 
+import io.github.fartown.movo.agent.tools.core.TerminalBody
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.fileName
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiBytes
+import io.github.fartown.movo.agent.tools.core.uiTime
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.Risk
@@ -133,6 +140,35 @@ internal class FileSearchTool(
             cursor = input.cursor,
         )
         return Verdict.Read(output)
+    }
+
+    override fun uiTitle(input: FileSearchInput): String {
+        val what = when (input.type) {
+            FileType.IMAGE -> "图片"
+            FileType.VIDEO -> "视频"
+            FileType.AUDIO -> "音频"
+            FileType.DOCUMENT -> "文档"
+            FileType.ANY -> "文件"
+        }
+        return "搜索$what" + input.query?.takeIf { it.isNotBlank() }?.let { "「${it.forTitle()}」" }.orEmpty()
+    }
+
+    override fun renderForUi(input: FileSearchInput, output: FileSearchOutput): ToolUiView {
+        val items = output.items.map { item ->
+            ToolUiBlock.Item(
+                title = item.name,
+                subtitle = listOf(uiBytes(item.sizeBytes), uiTime(item.timeMillis)).joinToString(" · "),
+            )
+        }
+        val total = output.total?.takeIf { it > items.size }
+        return ToolUiView(
+            summary = when {
+                items.isEmpty() -> "没找到"
+                total != null -> "找到 $total 个，列出 ${items.size} 个"
+                else -> "找到 ${items.size} 个"
+            },
+            blocks = listOf(ToolUiBlock.Items(items)).filter { items.isNotEmpty() },
+        )
     }
 
     override fun renderForModel(output: FileSearchOutput): ModelContent {

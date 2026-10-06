@@ -298,7 +298,9 @@ internal class AgentLoop(
                 round = round,
                 toolCallId = toolCall.id,
                 name = toolCall.name,
-                argsPreview = traceFormatter.summarizeArguments(toolCall),
+                // 工具自己给的标题（动作 + 对象）优先，老工具与元工具用格式化器兜底。
+                argsPreview = runCatching { toolExecutor.stepTitle(toolCall) }.getOrNull()
+                    ?: traceFormatter.summarizeArguments(toolCall),
                 command = traceFormatter.displayCommand(toolCall),
             ).stamped()
         )
@@ -365,6 +367,7 @@ internal class AgentLoop(
                 imageCount = result.images.size,
                 imageBytes = result.images.sumOf { it.bytes },
                 success = traceFormatter.isSuccessResult(result),
+                view = result.outcome?.view,
             ).stamped()
         )
     }

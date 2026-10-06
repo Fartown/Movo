@@ -309,6 +309,8 @@ internal object AgentConversationStore {
                 imageCount = imageCount,
                 startedAt = startedAtMillis,
                 finishedAt = finishedAtMillis,
+                // 截图、个人数据等临时视图只在本次运行中显示，不存（工具可视化方案 §6）。
+                toolViewJson = view?.takeUnless { it.transient }?.toJson()?.toString(),
             )
 
             is ToolSummaryMessageUi -> ConversationMessageEntity(
@@ -412,6 +414,7 @@ internal object AgentConversationStore {
                 imageCount = imageCount,
                 startedAtMillis = startedAt,
                 finishedAtMillis = finishedAt,
+                view = io.github.fartown.movo.agent.tools.core.ToolUiView.fromJsonString(toolViewJson),
             )
 
             TYPE_TOOL_SUMMARY -> ToolSummaryMessageUi(

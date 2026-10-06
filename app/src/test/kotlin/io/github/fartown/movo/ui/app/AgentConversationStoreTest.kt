@@ -601,4 +601,37 @@ class AgentConversationStoreTest {
         AgentConversationStore.commit(context, newer)
         assertTrue(AgentConversationStore.load(context).conversationsById.isEmpty())
     }
+
+    @Test
+    fun toolStepViews_persistUnlessTransient() {
+        val kept = io.github.fartown.movo.agent.tools.core.ToolUiView(
+            summary = "退出码 0",
+            blocks = listOf(io.github.fartown.movo.agent.tools.core.ToolUiBlock.Output("hi", label = "输出")),
+        )
+        val transient = io.github.fartown.movo.agent.tools.core.ToolUiView(summary = "找到 1 条", transient = true)
+        val conversation = AgentChatHomeUiState(
+            messages = listOf(
+                ToolActivityMessageUi("tool-1", "terminal_run", ToolActivityStatusUi.Success, "运行 · echo hi", resultSummary = "退出码 0", view = kept),
+                ToolActivityMessageUi("tool-2", "personal_search", ToolActivityStatusUi.Success, "搜索短信", resultSummary = "找到 1 条", view = transient),
+            ),
+            input = "",
+            isStreaming = false,
+            thinkingEnabled = false,
+        )
+        runBlocking {
+            AgentConversationStore.save(
+                context = context,
+                selectedConversationId = "conv-v",
+                conversationsById = mapOf("conv-v" to conversation),
+                titles = mapOf("conv-v" to "视图"),
+                updatedAt = mapOf("conv-v" to 1L),
+            )
+        }
+        val restored = AgentConversationStore.load(context).conversationsById.getValue("conv-v").messages
+            .filterIsInstance<ToolActivityMessageUi>()
+        assertEquals(kept, restored.first { it.id == "tool-1" }.view)
+        // 个人数据、截图等临时视图只在本次运行中显示：重启后只剩摘要。
+        assertEquals(null, restored.first { it.id == "tool-2" }.view)
+        assertEquals("找到 1 条", restored.first { it.id == "tool-2" }.resultSummary)
+    }
 }

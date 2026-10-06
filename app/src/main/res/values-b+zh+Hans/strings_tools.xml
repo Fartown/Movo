@@ -76,4 +76,14 @@
     <string name="tool_typed_group_skills">技能</string>
     <string name="tool_typed_group_monitor">后台监听与通知</string>
     <string name="tool_typed_group_meta">其他</string>
+    <string name="tool_step_open_image">点开看大图</string>
+    <string name="tool_step_image_gone">截图只在当时显示，重启后不再保留</string>
+    <string name="tool_step_more_items" formatted="true">还有 %d 项</string>
+    <string name="tool_step_more_lines" formatted="true">还有 %d 行没显示</string>
+    <string name="tool_step_show_all" formatted="true">展开全部（共 %d 行）</string>
+    <string name="tool_step_more_content">还有更多</string>
+    <string name="tool_step_before">原来</string>
+    <string name="tool_step_after">现在</string>
+    <string name="tool_step_close_image">关闭</string>
+    <string name="tool_step_command">命令</string>
 </resources>

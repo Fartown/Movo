@@ -1,5 +1,11 @@
 package io.github.fartown.movo.agent.tools.device
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiFields
+import io.github.fartown.movo.agent.tools.core.uiItems
+import io.github.fartown.movo.agent.tools.core.uiText
 import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
@@ -175,6 +181,23 @@ internal class AppControlTool(
     private fun isProtected(packageName: String): Boolean =
         packageName == MOVO_PACKAGE || SELF_PROTECT_PREFIXES.any { packageName == it || packageName.startsWith("$it.") } ||
             packageName in SELF_PROTECT_PACKAGES
+
+    override fun uiTitle(input: AppControlInput): String {
+        val app = io.github.fartown.movo.agent.tools.ui.appLabel(input.packageName)
+        return when (input.action) {
+            AppControlAction.FORCE_STOP -> "强行停止「$app」"
+            AppControlAction.FREEZE -> "冻结「$app」"
+            AppControlAction.UNFREEZE -> "解冻「$app」"
+        }
+    }
+
+    override fun renderForUi(input: AppControlInput, output: AppControlOutput): ToolUiView = ToolUiView(
+        summary = when (output.action) {
+            AppControlAction.FORCE_STOP -> "已停止"
+            AppControlAction.FREEZE -> "已冻结"
+            AppControlAction.UNFREEZE -> "已解冻"
+        },
+    )
 
     override fun renderForModel(output: AppControlOutput): ModelContent =
         ModelContent.Json(

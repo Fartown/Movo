@@ -1,5 +1,11 @@
 package io.github.fartown.movo.agent.tools.device
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiFields
+import io.github.fartown.movo.agent.tools.core.uiItems
+import io.github.fartown.movo.agent.tools.core.uiText
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.Risk
@@ -121,6 +127,28 @@ internal class DeviceDiagnosticsTool(
                 Verdict.Read(DeviceDiagnosticsOutput(input.kind, result.data, result.truncated))
             is DiagnosticsResult.Fail -> Verdict.Failed(ToolError(result.code, result.message))
         }
+    }
+
+    override fun uiTitle(input: DeviceDiagnosticsInput): String = when (input.kind) {
+        DiagnosticKind.TOP_PROCESSES -> "查看占用最高的进程"
+        DiagnosticKind.APP_STORAGE -> "查看应用占用的存储"
+        DiagnosticKind.LOGCAT -> "读取系统日志" + input.query?.takeIf { it.isNotBlank() }?.let { "「${it.forTitle()}」" }.orEmpty()
+    }
+
+    override fun renderForUi(input: DeviceDiagnosticsInput, output: DeviceDiagnosticsOutput): ToolUiView {
+        if (output.kind == DiagnosticKind.LOGCAT) {
+            val lines = output.data.optJSONArray("lines")
+            val text = lines?.let { a -> (0 until a.length()).joinToString("\n") { a.optString(it) } }.orEmpty()
+            // 系统日志里可能有别的应用写的账号、通知内容，只在本次运行中显示。
+            return ToolUiView(
+                summary = "${lines?.length() ?: 0} 行",
+                blocks = listOf(ToolUiBlock.Output(text)).filter { text.isNotBlank() },
+                transient = true,
+            )
+        }
+        val items = output.data.optJSONArray("items").uiItems("name", "label", "package", "process")
+        val summary = output.data.optString("summary").takeIf { it.isNotBlank() } ?: "${items.items.size} 项"
+        return ToolUiView(summary = summary, blocks = listOf(items).filter { it.items.isNotEmpty() })
     }
 
     override fun renderForModel(output: DeviceDiagnosticsOutput): ModelContent {

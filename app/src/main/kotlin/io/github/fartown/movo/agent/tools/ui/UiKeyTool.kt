@@ -1,5 +1,8 @@
 package io.github.fartown.movo.agent.tools.ui
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.InjectionBackend
 import io.github.fartown.movo.agent.tools.core.ModelContent
@@ -86,6 +89,11 @@ internal class UiKeyTool(
             )
         }
     }
+
+    override fun uiTitle(input: UiKeyInput): String = "按「${input.key.label()}」"
+
+    override fun renderForUi(input: UiKeyInput, output: UiAfter): ToolUiView =
+        ToolUiView(summary = afterSummary("已按下", output.packageName, output.windowChanged))
 
     override fun renderForModel(output: UiAfter): ModelContent {
         val json = JSONObject()

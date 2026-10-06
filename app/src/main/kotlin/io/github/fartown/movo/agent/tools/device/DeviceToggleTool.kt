@@ -1,5 +1,11 @@
 package io.github.fartown.movo.agent.tools.device
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiFields
+import io.github.fartown.movo.agent.tools.core.uiItems
+import io.github.fartown.movo.agent.tools.core.uiText
 import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.ApprovalPreview
 import io.github.fartown.movo.agent.tools.core.CallResolution
@@ -140,6 +146,17 @@ internal class DeviceToggleTool(
             DeviceToggleOutput(input.target, state),
             Evidence.ReadBack("${input.target.name.lowercase()}=$state"),
         )
+
+    override fun uiTitle(input: DeviceToggleInput): String = "${if (input.enabled) "打开" else "关闭"}${input.target.uiLabel()}"
+
+    override fun renderForUi(input: DeviceToggleInput, output: DeviceToggleOutput): ToolUiView =
+        ToolUiView(summary = "${output.target.uiLabel()}已${if (output.enabled) "打开" else "关闭"}")
+
+    private fun ToggleTarget.uiLabel(): String = when (this) {
+        ToggleTarget.WIFI -> " Wi‑Fi"
+        ToggleTarget.BLUETOOTH -> "蓝牙"
+        ToggleTarget.FLASHLIGHT -> "手电筒"
+    }.trim()
 
     override fun renderForModel(output: DeviceToggleOutput): ModelContent =
         ModelContent.Json(

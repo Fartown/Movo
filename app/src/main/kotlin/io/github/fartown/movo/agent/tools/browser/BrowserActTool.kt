@@ -1,5 +1,8 @@
 package io.github.fartown.movo.agent.tools.browser
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
 import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.ApprovalNeed
 import io.github.fartown.movo.agent.tools.core.CallResolution
@@ -201,6 +204,29 @@ internal class BrowserActTool(
             detail = target.summary.take(120),
         )
         return ctx.confirmConsequence(name, need, APPROVAL_TIMEOUT_MS)?.let { Verdict.Failed(it) }
+    }
+
+    override fun uiTitle(input: BrowserActInput): String {
+        val r = input.request
+        return when (r.action) {
+            BrowserActionType.CLICK -> "网页上点按"
+            // 网页输入框可能是密码框，执行前判断不了：只写字数，不写内容。
+            BrowserActionType.TYPE -> r.text?.let { "网页上输入 ${it.length} 个字" } ?: "网页上输入"
+            BrowserActionType.SCROLL -> "网页${r.direction?.let { d -> mapOf("up" to "向上", "down" to "向下", "left" to "向左", "right" to "向右")[d.lowercase()] }.orEmpty()}滚动"
+            BrowserActionType.SELECT -> r.option?.let { "网页上选择「${it.forTitle()}」" } ?: "网页上选择"
+            BrowserActionType.KEY -> "网页上按「${r.key.orEmpty()}」"
+        } + if (r.submit) "并提交" else ""
+    }
+
+    override fun renderForUi(input: BrowserActInput, output: BrowserActOutput): ToolUiView {
+        val result = output.result
+        val target = result.targetSummary.takeIf { it.isNotBlank() }?.let { "「${it.forTitle()}」" }
+        val summary = when {
+            result.navigated -> "跳到" + (result.title?.takeIf { it.isNotBlank() }?.let { "《${it.forTitle(24)}》" } ?: uiHost(result.url))
+            target != null -> "已操作 · $target"
+            else -> "已操作"
+        }
+        return ToolUiView(summary = summary)
     }
 
     override fun renderForModel(output: BrowserActOutput): ModelContent {

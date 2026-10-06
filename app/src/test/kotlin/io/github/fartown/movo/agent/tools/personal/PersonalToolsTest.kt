@@ -260,4 +260,25 @@ class PersonalToolsTest {
         val items = json.getJSONObject("data").getJSONArray("items")
         assertTrue(items.getJSONObject(1).isNull("password"))
     }
+
+    // ---- 执行卡视图（工具可视化方案 §6 决策 2：只看标题和时间，不显示正文）----
+
+    @Test
+    fun view_personalSearchListsTitlesAndTimesButNoBody() {
+        val view = pipeline(fullEnv).execute(call("personal_search", """{"source":"sms","query":"快递"}""")).outcome!!.view!!
+        assertEquals("找到 1 条", view.summary)
+        val item = (view.blocks.single() as io.github.fartown.movo.agent.tools.core.ToolUiBlock.Items).items.single()
+        assertEquals("标题", item.title)
+        assertTrue(item.subtitle!!.startsWith("10086"))
+        assertFalse("正文不显示", view.toJson().toString().contains("123456"))
+        assertTrue("个人数据只在本次运行中显示", view.transient)
+    }
+
+    @Test
+    fun view_smsCodeNeverShowsTheCode() {
+        val view = pipeline(fullEnv).execute(call("sms_code_read", """{"max_age_minutes":5}""")).outcome!!.view!!
+        assertFalse(view.toJson().toString().contains("123456"))
+        assertTrue(view.summary!!.startsWith("找到 1 个"))
+        assertTrue(view.blocks.isEmpty())
+    }
 }

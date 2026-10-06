@@ -1,5 +1,11 @@
 package io.github.fartown.movo.agent.tools.device
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiFields
+import io.github.fartown.movo.agent.tools.core.uiItems
+import io.github.fartown.movo.agent.tools.core.uiText
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
 import io.github.fartown.movo.agent.tools.core.ModelContent
@@ -92,6 +98,40 @@ internal class DeviceReadTool(
             )
         }
         return Verdict.Read(DeviceReadOutput(data, failed))
+    }
+
+    override fun uiTitle(input: DeviceReadInput): String =
+        "查看设备状态" + input.sections.takeIf { it.isNotEmpty() && it.size <= 3 }
+            ?.joinToString("、", prefix = " · ") { it.label() }.orEmpty()
+
+    override fun renderForUi(input: DeviceReadInput, output: DeviceReadOutput): ToolUiView {
+        val battery = output.data.optJSONObject("battery")?.takeIf { it.has("percent") }
+            ?.let { "电量 ${it.optInt("percent")}%" + if (it.optBoolean("charging")) "（充电中）" else "" }
+        val read = output.data.keys().asSequence().mapNotNull { key ->
+            DeviceSection.entries.firstOrNull { it.name.equals(key, ignoreCase = true) }?.label()
+        }.toList()
+        val fields = output.data.keys().asSequence().map { key ->
+            ToolUiBlock.Field(
+                DeviceSection.entries.firstOrNull { it.name.equals(key, ignoreCase = true) }?.label() ?: key,
+                output.data.opt(key).uiText(),
+            )
+        }.toList()
+        // 位置、网络、周边环境算个人数据，只在本次运行中显示。
+        return ToolUiView(
+            summary = battery ?: read.joinToString("、").ifBlank { "已读取" },
+            blocks = listOf(ToolUiBlock.Fields(fields)).filter { fields.isNotEmpty() },
+            transient = input.sections.any { it in backend.sensitiveSections() },
+        )
+    }
+
+    private fun DeviceSection.label(): String = when (this) {
+        DeviceSection.BATTERY -> "电池"
+        DeviceSection.MEMORY -> "内存"
+        DeviceSection.STORAGE -> "存储"
+        DeviceSection.SYSTEM -> "系统"
+        DeviceSection.NETWORK -> "网络"
+        DeviceSection.ENVIRONMENT -> "环境"
+        DeviceSection.LOCATION -> "位置"
     }
 
     override fun renderForModel(output: DeviceReadOutput): ModelContent = ModelContent.Json(output.data)
