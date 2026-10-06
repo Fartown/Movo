@@ -232,6 +232,7 @@
   <string name="tool_swipe">滑动</string>
   <string name="tool_scroll">滚动</string>
   <string name="tool_move_focus">移动焦点</string>
+  <string name="tool_video_search">搜片</string>
   <string name="tool_scroll_element">滚动元素</string>
   <string name="tool_input_text">输入文字</string>
   <string name="tool_replace_text">替换文字</string>

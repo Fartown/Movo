@@ -1,7 +1,6 @@
 package io.github.fartown.movo.agent.tools
 
 import androidx.test.core.app.ApplicationProvider
-import io.github.fartown.movo.agent.tools.core.ApprovalMode
 import io.github.fartown.movo.agent.tools.core.MemoryScope
 import io.github.fartown.movo.agent.tools.core.ToolEnvironment
 import io.github.fartown.movo.core.AndroidAgentLogger
@@ -12,7 +11,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
-/** 电视版工具白名单（实施方案 §5.6）与免审（Q11）。 */
+/** 电视版工具白名单（实施方案 §5.6）与无交互入口。 */
 @RunWith(RobolectricTestRunner::class)
 class TvToolWhitelistTest {
 
@@ -42,11 +41,10 @@ class TvToolWhitelistTest {
     @Test
     fun registersOnlyWhitelistedTools() {
         val expected = setOf(
-            "device_read", "device_toggle", "setting_read", "setting_write", "device_diagnostics",
-            "app_search", "app_open", "app_control",
-            "ui_observe", "ui_tap", "ui_scroll", "ui_swipe", "ui_input", "ui_key", "ui_wait",
+            "device_read", "setting_read", "app_search", "app_open",
+            "ui_observe", "ui_tap", "ui_focus", "ui_scroll", "ui_input", "ui_key", "ui_wait",
             "clipboard_read", "clipboard_write",
-            "clock_create", "clock_read", "media_control", "volume_set",
+            "media_control", "volume_set", "video_search",
             "memory_read", "memory_write", "conversation_read",
             "ask_user", "tool_search",
         )
@@ -56,8 +54,7 @@ class TvToolWhitelistTest {
     }
 
     @Test
-    fun noInteractionCards_hidesAskUser_andApprovalsAreSkipped() {
-        assertEquals(ApprovalMode.SKIP, FlavorModule.approvalMode)
+    fun noInteractionCards_hidesAskUser() {
         assertFalse(FlavorModule.interactionCards)
         subsystem().use { sub ->
             val catalog = sub.pipeline.catalog()
