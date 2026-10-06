@@ -133,7 +133,8 @@ internal class TclWakeService : Service() {
         private const val CALLBACK = "com.tcl.walleve.thirdapi.IThirdApiCallbackV3"
         private const val PROPERTY = "sys.tcl.voice.active_uptime"
         private fun prefs(context: Context) = context.getSharedPreferences("tv_wake", MODE_PRIVATE)
-        fun enabled(context: Context) = prefs(context).getBoolean("enabled", false)
+        /** 电视以语音为主：支持的 TCL 电视默认接管「小T小T」；只有用户手动关掉才不接管。 */
+        fun enabled(context: Context) = prefs(context).getBoolean("enabled", TclPcmInput.supported(context))
         fun status(context: Context) = prefs(context).getString("status", "唤醒接管未开启").orEmpty()
         @Volatile private var alive = false
 
@@ -142,6 +143,7 @@ internal class TclWakeService : Service() {
          * 进程起来、无障碍重新连上、开机 / 更新广播时调用：开着接管就把服务拉起来，状态先改成「正在连接」。
          */
         fun restoreIfEnabled(context: Context) {
+            // 无条件接管：缺录音权限时，喊「小T小T」会打开 Movo 并当场请求授权（TvMainActivity 自动听）。
             if (alive || !enabled(context) || !TclPcmInput.supported(context)) return
             status(context, "正在连接小T唤醒服务")
             val intent = Intent(context, TclWakeService::class.java)
@@ -161,10 +163,7 @@ internal class TclWakeService : Service() {
                 status(context, "接管已关闭，小T恢复响应")
                 return status(context)
             }
-            if (!TclPcmInput.supported(context)) return "当前固件未验证小T接管，仍可通过按钮开始语音"
-            if (listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                .any { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) return "请先授权录音"
-            if (!VoiceSettingsRepository.loadDoubaoCredentials().hasUsableAuth()) return "请先配置豆包语音，避免接管后无法回答"
+            if (!TclPcmInput.supported(context)) return "这台电视不支持接管「小T小T」"
             prefs(context).edit().putBoolean("enabled", true).apply()
             return runCatching {
                 context.startForegroundService(Intent(context, TclWakeService::class.java))
