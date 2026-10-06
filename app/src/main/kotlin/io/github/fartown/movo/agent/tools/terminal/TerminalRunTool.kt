@@ -1,7 +1,6 @@
 package io.github.fartown.movo.agent.tools.terminal
 
-import io.github.fartown.movo.agent.tools.core.ApprovalNeed
-import io.github.fartown.movo.agent.tools.core.ApprovalReason
+import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.ApprovalPreview
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.JobRef
@@ -54,7 +53,7 @@ internal class TerminalRunTool(
         string("command", "要执行的命令，≤4000", required = true, maxLength = 4000)
         string("description", "供卡片展示的简述，≤60", maxLength = 60)
         string("environment", "运行环境，默认 android", enum = TerminalEnv.entries.map { it.name.lowercase() })
-        string("identity", "身份，默认 user（root 需确认）", enum = TerminalIdentity.entries.map { it.name.lowercase() })
+        string("identity", "身份，默认 user", enum = TerminalIdentity.entries.map { it.name.lowercase() })
         string("cwd", "工作目录")
         integer("wait_ms", "前台等待毫秒，1000–180000，默认 30000，到时未结束转后台", min = 1000, max = 180_000)
         boolean("tty", "交互式伪终端，返回 job_id，用 terminal_job write 发输入")
@@ -81,48 +80,30 @@ internal class TerminalRunTool(
         }
 
     override fun resolve(input: TerminalRunInput, env: ToolEnvironment): CallResolution {
-        // root 命令、keep_alive 要确认；同一类命令（命令前缀相同）本次任务内可以勾选不再询问。
-        val risk = if (input.identity == TerminalIdentity.ROOT || input.mode == TerminalMode.KEEP_ALIVE) {
-            Risk.EXTERNAL
-        } else {
-            Risk.LOCAL
-        }
-        val approval = if (input.mode == TerminalMode.KEEP_ALIVE) {
-            ApprovalNeed(
-                reason = ApprovalReason.DECLARED_EFFECT,
-                title = "让这条命令在后台一直运行？",
-                detail = "${input.command.take(160)}\n这个任务结束后它还会继续运行，直到你在终端里停止它。",
-                taskScope = commandScope(input.command),
-            )
-        } else {
-            null
-        }
+        val root = input.identity == TerminalIdentity.ROOT
+        val risk = if (root || input.mode == TerminalMode.KEEP_ALIVE) Risk.EXTERNAL else Risk.LOCAL
         return CallResolution(
             risk = risk,
             sensitivity = Sensitivity.PRIVATE,
             resources = setOf(ResourceKey(ToolResource.TERMINAL)),
-            toolApproval = approval,
             // 没有 Root 却要以 Root 运行：确认之前就拒绝。
-            reject = if (input.identity == TerminalIdentity.ROOT && !env.rootAvailable) {
+            reject = if (root && !env.rootAvailable) {
                 ToolError(ToolErrorCode.ROOT_REQUIRED, "该命令需要 Root，这台手机没有 Root 授权")
             } else {
                 null
             },
-            // Linux 环境的命令、联网命令可能把内容发出去（实施方案 5.1）。
-            exfiltrates = input.environment == TerminalEnv.LINUX || NETWORK_COMMAND.containsMatchIn(input.command),
+            category = commandCategory(input.command, root),
         )
     }
 
     override fun approvalPreview(input: TerminalRunInput): ApprovalPreview = if (input.identity == TerminalIdentity.ROOT) {
         ApprovalPreview(
             title = "以 Root 身份运行命令？",
-            detail = "${input.command.take(200)}\nRoot 命令能读写整个系统。",
+            detail = "${input.command.take(200)}\nRoot 命令能读写整个系统",
         )
     } else {
         ApprovalPreview(title = "运行这条命令？", detail = input.command.take(200))
     }
-
-    override fun approvalScope(input: TerminalRunInput): String = commandScope(input.command)
 
     override fun execute(
         input: TerminalRunInput,
@@ -200,17 +181,18 @@ internal class TerminalRunTool(
 /** 能把内容发到网上的命令。 */
 private val NETWORK_COMMAND = Regex("""(^|[\s;&|(`])(curl|wget|nc|ncat|netcat|ssh|scp|sftp|rsync|ftp|telnet|socat|aria2c)(\s|$)""")
 
+/** 删东西的命令：删文件、清应用数据、卸载应用。 */
+private val DELETE_COMMAND = Regex(
+    """(^|[\s;&|(`])(rm|rmdir|unlink|shred)(\s|$)|\s-delete(\s|$)|(^|[\s;&|(`])pm\s+(uninstall|clear)(\s|$)""",
+)
+
 /**
- * 命令的审批范围：按 `&&`、`;`、`|` 切开，每段取命令名（跳过 sudo、env 赋值），用于「本次任务内，这类操作都允许」。
- * 例如 `getprop ro.a; getprop ro.b` → `getprop`，`pm list packages | grep x` → `pm grep`。
+ * 一条命令属于哪类有后果的动作（权限模式方案）：删东西优先（手动审批固定会问），其次 Root、联网外发。
+ * 普通命令返回 null，直接执行。terminal_run 与 monitor_start 共用。
  */
-internal fun commandScope(command: String): String =
-    command.split(Regex("&&|\\|\\||;|\\|"))
-        .mapNotNull { segment ->
-            segment.trim().split(Regex("\\s+"))
-                .dropWhile { it == "sudo" || it == "su" || it == "-c" || it.contains('=') }
-                .firstOrNull()?.takeIf { it.isNotBlank() }
-        }
-        .distinct()
-        .joinToString(" ")
-        .ifBlank { command.trim().take(40) }
+internal fun commandCategory(command: String, root: Boolean): ApprovalCategory? = when {
+    DELETE_COMMAND.containsMatchIn(command) -> ApprovalCategory.DELETE
+    root -> ApprovalCategory.ROOT
+    NETWORK_COMMAND.containsMatchIn(command) -> ApprovalCategory.OUTBOUND
+    else -> null
+}

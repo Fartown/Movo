@@ -20,7 +20,7 @@ internal interface ToolConcurrencyOracle {
 }
 
 /**
- * 统一执行管线：查找工具 → 复核可用性 → 守卫 → 审批 → 执行 → 结果后处理（敏感度、污点、投影）。
+ * 统一执行管线：查找工具 → 复核可用性 → 守卫 → 审批（按权限模式）→ 执行 → 结果后处理（敏感度、投影）。
  * 任何一层的失败都转成结构化结果，不打断循环；只有取消会向上抛出。
  */
 internal class ToolPipeline(
@@ -31,11 +31,9 @@ internal class ToolPipeline(
     private val runId: String,
     private val cancelled: () -> Boolean,
     private val interaction: UserInteraction = UserInteraction.NONE,
-    private val approvalRules: ApprovalRuleStore = ApprovalRuleStore.IN_MEMORY,
     private val guards: List<ToolGuard> = emptyList(),
     private val approvalTimeoutMs: Long = DEFAULT_APPROVAL_TIMEOUT_MS,
 ) : AgentModelClient.ToolExecutor, ToolConcurrencyOracle, AutoCloseable {
-    val taint = TaintTracker()
     private val loadedDeferred = ConcurrentHashMap.newKeySet<String>()
 
     @Volatile
@@ -100,7 +98,6 @@ internal class ToolPipeline(
             runId = runId,
             toolCallId = toolCall.id,
             env = env,
-            taint = taint,
             interaction = interaction,
             cancelled = cancelled,
         )
@@ -130,89 +127,18 @@ internal class ToolPipeline(
                 detail = throwable.javaClass.simpleName,
             )
         }
-        if (outcome.status == ToolStatus.OK) {
-            runCatching { tool.taintKinds(args, outcome) }.getOrNull()?.forEach { kind -> taint.mark(kind, tool.name) }
-        }
         val sensitivity = maxOf(declaredSensitivity, outcome.sensitivity ?: Sensitivity.NORMAL)
         return result(toolCall, tool, outcome, sensitivity)
     }
 
     /**
-     * 「本次任务内，这类操作都允许」记下的范围（实施方案 5.4：同一个工具、同一个目标在本次运行内不再询问）。
-     * 管线一次运行一个实例，所以存在这里，任务结束自然失效。
+     * 返回 null 表示放行；否则返回不执行的结果。工具声明了类别或所在应用的动作才走审批设置：
+     * YOLO 直接做，手动审批时高敏和规则命中的弹卡（见 [confirmConsequence]）。
      */
-    private val allowedThisTask = ConcurrentHashMap.newKeySet<String>()
-
-    /** 返回 null 表示放行；否则返回拒绝结果。 */
     private fun approve(tool: AgentTool, args: ToolArgs, ctx: ToolContext): ToolOutcome? {
-        val need = tool.approval(args, ctx) ?: defaultNeed(tool, args) ?: return null
-        val taskKey = if (need.allowTaskScope) "${tool.name}|${need.reason}|${need.taskScope.orEmpty()}" else null
-        if (taskKey != null && taskKey in allowedThisTask) return null
-        val scopeKey = need.scopeKey
-        // 两类污点同时成立时，一直允许的规则失效（实施方案 5.4）。
-        if (scopeKey != null && !taint.tainted && approvalRules.isAllowed(tool.name, scopeKey)) return null
-        if (!interaction.available) {
-            return ToolOutcome.error(
-                ToolErrorCode.UNSUPPORTED,
-                "这一步需要用户确认，但现在没人能确认（屏幕关着或入口不支持）；本次未执行",
-                hint = "在最终回复中说明需要用户确认的动作，不要换方式绕过",
-                detail = "no_interactive_surface",
-            )
-        }
-        val rememberLabel = when {
-            scopeKey != null -> need.scopeLabel ?: "以后不再询问"
-            taskKey != null -> TASK_SCOPE_LABEL
-            else -> null
-        }
-        val decision = interaction.approve(
-            ApprovalRequest(
-                toolName = tool.name,
-                title = need.title,
-                detail = need.detail,
-                rememberScope = rememberLabel,
-                reason = need.reason,
-            ),
-            approvalTimeoutMs,
-        )
-        ctx.checkCancelled()
-        return when (decision) {
-            is ApprovalDecision.Approved -> {
-                if (decision.remember) {
-                    when {
-                        scopeKey != null -> approvalRules.allow(tool.name, scopeKey)
-                        taskKey != null -> allowedThisTask += taskKey
-                    }
-                }
-                null
-            }
-            ApprovalDecision.Declined -> ToolOutcome.error(
-                ToolErrorCode.USER_DECLINED,
-                "用户拒绝了这一步",
-                hint = "不要换方式重试；询问用户下一步怎么做",
-            )
-            ApprovalDecision.TimedOut -> ToolOutcome.error(
-                ToolErrorCode.APPROVAL_TIMEOUT,
-                "用户没有确认，本次未执行",
-                hint = "结束本轮并说明需要用户确认的动作",
-            )
-            ApprovalDecision.Unavailable -> ToolOutcome.error(
-                ToolErrorCode.UNSUPPORTED,
-                "这一步需要用户确认，但当前无法显示确认；本次未执行",
-                hint = "在最终回复中说明需要用户确认的动作",
-                detail = "no_interactive_surface",
-            )
-        }
-    }
-
-    /** 非合同工具（tool_search、ask_user 之外的直接实现）风险为 EXTERNAL 时的兜底确认。 */
-    private fun defaultNeed(tool: AgentTool, args: ToolArgs): ApprovalNeed? {
-        if (tool.risk(args, currentEnvironment) != Risk.EXTERNAL) return null
-        val action = io.github.fartown.movo.agent.model.TypedToolLabels.of(tool.name) ?: tool.approvalTitle(args)
-        return ApprovalNeed(
-            reason = ApprovalReason.EXTERNAL_EFFECT,
-            title = "允许 Movo「$action」？",
-            detail = "$action\n这一步会改动系统，或者做了就撤销不了。",
-        )
+        val need = tool.approval(args, ctx) ?: return null
+        val refusal = ctx.confirmConsequence(tool.name, need, approvalTimeoutMs) ?: return null
+        return ToolOutcome(status = refusal.code.status, error = refusal)
     }
 
     private fun result(
@@ -236,9 +162,6 @@ internal class ToolPipeline(
 
     companion object {
         const val DEFAULT_APPROVAL_TIMEOUT_MS = 120_000L
-
-        /** 定稿 16-01 的勾选框文案。 */
-        const val TASK_SCOPE_LABEL = "本次任务内，这类操作都允许"
 
         /** 循环在执行前拒绝的调用（参数无效、输出截断等）也用同一协议。 */
         fun rejected(

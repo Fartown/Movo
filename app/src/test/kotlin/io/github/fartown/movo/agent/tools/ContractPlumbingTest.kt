@@ -3,7 +3,9 @@ package io.github.fartown.movo.agent.tools
 import androidx.test.core.app.ApplicationProvider
 import io.github.fartown.movo.agent.model.AgentModelClient
 import io.github.fartown.movo.agent.tools.core.AgentTool
+import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.ApprovalDecision
+import io.github.fartown.movo.agent.tools.core.ApprovalPolicy
 import io.github.fartown.movo.agent.tools.core.ApprovalRequest
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ContractTool
@@ -86,7 +88,7 @@ class ContractPlumbingTest {
     }
 
     @Test
-    fun externalTool_requiresApproval_declinedBlocksExecution() {
+    fun categorizedTool_manualMode_declinedBlocksExecution() {
         var executed = false
         val external = object : ToolProvider {
             override val tools = listOf(ContractTool(ExternalFake { executed = true }))
@@ -96,12 +98,16 @@ class ContractPlumbingTest {
             override fun ask(question: UserQuestion, timeoutMs: Long) = UserAnswer.Declined
             override fun approve(request: ApprovalRequest, timeoutMs: Long) = ApprovalDecision.Declined
         }
-        val p = pipeline(listOf(external), ToolEnvironment(), decline)
-        val result = p.execute(call("ext_fake", "{}"))
-        // 中央派生 requiresApproval 命中 EXTERNAL → 用户拒绝 → 不执行
+        // YOLO（默认）：直接执行。
+        assertEquals("ok", pipeline(listOf(external), ToolEnvironment(), decline).execute(call("ext_fake", "{}")).status)
+        assertTrue(executed)
+        executed = false
+        // 手动审批：删东西固定会问 → 用户拒绝 → 不执行。
+        val manual = ToolEnvironment(approvalPolicy = ApprovalPolicy.MANUAL_BUILT_IN)
+        val result = pipeline(listOf(external), manual, decline).execute(call("ext_fake", "{}"))
         assertEquals("error", result.status)
         assertEquals("USER_DECLINED", result.errorCode)
-        assertFalse("external 工具在未确认时不得执行", executed)
+        assertFalse("有后果的工具在未确认时不得执行", executed)
     }
 
     private fun deviceProvider() = object : ToolProvider {
@@ -118,7 +124,10 @@ class ContractPlumbingTest {
         override fun schema(env: ToolEnvironment) = JSONObject().put("type", "object")
         override fun parse(args: ToolArgs, env: ToolEnvironment) = ExtIn()
         override fun resolve(input: ExtIn, env: ToolEnvironment) =
-            CallResolution(risk = Risk.EXTERNAL, sensitivity = Sensitivity.NORMAL, resources = emptySet())
+            CallResolution(
+                risk = Risk.EXTERNAL, sensitivity = Sensitivity.NORMAL, resources = emptySet(),
+                category = ApprovalCategory.DELETE,
+            )
         override fun execute(input: ExtIn, resolution: CallResolution, ctx: ToolContext): Verdict<ExtOut> {
             onExec()
             return Verdict.Done(ExtOut(), Evidence.ReadBack("x"))

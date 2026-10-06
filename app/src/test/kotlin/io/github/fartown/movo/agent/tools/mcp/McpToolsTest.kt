@@ -4,6 +4,7 @@ import androidx.test.core.app.ApplicationProvider
 import io.github.fartown.movo.agent.mcp.McpHttpStatusException
 import io.github.fartown.movo.agent.mcp.McpJsonRpcException
 import io.github.fartown.movo.agent.model.AgentModelClient
+import io.github.fartown.movo.agent.tools.core.ApprovalPolicy
 import io.github.fartown.movo.agent.tools.core.ApprovalDecision
 import io.github.fartown.movo.agent.tools.core.ApprovalRequest
 import io.github.fartown.movo.agent.tools.core.ToolErrorCode
@@ -75,9 +76,10 @@ class McpToolsTest {
     private fun pipeline(
         providers: List<ToolProvider>,
         interaction: UserInteraction = UserInteraction.NONE,
+        env: ToolEnvironment = ToolEnvironment(),
     ) = ToolPipeline(
         registry = ToolRegistry(providers),
-        environment = { ToolEnvironment() },
+        environment = { env },
         appContext = ApplicationProvider.getApplicationContext(),
         logger = AndroidAgentLogger,
         runId = "run1",
@@ -119,11 +121,12 @@ class McpToolsTest {
     }
 
     @Test
-    fun directDestructiveTool_requiresApproval_declineBlocks() {
+    fun directDestructiveTool_manualMode_declineBlocks() {
         val backend = FakeBackend()
         val cat = catalog(listOf(raw("s1", "Admin", tool("delete_all", destructive = true))))
         val name = cat.entries.single().shortName
-        val result = pipeline(listOf(McpToolProvider(cat, backend)), decline).execute(call(name, "{}"))
+        val manual = ToolEnvironment(approvalPolicy = ApprovalPolicy.MANUAL_BUILT_IN)
+        val result = pipeline(listOf(McpToolProvider(cat, backend)), decline, manual).execute(call(name, "{}"))
         assertEquals("error", result.status)
         assertEquals("USER_DECLINED", result.errorCode)
         assertNull("external 工具未确认不得执行", backend.lastTool)

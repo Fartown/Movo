@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicLong
  */
 internal sealed interface InteractionReply {
     data class Answer(val text: String, val optionIndex: Int?) : InteractionReply
-    data class Approval(val approved: Boolean, val remember: Boolean) : InteractionReply
+    data class Approval(val approved: Boolean) : InteractionReply
     data object Cancelled : InteractionReply
 }
 
@@ -36,7 +36,8 @@ internal data class InteractionPrompt(
     val detail: String,
     val options: List<String> = emptyList(),
     val allowFreeText: Boolean = true,
-    val rememberLabel: String? = null,
+    /** 审批卡灰底块下面一行：为什么问你。 */
+    val note: String? = null,
     val reason: String? = null,
 )
 
@@ -101,6 +102,8 @@ internal class BrokeredUserInteraction(
     private val idPrefix: String = "ix",
     /** 现在有没有人能作答（屏幕亮着）。没有时审批、提问立即返回「无法确认」，不干等 120 秒。 */
     private val availableNow: () -> Boolean = { true },
+    /** 用户批准后、放行这一步之前调用：等卡片真正撤下，免得下一步操作落在卡片上。 */
+    private val afterApproved: () -> Unit = {},
 ) : UserInteraction {
     private val seq = AtomicLong(0)
     override val available: Boolean get() = runCatching(availableNow).getOrDefault(true)
@@ -144,14 +147,23 @@ internal class BrokeredUserInteraction(
             kind = InteractionKind.APPROVAL,
             title = request.title,
             detail = request.detail,
-            rememberLabel = request.rememberScope,
-            reason = request.reason.name,
+            // 卡片只有允许 / 拒绝（权限模式方案）。原因码给界面选样式：类别名，或应用规则。
+            note = request.reason,
+            reason = request.category?.name ?: APP_RULE_REASON,
         )
         return when (val reply = awaitReply(prompt, timeoutMs)) {
-            is InteractionReply.Approval -> if (reply.approved) ApprovalDecision.Approved(reply.remember) else ApprovalDecision.Declined
+            is InteractionReply.Approval -> if (reply.approved) {
+                runCatching(afterApproved)
+                ApprovalDecision.Approved
+            } else {
+                ApprovalDecision.Declined
+            }
             InteractionReply.Cancelled -> ApprovalDecision.Declined
             is InteractionReply.Answer -> ApprovalDecision.Declined   // 类型不符当拒绝，安全侧
             null -> ApprovalDecision.TimedOut
         }
     }
 }
+
+/** 「某个应用里先问我」命中时的原因码。 */
+internal const val APP_RULE_REASON = "APP_RULE"

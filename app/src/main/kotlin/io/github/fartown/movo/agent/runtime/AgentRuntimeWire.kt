@@ -631,7 +631,6 @@ internal object AgentRuntimeWire {
     private const val KEY_INTERACTION_ANSWER_TEXT = "interaction_answer_text"
     private const val KEY_INTERACTION_ANSWER_OPTION = "interaction_answer_option"
     private const val KEY_INTERACTION_APPROVED = "interaction_approved"
-    private const val KEY_INTERACTION_REMEMBER = "interaction_remember"
     private const val MAX_INTERACTION_ANSWER_CHARS = 8_000
 
     /** 把界面作答打包为回传消息体。 */
@@ -647,7 +646,6 @@ internal object AgentRuntimeWire {
             is InteractionReply.Approval -> {
                 putString(KEY_INTERACTION_REPLY_KIND, "approval")
                 putBoolean(KEY_INTERACTION_APPROVED, reply.approved)
-                putBoolean(KEY_INTERACTION_REMEMBER, reply.remember)
             }
             InteractionReply.Cancelled -> putString(KEY_INTERACTION_REPLY_KIND, "cancelled")
         }
@@ -663,10 +661,7 @@ internal object AgentRuntimeWire {
                 text = bundle.getString(KEY_INTERACTION_ANSWER_TEXT).orEmpty(),
                 optionIndex = bundle.getInt(KEY_INTERACTION_ANSWER_OPTION, -1).takeIf { it >= 0 },
             )
-            "approval" -> InteractionReply.Approval(
-                approved = bundle.getBoolean(KEY_INTERACTION_APPROVED),
-                remember = bundle.getBoolean(KEY_INTERACTION_REMEMBER),
-            )
+            "approval" -> InteractionReply.Approval(approved = bundle.getBoolean(KEY_INTERACTION_APPROVED))
             "cancelled" -> InteractionReply.Cancelled
             else -> return null
         }
@@ -869,7 +864,7 @@ internal object AgentRuntimeWire {
                 putString("interaction_detail", event.detail)
                 putStringArrayList("interaction_options", ArrayList(event.options))
                 putBoolean("interaction_allow_free_text", event.allowFreeText)
-                event.rememberLabel?.let { putString("interaction_remember_label", it) }
+                event.note?.let { putString("interaction_note", it) }
                 event.reason?.let { putString("interaction_reason", it) }
             }
 
@@ -1037,7 +1032,7 @@ internal object AgentRuntimeWire {
             detail = bundle.getString("interaction_detail").orEmpty(),
             options = bundle.getStringArrayList("interaction_options").orEmpty(),
             allowFreeText = bundle.getBoolean("interaction_allow_free_text", true),
-            rememberLabel = bundle.getString("interaction_remember_label"),
+            note = bundle.getString("interaction_note"),
             reason = bundle.getString("interaction_reason"),
         )
 

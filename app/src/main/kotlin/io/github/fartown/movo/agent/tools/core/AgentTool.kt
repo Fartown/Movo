@@ -28,7 +28,7 @@ internal enum class Risk {
     EXTERNAL,
 }
 
-/** 数据敏感度，决定持久化脱敏、展示遮盖与污点标记。 */
+/** 数据敏感度，决定持久化脱敏与展示遮盖。 */
 internal enum class Sensitivity {
     NORMAL,
     /** 个人数据：结果不进入持久会话。 */
@@ -95,19 +95,14 @@ internal interface AgentTool {
     fun concurrency(args: ToolArgs, env: ToolEnvironment): Concurrency = Concurrency.Parallel
 
     /**
-     * 工具自己对审批的诉求（受保护应用、声明的后果、root 命令等）。返回 null 时由管线按风险等级和
-     * 污点状态决定：风险为 EXTERNAL 时一律确认。工具只能增加确认，不能免除管线的确认。
+     * 这一步有没有后果（声明的发送 / 付款、Root 命令、改系统设置等）；有后果时返回确认卡文案。
+     * 返回 null 时由管线按风险等级兜底：风险为 EXTERNAL 的一律算有后果。
+     * 是否真的弹卡由权限模式决定（YOLO 不弹，手动审批弹）。
      */
     fun approval(args: ToolArgs, ctx: ToolContext): ApprovalNeed? = null
 
     /** 审批卡片上的动作说明。 */
     fun approvalTitle(args: ToolArgs): String = name
-
-    /**
-     * 执行成功后给本轮打哪类污点（实施方案 5.1）。默认不打；读到不可信内容或个人数据的工具才声明。
-     * 结果敏感度只决定脱敏，不再决定污点：终端输出、写记忆等工具自己的结果不污染后续调用。
-     */
-    fun taintKinds(args: ToolArgs, outcome: ToolOutcome): Set<TaintKind> = emptySet()
 
     /** 执行。超时由工具自己处理：只读超时返回 TIMEOUT，动作超时返回 OUTCOME_UNKNOWN。 */
     fun execute(args: ToolArgs, ctx: ToolContext): ToolOutcome

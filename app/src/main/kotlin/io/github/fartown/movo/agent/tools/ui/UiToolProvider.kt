@@ -49,7 +49,7 @@ internal class UiToolProvider(
             - 动作 ok 只代表已送达（effect_verified=false），关键步骤后重新 ui_observe 确认。
             - ui_scroll 能判定移动：moved=true 才算滚到；没动可能到边界。
             - ui_input 文字回读一致才算证实；submit 是独立动作，不代表已发送。append 无法插入时不要改用 replace。
-            - 遇 unknown 先观察，不要直接重复同一动作。读不到屏幕内容时的操作会请你确认。
+            - 遇 unknown 先观察，不要直接重复同一动作。
         """.trimIndent(),
     )
 

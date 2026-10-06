@@ -16,36 +16,20 @@ internal sealed interface UserAnswer {
     data object Unavailable : UserAnswer
 }
 
-/** 一次审批请求：展示要执行的动作和关键参数。 */
+/**
+ * 一次审批请求（手动审批模式）：[detail] 是要执行的动作和关键参数，[reason] 是为什么问你。
+ * [category] 为空表示命中的是「某个应用里先问我」。
+ */
 internal data class ApprovalRequest(
     val toolName: String,
     val title: String,
     val detail: String,
-    /**
-     * 卡片上勾选框的完整文案：「本次任务内，这类操作都允许」或一直允许的说法（如「以后读取短信不再询问」）；
-     * 为空时不显示勾选框。
-     */
-    val rememberScope: String?,
-    val reason: ApprovalReason,
+    val category: ApprovalCategory?,
+    val reason: String = reasonSentence(category),
 )
 
-internal enum class ApprovalReason {
-    /** 动作对外或不可逆。 */
-    EXTERNAL_EFFECT,
-    /** 用户指定的受保护应用（默认没有）里的操作；用户设过受保护应用、却认不出当前是哪个应用时也用它。 */
-    PROTECTED_APP,
-    /** 本轮既读过不可信内容、又读过个人数据之后，又要执行会把内容发出去的动作。 */
-    TAINTED,
-    /** 模型声明了动作后果（send / delete / submit）。 */
-    DECLARED_EFFECT,
-    /** 支付、转账：深色确认，不能勾「本次任务内都允许」（定稿 16-02）。 */
-    PAYMENT,
-    /** 第一次读取短信、通话记录这类个人数据。 */
-    PERSONAL_DATA,
-}
-
 internal sealed interface ApprovalDecision {
-    data class Approved(val remember: Boolean) : ApprovalDecision
+    data object Approved : ApprovalDecision
     data object Declined : ApprovalDecision
     data object TimedOut : ApprovalDecision
     data object Unavailable : ApprovalDecision

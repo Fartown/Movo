@@ -1791,7 +1791,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 detail = event.detail,
                 options = event.options,
                 allowFreeText = event.allowFreeText,
-                rememberLabel = event.rememberLabel,
+                note = event.note,
                 reason = event.reason,
             ),
         )
@@ -1840,12 +1840,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 } else {
                     AgentInteractionOverlayContent(
                         model = model,
-                        onApprove = { remember ->
-                            replyFromFloatingCard(model, InteractionReply.Approval(approved = true, remember = remember))
-                        },
-                        onDecline = {
-                            InteractionCardCoordinator.reply(model, InteractionReply.Approval(approved = false, remember = false))
-                        },
+                        onApprove = { replyFromFloatingCard(model, InteractionReply.Approval(approved = true)) },
+                        onDecline = { InteractionCardCoordinator.reply(model, InteractionReply.Approval(approved = false)) },
                         onAnswer = { text, idx -> replyFromFloatingCard(model, InteractionReply.Answer(text, idx)) },
                         onCancel = { InteractionCardCoordinator.reply(model, InteractionReply.Cancelled) },
                     )
@@ -1860,6 +1856,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             return
         }
         interactionView = view
+        InteractionCardCoordinator.setFloatingAttached(true)
         interactionParams = lp
         interactionOwner = owner
         interactionWindowManager = wm
@@ -1890,6 +1887,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     private fun removeInteractionOverlay() {
         interactionView?.let { view -> runCatching { (interactionWindowManager ?: windowManager)?.removeView(view) } }
+        InteractionCardCoordinator.setFloatingAttached(false)
         interactionWindowManager = null
         interactionView = null
         interactionParams = null

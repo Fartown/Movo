@@ -1,8 +1,6 @@
 package io.github.fartown.movo.agent.tools.skill
 
-import io.github.fartown.movo.agent.tools.core.ApprovalDecision
-import io.github.fartown.movo.agent.tools.core.ApprovalReason
-import io.github.fartown.movo.agent.tools.core.ApprovalRequest
+import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
 import io.github.fartown.movo.agent.tools.core.ModelContent
@@ -130,15 +128,19 @@ internal class SkillInstallTool(
 
     override fun resolve(input: SkillInstallInput, env: ToolEnvironment): CallResolution =
         CallResolution(
-            // 只有 install 真正落盘 → EXTERNAL（中央确认）；curated/inspect 只是网络发现。
+            // 只有 install 真正落盘，归为「安装技能」；curated/inspect 只是网络发现。
             risk = if (input.action == SkillInstallAction.INSTALL) Risk.EXTERNAL else Risk.READ,
             sensitivity = Sensitivity.NORMAL,
             resources = emptySet(),
+            category = if (input.action == SkillInstallAction.INSTALL) ApprovalCategory.INSTALL else null,
         )
 
     override fun approvalPreview(input: SkillInstallInput): ApprovalPreview = ApprovalPreview(
         title = "安装这个技能？",
-        detail = "${input.repository.orEmpty().take(120)}\n技能里的脚本之后可能会在终端里运行。",
+        detail = buildString {
+            append(input.repository.orEmpty().take(120))
+            if (input.paths.isNotEmpty()) append("：").append(input.paths.joinToString("、").take(120))
+        },
     )
 
     override fun execute(
@@ -148,7 +150,7 @@ internal class SkillInstallTool(
     ): Verdict<SkillInstallOutput> = when (input.action) {
         SkillInstallAction.CURATED -> discover(input.action, backend.curated())
         SkillInstallAction.INSPECT -> discover(input.action, backend.inspect(input.repository!!, input.ref, input.path))
-        SkillInstallAction.INSTALL -> install(input, ctx)
+        SkillInstallAction.INSTALL -> install(input)
     }
 
     private fun discover(action: SkillInstallAction, result: SkillDiscoverResult): Verdict<SkillInstallOutput> =
@@ -157,41 +159,19 @@ internal class SkillInstallTool(
             is SkillDiscoverResult.Failed -> Verdict.Failed(ToolError(result.code, result.message))
         }
 
-    private fun install(input: SkillInstallInput, ctx: ToolContext): Verdict<SkillInstallOutput> {
-        var outcome = backend.install(input.repository!!, input.ref, input.paths, input.replace)
-        // 冲突且未声明替换：当场弹确认卡，确认后以 replace 重装。
-        if (outcome is SkillInstallOutcome.Conflict && !input.replace) {
-            val names = outcome.conflicts.joinToString("、") { it.name }
-            val decision = ctx.interaction.approve(
-                ApprovalRequest(
-                    toolName = name,
-                    title = "替换已安装的技能？",
-                    detail = "$names\n会用新下载的版本覆盖它。",
-                    rememberScope = null,
-                    reason = ApprovalReason.EXTERNAL_EFFECT,
-                ),
-                APPROVAL_TIMEOUT_MS,
-            )
-            when (decision) {
-                is ApprovalDecision.Approved ->
-                    outcome = backend.install(input.repository, input.ref, input.paths, replace = true)
-                ApprovalDecision.Declined ->
-                    return Verdict.Failed(ToolError(ToolErrorCode.USER_DECLINED, "用户拒绝替换已安装技能"))
-                ApprovalDecision.TimedOut ->
-                    return Verdict.Failed(ToolError(ToolErrorCode.APPROVAL_TIMEOUT, "替换确认超时"))
-                ApprovalDecision.Unavailable ->
-                    return Verdict.Failed(
-                        ToolError(ToolErrorCode.CONFLICT, "与已安装技能冲突，且当前入口无法确认替换", hint = "换带交互的入口，或传 replace=true"),
-                    )
-            }
-        }
-        return when (val o = outcome) {
+    private fun install(input: SkillInstallInput): Verdict<SkillInstallOutput> {
+        // 与已安装技能同名且没传 replace：不替换，回给模型冲突，由它确认用户意图后带 replace=true 重试。
+        return when (val o = backend.install(input.repository!!, input.ref, input.paths, input.replace)) {
             is SkillInstallOutcome.Installed -> Verdict.Done(
                 SkillInstallOutput(SkillInstallAction.INSTALL, null, o.items),
                 Evidence.ReadBack("installed=${o.items.joinToString(",") { it.id }}"),
             )
             is SkillInstallOutcome.Conflict -> Verdict.Failed(
-                ToolError(ToolErrorCode.CONFLICT, "与已安装技能冲突", hint = "传 replace=true 覆盖"),
+                ToolError(
+                    ToolErrorCode.CONFLICT,
+                    "与已安装技能同名：${o.conflicts.joinToString("、") { it.name }}",
+                    hint = "用户要更新它时带 replace=true 重试；不清楚就先问用户",
+                ),
             )
             SkillInstallOutcome.CommitUncertain -> Verdict.Unknown(
                 reason = "提交阶段失败，技能目录状态不确定",
@@ -224,9 +204,5 @@ internal class SkillInstallTool(
             json.put("available", "next_task").put("scripts_executed", false)
         }
         return ModelContent.Json(json)
-    }
-
-    private companion object {
-        const val APPROVAL_TIMEOUT_MS = 120_000L
     }
 }

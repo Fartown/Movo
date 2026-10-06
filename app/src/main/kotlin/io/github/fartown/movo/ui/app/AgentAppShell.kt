@@ -341,6 +341,8 @@ private fun titleForRoute(route: AppRoute?): String = when (route) {
     is AppRoute.SystemEnhance -> stringResource(R.string.route_system_enhancements)
     is AppRoute.Settings -> stringResource(R.string.route_settings)
     is AppRoute.ToolSettings -> stringResource(R.string.movo_settings_tools)
+    is AppRoute.PermissionSettings -> stringResource(R.string.permission_title)
+    is AppRoute.PermissionAddApp -> stringResource(R.string.permission_add_title)
     is AppRoute.SystemAssistant -> stringResource(R.string.movo_settings_system_assistant)
     is AppRoute.RunDetail -> stringResource(R.string.movo_run_detail_title)
     is AppRoute.VoiceSettings -> stringResource(R.string.voice_settings_title)

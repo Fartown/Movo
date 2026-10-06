@@ -56,4 +56,22 @@ class TextEditPlannerTest {
             TextEditPlanner.insertAtSelection("", "X", -1, -1),
         )
     }
+
+    @Test
+    fun `empty field that reports no text is treated as empty`() {
+        // 真机：设置搜索框为空时无障碍读到的文字是 null，追加「蓝牙」被拒绝。
+        assertEquals("", TextEditPlanner.existingText(null, showingHint = false, selectionStart = 0, selectionEnd = 0))
+        assertEquals("", TextEditPlanner.existingText(null, showingHint = false, selectionStart = -1, selectionEnd = -1))
+    }
+
+    @Test
+    fun `hint text is not existing content`() {
+        assertEquals("", TextEditPlanner.existingText("搜索系统设置项", showingHint = true, selectionStart = 0, selectionEnd = 0))
+    }
+
+    @Test
+    fun `unreadable text with cursor after start is not guessed`() {
+        assertNull(TextEditPlanner.existingText(null, showingHint = false, selectionStart = 3, selectionEnd = 3))
+        assertEquals("ABC", TextEditPlanner.existingText("ABC", showingHint = false, selectionStart = 3, selectionEnd = 3))
+    }
 }

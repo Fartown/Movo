@@ -4,7 +4,6 @@ import io.github.fartown.movo.agent.model.AgentModelClient
 import io.github.fartown.movo.agent.tools.browser.BrowserToolProvider
 import io.github.fartown.movo.agent.tools.clockmedia.ClockMediaToolProvider
 import io.github.fartown.movo.agent.tools.conversation.ConversationToolProvider
-import io.github.fartown.movo.agent.tools.core.ApprovalRuleStore
 import io.github.fartown.movo.agent.tools.core.ToolEnvironment
 import io.github.fartown.movo.agent.tools.core.ToolPipeline
 import io.github.fartown.movo.agent.tools.core.ToolGuard
@@ -38,7 +37,6 @@ internal class AgentToolSubsystem(
     mcpCatalog: McpCatalog = McpCatalog.EMPTY,
     characterId: () -> String? = { null },
     conversationLoader: () -> List<AgentModelClient.ConversationMessage> = { emptyList() },
-    approvalRules: ApprovalRuleStore = ApprovalRuleStore.IN_MEMORY,
     guards: List<ToolGuard> = emptyList(),
 ) : AutoCloseable {
     private val meta = MetaToolProvider()
@@ -57,7 +55,6 @@ internal class AgentToolSubsystem(
         runId = services.runId,
         cancelled = cancelled,
         interaction = interaction,
-        approvalRules = approvalRules,
         guards = guards,
     ).also { meta.pipeline = it }
 

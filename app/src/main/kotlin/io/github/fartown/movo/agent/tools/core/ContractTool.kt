@@ -46,59 +46,18 @@ internal class ContractTool<I : ToolInput, O : ToolOutput>(
         compute(args, ctx.env)
         // 解析失败（参数错误等）：execute() 会回报具体错误，不弹确认卡。
         if (memoFailure != null || memoInput == null) return null
-        val action = io.github.fartown.movo.agent.model.TypedToolLabels.of(name) ?: "这一步"
-        val r = memoResolution ?: return ApprovalNeed(
-            ApprovalReason.EXTERNAL_EFFECT,
-            title = "允许 Movo「$action」？",
-            detail = "$action\nMovo 判断不了这一步的影响，需要你确认。",
-        )
+        val r = memoResolution ?: return null
         // 审批前已判定拒绝的调用不弹确认卡；execute() 会短路返回该拒绝。
         if (r.reject != null) return null
-        val need = r.requiresApproval(ctx.taint.tainted) ?: return null
-        val scoped = if (need.taskScope == null) {
-            val scope = memoInput?.let { runCatching { contract.approvalScope(it) }.getOrNull() }
-            if (scope != null) need.copy(taskScope = scope) else need
-        } else {
-            need
-        }
-        // 中央派生的审批（污点 / EXTERNAL）标题与正文为空，这里按工具与原因补全可读文案。工具自带文案保持不动。
-        if (scoped.title.isNotBlank() && scoped.detail.isNotBlank()) return scoped
+        val need = r.consequence() ?: return null
+        // 按类别 / 应用派生的确认标题与正文为空，这里按工具补全可读文案。工具自带文案保持不动。
+        if (need.title.isNotBlank() && need.detail.isNotBlank()) return need
+        val action = io.github.fartown.movo.agent.model.TypedToolLabels.of(name) ?: "这一步"
         val preview = memoInput?.let { runCatching { contract.approvalPreview(it) }.getOrNull() }
-        return scoped.copy(
-            title = scoped.title.ifBlank { preview?.title ?: "允许 Movo「$action」？" },
-            detail = scoped.detail.ifBlank {
-                // 预览自带两行（做什么 + 为什么）时原样用；只有一行时补上原因。
-                preview?.detail?.let { if ('\n' in it) it else "$it\n${reasonSentence(scoped.reason)}" }
-                    ?: defaultApprovalDetail(scoped.reason, action, args)
-            },
+        return need.copy(
+            title = need.title.ifBlank { preview?.title ?: "允许 Movo「$action」？" },
+            detail = need.detail.ifBlank { preview?.detail ?: defaultApprovalDetail(action, args) },
         )
-    }
-
-    override fun taintKinds(args: ToolArgs, outcome: ToolOutcome): Set<TaintKind> {
-        // 管线在 execute 之后用同一个 args 对象调用，解析结果仍在记忆里。
-        val input = memoInput.takeIf { memoArgs === args } ?: return emptySet()
-        return runCatching { contract.taintKinds(input) }.getOrDefault(emptySet())
-    }
-
-    /** 确认卡灰底块的第二行：为什么要确认（写给用户，不写实现词）。 */
-    private fun reasonSentence(reason: ApprovalReason): String = when (reason) {
-        ApprovalReason.TAINTED -> "这个任务读过外部内容和你的个人数据，这一步可能把内容发出去。"
-        ApprovalReason.EXTERNAL_EFFECT -> "这一步会改动系统，或者做了就撤销不了。"
-        ApprovalReason.PROTECTED_APP -> "这一步在你设的受保护应用里。"
-        ApprovalReason.DECLARED_EFFECT, ApprovalReason.PAYMENT -> "这一步会发送、提交或付款。"
-        ApprovalReason.PERSONAL_DATA -> "要读取你的个人数据。"
-    }
-
-    /**
-     * 没有工具自带预览时的兜底正文：第一行写动作和它的主要对象（命令、网址、路径、设置项……），
-     * 第二行写原因。不贴原始 JSON，也不列英文参数名。
-     */
-    private fun defaultApprovalDetail(reason: ApprovalReason, action: String, args: ToolArgs): String {
-        val target = PRIMARY_ARG_KEYS.firstNotNullOfOrNull { key ->
-            args.raw.optString(key, "").trim().takeIf { it.isNotEmpty() && it != "null" }
-        }?.let { if (it.length > 120) it.take(120) + "…" else it }
-        val first = if (target == null) action else "$action：$target"
-        return "$first\n${reasonSentence(reason)}"
     }
 
     private companion object {
@@ -106,6 +65,17 @@ internal class ContractTool<I : ToolInput, O : ToolOutput>(
         val PRIMARY_ARG_KEYS = listOf(
             "command", "url", "uri", "path", "file", "package", "name", "key", "tool", "skill", "query", "text", "new_text",
         )
+    }
+
+    /**
+     * 没有工具自带预览时的兜底正文：写动作和它的主要对象（命令、网址、路径、设置项……）。
+     * 不贴原始 JSON，也不列英文参数名。
+     */
+    private fun defaultApprovalDetail(action: String, args: ToolArgs): String {
+        val target = PRIMARY_ARG_KEYS.firstNotNullOfOrNull { key ->
+            args.raw.optString(key, "").trim().takeIf { it.isNotEmpty() && it != "null" }
+        }?.let { if (it.length > 120) it.take(120) + "…" else it }
+        return if (target == null) action else "$action：$target"
     }
 
     override fun execute(args: ToolArgs, ctx: ToolContext): ToolOutcome {
@@ -165,7 +135,7 @@ internal class ContractTool<I : ToolInput, O : ToolOutput>(
         val text = (content as? ModelContent.Text)?.text
         return ToolOutcome.ok(
             data = data, textBody = text, warnings = contract.warnings(output), images = contract.images(output),
-            // 回填解析阶段判定的敏感度：决定结果在历史里是否脱敏（污点由 taintKinds 单独声明）。
+            // 回填解析阶段判定的敏感度：决定结果在历史里是否脱敏。
             sensitivity = memoResolution?.sensitivity,
         ).copy(effectVerified = verified, evidence = evidence)
     }

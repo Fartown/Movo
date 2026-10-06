@@ -1,5 +1,6 @@
 package io.github.fartown.movo.agent.tools.device
 
+import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
 import io.github.fartown.movo.agent.tools.core.ModelContent
@@ -44,7 +45,7 @@ internal interface SettingWriteBackend {
 }
 
 /**
- * setting_write（回读型，external，需确认）：改一个 Android Settings 值（需 Root），写后回读。
+ * setting_write（回读型，external，归为「改系统设置」）：改一个 Android Settings 值（需 Root），写后回读。
  * 命中自我保护黑名单 → Failed(UNSUPPORTED, policy_denied)；回读到值 → Done(ReadBack，基于回读值)。
  */
 internal class SettingWriteTool(
@@ -54,7 +55,7 @@ internal class SettingWriteTool(
     override val domain = ToolDomain.DEVICE
     override val summary =
         "写入/修改一个 Android 系统设置值（如亮度、音量模式等，需 Root），写后回读确认。" +
-            "要“改/设置/调整”系统设置就用它，只读取用 setting_read。需用户确认。namespace、key、value 必填。"
+            "要“改/设置/调整”系统设置就用它，只读取用 setting_read。namespace、key、value 必填。"
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
         string(
@@ -75,11 +76,8 @@ internal class SettingWriteTool(
 
     override fun approvalPreview(input: SettingWriteInput): ApprovalPreview = ApprovalPreview(
         title = "修改系统设置？",
-        detail = "把「${settingLabel(input.key)}」改为 ${input.value.take(40)}\n这会改动系统设置。",
+        detail = "把「${settingLabel(input.key)}」改为 ${input.value.take(40)}",
     )
-
-    override fun approvalScope(input: SettingWriteInput): String =
-        "${input.namespace.name.lowercase()}/${input.key}"
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): SettingWriteInput =
         SettingWriteInput(
@@ -90,9 +88,10 @@ internal class SettingWriteTool(
 
     override fun resolve(input: SettingWriteInput, env: ToolEnvironment): CallResolution =
         CallResolution(
-            risk = Risk.EXTERNAL,            // 中央派生要求确认
+            risk = Risk.EXTERNAL,
             sensitivity = Sensitivity.PRIVATE,
             resources = setOf(ResourceKey(ToolResource.DEVICE)),   // 系统设置写入独占设备
+            category = ApprovalCategory.SYSTEM,
             // 自我保护黑名单在审批前拒绝：不先弹确认卡再拒。
             reject = if (isProtected(input.namespace, input.key)) {
                 ToolError(ToolErrorCode.POLICY_DENIED, "出于自我保护，拒绝写入 ${input.key}", detail = "policy_denied")

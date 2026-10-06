@@ -1,5 +1,7 @@
 package io.github.fartown.movo.agent.tools.ui
 
+import io.github.fartown.movo.agent.tools.core.ApprovalCategory
+import io.github.fartown.movo.agent.tools.core.ApprovalNeed
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
 import io.github.fartown.movo.agent.tools.core.InjectionBackend
@@ -75,7 +77,7 @@ internal class UiInputTool(
         integer("index", "输入框节点 index（可选，省略写当前焦点）", min = 0)
         string("observation_id", "给出 index 时必填，绑定其观察代际", maxLength = 64)
         boolean("submit", "写后执行回车/输入法提交动作")
-        string("effect", "声明动作后果（只增加确认）", enum = UiEffect.entries.map { it.name.lowercase() })
+        string("effect", "这一步的后果：带 submit 会发送或提交时声明", enum = UiEffect.entries.map { it.name.lowercase() })
     }
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): UiInputInput {
@@ -107,18 +109,21 @@ internal class UiInputTool(
         val element = input.element
         val target: TargetIdentity
         val pkg: String?
+        val password: Boolean
         var stale: ToolError? = null
         if (element != null) {
             val gen = registry.genOf(element.observationId) ?: -1L
             target = TargetIdentity.Observed(element.observationId, gen, element.index)
             pkg = registry.observationPackage(element.observationId)
             stale = genError(registry, element.observationId, gen)
+            password = registry.observedNode(element.observationId, element.index)?.password == true
         } else {
             // 写当前焦点：仍是“有目标”动作（Named），用前台包做自我保护与归因。
             target = TargetIdentity.Named("focus", "")
             pkg = registry.foregroundPackage()
+            password = registry.focusedInputIsPassword() == true
         }
-        return buildUiActionResolution(
+        val resolution = buildUiActionResolution(
             backend = backend.backend(env),
             target = target,
             pkg = pkg,
@@ -127,20 +132,35 @@ internal class UiInputTool(
             readableTarget = true,
             effect = input.effect,
             selfProtect = true,
-            // sensitivity=按目标（§1 表）；无法在 resolve 判定密码框，保守取 NORMAL，回读时对敏感内容打码。
-            sensitivity = Sensitivity.NORMAL,
+            // 密码框按机密处理（结果在历史里脱敏）；其余取 NORMAL，回读时对敏感内容打码。
+            sensitivity = if (password) Sensitivity.SECRET else Sensitivity.NORMAL,
             // 粘贴回退占用剪贴板。
             extraResources = setOf(ResourceKey(ToolResource.CLIPBOARD)),
             stale = stale,
-            action = inputAction(input),
+            action = inputAction(input, password),
+        )
+        // 往密码框输入归为「输入密码」，优先于模型声明的后果（手动审批时固定会问）。
+        if (!password || resolution.reject != null) return resolution
+        return resolution.copy(
+            category = ApprovalCategory.PASSWORD,
+            toolApproval = ApprovalNeed(
+                category = ApprovalCategory.PASSWORD,
+                title = "在「${appLabel(pkg)}」里输入密码？",
+                detail = "下一步：${inputAction(input, password)}",
+                appPackage = pkg,
+            ),
         )
     }
 
-    /** 确认卡上的这一步：「输入「明天见」」，带 submit 时「输入「明天见」并提交」。 */
-    private fun inputAction(input: UiInputInput): String {
+    /** 确认卡上的这一步：「输入「明天见」」，带 submit 时「输入「明天见」并提交」；密码不上卡。 */
+    private fun inputAction(input: UiInputInput, password: Boolean): String {
         val oneLine = input.text.replace(Regex("\\s+"), " ").trim()
         val preview = if (oneLine.length > 20) oneLine.take(20) + "…" else oneLine
-        val typed = if (preview.isEmpty()) "清空输入框" else "输入「$preview」"
+        val typed = when {
+            preview.isEmpty() -> "清空输入框"
+            password -> "在密码框输入 ${input.text.length} 个字符"
+            else -> "输入「$preview」"
+        }
         return if (input.submit) "${typed}并提交" else typed
     }
 

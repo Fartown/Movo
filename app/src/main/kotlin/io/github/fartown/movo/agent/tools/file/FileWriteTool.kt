@@ -1,5 +1,6 @@
 package io.github.fartown.movo.agent.tools.file
 
+import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
 import io.github.fartown.movo.agent.tools.core.ModelContent
@@ -50,15 +51,14 @@ internal interface FileWriteBackend {
     fun write(path: String, content: String, append: Boolean): FileWriteResult
 }
 
-/** §F.29 file_write：写文本文件（覆盖或追加），自动建父目录。写 Root 路径或工作区外路径需确认。 */
+/** §F.29 file_write：写文本文件（覆盖或追加），自动建父目录。写工作区以外的路径归为「写工作区以外的文件」。 */
 internal class FileWriteTool(
     private val backend: FileWriteBackend,
 ) : ToolContract<FileWriteInput, FileWriteOutput> {
     override val name = "file_write"
     override val domain = ToolDomain.FILE
     override val summary =
-        "写文本文件：mode 选 overwrite 或 append，自动建父目录。写完回读校验。" +
-            "默认工作区；写 Root 路径、共享存储以外路径、向工作区外追加需用户确认。"
+        "写文本文件：mode 选 overwrite 或 append，自动建父目录。写完回读校验。相对路径写在工作区内。"
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
         string("path", "目标路径（相对为工作区内；绝对路径按分区判定风险）", required = true, maxLength = 1024)
@@ -91,16 +91,14 @@ internal class FileWriteTool(
             risk = risk,
             sensitivity = FileSupport.sensitivityOf(input.path),
             resources = emptySet(),
+            category = if (zone == FileSupport.PathZone.WORKSPACE) null else ApprovalCategory.FILES,
         )
     }
 
     override fun approvalPreview(input: FileWriteInput): ApprovalPreview = ApprovalPreview(
-        title = if (input.mode == FileWriteMode.APPEND) "往这个文件末尾追加内容？" else "写入这个文件？",
-        detail = "${input.path.take(160)}\n这个位置在 Movo 的工作区以外，写入后不能自动撤销。",
+        title = if (input.mode == FileWriteMode.APPEND) "往工作区以外的文件末尾追加内容？" else "写入工作区以外的文件？",
+        detail = input.path.take(160),
     )
-
-    /** 同一个目录本次任务内可以勾选不再询问。 */
-    override fun approvalScope(input: FileWriteInput): String = input.path.substringBeforeLast('/', input.path)
 
     override fun execute(
         input: FileWriteInput,

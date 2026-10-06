@@ -2599,7 +2599,7 @@ internal class AgentAppState(
                     detail = event.detail,
                     options = event.options,
                     allowFreeText = event.allowFreeText,
-                    rememberLabel = event.rememberLabel,
+                    note = event.note,
                     reason = event.reason,
                 )
             }
@@ -2616,8 +2616,8 @@ internal class AgentAppState(
         }
     }
 
-    /** 用户在确认卡上选择允许 / 拒绝（可带“一直允许”），回传给等待中的 run 并收起卡片。 */
-    fun submitInteractionApproval(approved: Boolean, remember: Boolean) {
+    /** 用户在确认卡上选择允许 / 拒绝，回传给等待中的 run 并收起卡片。 */
+    fun submitInteractionApproval(approved: Boolean) {
         val interaction = activeInteraction ?: return
         activeInteraction = null
         scope.launch(Dispatchers.IO) {
@@ -2625,7 +2625,7 @@ internal class AgentAppState(
                 .sendInteractionReply(
                     interaction.runId,
                     interaction.requestId,
-                    InteractionReply.Approval(approved, remember),
+                    InteractionReply.Approval(approved),
                 )
         }
     }

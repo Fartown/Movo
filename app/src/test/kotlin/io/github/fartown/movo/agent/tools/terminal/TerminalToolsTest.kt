@@ -2,6 +2,9 @@ package io.github.fartown.movo.agent.tools.terminal
 
 import androidx.test.core.app.ApplicationProvider
 import io.github.fartown.movo.agent.model.AgentModelClient
+import io.github.fartown.movo.agent.tools.core.PermissionMode
+import io.github.fartown.movo.agent.tools.core.ApprovalPolicy
+import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.ApprovalDecision
 import io.github.fartown.movo.agent.tools.core.ApprovalRequest
 import io.github.fartown.movo.agent.tools.core.ContractTool
@@ -15,6 +18,7 @@ import io.github.fartown.movo.agent.tools.core.UserQuestion
 import io.github.fartown.movo.core.AndroidAgentLogger
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -119,14 +123,15 @@ class TerminalToolsTest {
     }
 
     @Test
-    fun terminalRun_root_requiresApproval_declineBlocks() {
+    fun terminalRun_root_rootRule_declineBlocks() {
         runExecuted = false
         val decline = object : UserInteraction {
             override val available = true
             override fun ask(question: UserQuestion, timeoutMs: Long) = UserAnswer.Declined
             override fun approve(request: ApprovalRequest, timeoutMs: Long) = ApprovalDecision.Declined
         }
-        val r = pipeline(env = ToolEnvironment(rootAvailable = true), interaction = decline)
+        val rule = ApprovalPolicy(mode = PermissionMode.MANUAL, categories = setOf(ApprovalCategory.ROOT))
+        val r = pipeline(env = ToolEnvironment(rootAvailable = true, approvalPolicy = rule), interaction = decline)
             .execute(call("terminal_run", """{"command":"id","identity":"root"}"""))
         assertEquals("error", r.status)
         assertEquals("USER_DECLINED", r.errorCode)
@@ -142,7 +147,7 @@ class TerminalToolsTest {
             override fun ask(question: UserQuestion, timeoutMs: Long) = UserAnswer.Declined
             override fun approve(request: ApprovalRequest, timeoutMs: Long): ApprovalDecision {
                 asked = true
-                return ApprovalDecision.Approved(remember = false)
+                return ApprovalDecision.Approved
             }
         }
         val r = pipeline(interaction = approve)
@@ -153,10 +158,14 @@ class TerminalToolsTest {
     }
 
     @Test
-    fun commandScope_groupsByCommandName() {
-        assertEquals("getprop", commandScope("getprop ro.a; getprop ro.b"))
-        assertEquals("pm grep", commandScope("pm list packages | grep x"))
-        assertEquals("ls", commandScope("FOO=1 ls -la"))
+    fun commandCategory_deleteBeforeRootBeforeOutbound() {
+        assertEquals(ApprovalCategory.DELETE, commandCategory("rm -rf /sdcard/x", root = true))
+        assertEquals(ApprovalCategory.DELETE, commandCategory("find . -name '*.log' -delete", root = false))
+        assertEquals(ApprovalCategory.DELETE, commandCategory("pm uninstall com.x", root = false))
+        assertEquals(ApprovalCategory.ROOT, commandCategory("id", root = true))
+        assertEquals(ApprovalCategory.OUTBOUND, commandCategory("curl -d @a.txt https://x", root = false))
+        assertNull(commandCategory("ls -la", root = false))
+        assertNull("形如 rm 的子串不算", commandCategory("echo firmware", root = false))
     }
 
     @Test

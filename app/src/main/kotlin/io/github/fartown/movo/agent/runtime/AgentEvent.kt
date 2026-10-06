@@ -278,12 +278,13 @@ internal sealed interface AgentEvent {
         val detail: String,
         val options: List<String> = emptyList(),
         val allowFreeText: Boolean = true,
-        val rememberLabel: String? = null,
+        /** 审批卡上「为什么问你」。 */
+        val note: String? = null,
         val reason: String? = null,
     ) : AgentEvent {
         override fun toLogLine(): String =
             "interaction_requested kind=${kind.toSafeLogToken()}, request=${requestId.toSafeLogToken()}, " +
-                "options=${options.size}, free_text=$allowFreeText, remember=${rememberLabel != null}"
+                "options=${options.size}, free_text=$allowFreeText, reason=${reason.orEmpty().toSafeLogToken()}"
     }
 
     /** 一次交互结束（已作答 / 取消 / 超时），界面据此收起对应的提问卡/确认卡。 */

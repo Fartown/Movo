@@ -1,6 +1,7 @@
 package io.github.fartown.movo.agent.tools.browser
 
 import io.github.fartown.movo.agent.tools.core.ApprovalPreview
+import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.ResourceKey
@@ -90,17 +91,15 @@ internal class BrowserOpenTool(
     }
 
     override fun resolve(input: BrowserOpenInput, env: ToolEnvironment): CallResolution {
-        // 导航为“读”（有副作用但承载为 Read）。污点确认交由中央派生：
-        // 按定义清单，仅“URL 带查询参数”的导航算外发（可能把本轮读到的不可信内容拼进 query 泄露）；
-        // 带查询参数时 exfiltrates=true，有污点即确认；普通导航/历史导航不算外发。
-        // （“用户没提过的域名”信号 resolve 看不到，暂以查询参数为准，见返回报告。）
+        // 导航为“读”（有副作用但承载为 Read）。只有 URL 带查询参数时可能把内容拼进网址发出去，
+        // 归为「把内容发到外部」；普通导航、历史导航不归类。
         val target = input.target
-        val exfiltrates = target is BrowserOpenTarget.Url && target.hasQuery
+        val outbound = target is BrowserOpenTarget.Url && target.hasQuery
         return CallResolution(
             risk = Risk.READ,
             sensitivity = Sensitivity.NORMAL,
             resources = setOf(ResourceKey(ToolResource.BROWSER)),
-            exfiltrates = exfiltrates,
+            category = if (outbound) ApprovalCategory.OUTBOUND else null,
         )
     }
 

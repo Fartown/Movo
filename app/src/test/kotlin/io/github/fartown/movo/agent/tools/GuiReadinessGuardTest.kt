@@ -7,7 +7,6 @@ import io.github.fartown.movo.agent.runtime.AgentRuntimeWire
 import io.github.fartown.movo.agent.runtime.EntrySurfaceGuard
 import io.github.fartown.movo.agent.tools.core.AgentTool
 import io.github.fartown.movo.agent.tools.core.Risk
-import io.github.fartown.movo.agent.tools.core.TaintTracker
 import io.github.fartown.movo.agent.tools.core.ToolArgs
 import io.github.fartown.movo.agent.tools.core.ToolContext
 import io.github.fartown.movo.agent.tools.core.ToolDomain
@@ -134,7 +133,6 @@ class GuiReadinessGuardTest {
         runId = "run-1",
         toolCallId = "call-1",
         env = env,
-        taint = TaintTracker(),
         interaction = UserInteraction.NONE,
         cancelled = { false },
     )

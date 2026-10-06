@@ -11,7 +11,6 @@ internal class ToolContext(
     val runId: String,
     val toolCallId: String,
     val env: ToolEnvironment,
-    val taint: TaintTracker,
     val interaction: UserInteraction,
     private val cancelled: () -> Boolean,
 ) {

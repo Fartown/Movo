@@ -53,23 +53,11 @@ internal interface ToolContract<I : ToolInput, O : ToolOutput> {
     fun renderForUi(output: O): JSONObject = JSONObject()
 
     /**
-     * 需要用户确认时给界面的可读预览：标题（卡片大标题）+ 预览盒正文（要执行的动作/关键参数）。
-     * 中央派生的审批（污点、受保护应用、EXTERNAL 兜底）本身没有可读文案，工具可据输入给出清晰预览；
-     * 返回 null 时管线回退到按原因的通用标题 + 参数摘要。只对会触发确认的工具有意义，其余保持默认 null。
+     * 手动审批模式下给确认卡的可读预览：标题（卡片大标题）+ 预览盒正文（要执行的动作/关键参数）。
+     * 按类别补全的确认本身没有可读文案，工具可据输入给出清晰预览；
+     * 返回 null 时回退到按类别的通用标题 + 参数摘要。只对有后果的工具有意义，其余保持默认 null。
      */
     fun approvalPreview(input: I): ApprovalPreview? = null
-
-    /**
-     * 成功执行后给本轮打哪类污点（实施方案 5.1）。默认不打：只有读到不可信内容（网页、屏幕、通知、MCP）
-     * 或个人数据（个人记录、验证码、剪贴板、文件、位置等）的工具才声明。
-     */
-    fun taintKinds(input: I): Set<TaintKind> = emptySet()
-
-    /**
-     * 「本次任务内，这类操作都允许」的目标范围（实施方案 5.4），例如命令前缀、设置项、域名。
-     * 默认 null = 按工具算：同一个工具本次任务内不再询问。
-     */
-    fun approvalScope(input: I): String? = null
 }
 
 /** 确认卡的可读预览：[title] 为卡片大标题，[detail] 为预览盒正文（首行作对象/强调，换行后为内容）。 */
@@ -104,7 +92,7 @@ internal sealed interface TargetIdentity {
 
 /**
  * 不可变的调用解析结果。由 [ToolContract.resolve] 在准备阶段生成，审批、资源获取、临派发复核、
- * 执行、收尾都读它。是否必须确认由 [requiresApproval] 中央派生，不交给各工具自觉（合同 §5.3、review I5）。
+ * 执行、收尾都读它。这一步属于哪类有后果的动作由 [category] 声明，是否弹卡由审批设置决定。
  */
 internal data class CallResolution(
     val risk: Risk,
@@ -113,14 +101,13 @@ internal data class CallResolution(
     val backend: InjectionBackend = InjectionBackend.NONE,
     val target: TargetIdentity = TargetIdentity.None,
     /**
-     * 本次动作是否读到了可信节点（坐标点下有没有节点）。只作记录，不再单独触发确认：
+     * 本次动作是否读到了可信节点（坐标点下有没有节点）。只作记录，不触发确认：
      * 读不到节点的界面（地图、画布、游戏、节点很多的列表）里每点一下都弹卡，用户无法使用（2026-10-05 用户反馈）。
-     * 受保护应用里的每一步、模型声明的发送 / 支付照常确认。
      */
     val readableTarget: Boolean = true,
-    /** 前台包名是否可信归因；认不出且用户设过受保护应用时，由 ui 工具自己要求确认（见 buildUiActionResolution）。 */
+    /** 前台包名是否可信归因（只作记录）。 */
     val packageAttributed: Boolean = true,
-    /** 工具额外的审批诉求；与中央派生取并集。 */
+    /** 工具自己给出的确认卡文案（例如模型声明的发送 / 付款），优先于按 [category] 补全。 */
     val toolApproval: ApprovalNeed? = null,
     /** 恢复资格（不用可空 null 二义，见 review I6）。 */
     val recovery: RecoverySpec = RecoverySpec.NonReplayable,
@@ -129,21 +116,18 @@ internal data class CallResolution(
      * 不打扰用户弹确认卡（review：策略拒绝不应先弹卡再拒，设备/clockmedia 子任务反馈）。
      */
     val reject: ToolError? = null,
-    /**
-     * 这次调用会不会把内容发出去（实施方案 5.1 的外发类动作）：带参数的网址、网页提交、Linux 终端命令、
-     * 能联网的命令、非只读的 MCP、把内容写进长期记忆。只有显式置 true 的调用在两类污点同时成立时才确认；
-     * 设闹钟、调音量、复制、写本机文件、界面点击等本地动作不受污点影响。
-     */
-    val exfiltrates: Boolean = false,
+    /** 这一步属于哪类有后果的动作（权限模式方案）；普通操作为空。 */
+    val category: ApprovalCategory? = null,
+    /** 界面操作所在的应用，用于「某个应用里先问我」；非界面操作为空。 */
+    val appPackage: String? = null,
 ) {
     /**
-     * 中央派生「是否必须确认」（实施方案 5.3）：工具自带诉求 → 对外或不可撤销（EXTERNAL）→
-     * 两类污点同时成立后的外发动作。[tainted] 是两类同时成立（[TaintTracker.tainted]）。
+     * 这一步可能要问用户时的描述：工具自带文案优先，否则按类别 / 应用生成空文案，由 [ContractTool] 补全。
+     * 要不要真的弹卡由审批设置（[ApprovalPolicy.shouldAsk]）决定。
      */
-    fun requiresApproval(tainted: Boolean): ApprovalNeed? = when {
+    fun consequence(): ApprovalNeed? = when {
         toolApproval != null -> toolApproval
-        risk == Risk.EXTERNAL -> ApprovalNeed(ApprovalReason.EXTERNAL_EFFECT, title = "", detail = "")
-        tainted && exfiltrates -> ApprovalNeed(ApprovalReason.TAINTED, title = "", detail = "")
+        category != null || appPackage != null -> ApprovalNeed(category, title = "", detail = "", appPackage = appPackage)
         else -> null
     }
 }

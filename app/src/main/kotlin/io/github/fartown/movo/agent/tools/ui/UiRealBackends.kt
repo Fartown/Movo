@@ -132,8 +132,11 @@ internal class RealUiScreenBackend(
                 role = node.className.ifBlank { null },
                 bounds = listOf(node.bounds.left, node.bounds.top, node.bounds.right, node.bounds.bottom),
                 clickable = node.clickable,
+                password = node.password,
             )
         }
+
+    override fun focusedInputIsPassword(): Boolean? = AgentAccessibilityService.current()?.focusedInputIsPassword()
 
     // ---- UiObserveBackend ----
 

@@ -53,7 +53,7 @@ internal interface DeviceDiagnosticsBackend {
 
 /**
  * device_diagnostics（只读）：top_processes、app_storage、logcat。
- * 全部需 Root → 无 Root Failed(ROOT_REQUIRED)；logcat 结果为 private 并作为“读过个人数据”的污点来源。
+ * 全部需 Root → 无 Root Failed(ROOT_REQUIRED)；logcat 结果为 private。
  */
 internal class DeviceDiagnosticsTool(
     private val backend: DeviceDiagnosticsBackend,
@@ -95,7 +95,7 @@ internal class DeviceDiagnosticsTool(
     override fun resolve(input: DeviceDiagnosticsInput, env: ToolEnvironment): CallResolution =
         CallResolution(
             risk = Risk.READ,
-            // logcat 含其他应用数据 → private（管线按敏感度默认打污点）；前两者为普通设备信息。
+            // logcat 含其他应用数据 → private；前两者为普通设备信息。
             sensitivity = if (input.kind == DiagnosticKind.LOGCAT) Sensitivity.PRIVATE else Sensitivity.NORMAL,
             resources = emptySet(),
         )

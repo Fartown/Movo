@@ -19,7 +19,7 @@ import org.json.JSONObject
 
 /**
  * §10 ui_tap（送达型）。点击或长按一个目标（index / 点 / 区域）。ok 只代表已送达，需再观察确认。
- * 确认只在声明了发送 / 支付等后果、或在受保护应用里时发生（见 buildUiActionResolution）；
+ * 手动审批时，声明了发送 / 支付等后果、或在用户选的应用里才会问（见 buildUiActionResolution）；
  * 坐标点下的节点（readableNodeAtPoint）只用来在确认卡上写「点按「转账」」。
  */
 
@@ -50,7 +50,7 @@ internal class UiTapTool(
         flatTarget(allowCoordinates = true, allowArea = true)
         integer("hold_ms", "长按毫秒 0–3000，默认 0（即普通点击）", min = 0, max = 3000)
         string(
-            "effect", "声明动作后果（只增加确认）",
+            "effect", "这一下的后果：发送、删除、提交、付款、转账时声明",
             enum = UiEffect.entries.map { it.name.lowercase() },
         )
     }

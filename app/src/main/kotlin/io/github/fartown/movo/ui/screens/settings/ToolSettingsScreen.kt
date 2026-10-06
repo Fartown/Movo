@@ -1,6 +1,7 @@
 package io.github.fartown.movo.ui.screens.settings
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -8,6 +9,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.res.stringResource
 import io.github.fartown.movo.R
 import io.github.fartown.movo.agent.monitor.MonitorSettings
+import io.github.fartown.movo.agent.tools.core.ApprovalSettings
+import io.github.fartown.movo.agent.tools.core.PermissionMode
 import io.github.fartown.movo.config.Prefs
 import io.github.fartown.movo.ui.components.movo.CardFooter
 import io.github.fartown.movo.ui.components.movo.CardTitle
@@ -18,8 +21,9 @@ import io.github.fartown.movo.ui.components.movo.SettingsRow
 import io.github.fartown.movo.ui.navigation.AppRoute
 
 /**
- * 设置 · 工具（规范 8.7，Figma「19 · 设置 · 工具」）：基础能力 3 个开关、敏感权限 2 个开关（页脚写后果，
- * 开启「敏感设备操作」先确认）、环境（Linux 工具环境、全部工具 → 只读的工具能力目录）。
+ * 设置 · 工具（规范 8.7，Figma「19 · 设置 · 工具」、定稿 19 权限）：基础能力 3 个开关、个人数据与系统 2 个开关
+ * （管能不能用；开启「敏感设备操作」先确认）、权限（权限模式 → 权限页）、后台监听、
+ * 环境（Linux 工具环境、全部工具 → 只读的工具能力目录）。
  * 开关的存储 key 与默认值不变（[Prefs.Keys]），都是 App 本地配置，提交后回写远端。
  */
 @Composable
@@ -32,6 +36,7 @@ internal fun ToolSettingsScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
     var monitorMaxMs by remember { mutableStateOf(MonitorSettings.maxDurationMs(context)) }
     var showMonitorChoice by remember { mutableStateOf(false) }
+    val permissionPolicy by remember { ApprovalSettings.state(context) }.collectAsState()
 
     MovoListPage(title = stringResource(R.string.movo_settings_tools), onBack = onBack) {
         item(key = "basic") {
@@ -79,6 +84,29 @@ internal fun ToolSettingsScreen(
                     listOf(
                         stringResource(R.string.movo_tools_sensitive_footer_1),
                         stringResource(R.string.movo_tools_sensitive_footer_2),
+                    ),
+                )
+            }
+        }
+        // 权限（定稿 19）：一行「权限模式」，右侧写当前模式，点进去管模式和审批规则。
+        item(key = "permission") {
+            val mode = permissionPolicy.mode
+            MovoCard {
+                CardTitle(stringResource(R.string.tools_permission_group))
+                SettingsRow(
+                    title = stringResource(R.string.permission_mode),
+                    trailing = io.github.fartown.movo.ui.components.movo.RowTrailing.Arrow(
+                        stringResource(
+                            if (mode == PermissionMode.MANUAL) R.string.permission_mode_manual else R.string.permission_mode_yolo,
+                        ),
+                    ),
+                    showDivider = false,
+                    onClick = { onNavigate(AppRoute.PermissionSettings) },
+                )
+                CardFooter(
+                    listOf(
+                        stringResource(R.string.tools_permission_footer_1),
+                        stringResource(R.string.tools_permission_footer_2),
                     ),
                 )
             }

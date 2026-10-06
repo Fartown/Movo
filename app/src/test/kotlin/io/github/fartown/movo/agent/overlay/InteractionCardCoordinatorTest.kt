@@ -25,7 +25,60 @@ class InteractionCardCoordinatorTest {
         hosts.forEach(InteractionCardCoordinator::unregisterHost)
         InteractionCardCoordinator.clearRun(null)
         InteractionCardCoordinator.setUnlockInProgress(false)
+        InteractionCardCoordinator.setFloatingAttached(false)
         AgentInteractionRegistry.unregister("run-1")
+    }
+
+    @Test
+    fun afterApprovingAFloatingCard_waitsUntilItIsGoneAndTheTargetAppIsActive() {
+        // 悬浮卡上点了「继续」：卡窗口还挂着、活动窗口还是 Movo 时不放行；撤下且回到目标应用才放行（真机 P8）。
+        InteractionCardCoordinator.publish(card("ix-9"))
+        InteractionCardCoordinator.setFloatingAttached(true)
+        InteractionCardCoordinator.reply(card("ix-9"), InteractionReply.Approval(approved = true))
+        var clock = 0L
+        var active = "io.github.fartown.movo"
+        val settled = InteractionCardCoordinator.awaitSettled(
+            activePackage = { active },
+            selfPackage = "io.github.fartown.movo",
+            now = { clock },
+            sleep = { ms ->
+                clock += ms
+                if (clock >= 200) InteractionCardCoordinator.setFloatingAttached(false)
+                if (clock >= 400) active = "com.android.settings"
+            },
+        )
+        assertTrue(settled)
+        assertTrue("等到卡片撤下、回到目标应用才放行", clock >= 400)
+
+        // 一直撤不下来：到时限放行，不卡住任务。
+        InteractionCardCoordinator.setFloatingAttached(true)
+        clock = 0L
+        assertFalse(
+            InteractionCardCoordinator.awaitSettled(
+                activePackage = { "com.android.settings" },
+                selfPackage = "io.github.fartown.movo",
+                timeoutMs = 300,
+                now = { clock },
+                sleep = { clock += it },
+            ),
+        )
+    }
+
+    @Test
+    fun afterApprovingAnInAppCard_doesNotWaitForTheTargetApp() {
+        val host = Any().also { hosts += it; InteractionCardCoordinator.registerHost(it) }
+        InteractionCardCoordinator.publish(card("ix-10"))
+        InteractionCardCoordinator.reply(card("ix-10"), InteractionReply.Approval(approved = true))
+        var slept = 0L
+        assertTrue(
+            InteractionCardCoordinator.awaitSettled(
+                activePackage = { "io.github.fartown.movo" },
+                selfPackage = "io.github.fartown.movo",
+                sleep = { slept += it },
+            ),
+        )
+        assertEquals("App 内的卡不用等活动窗口换走", 0L, slept)
+        InteractionCardCoordinator.unregisterHost(host)
     }
 
     @Test
@@ -96,10 +149,10 @@ class InteractionCardCoordinatorTest {
         val model = card("ix-1")
         InteractionCardCoordinator.publish(model)
 
-        assertTrue(InteractionCardCoordinator.reply(model, InteractionReply.Approval(approved = true, remember = false)))
+        assertTrue(InteractionCardCoordinator.reply(model, InteractionReply.Approval(approved = true)))
         assertNull(InteractionCardCoordinator.pending.value)
         assertEquals(
-            InteractionReply.Approval(approved = true, remember = false),
+            InteractionReply.Approval(approved = true),
             broker.await("ix-1", timeoutMs = 1_000L, cancelled = { false }),
         )
         assertFalse("only the first reply counts", InteractionCardCoordinator.reply(model, InteractionReply.Cancelled))

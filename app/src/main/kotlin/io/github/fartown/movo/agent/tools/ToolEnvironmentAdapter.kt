@@ -1,6 +1,7 @@
 package io.github.fartown.movo.agent.tools
 
 import io.github.fartown.movo.agent.tool.AgentToolCapabilities
+import io.github.fartown.movo.agent.tools.core.ApprovalPolicy
 import io.github.fartown.movo.agent.tools.core.ModelInput
 import io.github.fartown.movo.agent.tools.core.MemoryScope
 import io.github.fartown.movo.agent.tools.core.ToolEnvironment
@@ -21,6 +22,7 @@ internal fun AgentToolCapabilities.toToolEnvironment(
     interactive: Boolean,
     conversationId: String? = null,
     modelInputs: Set<ModelInput>,
+    approvalPolicy: ApprovalPolicy = ApprovalPolicy.YOLO,
 ): ToolEnvironment = ToolEnvironment(
     rootAvailable = rootAvailable,
     lsposedAvailable = lsposedAvailable,
@@ -37,4 +39,5 @@ internal fun AgentToolCapabilities.toToolEnvironment(
     conversationId = conversationId,
     interactive = interactive,
     modelInputs = modelInputs,
+    approvalPolicy = approvalPolicy,
 )

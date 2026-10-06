@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
+import io.github.fartown.movo.agent.tools.interaction.APP_RULE_REASON
 import io.github.fartown.movo.ui.model.AgentInteractionUiState
 import io.github.fartown.movo.ui.theme.LocalReducedMotion
 import io.github.fartown.movo.ui.theme.MovoColors
@@ -67,15 +68,15 @@ import top.yukonga.miuix.kmp.basic.Text
 /**
  * 同步交互卡（实施方案 §6.1 交互通道；S5 审批/提问 UI）。底部锚定，背景静止（不后退不缩放，见规范「弹窗时背后页面不动」）。
  *
- * 由 [AgentInteractionUiState] 驱动，覆盖定稿「候选 · 审批交互 v1」的四类：
- * 外发消息审批（可一直允许）、支付类审批（不可一直允许、深色确认）、提问（选项 + 可选自由文本）、以及解锁提示（前向兼容）。
+ * 由 [AgentInteractionUiState] 驱动：审批卡（手动审批模式，只有允许 / 拒绝，灰底块下写为什么问你；
+ * 付款深色确认，定稿 16、19）、提问卡（选项 + 可选自由文本），以及解锁提示（前向兼容）。
  * 作答经回调回传给正在等待的 run；用户点遮罩或取消按取消处理（审批=拒绝、提问=拒绝，安全侧）。
  */
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
 internal fun AgentInteractionCard(
     state: AgentInteractionUiState?,
-    onApprove: (remember: Boolean) -> Unit,
+    onApprove: () -> Unit,
     onDecline: () -> Unit,
     onAnswer: (text: String, optionIndex: Int?) -> Unit,
     onCancel: () -> Unit,
@@ -141,7 +142,7 @@ internal fun AgentInteractionCard(
 @Composable
 internal fun AgentInteractionOverlayContent(
     model: AgentInteractionUiState,
-    onApprove: (remember: Boolean) -> Unit,
+    onApprove: () -> Unit,
     onDecline: () -> Unit,
     onAnswer: (text: String, optionIndex: Int?) -> Unit,
     onCancel: () -> Unit,
@@ -174,7 +175,7 @@ internal fun AgentInteractionOverlayContent(
 @Composable
 internal fun InteractionCardBody(
     model: AgentInteractionUiState,
-    onApprove: (Boolean) -> Unit,
+    onApprove: () -> Unit,
     onDecline: () -> Unit,
     onAnswer: (String, Int?) -> Unit,
 ) {
@@ -234,13 +235,28 @@ private data class HeaderSpec(
 
 private fun headerSpec(model: AgentInteractionUiState): HeaderSpec = when {
     !model.isApproval -> HeaderSpec(null, MovoColors.indigoFg, "需要你选择")
-    // 支付、转账（定稿 16-02）：Rose 警示。
+    // 支付、转账（定稿 16-02）、在你选的应用里（定稿 19）：Rose 警示。
     model.reason == "PAYMENT" -> HeaderSpec(MovoIcons.TriangleAlert, MovoColors.roseFg, "需要你确认 · 付款")
-    model.reason == "PROTECTED_APP" -> HeaderSpec(MovoIcons.ShieldAlert, MovoColors.roseFg, "需要你确认 · 受保护应用")
-    model.reason == "PERSONAL_DATA" -> HeaderSpec(MovoIcons.Eye, MovoColors.indigoFg, "需要你确认 · 读取个人数据")
+    model.reason == APP_RULE_REASON -> HeaderSpec(MovoIcons.ShieldAlert, MovoColors.roseFg, "需要你确认 · 你选的应用")
     isUnlock(model) -> HeaderSpec(MovoIcons.Lock, MovoColors.textPrimary, "需要你操作")
-    else -> HeaderSpec(MovoIcons.ArrowUp, MovoColors.indigoFg, "需要你确认")
+    else -> HeaderSpec(
+        MovoIcons.ArrowUp,
+        MovoColors.indigoFg,
+        CATEGORY_LABELS[model.reason]?.let { "需要你确认 · $it" } ?: "需要你确认",
+    )
 }
+
+/** 卡头小标题里的动作类别（原因码 = 类别名）。 */
+private val CATEGORY_LABELS = mapOf(
+    "SEND" to "发送",
+    "PASSWORD" to "输入密码",
+    "DELETE" to "删除",
+    "SYSTEM" to "改系统设置",
+    "ROOT" to "Root 命令",
+    "INSTALL" to "安装技能",
+    "OUTBOUND" to "发到外部",
+    "FILES" to "写文件",
+)
 
 /** 解锁提示（前向兼容）：当前运行时无此 reason，保留按 reason 字串识别的分支。 */
 private fun isUnlock(model: AgentInteractionUiState): Boolean = model.reason == "UNLOCK"
@@ -248,10 +264,10 @@ private fun isUnlock(model: AgentInteractionUiState): Boolean = model.reason == 
 @Composable
 private fun ApprovalContent(
     model: AgentInteractionUiState,
-    onApprove: (Boolean) -> Unit,
+    onApprove: () -> Unit,
     onDecline: () -> Unit,
 ) {
-    // 只有支付、转账用深色确认、不提供勾选（定稿 16-02）；受保护应用、读取个人数据用普通主操作。
+    // 支付、转账用深色确认（定稿 16-02）；其余用普通主操作。卡片只有允许 / 拒绝，每次都问（定稿 19）。
     val payment = model.reason == "PAYMENT"
     if (model.detail.isNotBlank()) {
         if (isUnlock(model)) {
@@ -263,32 +279,22 @@ private fun ApprovalContent(
         }
     }
 
-    // 「本次任务内」默认勾上（定稿 16-01）；「以后不再询问」这类一直允许默认不勾。
-    var remember by remember(model.requestId) {
-        mutableStateOf(model.rememberLabel != null && model.reason != "PERSONAL_DATA")
-    }
-    if (model.rememberLabel != null) {
+    // 灰底块下面一行：为什么问你；付款再补一句确认后仍要自己验证。
+    val note = listOfNotNull(
+        model.note?.takeIf { it.isNotBlank() },
+        "确认后仍需在屏幕上点按或生物识别。".takeIf { payment },
+    ).joinToString("")
+    if (note.isNotEmpty()) {
         Spacer(Modifier.size(MovoSpacing.md))
-        RememberRow(
-            label = rememberText(model.rememberLabel),
-            checked = remember,
-            onToggle = { remember = it },
-        )
-    } else if (payment) {
-        Spacer(Modifier.size(MovoSpacing.md))
-        Text(
-            "付款不提供「本次任务内都允许」；确认后仍需在屏幕上点按或验证身份。",
-            style = MovoTypography.labelRegular,
-            color = MovoColors.textTertiary,
-        )
+        Text(note, style = MovoTypography.labelRegular, color = MovoColors.textTertiary)
     }
 
     Spacer(Modifier.size(MovoSpacing.lg))
     MovoButtonRow {
         MovoBlockButton(label = "拒绝", onClick = onDecline, tone = BlockTone.Secondary)
         MovoBlockButton(
-            label = if (payment || model.reason == "PROTECTED_APP") "继续" else "允许",
-            onClick = { onApprove(remember) },
+            label = if (payment || model.reason == APP_RULE_REASON) "继续" else "允许",
+            onClick = onApprove,
             tone = if (payment) BlockTone.Destructive else BlockTone.Primary,
         )
     }
@@ -331,34 +337,6 @@ private fun PreviewBox(detail: String) {
         if (lines.size > 1 && lines[1].isNotBlank()) {
             Text(lines[1], style = MovoTypography.bodyRegular, color = MovoColors.textSecondary)
         }
-    }
-}
-
-@Composable
-private fun RememberRow(label: String, checked: Boolean, onToggle: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(MovoRadius.sm))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                role = Role.Checkbox,
-                onClick = { onToggle(!checked) },
-            ),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(20.dp)
-                .clip(RoundedCornerShape(MovoRadius.xs))
-                .background(if (checked) MovoColors.actionPrimaryBg else MovoColors.bgSurfaceMuted),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (checked) MovoIcon(MovoIcons.Check, null, size = 14.dp, tint = MovoColors.actionPrimaryFg)
-        }
-        Spacer(Modifier.width(MovoSpacing.sm))
-        Text(label, style = MovoTypography.bodyRegular, color = MovoColors.textSecondary)
     }
 }
 
@@ -425,6 +403,3 @@ private fun FreeTextRow(onSubmit: (String) -> Unit) {
         }
     }
 }
-
-/** 勾选框文案由运行时给出完整句子（「本次任务内，这类操作都允许」「以后读取短信不再询问」）。 */
-private fun rememberText(label: String): String = label.ifBlank { "本次任务内，这类操作都允许" }

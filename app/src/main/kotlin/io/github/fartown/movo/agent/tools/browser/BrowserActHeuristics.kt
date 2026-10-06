@@ -38,7 +38,7 @@ internal data class BrowserTargetSignals(
 )
 
 internal data class BrowserSubmitClassification(
-    /** 表单含密码/提交控件、按钮文字命中提交点 → 执行前需确认。 */
+    /** 表单含密码/提交控件、按钮文字命中提交点 → 归为「发消息和提交表单」，手动审批时问用户。 */
     val submitPoint: Boolean,
     /** role=search 或 GET 表单：是搜索类，不确认（即使命中 submitPoint）。 */
     val searchRole: Boolean,

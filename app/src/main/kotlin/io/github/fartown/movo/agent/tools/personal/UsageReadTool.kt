@@ -17,7 +17,6 @@ import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.invalidArgs
 import io.github.fartown.movo.agent.tools.core.objectSchema
-import io.github.fartown.movo.agent.tools.core.TaintKind
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -126,8 +125,6 @@ internal class UsageReadTool(
         }
         return Verdict.Read(UsageReadOutput(input.view, items))
     }
-
-    override fun taintKinds(input: UsageReadInput): Set<TaintKind> = setOf(TaintKind.PERSONAL)
 
     override fun renderForModel(output: UsageReadOutput): ModelContent {
         val array = JSONArray()

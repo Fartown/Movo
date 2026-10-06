@@ -29,7 +29,7 @@
   <string name="movo_permission_overlay_off">Overlay off</string>
   <string name="movo_permission_accessibility_off">Accessibility off</string>
   <string name="movo_tools_group_basic">Basics</string>
-  <string name="movo_tools_group_sensitive">Sensitive permissions</string>
+  <string name="movo_tools_group_sensitive">Personal data &amp; system</string>
   <string name="movo_tools_group_environment">Environment</string>
   <string name="movo_tools_browser">Web browsing</string>
   <string name="movo_tools_browser_desc">Search the web, open links and read pages</string>
@@ -42,7 +42,7 @@
   <string name="movo_tools_sensitive_action">Sensitive device actions</string>
   <string name="movo_tools_sensitive_action_desc">Change settings, toggle network and Bluetooth</string>
   <string name="movo_tools_sensitive_footer_1">Sensitive content is used only for the current task and is not saved to chats.</string>
-  <string name="movo_tools_sensitive_footer_2">Turning on sensitive device actions asks you first.</string>
+  <string name="movo_tools_sensitive_footer_2">When off, Movo won\'t use them or open the related apps to look.</string>
   <string name="movo_tools_all">All tools</string>
   <string name="movo_tools_confirm_title">Allow sensitive device actions?</string>
   <string name="movo_tools_confirm_message">Movo can change system settings and turn network and Bluetooth on or off. You can turn this off anytime.</string>

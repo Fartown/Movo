@@ -3,6 +3,7 @@ package io.github.fartown.movo.agent.tools.memory
 import androidx.test.core.app.ApplicationProvider
 import io.github.fartown.movo.agent.model.AgentModelClient
 import io.github.fartown.movo.agent.tools.core.ApprovalDecision
+import io.github.fartown.movo.agent.tools.core.ApprovalPolicy
 import io.github.fartown.movo.agent.tools.core.ApprovalRequest
 import io.github.fartown.movo.agent.tools.core.ContractTool
 import io.github.fartown.movo.agent.tools.core.MemoryScope
@@ -22,7 +23,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
-/** memory_read / memory_write 的管线验证：只读、回读 Done、冲突、唯一匹配、clear 外发确认、污点确认。 */
+/** memory_read / memory_write 的管线验证：只读、回读 Done、冲突、唯一匹配、手动审批时清空算删东西要问。 */
 @RunWith(RobolectricTestRunner::class)
 class MemoryToolsTest {
 
@@ -45,7 +46,7 @@ class MemoryToolsTest {
     private val approve = object : UserInteraction {
         override val available = true
         override fun ask(question: UserQuestion, timeoutMs: Long) = UserAnswer.Declined
-        override fun approve(request: ApprovalRequest, timeoutMs: Long) = ApprovalDecision.Approved(false)
+        override fun approve(request: ApprovalRequest, timeoutMs: Long) = ApprovalDecision.Approved
     }
     private val decline = object : UserInteraction {
         override val available = true
@@ -53,7 +54,11 @@ class MemoryToolsTest {
         override fun approve(request: ApprovalRequest, timeoutMs: Long) = ApprovalDecision.Declined
     }
 
-    private fun pipeline(backend: MemoryBackend, interaction: UserInteraction = approve): ToolPipeline {
+    private fun pipeline(
+        backend: MemoryBackend,
+        interaction: UserInteraction = approve,
+        policy: ApprovalPolicy = ApprovalPolicy.MANUAL_BUILT_IN,
+    ): ToolPipeline {
         val provider = object : ToolProvider {
             override val tools = listOf(
                 ContractTool(MemoryReadTool(backend)),
@@ -62,7 +67,7 @@ class MemoryToolsTest {
         }
         return ToolPipeline(
             registry = ToolRegistry(listOf(provider)),
-            environment = { ToolEnvironment(memoryScope = MemoryScope.REAL) },
+            environment = { ToolEnvironment(memoryScope = MemoryScope.REAL, approvalPolicy = policy) },
             appContext = ApplicationProvider.getApplicationContext(),
             logger = AndroidAgentLogger,
             runId = "run1",
@@ -147,12 +152,14 @@ class MemoryToolsTest {
     }
 
     @Test
-    fun append_whenTainted_requiresApproval() {
+    fun clear_yolo_noCard() {
+        val p = pipeline(FakeMemory("something"), decline, policy = ApprovalPolicy.YOLO)
+        assertEquals("ok", p.execute(call("memory_write", """{"mode":"clear","revision":"rev0"}""")).status)
+    }
+
+    @Test
+    fun append_manualMode_noCard() {
         val p = pipeline(FakeMemory("x"), decline)
-        // 本轮既读过不可信内容、又读过个人数据：两类污点同时成立，追加记忆要确认。
-        p.taint.mark(io.github.fartown.movo.agent.tools.core.TaintKind.UNTRUSTED, "browser_read")
-        p.taint.mark(io.github.fartown.movo.agent.tools.core.TaintKind.PERSONAL, "personal_search")
-        val r = p.execute(call("memory_write", """{"mode":"append","new_text":"y"}"""))
-        assertEquals("USER_DECLINED", r.errorCode)
+        assertEquals("ok", p.execute(call("memory_write", """{"mode":"append","new_text":"y"}""")).status)
     }
 }

@@ -13,7 +13,6 @@ import io.github.fartown.movo.agent.tools.core.ToolInput
 import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.objectSchema
-import io.github.fartown.movo.agent.tools.core.TaintKind
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -89,9 +88,6 @@ internal class McpFindTool(
         }
         return Verdict.Read(McpFindOutput(matches, filtered.size))
     }
-
-    /** 返回里有第三方写的工具描述，算不可信内容。 */
-    override fun taintKinds(input: McpFindInput): Set<TaintKind> = setOf(TaintKind.UNTRUSTED)
 
     override fun renderForModel(output: McpFindOutput): ModelContent {
         val array = JSONArray()

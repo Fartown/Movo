@@ -1,7 +1,5 @@
 package io.github.fartown.movo.agent.tools.personal
 
-import io.github.fartown.movo.agent.tools.core.ApprovalNeed
-import io.github.fartown.movo.agent.tools.core.ApprovalReason
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.Risk
@@ -21,23 +19,21 @@ import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.fail
 import io.github.fartown.movo.agent.tools.core.invalidArgs
 import io.github.fartown.movo.agent.tools.core.objectSchema
-import io.github.fartown.movo.agent.tools.core.TaintKind
 import org.json.JSONArray
 import org.json.JSONObject
 
 /**
  * 个人数据来源。每个来源声明：是否支持时间过滤、是否 secret、以及在当前环境是否可用
- * （Root / ColorOS / 通知权）。首读确认只针对隐私最重的短信、通话。
+ * （Root / ColorOS / 通知权）。
  */
 internal enum class PersonalSource(
     val supportsTimeFilter: Boolean,
     val secret: Boolean = false,
-    val firstReadConfirm: Boolean = false,
 ) {
     NOTIFICATIONS(supportsTimeFilter = true),
     CONTACTS(supportsTimeFilter = false),
-    CALL_LOG(supportsTimeFilter = true, firstReadConfirm = true),
-    SMS(supportsTimeFilter = true, firstReadConfirm = true),
+    CALL_LOG(supportsTimeFilter = true),
+    SMS(supportsTimeFilter = true),
     CALENDAR(supportsTimeFilter = true),
     NOTES(supportsTimeFilter = false),
     RECORDING_SUMMARIES(supportsTimeFilter = false),
@@ -111,7 +107,6 @@ internal interface PersonalSearchBackend {
  * - source 必选，schema 只列当前可用来源；所有来源都不可用时整体 Unavailable（目录层隐藏）。
  * - since/until 仅对声明支持时间过滤的来源可用，否则 INVALID_ARGUMENTS。
  * - 短信/通知正文里的验证码等 secret 内容打码（绕不开 sms_code_read）。
- * - 短信、通话首读需确认一次（当前每次确认；"首次"持久化留 TODO）。
  */
 internal class PersonalSearchTool(
     private val backend: PersonalSearchBackend,
@@ -186,28 +181,11 @@ internal class PersonalSearchTool(
         )
     }
 
-    override fun resolve(input: PersonalSearchInput, env: ToolEnvironment): CallResolution {
-        val approval = if (input.source.firstReadConfirm) {
-            // 第一次读短信、通话记录先问一次；勾「以后不再询问」后本进程内不再问（持久化等「已允许的操作」管理页定稿）。
-            val label = sourceLabel(input.source)
-            ApprovalNeed(
-                reason = ApprovalReason.PERSONAL_DATA,
-                title = "允许 Movo 读取你的$label？",
-                detail = "读取$label\n只用来完成这次任务，读到的内容不写进对话记录。",
-                scopeKey = "first_read:${input.source.wire}",
-                scopeLabel = "以后读取${label}不再询问",
-                allowTaskScope = false,
-            )
-        } else {
-            null
-        }
-        return CallResolution(
-            risk = Risk.READ,
-            sensitivity = if (input.source.secret) Sensitivity.SECRET else Sensitivity.PRIVATE,
-            resources = emptySet(),
-            toolApproval = approval,
-        )
-    }
+    override fun resolve(input: PersonalSearchInput, env: ToolEnvironment): CallResolution = CallResolution(
+        risk = Risk.READ,
+        sensitivity = if (input.source.secret) Sensitivity.SECRET else Sensitivity.PRIVATE,
+        resources = emptySet(),
+    )
 
     override fun execute(
         input: PersonalSearchInput,
@@ -228,12 +206,6 @@ internal class PersonalSearchTool(
                 toolWarnings = result.warnings,
             ),
         )
-    }
-
-    /** 个人记录都算个人数据；通知、订单（来自通知）里还有别人写的内容，同时算不可信内容。 */
-    override fun taintKinds(input: PersonalSearchInput): Set<TaintKind> = when (input.source) {
-        PersonalSource.NOTIFICATIONS, PersonalSource.ORDERS -> setOf(TaintKind.PERSONAL, TaintKind.UNTRUSTED)
-        else -> setOf(TaintKind.PERSONAL)
     }
 
     override fun renderForModel(output: PersonalSearchOutput): ModelContent {

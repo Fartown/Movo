@@ -20,7 +20,6 @@ import io.github.fartown.movo.agent.tools.core.ToolResource
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.fail
 import io.github.fartown.movo.agent.tools.core.objectSchema
-import io.github.fartown.movo.agent.tools.core.TaintKind
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -45,7 +44,7 @@ internal data class BrowserReadOutput(
  * §34 browser_read：读当前网页。readable 正文、text 指定 selector 文字、elements 可交互元素、
  * screenshot 截图、info 页面信息；可先等某 selector 出现再读。只读 → Verdict.Read。
  *
- * 结果敏感度 private（页面可能是登录态），由管线默认按 sensitivity 打“读过不可信内容”污点。
+ * 结果敏感度 private（页面可能是登录态），结果不进持久会话。
  * cursor 绑 navigationGeneration，页面变化后失效 → STALE_OBSERVATION。
  */
 internal class BrowserReadTool(
@@ -88,7 +87,7 @@ internal class BrowserReadTool(
     override fun resolve(input: BrowserReadInput, env: ToolEnvironment): CallResolution =
         CallResolution(
             risk = Risk.READ,
-            // private：页面可能是登录态；管线据此打污点，结果不进持久会话。
+            // private：页面可能是登录态，结果不进持久会话。
             sensitivity = Sensitivity.PRIVATE,
             resources = setOf(ResourceKey(ToolResource.BROWSER)),
         )
@@ -198,9 +197,6 @@ internal class BrowserReadTool(
         info.keys().forEach { key -> data.put(key, info.get(key)) }
         return Verdict.Read(BrowserReadOutput(data, screenshot = null))
     }
-
-    /** 网页内容是不可信内容。 */
-    override fun taintKinds(input: BrowserReadInput): Set<TaintKind> = setOf(TaintKind.UNTRUSTED)
 
     override fun renderForModel(output: BrowserReadOutput): ModelContent = ModelContent.Json(output.data)
 

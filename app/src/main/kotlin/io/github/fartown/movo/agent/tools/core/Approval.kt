@@ -1,110 +1,125 @@
 package io.github.fartown.movo.agent.tools.core
 
-import java.util.concurrent.ConcurrentHashMap
-
-/** 污点的两类（实施方案 5.1）。 */
-internal enum class TaintKind {
-    /** 不可信内容：网页、其他应用的屏幕内容、通知、MCP 结果、后台监听送来的命令输出。 */
-    UNTRUSTED,
-    /** 个人数据：个人记录（短信、通话、通讯录、相册等）、验证码、剪贴板、文件、健康、应用用量、位置、Wi‑Fi 密码。 */
-    PERSONAL,
-}
-
 /**
- * 本轮运行的污点状态（实施方案 5.1）：分「不可信内容」「个人数据」两类，只增不减，跟随单次运行。
- * 只有两类**同时成立**时，会把内容发出去的动作才需要确认——针对「个人数据被注入的指令发出去」这一威胁；
- * 只读了其中一类不触发（用户 2026-10-04 定）。工具自己的输出（终端、写记忆）不算污点来源。
+ * 权限模式（2026-10-06 用户定，方案见 docs/research/tool-redesign/Movo 权限模式方案.md）。默认 YOLO。
  */
-internal class TaintTracker {
-    private val sources = ConcurrentHashMap<TaintKind, MutableSet<String>>()
-
-    val untrusted: Boolean get() = !sources[TaintKind.UNTRUSTED].isNullOrEmpty()
-    val personal: Boolean get() = !sources[TaintKind.PERSONAL].isNullOrEmpty()
-
-    /** 两类同时成立。 */
-    val tainted: Boolean get() = untrusted && personal
-
-    val snapshot: Map<TaintKind, Set<String>> get() = sources.mapValues { it.value.toSet() }
-
-    fun mark(kind: TaintKind, source: String) {
-        sources.getOrPut(kind) { ConcurrentHashMap.newKeySet() } += source
-    }
-}
-
-/** 工具对审批的诉求：由工具按参数和上下文给出，管线再叠加通用规则。 */
-internal data class ApprovalNeed(
-    val reason: ApprovalReason,
-    val title: String,
-    val detail: String,
-    /** 一直允许的键（工具名之外的范围），例如「首次读取短信」；为空则不能一直允许。 */
-    val scopeKey: String? = null,
-    /** 一直允许那一行的完整文案，例如「以后读取短信不再询问」。 */
-    val scopeLabel: String? = null,
-    /**
-     * 「本次任务内」的目标范围（实施方案 5.4：同一个工具、同一个目标在本次运行内不再询问），例如包名、设置项、域名。
-     * 为空时按工具算。
-     */
-    val taskScope: String? = null,
-    /** 能否勾选「本次任务内，这类操作都允许」；支付、转账、删除不能（定稿 16-02）。 */
-    val allowTaskScope: Boolean = true,
-)
-
-/** 用户“一直允许”的规则。键包含策略版本，策略变化后旧授权失效。 */
-internal interface ApprovalRuleStore {
-    fun isAllowed(toolName: String, scopeKey: String): Boolean
-    fun allow(toolName: String, scopeKey: String)
+internal enum class PermissionMode(val wire: String) {
+    /** 全部直接做，不弹卡。 */
+    YOLO("yolo"),
+    /** 高敏动作和用户加的规则命中的动作弹卡，其余直接做。 */
+    MANUAL("manual");
 
     companion object {
-        const val POLICY_VERSION = 1
+        fun fromWire(value: String?): PermissionMode = entries.firstOrNull { it.wire == value } ?: YOLO
+    }
+}
 
-        fun key(toolName: String, scopeKey: String): String = "v$POLICY_VERSION|$toolName|$scopeKey"
+/** 有后果的动作分几类。手动审批时 [highSensitive] 的固定会问，其余由用户在规则里勾选。 */
+internal enum class ApprovalCategory(val wire: String, val label: String, val highSensitive: Boolean = false) {
+    PAYMENT("payment", "付款、转账", highSensitive = true),
+    PASSWORD("password", "输入密码", highSensitive = true),
+    DELETE("delete", "删东西", highSensitive = true),
+    SEND("send", "发消息和提交表单", highSensitive = true),
+    SYSTEM("system", "改系统设置"),
+    ROOT("root", "Root 命令"),
+    INSTALL("install", "安装技能"),
+    OUTBOUND("outbound", "把内容发到外部"),
+    FILES("files", "写工作区以外的文件");
 
-        /** 进程内单例：同一进程里的“一直允许”跨运行保留，直到策略版本变化（review §17.10）。 */
-        val IN_MEMORY: ApprovalRuleStore = object : ApprovalRuleStore {
-            private val allowed = ConcurrentHashMap.newKeySet<String>()
-            override fun isAllowed(toolName: String, scopeKey: String) = key(toolName, scopeKey) in allowed
-            override fun allow(toolName: String, scopeKey: String) {
-                allowed += key(toolName, scopeKey)
-            }
-        }
+    companion object {
+        fun fromWire(value: String?): ApprovalCategory? = entries.firstOrNull { it.wire == value }
+
+        /** 用户可以勾选的规则（高敏的固定会问，不出现在可选列表里）。 */
+        val optional: List<ApprovalCategory> get() = entries.filterNot { it.highSensitive }
     }
 }
 
 /**
- * 受保护应用：用户自己指定的应用，Movo 在里面的点击、滑动、输入每一步都要确认。
- * **默认为空**，只有用户在「设置 → 工具 → 受保护应用」里加了才生效（2026-10-05 用户要求：可以留着，但要能管理，默认不应该有）。
+ * 审批设置：模式、用户勾选的动作类别、用户选的应用。默认 YOLO、没有规则。存储见 [ApprovalSettings]。
  */
-internal object ProtectedApps {
-    private const val PREFS = "movo_protected_apps"
-    private const val KEY = "packages"
-
-    @Volatile private var cache: Set<String>? = null
-
-    private fun prefs(context: android.content.Context) =
-        context.applicationContext.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
-
-    fun packages(context: android.content.Context): Set<String> =
-        cache ?: prefs(context).getStringSet(KEY, emptySet()).orEmpty().toSet().also { cache = it }
-
-    fun setPackages(context: android.content.Context, packages: Set<String>) {
-        prefs(context).edit().putStringSet(KEY, packages.toSet()).apply()
-        cache = packages.toSet()
+internal data class ApprovalPolicy(
+    val mode: PermissionMode = PermissionMode.YOLO,
+    val categories: Set<ApprovalCategory> = emptySet(),
+    val apps: Set<String> = emptySet(),
+) {
+    /** 这一步要不要问用户：只在手动审批时问；高敏、勾选的类别、选中的应用里的操作命中任意一条就问。 */
+    fun shouldAsk(category: ApprovalCategory?, appPackage: String?): Boolean {
+        if (mode != PermissionMode.MANUAL) return false
+        if (category != null && (category.highSensitive || category in categories)) return true
+        return appPackage != null && appPackage in apps
     }
 
-    fun add(context: android.content.Context, pkg: String) = setPackages(context, packages(context) + pkg)
-
-    fun remove(context: android.content.Context, pkg: String) = setPackages(context, packages(context) - pkg)
-
-    /** 工具解析时调用（没有 Context 入参）：取进程的 Application；取不到时按未保护处理。 */
-    fun isProtected(packageName: String?): Boolean {
-        if (packageName.isNullOrBlank()) return false
-        val context = io.github.fartown.movo.agent.runtime.AgentAppContext.resolve() ?: return false
-        return packageName in packages(context)
+    companion object {
+        val YOLO = ApprovalPolicy()
+        val MANUAL_BUILT_IN = ApprovalPolicy(mode = PermissionMode.MANUAL)
     }
+}
 
-    /** 用户是否设过受保护应用。没设过时，认不出前台应用也不用确认（无从判断「是不是在受保护应用里」）。 */
-    fun anyConfigured(): Boolean {
-        val context = io.github.fartown.movo.agent.runtime.AgentAppContext.resolve() ?: return false
-        return packages(context).isNotEmpty()
+/**
+ * 一个可能要问用户的动作：[category] 是它属于哪类有后果的动作（没有就是普通操作），
+ * [appPackage] 是界面操作所在的应用（用于「某个应用里先问我」）。
+ * [title] 是卡片大标题，[detail] 是灰底块里这一步要做什么，[reason] 是灰底块下面一行「为什么问你」，
+ * 留空时按类别补（[reasonSentence]）。
+ */
+internal data class ApprovalNeed(
+    val category: ApprovalCategory?,
+    val title: String,
+    val detail: String,
+    val appPackage: String? = null,
+    val reason: String = "",
+)
+
+/** 卡片上「为什么问你」：高敏的写「手动审批时都会先问你」，用户勾选的写「你设了先问你」，应用规则写应用。 */
+internal fun reasonSentence(category: ApprovalCategory?): String = when {
+    category == null -> "你设了在这个应用里每一步都先问你。"
+    category.highSensitive -> "手动审批时，${category.label}都会先问你。"
+    else -> "你设了「${category.label}」先问你。"
+}
+
+/**
+ * 按审批设置处理一个动作：命中规则就弹卡等用户作答，否则直接放行。
+ * 返回 null 表示放行，否则是不执行的原因（作为工具结果回给模型）。
+ */
+internal fun ToolContext.confirmConsequence(
+    toolName: String,
+    need: ApprovalNeed,
+    timeoutMs: Long,
+): ToolError? {
+    if (!env.approvalPolicy.shouldAsk(need.category, need.appPackage)) return null
+    if (!interaction.available) {
+        return ToolError(
+            ToolErrorCode.UNSUPPORTED,
+            "这一步要用户确认，但现在没人能确认；本次未执行",
+            hint = "在最终回复中说明需要用户确认的动作，不要换方式绕过",
+            detail = "no_interactive_surface",
+        )
+    }
+    val request = ApprovalRequest(
+        toolName = toolName,
+        title = need.title,
+        detail = need.detail,
+        category = need.category,
+        reason = need.reason.ifBlank { reasonSentence(need.category) },
+    )
+    val decision = interaction.approve(request, timeoutMs)
+    checkCancelled()
+    return when (decision) {
+        ApprovalDecision.Approved -> null
+        ApprovalDecision.Declined -> ToolError(
+            ToolErrorCode.USER_DECLINED,
+            "用户拒绝了这一步",
+            hint = "不要换方式重试；询问用户下一步怎么做",
+        )
+        ApprovalDecision.TimedOut -> ToolError(
+            ToolErrorCode.APPROVAL_TIMEOUT,
+            "用户没有确认，本次未执行",
+            hint = "结束本轮并说明需要用户确认的动作",
+        )
+        ApprovalDecision.Unavailable -> ToolError(
+            ToolErrorCode.UNSUPPORTED,
+            "这一步要用户确认，但当前无法显示确认；本次未执行",
+            hint = "在最终回复中说明需要用户确认的动作",
+            detail = "no_interactive_surface",
+        )
     }
 }

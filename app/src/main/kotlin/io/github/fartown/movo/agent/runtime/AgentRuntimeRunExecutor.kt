@@ -182,6 +182,7 @@ internal class AgentRuntimeRunExecutor(
                         // 用户自己发起的任务照常等：亮屏后卡片出现（锁着时先出解锁提示）。
                         interactive = userCanAnswer(request, appContext),
                         modelInputs = setOf(ModelInput.TEXT, ModelInput.IMAGE),
+                        approvalPolicy = io.github.fartown.movo.agent.tools.core.ApprovalSettings.load(appContext),
                     )
                 },
                 interaction = BrokeredUserInteraction(
@@ -195,7 +196,7 @@ internal class AgentRuntimeRunExecutor(
                                 detail = prompt.detail,
                                 options = prompt.options,
                                 allowFreeText = prompt.allowFreeText,
-                                rememberLabel = prompt.rememberLabel,
+                                note = prompt.note,
                                 reason = prompt.reason,
                             ),
                         )
@@ -205,6 +206,14 @@ internal class AgentRuntimeRunExecutor(
                         dispatchInteractionEvent(AgentEvent.InteractionResolved(requestId))
                     },
                     availableNow = { userCanAnswer(request, appContext) },
+                    afterApproved = {
+                        io.github.fartown.movo.agent.overlay.InteractionCardCoordinator.awaitSettled(
+                            activePackage = {
+                                io.github.fartown.movo.agent.accessibility.AgentAccessibilityService.current()?.currentPackageName()
+                            },
+                            selfPackage = appContext.packageName,
+                        )
+                    },
                 ),
                 cancelled = { runController.isCancelled },
                 characterId = { roleplayContext?.characterId },
@@ -216,10 +225,6 @@ internal class AgentRuntimeRunExecutor(
                     AgentInteractionRegistry.unregister(request.runId)
                     built.close()
                 }
-            }
-            // 后台监听唤醒的一轮：命令输出（日志、网页、通知等）是不可信内容（实施方案 5.1）。
-            if (request.isMonitorOrigin) {
-                typedSubsystem.pipeline.taint.mark(io.github.fartown.movo.agent.tools.core.TaintKind.UNTRUSTED, "monitor_event")
             }
             val effectiveExecutor = typedSubsystem.pipeline
             val typedCatalog: (AgentToolCapabilities) -> org.json.JSONArray = { _ -> typedSubsystem.pipeline.catalog() }
@@ -258,10 +263,6 @@ internal class AgentRuntimeRunExecutor(
                 memoryContext = memoryContext,
             ) { event ->
                 timing.accept(event)
-                // 运行中并入的监听事件进了模型上下文：同样算不可信内容。
-                if (event is AgentEvent.MonitorEventReceived) {
-                    typedSubsystem.pipeline.taint.mark(io.github.fartown.movo.agent.tools.core.TaintKind.UNTRUSTED, "monitor_event")
-                }
                 acceptEvent(
                     session,
                     event,

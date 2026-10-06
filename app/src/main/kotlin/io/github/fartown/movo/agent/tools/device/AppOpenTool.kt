@@ -1,5 +1,6 @@
 package io.github.fartown.movo.agent.tools.device
 
+import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
 import io.github.fartown.movo.agent.tools.core.ModelContent
@@ -108,11 +109,15 @@ internal class AppOpenTool(
     }
 
     override fun resolve(input: AppOpenInput, env: ToolEnvironment): CallResolution =
-        // 打开应用只是切换前台，不外发；带参数的 URI（如 https://…?q=…）会把参数交给别的应用或网站，
-        // 两类污点同时成立时要确认（实施方案 5.1）。
+        // 打开应用只是切换前台；带参数的 URI（如 https://…?q=…）会把参数交给别的应用或网站，
+        // 归为「把内容发到外部」。
         CallResolution(
             risk = Risk.LOCAL, sensitivity = Sensitivity.NORMAL, resources = emptySet(),
-            exfiltrates = (input.target as? AppOpenTarget.ByUri)?.uri?.contains('?') == true,
+            category = if ((input.target as? AppOpenTarget.ByUri)?.uri?.contains('?') == true) {
+                ApprovalCategory.OUTBOUND
+            } else {
+                null
+            },
         )
 
     override fun approvalPreview(input: AppOpenInput): ApprovalPreview? =

@@ -7,14 +7,14 @@ package io.github.fartown.movo.ui.model
 internal data class AgentInteractionUiState(
     val runId: String,
     val requestId: String,
-    /** true 为审批（允许/拒绝 + 可选“一直允许”），false 为提问（选项 + 可选自由文本）。 */
+    /** true 为审批（允许 / 拒绝），false 为提问（选项 + 可选自由文本）。 */
     val isApproval: Boolean,
     val title: String,
     val detail: String,
     val options: List<String> = emptyList(),
     val allowFreeText: Boolean = true,
-    /** 非空时审批卡提供“一直允许（此范围）”，文案即范围说明，例如“微信”。 */
-    val rememberLabel: String? = null,
-    /** 审批原因码（ApprovalReason 名），界面据此区分普通外发 / 受保护应用（支付解锁等）样式。 */
+    /** 审批卡灰底块下面一行：为什么问你，例如「手动审批时，付款、转账都会先问你。」。 */
+    val note: String? = null,
+    /** 审批原因码：动作类别名（PAYMENT、SEND……）或 APP_RULE（在你选的应用里），界面据此选卡头样式。 */
     val reason: String? = null,
 )

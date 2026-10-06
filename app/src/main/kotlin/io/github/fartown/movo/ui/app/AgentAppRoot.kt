@@ -637,6 +637,15 @@ internal fun AgentAppRoot(
             entry<AppRoute.ToolSettings>(swipeDismiss = swipeDismiss) {
                 ToolSettingsScreen(onNavigate = { route -> pushRoute(route) }, onBack = ::popRoute)
             }
+            entry<AppRoute.PermissionSettings>(swipeDismiss = swipeDismiss) {
+                io.github.fartown.movo.ui.screens.settings.PermissionSettingsScreen(
+                    onNavigate = { route -> pushRoute(route) },
+                    onBack = ::popRoute,
+                )
+            }
+            entry<AppRoute.PermissionAddApp>(swipeDismiss = swipeDismiss) {
+                io.github.fartown.movo.ui.screens.settings.PermissionAddAppScreen(onBack = ::popRoute)
+            }
             entry<AppRoute.SystemAssistant>(swipeDismiss = swipeDismiss) {
                 SystemAssistantScreen(onNavigate = { route -> pushRoute(route) }, onBack = ::popRoute)
             }

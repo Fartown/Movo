@@ -186,6 +186,9 @@ class AgentAccessibilityService : AccessibilityService() {
     fun currentPackageName(): String? =
         rootInActiveWindow?.packageName?.toString()
 
+    /** 当前输入焦点是不是密码框；没有可用输入框时返回 null。手动审批据此判断「输入密码」。 */
+    fun focusedInputIsPassword(): Boolean? = findFocusedEditableNode()?.isPassword
+
     /**
      * 该快照所属窗口的当前内容代际，用于校验观察是否仍新鲜（类型化子系统 ui_* 代际绑定）。
      * 快照来自已被替换的服务实例（serviceToken 不符）时返回 null → 调用方按观察失效处理。
@@ -747,13 +750,13 @@ class AgentAccessibilityService : AccessibilityService() {
             return@runNodeActionOnMainSync error
         }
         val plan = TextEditPlanner.insertAtSelection(
-            currentText = node.text?.toString().orEmpty(),
+            currentText = node.existingInputText().orEmpty(),
             insertedText = text,
             selectionStart = node.textSelectionStart,
             selectionEnd = node.textSelectionEnd,
         ) ?: return@runNodeActionOnMainSync NodeActionResult.failure(
             "TEXT_SELECTION_UNAVAILABLE",
-            "当前输入框未提供可靠光标或选区；请用 replace_text 提供完整值",
+            "当前输入框没有可靠的光标或选区；改用 mode=replace 写入完整内容",
         )
         setNodeText(node, plan.text, plan.cursor)
     }
@@ -795,13 +798,13 @@ class AgentAccessibilityService : AccessibilityService() {
             return@runNodeActionOnMainSync error
         }
         val plan = TextEditPlanner.insertAtSelection(
-            currentText = node.text?.toString().orEmpty(),
+            currentText = node.existingInputText().orEmpty(),
             insertedText = text,
             selectionStart = node.textSelectionStart,
             selectionEnd = node.textSelectionEnd,
         ) ?: return@runNodeActionOnMainSync NodeActionResult.failure(
             "TEXT_SELECTION_UNAVAILABLE",
-            "当前输入框未提供可靠光标或选区；请用 replace_text 提供完整值",
+            "当前输入框没有可靠的光标或选区；改用 mode=replace 写入完整内容",
         )
         val directResult = setNodeText(node, plan.text, plan.cursor)
         if (directResult.ok) {
@@ -1251,6 +1254,11 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     private fun findFocusedEditableNode(): AccessibilityNodeInfo? {
+        // 先取跨窗口的输入焦点（服务开了 flagRetrieveInteractiveWindows）：活动窗口不一定是有输入焦点的那个，
+        // 例如刚点过 Movo 悬浮卡时活动窗口还是卡片，只按活动窗口找会落空（真机 P8）。Movo 自己的窗口不算。
+        runCatching { findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }.getOrNull()
+            ?.takeIf { it.isUsableInputTarget() && it.packageName?.toString() != packageName }
+            ?.let { return it }
         val root = rootInActiveWindow ?: return null
         val inputFocus = runCatching {
             root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
@@ -1262,14 +1270,20 @@ class AgentAccessibilityService : AccessibilityService() {
     private fun AccessibilityNodeInfo.isUsableInputTarget(): Boolean =
         isEditable && isEnabled && isVisibleToUser
 
-    private fun AccessibilityNodeInfo.incrementalTextValidationError(): NodeActionResult? {
-        val currentText = text
-        if (isPassword || currentText == null) {
-            return NodeActionResult.failure(
-                "TEXT_CONTENT_UNAVAILABLE",
-                "当前输入框不允许可靠读取已有文本；请用 replace_text 提供完整值",
-            )
+    /** 输入框里实际已有的文字（见 [TextEditPlanner.existingText]）；密码框或读不出时为 null。 */
+    private fun AccessibilityNodeInfo.existingInputText(): String? =
+        if (isPassword) {
+            null
+        } else {
+            TextEditPlanner.existingText(text?.toString(), isShowingHintText, textSelectionStart, textSelectionEnd)
         }
+
+    private fun AccessibilityNodeInfo.incrementalTextValidationError(): NodeActionResult? {
+        val currentText = existingInputText()
+            ?: return NodeActionResult.failure(
+                "TEXT_CONTENT_UNAVAILABLE",
+                "当前输入框读不到已有文字，没法在原有内容后追加；改用 mode=replace 写入完整内容",
+            )
         if (
             !TextEditPlanner.canSafelyReconstruct(
                 password = false,
@@ -1281,7 +1295,7 @@ class AgentAccessibilityService : AccessibilityService() {
         ) {
             return NodeActionResult.failure(
                 "TEXT_SELECTION_UNAVAILABLE",
-                "当前输入框未提供可靠光标或选区；请用 replace_text 提供完整值",
+                "当前输入框没有可靠的光标或选区；改用 mode=replace 写入完整内容",
             )
         }
         return null

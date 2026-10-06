@@ -7,6 +7,18 @@ internal object TextEditPlanner {
         val cursor: Int,
     )
 
+    /**
+     * 追加前输入框里实际已有的文字。显示的是提示文字（isShowingHintText）时为空；
+     * 读不到文字（null）但没有光标或光标在开头时按空输入框处理——空的输入框常这样报（真机：设置搜索框）；
+     * 读不到文字而光标在后面，说明有内容但读不出，返回 null（不追加，免得覆盖原有内容）。
+     */
+    fun existingText(text: String?, showingHint: Boolean, selectionStart: Int, selectionEnd: Int): String? = when {
+        showingHint -> ""
+        text != null -> text
+        selectionStart <= 0 && selectionEnd <= 0 -> ""
+        else -> null
+    }
+
     fun canSafelyReconstruct(
         password: Boolean,
         textAvailable: Boolean,

@@ -27,6 +27,8 @@ class AppRouteSerializationTest {
             AppRoute.Settings,
             AppRoute.ToolSettings,
             AppRoute.SystemAssistant,
+            AppRoute.PermissionSettings,
+            AppRoute.PermissionAddApp,
             AppRoute.RunDetail("work-user-run-1"),
             AppRoute.VoiceSettings,
             AppRoute.Diagnostics,

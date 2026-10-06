@@ -51,6 +51,14 @@ sealed interface AppRoute : NavKey {
     @Serializable
     data object ToolSettings : AppRoute
 
+    /** 设置 · 工具 · 权限：权限模式（YOLO / 手动审批）与审批规则（定稿 19）。 */
+    @Serializable
+    data object PermissionSettings : AppRoute
+
+    /** 权限 · 添加应用：从已安装的应用里选「在这个应用里每一步都先问我」。 */
+    @Serializable
+    data object PermissionAddApp : AppRoute
+
     /** 设置 · 系统助手：数字助理、电源键、厂商助手、Gemini、一圈即搜。 */
     @Serializable
     data object SystemAssistant : AppRoute

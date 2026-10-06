@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="tools_permission_group">权限</string>
+  <string name="tools_permission_footer_1">YOLO：Movo 直接做，不停下来问你。</string>
+  <string name="tools_permission_footer_2">手动审批：付款、密码、删除、发送前先问你。</string>
+  <string name="permission_title">权限</string>
+  <string name="permission_mode">权限模式</string>
+  <string name="permission_mode_yolo">YOLO</string>
+  <string name="permission_mode_yolo_desc">全部直接做，不停下来问你</string>
+  <string name="permission_mode_manual">手动审批</string>
+  <string name="permission_mode_manual_desc">付款、输入密码、删东西、发消息前先问你</string>
+  <string name="permission_fixed_title">手动审批时总会先问</string>
+  <string name="permission_fixed_value">总会问</string>
+  <string name="permission_fixed_payment">付款、转账</string>
+  <string name="permission_fixed_payment_desc">点按付款、转账按钮时</string>
+  <string name="permission_fixed_password">输入密码</string>
+  <string name="permission_fixed_password_desc">往密码框里输入时</string>
+  <string name="permission_fixed_delete">删东西</string>
+  <string name="permission_fixed_delete_desc">删除文件、清空记忆、卸载应用时</string>
+  <string name="permission_fixed_send">发消息和提交表单</string>
+  <string name="permission_fixed_send_desc">点按发送、提交，或在网页上提交表单时</string>
+  <string name="permission_fixed_footer">这几类在手动审批时一定会先问你，不能关掉。</string>
+  <string name="permission_rules_title">这些动作也先问我</string>
+  <string name="permission_rule_system">改系统设置</string>
+  <string name="permission_rule_system_desc">改系统设置、开关网络和蓝牙、停止或冻结应用</string>
+  <string name="permission_rule_root">Root 命令</string>
+  <string name="permission_rule_root_desc">以 Root 身份运行终端命令</string>
+  <string name="permission_rule_install">安装技能</string>
+  <string name="permission_rule_install_desc">从 GitHub 安装技能</string>
+  <string name="permission_rule_outbound">把内容发到外部</string>
+  <string name="permission_rule_outbound_desc">带参数的网址、联网命令、外部 MCP 工具</string>
+  <string name="permission_rule_files">写工作区以外的文件</string>
+  <string name="permission_rule_files_desc">写到 Movo 工作区以外的位置</string>
+  <string name="permission_rules_footer">默认都关。只在手动审批时生效。</string>
+  <string name="permission_apps_title">在这些应用里，每一步都先问我</string>
+  <string name="permission_apps_count" formatted="true">%d 个</string>
+  <string name="permission_apps_add">添加应用</string>
+  <string name="permission_apps_remove">移除</string>
+  <string name="permission_apps_footer">默认没有。只在手动审批时生效。</string>
+  <string name="permission_add_title">添加应用</string>
+  <string name="permission_add_search">搜索应用</string>
+  <string name="permission_add_section">已安装的应用</string>
+  <string name="permission_add_sorted">按名称排序</string>
+  <string name="permission_add_action">添加</string>
+  <string name="permission_add_added">已添加</string>
+  <string name="permission_add_empty">没有匹配的应用</string>
+</resources>

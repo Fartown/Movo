@@ -20,7 +20,6 @@ import io.github.fartown.movo.agent.tools.core.ToolResource
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.invalidArgs
 import io.github.fartown.movo.agent.tools.core.objectSchema
-import io.github.fartown.movo.agent.tools.core.TaintKind
 import org.json.JSONObject
 
 // ===========================================================================
@@ -95,8 +94,6 @@ internal class ClipboardReadTool(
             )
         }
     }
-
-    override fun taintKinds(input: ClipboardReadInput): Set<TaintKind> = setOf(TaintKind.PERSONAL)
 
     override fun renderForModel(output: ClipboardReadOutput): ModelContent =
         ModelContent.Json(JSONObject().put("text", output.text).put("truncated", output.truncated))

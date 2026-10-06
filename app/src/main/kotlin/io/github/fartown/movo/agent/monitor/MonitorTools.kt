@@ -139,7 +139,7 @@ internal class MonitorStartTool(
         string("command", "持续运行的 shell 命令；只在需要你处理时往 stdout 输出一行，输出要及时（不要缓冲）", required = true, maxLength = 4000)
         // 不设上限：超过用户设置的最长时长时按上限生效，并在结果里写明，而不是报错。
         integer("timeout_ms", "最长运行毫秒数，默认 30 分钟；超过用户设置的上限时按上限生效", min = MonitorRegistryCore.MIN_TIMEOUT_MS)
-        string("identity", "身份，默认 user（root 需确认）", enum = listOf("user", "root"))
+        string("identity", "身份，默认 user", enum = listOf("user", "root"))
     }
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): MonitorStartInput = MonitorStartInput(
@@ -155,12 +155,11 @@ internal class MonitorStartTool(
     )
 
     override fun resolve(input: MonitorStartInput, env: ToolEnvironment): CallResolution = CallResolution(
-        // 与 terminal_run 一致：普通命令是本机动作，root 命令一律确认；污点由中央派生叠加。
         risk = if (input.root) Risk.EXTERNAL else Risk.LOCAL,
         sensitivity = Sensitivity.PRIVATE,
         resources = setOf(ResourceKey(ToolResource.TERMINAL, "monitor")),
-        // 监听会一直跑命令，和 Linux 终端命令一样算外发通道：读过外部内容和个人数据之后启动要确认（实施方案 5.1）。
-        exfiltrates = true,
+        // 与 terminal_run 同一套分类：删东西、Root、联网命令（权限模式方案）。
+        category = io.github.fartown.movo.agent.tools.terminal.commandCategory(input.command, input.root),
     )
 
     override fun execute(input: MonitorStartInput, resolution: CallResolution, ctx: ToolContext): Verdict<MonitorStartOutput> {
@@ -240,7 +239,7 @@ internal class MonitorStopTool(private val gate: MonitorToolGate = MonitorToolGa
     override fun parse(args: ToolArgs, env: ToolEnvironment) = MonitorStopInput(args.nonBlank("task_id"))
 
     override fun resolve(input: MonitorStopInput, env: ToolEnvironment) = CallResolution(
-        risk = Risk.LOCAL, sensitivity = Sensitivity.NORMAL, resources = emptySet(), exfiltrates = false,
+        risk = Risk.LOCAL, sensitivity = Sensitivity.NORMAL, resources = emptySet(),
     )
 
     override fun execute(input: MonitorStopInput, resolution: CallResolution, ctx: ToolContext): Verdict<MonitorStopOutput> {
@@ -324,7 +323,7 @@ internal class NotifyUserTool(
     )
 
     override fun resolve(input: NotifyUserInput, env: ToolEnvironment) = CallResolution(
-        risk = Risk.LOCAL, sensitivity = Sensitivity.NORMAL, resources = emptySet(), exfiltrates = false,
+        risk = Risk.LOCAL, sensitivity = Sensitivity.NORMAL, resources = emptySet(),
     )
 
     override fun execute(input: NotifyUserInput, resolution: CallResolution, ctx: ToolContext): Verdict<NotifyUserOutput> {

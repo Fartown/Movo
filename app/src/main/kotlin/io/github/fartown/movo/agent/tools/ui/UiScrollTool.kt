@@ -99,8 +99,6 @@ internal class UiScrollTool(
             backend = backend.backend(env),
             target = target,
             readableTarget = true,
-            // 滚动只改变可见区域，不会把任何内容发出去：污点不拦截（与点击、滑动的共用声明一致）。
-            exfiltrates = false,
         )
     }
 

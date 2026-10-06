@@ -1,5 +1,7 @@
 package io.github.fartown.movo.agent.tools.device
 
+import io.github.fartown.movo.agent.tools.core.ApprovalCategory
+import io.github.fartown.movo.agent.tools.core.ApprovalPreview
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
 import io.github.fartown.movo.agent.tools.core.ModelContent
@@ -75,7 +77,19 @@ internal class DeviceToggleTool(
             sensitivity = Sensitivity.NORMAL,
             // 并发应独占无线电/手电筒资源；核心 ToolResource 暂无对应枚举，留空（见返回报告）。
             resources = emptySet(),
+            // 开关网络、蓝牙归为「改系统设置」；手电筒不算。
+            category = if (input.target == ToggleTarget.FLASHLIGHT) null else ApprovalCategory.SYSTEM,
         )
+
+    override fun approvalPreview(input: DeviceToggleInput): ApprovalPreview {
+        val what = when (input.target) {
+            ToggleTarget.WIFI -> "Wi‑Fi"
+            ToggleTarget.BLUETOOTH -> "蓝牙"
+            ToggleTarget.FLASHLIGHT -> "手电筒"
+        }
+        val verb = if (input.enabled) "打开" else "关闭"
+        return ApprovalPreview("$verb$what？", "$verb$what")
+    }
 
     override fun execute(
         input: DeviceToggleInput,

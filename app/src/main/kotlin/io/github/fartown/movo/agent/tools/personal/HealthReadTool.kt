@@ -16,7 +16,6 @@ import io.github.fartown.movo.agent.tools.core.ToolInput
 import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.objectSchema
-import io.github.fartown.movo.agent.tools.core.TaintKind
 import org.json.JSONObject
 
 internal data class HealthReadInput(val days: Int) : ToolInput
@@ -96,8 +95,6 @@ internal class HealthReadTool(
             null -> Verdict.Failed(ToolError(ToolErrorCode.SOURCE_UNAVAILABLE, "健康数据暂时读不到"))
         }
     }
-
-    override fun taintKinds(input: HealthReadInput): Set<TaintKind> = setOf(TaintKind.PERSONAL)
 
     override fun renderForModel(output: HealthReadOutput): ModelContent =
         ModelContent.Json(

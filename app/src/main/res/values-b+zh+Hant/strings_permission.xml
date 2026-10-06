@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="tools_permission_group">權限</string>
+  <string name="tools_permission_footer_1">YOLO：Movo 直接做，不停下來問你。</string>
+  <string name="tools_permission_footer_2">手動審批：付款、密碼、刪除、傳送前先問你。</string>
+  <string name="permission_title">權限</string>
+  <string name="permission_mode">權限模式</string>
+  <string name="permission_mode_yolo">YOLO</string>
+  <string name="permission_mode_yolo_desc">全部直接做，不停下來問你</string>
+  <string name="permission_mode_manual">手動審批</string>
+  <string name="permission_mode_manual_desc">付款、輸入密碼、刪東西、發訊息前先問你</string>
+  <string name="permission_fixed_title">手動審批時總會先問</string>
+  <string name="permission_fixed_value">總會問</string>
+  <string name="permission_fixed_payment">付款、轉帳</string>
+  <string name="permission_fixed_payment_desc">點按付款、轉帳按鈕時</string>
+  <string name="permission_fixed_password">輸入密碼</string>
+  <string name="permission_fixed_password_desc">往密碼框裡輸入時</string>
+  <string name="permission_fixed_delete">刪東西</string>
+  <string name="permission_fixed_delete_desc">刪除檔案、清空記憶、解除安裝應用時</string>
+  <string name="permission_fixed_send">發訊息和提交表單</string>
+  <string name="permission_fixed_send_desc">點按傳送、提交，或在網頁上提交表單時</string>
+  <string name="permission_fixed_footer">這幾類在手動審批時一定會先問你，不能關掉。</string>
+  <string name="permission_rules_title">這些動作也先問我</string>
+  <string name="permission_rule_system">改系統設定</string>
+  <string name="permission_rule_system_desc">改系統設定、開關網路和藍牙、停止或凍結應用</string>
+  <string name="permission_rule_root">Root 指令</string>
+  <string name="permission_rule_root_desc">以 Root 身分執行終端機指令</string>
+  <string name="permission_rule_install">安裝技能</string>
+  <string name="permission_rule_install_desc">從 GitHub 安裝技能</string>
+  <string name="permission_rule_outbound">把內容發到外部</string>
+  <string name="permission_rule_outbound_desc">帶參數的網址、連網指令、外部 MCP 工具</string>
+  <string name="permission_rule_files">寫工作區以外的檔案</string>
+  <string name="permission_rule_files_desc">寫到 Movo 工作區以外的位置</string>
+  <string name="permission_rules_footer">預設都關。只在手動審批時生效。</string>
+  <string name="permission_apps_title">在這些應用裡，每一步都先問我</string>
+  <string name="permission_apps_count" formatted="true">%d 個</string>
+  <string name="permission_apps_add">新增應用</string>
+  <string name="permission_apps_remove">移除</string>
+  <string name="permission_apps_footer">預設沒有。只在手動審批時生效。</string>
+  <string name="permission_add_title">新增應用</string>
+  <string name="permission_add_search">搜尋應用</string>
+  <string name="permission_add_section">已安裝的應用</string>
+  <string name="permission_add_sorted">按名稱排序</string>
+  <string name="permission_add_action">新增</string>
+  <string name="permission_add_added">已新增</string>
+  <string name="permission_add_empty">沒有符合的應用</string>
+</resources>

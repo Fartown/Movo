@@ -639,12 +639,12 @@ class AgentRuntimeWireTest {
         val approval = AgentEvent.InteractionRequested(
             requestId = "ix-1",
             kind = "approval",
-            title = "给「妈妈（微信）」发送这条消息？",
-            detail = "妈妈 · 微信\n我周五晚上到家，不用等我吃饭。",
+            title = "在「微信」里发送？",
+            detail = "下一步：点按「发送」",
             options = emptyList(),
             allowFreeText = false,
-            rememberLabel = "微信",
-            reason = "DECLARED_EFFECT",
+            note = "手动审批时，发消息和提交表单都会先问你。",
+            reason = "SEND",
         )
         assertEquals(approval, AgentRuntimeWire.eventFromBundle(AgentRuntimeWire.eventToBundle(approval)))
         assertEquals(approval, AgentEventJsonCodec.decode(AgentEventJsonCodec.encode(approval)))
@@ -668,8 +668,8 @@ class AgentRuntimeWireTest {
     @Test
     fun interactionReplyBundleRoundTrips() {
         listOf(
-            InteractionReply.Approval(approved = true, remember = true),
-            InteractionReply.Approval(approved = false, remember = false),
+            InteractionReply.Approval(approved = true),
+            InteractionReply.Approval(approved = false),
             InteractionReply.Answer(text = "其他答案", optionIndex = null),
             InteractionReply.Answer(text = "", optionIndex = 2),
             InteractionReply.Cancelled,

@@ -2,7 +2,7 @@ package io.github.fartown.movo.agent.tools.ui
 
 import io.github.fartown.movo.agent.model.AgentModelClient
 import io.github.fartown.movo.agent.tools.core.ApprovalNeed
-import io.github.fartown.movo.agent.tools.core.ApprovalReason
+import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.InjectionBackend
 import io.github.fartown.movo.agent.tools.core.ResourceKey
@@ -27,8 +27,8 @@ import org.json.JSONObject
  * 本领域最难的两点都落在这里：
  * 1. **观察代际绑定**（合同 §5.1）：index 必带 observation_id；坐标隐式绑最近一次 ui_observe 的 gen；
  *    gen 失效一律 STALE_OBSERVATION，不允许“默认最近观察”兜底。
- * 2. **确认**统一由 [buildUiActionResolution] 声明：模型声明的发送 / 支付等后果、用户设的受保护应用；
- *    读不到坐标点上的节点只记录（readableTarget），不单独确认（2026-10-05 用户反馈：这类界面每一步都弹卡）。
+ * 2. **审批分类**统一由 [buildUiActionResolution] 声明：模型声明的发送 / 支付等后果、所在应用；
+ *    要不要弹卡由权限模式决定。读不到坐标点上的节点只记录（readableTarget），不单独确认。
  */
 
 // ---------------------------------------------------------------------------
@@ -46,7 +46,7 @@ internal enum class UiKeyCode {
 /** 文本写入目标语义；写入方式（set_text/paste）由后端选，不改变此语义。 */
 internal enum class UiInputMode { APPEND, REPLACE }
 
-/** 模型声明的动作后果：只增加确认，不免除（合同 §0.6）。 */
+/** 模型声明的动作后果：手动审批时用来判断这一步属于哪类高敏动作（合同 §0.6）。 */
 internal enum class UiEffect { SEND, PAY, TRANSFER, DELETE, SUBMIT;
 
     fun label(): String = when (this) {
@@ -55,6 +55,12 @@ internal enum class UiEffect { SEND, PAY, TRANSFER, DELETE, SUBMIT;
         TRANSFER -> "转账"
         DELETE -> "删除"
         SUBMIT -> "提交"
+    }
+
+    fun category(): ApprovalCategory = when (this) {
+        PAY, TRANSFER -> ApprovalCategory.PAYMENT
+        DELETE -> ApprovalCategory.DELETE
+        SEND, SUBMIT -> ApprovalCategory.SEND
     }
 }
 
@@ -97,6 +103,7 @@ internal data class UiNodeProbe(
     val role: String? = null,
     val bounds: List<Int> = emptyList(),
     val clickable: Boolean = false,
+    val password: Boolean = false,
 )
 
 // ---------------------------------------------------------------------------
@@ -125,6 +132,9 @@ internal interface UiObservationRegistry {
 
     /** 某次观察里第 [index] 个节点（给确认卡写「点按「转账」」用）；未知返回 null。 */
     fun observedNode(observationId: String, index: Int): UiNodeProbe? = null
+
+    /** 当前输入焦点是不是密码框；读不到返回 null。 */
+    fun focusedInputIsPassword(): Boolean? = null
 }
 
 /** ui_observe 的后端：观察并登记一次新代际。 */
@@ -299,11 +309,9 @@ internal fun parseFlatTarget(args: ToolArgs, allowCoordinates: Boolean = true, a
 // ---------------------------------------------------------------------------
 
 /**
- * 构造一次“有目标 ui_* 动作”的解析结果。什么时候要确认（2026-10-05 用户反馈后收窄，只剩这三种）：
- * - 模型声明了后果（发送、提交、删除；支付、转账为深色确认、不能「本次任务内都允许」）；
- * - 目标在用户自己设的受保护应用里（默认没有）；
- * - 用户设过受保护应用，但认不出当前是哪个应用。
- * 读不到坐标点上的节点（地图、画布、游戏、节点很多的列表）不再单独确认，否则这类界面每一步都弹卡。
+ * 构造一次“有目标 ui_* 动作”的解析结果。这一步属于哪类有后果的动作由模型声明的 [effect] 决定
+ * （付款、转账 → 付款；删除 → 删东西；发送、提交 → 发消息和提交表单），所在应用记在 appPackage，
+ * 供手动审批时的「某个应用里先问我」。要不要弹卡由审批设置决定，YOLO 下一律不弹。
  * [selfProtect] 且目标命中 Movo 自身 → 审批前直接 reject(POLICY_DENIED)。[action] 是写给用户的这一步，
  * 例如「点按「转账」」「输入文字」，显示在确认卡灰底块第一行。
  */
@@ -331,31 +339,22 @@ internal fun buildUiActionResolution(
     } else {
         stale
     }
-    val protectedApps = io.github.fartown.movo.agent.tools.core.ProtectedApps
+    val category = effect?.category()
+    val appLabel = appLabel(pkg)
     val toolApproval = when {
         reject != null -> null
-        effect != null -> {
-            val payment = effect == UiEffect.PAY || effect == UiEffect.TRANSFER
-            ApprovalNeed(
-                reason = if (payment) ApprovalReason.PAYMENT else ApprovalReason.DECLARED_EFFECT,
-                title = "在「${appLabel(pkg)}」里${effect.label()}？",
-                detail = "下一步：$action\n确认后 Movo 才会${effect.label()}。",
-                taskScope = pkg,
-                allowTaskScope = !payment && effect != UiEffect.DELETE,
-            )
-        }
-        pkg != null && protectedApps.isProtected(pkg) -> ApprovalNeed(
-            reason = ApprovalReason.PROTECTED_APP,
-            title = "在「${appLabel(pkg)}」里继续操作？",
-            detail = "下一步：$action\n你把「${appLabel(pkg)}」设为了受保护应用，在里面每一步都会先问你。",
-            taskScope = pkg,
-            allowTaskScope = false,
+        effect != null -> ApprovalNeed(
+            category = category,
+            title = "在「$appLabel」里${effect.label()}？",
+            detail = "下一步：$action",
+            appPackage = pkg,
         )
-        pkg == null && hasTarget && protectedApps.anyConfigured() -> ApprovalNeed(
-            reason = ApprovalReason.PROTECTED_APP,
-            title = "继续操作屏幕？",
-            detail = "下一步：$action\n认不出现在是哪个应用，没法判断是不是你设的受保护应用。",
-            allowTaskScope = false,
+        pkg != null -> ApprovalNeed(
+            category = null,
+            title = "在「$appLabel」里继续操作？",
+            detail = "下一步：$action",
+            appPackage = pkg,
+            reason = "你设了在「$appLabel」里每一步都先问你。",
         )
         else -> null
     }
@@ -369,8 +368,8 @@ internal fun buildUiActionResolution(
         packageAttributed = pkg != null,
         toolApproval = toolApproval,
         reject = reject,
-        // 界面点击/滑动/输入是本地交互，污点不拦它们；发送、支付由声明的后果与受保护应用兜底。
-        exfiltrates = false,
+        category = category,
+        appPackage = pkg,
     )
 }
 

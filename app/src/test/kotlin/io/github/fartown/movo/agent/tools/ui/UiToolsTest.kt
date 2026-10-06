@@ -4,7 +4,9 @@ import androidx.test.core.app.ApplicationProvider
 import io.github.fartown.movo.agent.model.AgentModelClient
 import io.github.fartown.movo.agent.tools.core.AgentTool
 import io.github.fartown.movo.agent.tools.core.ApprovalDecision
-import io.github.fartown.movo.agent.tools.core.ApprovalReason
+import io.github.fartown.movo.agent.tools.core.ApprovalCategory
+import io.github.fartown.movo.agent.tools.core.ApprovalPolicy
+import io.github.fartown.movo.agent.tools.core.PermissionMode
 import io.github.fartown.movo.agent.tools.core.ApprovalRequest
 import io.github.fartown.movo.agent.tools.core.ContractTool
 import io.github.fartown.movo.agent.tools.core.InjectionBackend
@@ -23,6 +25,7 @@ import io.github.fartown.movo.core.AndroidAgentLogger
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -33,6 +36,7 @@ import org.robolectric.RobolectricTestRunner
 class UiToolsTest {
 
     private val accessibilityEnv = ToolEnvironment(accessibilityAvailable = true)
+    private val manualEnv = accessibilityEnv.copy(approvalPolicy = ApprovalPolicy.MANUAL_BUILT_IN)
 
     private fun pipeline(
         provider: ToolProvider,
@@ -57,7 +61,7 @@ class UiToolsTest {
     private val approveAll = object : UserInteraction {
         override val available = true
         override fun ask(question: UserQuestion, timeoutMs: Long) = UserAnswer.Declined
-        override fun approve(request: ApprovalRequest, timeoutMs: Long) = ApprovalDecision.Approved(false)
+        override fun approve(request: ApprovalRequest, timeoutMs: Long) = ApprovalDecision.Approved
     }
     private val declineAll = object : UserInteraction {
         override val available = true
@@ -119,43 +123,107 @@ class UiToolsTest {
         assertTrue(backend.tapCalled)
     }
 
-    @Test
-    fun uiTap_declaredPayment_requiresApprovalWithoutTaskScope() {
-        val backend = FakeUiBackend(observationPackageMap = mutableMapOf("obs1" to "com.example.pay"))
-        var seen: ApprovalRequest? = null
-        val capture = object : UserInteraction {
-            override val available = true
-            override fun ask(question: UserQuestion, timeoutMs: Long) = UserAnswer.Declined
-            override fun approve(request: ApprovalRequest, timeoutMs: Long): ApprovalDecision {
-                seen = request
-                return ApprovalDecision.Declined
-            }
+    private class Capture(private val decision: ApprovalDecision = ApprovalDecision.Declined) : UserInteraction {
+        val seen = mutableListOf<ApprovalRequest>()
+        override val available = true
+        override fun ask(question: UserQuestion, timeoutMs: Long) = UserAnswer.Declined
+        override fun approve(request: ApprovalRequest, timeoutMs: Long): ApprovalDecision {
+            seen += request
+            return decision
         }
-        val result = pipeline(provider(ContractTool(UiTapTool(backend, backend))), accessibilityEnv, capture)
-            .execute(call("ui_tap", """{"index":0,"observation_id":"obs1","effect":"pay"}"""))
-        assertEquals("USER_DECLINED", result.errorCode)
-        assertEquals(ApprovalReason.PAYMENT, seen?.reason)
-        assertEquals("付款、转账不能勾「本次任务内都允许」", null, seen?.rememberScope)
-        assertFalse(seen!!.detail.contains("{"))
     }
 
     @Test
-    fun uiTap_declaredSend_offersTaskScopeAndRemembersIt() {
-        val backend = FakeUiBackend(observationPackageMap = mutableMapOf("obs1" to "com.example.chat"))
-        var asked = 0
-        val approveRemember = object : UserInteraction {
-            override val available = true
-            override fun ask(question: UserQuestion, timeoutMs: Long) = UserAnswer.Declined
-            override fun approve(request: ApprovalRequest, timeoutMs: Long): ApprovalDecision {
-                asked++
-                assertEquals("本次任务内，这类操作都允许", request.rememberScope)
-                return ApprovalDecision.Approved(remember = true)
-            }
+    fun uiTap_declaredPayment_manualMode_asksAsPayment() {
+        val backend = FakeUiBackend(observationPackageMap = mutableMapOf("obs1" to "com.example.pay"))
+        val capture = Capture()
+        val result = pipeline(provider(ContractTool(UiTapTool(backend, backend))), manualEnv, capture)
+            .execute(call("ui_tap", """{"index":0,"observation_id":"obs1","effect":"pay"}"""))
+        assertEquals("USER_DECLINED", result.errorCode)
+        assertEquals(ApprovalCategory.PAYMENT, capture.seen.single().category)
+        assertFalse(capture.seen.single().detail.contains("{"))
+        assertFalse(backend.tapCalled)
+    }
+
+    @Test
+    fun uiTap_declaredEffects_mapToHighSensitiveCategories() {
+        val expected = mapOf(
+            "send" to ApprovalCategory.SEND, "submit" to ApprovalCategory.SEND,
+            "delete" to ApprovalCategory.DELETE, "transfer" to ApprovalCategory.PAYMENT,
+        )
+        for ((effect, category) in expected) {
+            val backend = FakeUiBackend()
+            val capture = Capture()
+            pipeline(provider(ContractTool(UiTapTool(backend, backend))), manualEnv, capture)
+                .execute(call("ui_tap", """{"index":0,"observation_id":"obs1","effect":"$effect"}"""))
+            assertEquals(effect, category, capture.seen.single().category)
         }
-        val p = pipeline(provider(ContractTool(UiTapTool(backend, backend))), accessibilityEnv, approveRemember)
+    }
+
+    @Test
+    fun uiTap_declaredSend_yolo_noCard() {
+        val backend = FakeUiBackend(observationPackageMap = mutableMapOf("obs1" to "com.example.chat"))
+        val capture = Capture()
+        val result = pipeline(provider(ContractTool(UiTapTool(backend, backend))), accessibilityEnv, capture)
+            .execute(call("ui_tap", """{"index":0,"observation_id":"obs1","effect":"send"}"""))
+        assertEquals("ok", result.status)
+        assertTrue(capture.seen.isEmpty())
+        assertTrue(backend.tapCalled)
+    }
+
+    @Test
+    fun uiTap_declaredSend_approved_isAskedEveryTime() {
+        val backend = FakeUiBackend(observationPackageMap = mutableMapOf("obs1" to "com.example.chat"))
+        val capture = Capture(ApprovalDecision.Approved)
+        val p = pipeline(provider(ContractTool(UiTapTool(backend, backend))), manualEnv, capture)
         p.execute(call("ui_tap", """{"index":0,"observation_id":"obs1","effect":"send"}"""))
         p.execute(call("ui_tap", """{"index":0,"observation_id":"obs1","effect":"send"}"""))
-        assertEquals("本次任务内勾选后同一应用里不再询问", 1, asked)
+        assertEquals("卡片没有「记住」，每次发送都问", 2, capture.seen.size)
+    }
+
+    @Test
+    fun uiTap_appRule_asksEveryStepInThatAppOnly() {
+        val env = accessibilityEnv.copy(
+            approvalPolicy = ApprovalPolicy(mode = PermissionMode.MANUAL, apps = setOf("com.example.bank")),
+        )
+        val bank = FakeUiBackend(observationPackageMap = mutableMapOf("obs1" to "com.example.bank"))
+        val capture = Capture()
+        assertEquals(
+            "USER_DECLINED",
+            pipeline(provider(ContractTool(UiTapTool(bank, bank))), env, capture)
+                .execute(call("ui_tap", """{"index":0,"observation_id":"obs1"}""")).errorCode,
+        )
+        assertNull("应用规则命中时类别为空", capture.seen.single().category)
+        assertTrue(capture.seen.single().reason, capture.seen.single().reason.startsWith("你设了在「"))
+        val other = FakeUiBackend()
+        assertEquals(
+            "ok",
+            pipeline(provider(ContractTool(UiTapTool(other, other))), env, capture)
+                .execute(call("ui_tap", """{"index":0,"observation_id":"obs1"}""")).status,
+        )
+        assertEquals(1, capture.seen.size)
+    }
+
+    @Test
+    fun uiInput_passwordField_manualMode_asksWithoutShowingThePassword() {
+        val backend = FakeUiBackend(focusedPassword = true)
+        val capture = Capture()
+        val result = pipeline(provider(ContractTool(UiInputTool(backend, backend))), manualEnv, capture)
+            .execute(call("ui_input", """{"text":"hunter2"}"""))
+        assertEquals("USER_DECLINED", result.errorCode)
+        val card = capture.seen.single()
+        assertEquals(ApprovalCategory.PASSWORD, card.category)
+        assertFalse("确认卡不显示密码", card.detail.contains("hunter2") || card.title.contains("hunter2"))
+    }
+
+    @Test
+    fun uiInput_plainField_manualMode_noCard() {
+        val backend = FakeUiBackend(focusedPassword = false)
+        val capture = Capture()
+        val result = pipeline(provider(ContractTool(UiInputTool(backend, backend))), manualEnv, capture)
+            .execute(call("ui_input", """{"text":"hello"}"""))
+        assertEquals("ok", result.status)
+        assertTrue(capture.seen.isEmpty())
     }
 
     @Test
@@ -196,27 +264,13 @@ class UiToolsTest {
     }
 
     @Test
-    fun protectedApps_areEmptyByDefaultAndOnlyGateUserAddedApps() {
-        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-        val protectedApps = io.github.fartown.movo.agent.tools.core.ProtectedApps
-        protectedApps.setPackages(context, emptySet())
-        // 默认没有任何受保护应用：支付、设置里的点击都不因此弹确认。
-        assertFalse(protectedApps.isProtected("com.eg.android.AlipayGphone"))
-        assertFalse(protectedApps.isProtected("com.android.settings"))
-        protectedApps.add(context, "com.eg.android.AlipayGphone")
-        assertTrue(protectedApps.isProtected("com.eg.android.AlipayGphone"))
-        protectedApps.remove(context, "com.eg.android.AlipayGphone")
-        assertFalse(protectedApps.isProtected("com.eg.android.AlipayGphone"))
-    }
-
-    @Test
-    fun uiScroll_isNeverGatedByTaint() {
-        // 滚动不会外发：读过不可信内容（污点）后也不该弹「可能把内容发出去」的确认（后台监听每 15 秒下滑的真机回归）。
+    fun uiScroll_isNeverAsked() {
+        // 滚动不归类：手动审批也不弹卡（后台监听每 15 秒下滑的真机回归）。
         val backend = FakeUiBackend(scrollResult = UiScrollResult.Finished(true, false, "com.example.app"))
         val resolution = UiScrollTool(backend, backend).let { tool ->
-            tool.resolve(tool.parse(ToolArgs(JSONObject("""{"direction":"down"}""")), accessibilityEnv), accessibilityEnv)
+            tool.resolve(tool.parse(ToolArgs(JSONObject("""{"direction":"down"}""")), manualEnv), manualEnv)
         }
-        assertEquals(null, resolution.requiresApproval(tainted = true))
+        assertNull(resolution.consequence())
     }
 
     @Test
@@ -428,6 +482,7 @@ class UiToolsTest {
         private val inputResult: UiInputResult = UiInputResult.Written("set_text", true, 0, false, "com.example.app", false),
         private val keyResult: UiInjectResult = UiInjectResult.Dispatched("global", "com.example.app", false),
         private val waitResult: UiWaitResult = UiWaitResult.Finished(true, 0, null),
+        private val focusedPassword: Boolean? = null,
     ) : UiObserveBackend, UiActionBackend {
         var tapCalled = false
         var swipeCalled = false
@@ -437,6 +492,7 @@ class UiToolsTest {
         override fun foregroundPackage(): String? = foreground
         override fun observationPackage(observationId: String): String? = observationPackageMap[observationId]
         override fun observe(request: UiObserveRequest, env: ToolEnvironment) = observeResult
+        override fun focusedInputIsPassword(): Boolean? = focusedPassword
 
         override fun backend(env: ToolEnvironment): InjectionBackend = when {
             env.accessibilityUsable -> InjectionBackend.ACCESSIBILITY

@@ -87,8 +87,46 @@ internal object InteractionCardCoordinator {
         }
     }
 
+    /** 悬浮卡窗口是否还挂着：Runtime 服务加上 / 撤下窗口时更新。 */
+    private val _floatingAttached = MutableStateFlow(false)
+    val floatingAttached: StateFlow<Boolean> = _floatingAttached.asStateFlow()
+
+    fun setFloatingAttached(attached: Boolean) {
+        _floatingAttached.value = attached
+    }
+
+    /** 最近一次作答时卡片是不是悬浮在别的应用上。 */
+    @Volatile
+    var lastReplyWasFloating: Boolean = false
+        private set
+
+    /**
+     * 用户点了允许 / 继续之后，等卡片真正撤下再执行这一步（最多 [timeoutMs]）：悬浮卡窗口撤掉，
+     * 且作答时卡是悬浮的话，无障碍的活动窗口已回到目标应用。作答会立刻放行运行线程，而悬浮窗是主线程稍后才撤：
+     * 刚点过的卡片还算活动窗口，这时按「当前焦点」输入找不到输入框，按坐标点按会落在卡片遮罩上（真机 P8）。
+     * 返回是否在时限内等到。
+     */
+    fun awaitSettled(
+        activePackage: () -> String?,
+        selfPackage: String,
+        timeoutMs: Long = 1_500,
+        now: () -> Long = System::currentTimeMillis,
+        sleep: (Long) -> Unit = { Thread.sleep(it) },
+    ): Boolean {
+        val deadline = now() + timeoutMs
+        val waitForWindow = lastReplyWasFloating
+        while (true) {
+            val overlayGone = !_floatingAttached.value
+            val windowBack = !waitForWindow || runCatching(activePackage).getOrNull() != selfPackage
+            if (overlayGone && windowBack) return true
+            if (now() >= deadline) return false
+            sleep(50)
+        }
+    }
+
     /** 作答：先收起这张卡（与它显示在哪一处无关），再投递给等待中的 run。返回是否送达。 */
     fun reply(model: AgentInteractionUiState, reply: InteractionReply): Boolean {
+        lastReplyWasFloating = currentPlacement == Placement.FLOATING
         resolve(model.requestId)
         return runCatching { AgentInteractionRegistry.deliver(model.runId, model.requestId, reply) }.getOrDefault(false)
     }
@@ -129,12 +167,8 @@ internal fun InteractionCardHost(enabled: Boolean = true) {
     // 退场动画期间卡片还显示着上一张，此时 shown 已为 null：点击不再作答。
     AgentInteractionCard(
         state = shown,
-        onApprove = { remember ->
-            shown?.let { InteractionCardCoordinator.reply(it, InteractionReply.Approval(approved = true, remember = remember)) }
-        },
-        onDecline = {
-            shown?.let { InteractionCardCoordinator.reply(it, InteractionReply.Approval(approved = false, remember = false)) }
-        },
+        onApprove = { shown?.let { InteractionCardCoordinator.reply(it, InteractionReply.Approval(approved = true)) } },
+        onDecline = { shown?.let { InteractionCardCoordinator.reply(it, InteractionReply.Approval(approved = false)) } },
         onAnswer = { text, optionIndex ->
             shown?.let { InteractionCardCoordinator.reply(it, InteractionReply.Answer(text, optionIndex)) }
         },

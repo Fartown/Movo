@@ -16,7 +16,6 @@ import io.github.fartown.movo.agent.tools.core.ToolInput
 import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.objectSchema
-import io.github.fartown.movo.agent.tools.core.TaintKind
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -82,8 +81,6 @@ internal class WifiPasswordReadTool(
             ?: return Verdict.Failed(ToolError(ToolErrorCode.SOURCE_UNAVAILABLE, "读不到已保存的 Wi‑Fi 配置"))
         return Verdict.Read(WifiPasswordReadOutput(items))
     }
-
-    override fun taintKinds(input: WifiPasswordReadInput): Set<TaintKind> = setOf(TaintKind.PERSONAL)
 
     override fun renderForModel(output: WifiPasswordReadOutput): ModelContent {
         val array = JSONArray()

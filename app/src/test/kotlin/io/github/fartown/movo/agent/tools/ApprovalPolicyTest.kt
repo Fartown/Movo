@@ -4,14 +4,15 @@ import androidx.test.core.app.ApplicationProvider
 import io.github.fartown.movo.agent.model.AgentModelClient
 import io.github.fartown.movo.agent.tools.core.AgentTool
 import io.github.fartown.movo.agent.tools.core.ApprovalDecision
-import io.github.fartown.movo.agent.tools.core.ApprovalReason
+import io.github.fartown.movo.agent.tools.core.ApprovalCategory
+import io.github.fartown.movo.agent.tools.core.ApprovalPolicy
 import io.github.fartown.movo.agent.tools.core.ApprovalRequest
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ContractTool
 import io.github.fartown.movo.agent.tools.core.ModelContent
+import io.github.fartown.movo.agent.tools.core.PermissionMode
 import io.github.fartown.movo.agent.tools.core.Risk
 import io.github.fartown.movo.agent.tools.core.Sensitivity
-import io.github.fartown.movo.agent.tools.core.TaintKind
 import io.github.fartown.movo.agent.tools.core.ToolArgs
 import io.github.fartown.movo.agent.tools.core.ToolAvailability
 import io.github.fartown.movo.agent.tools.core.ToolContext
@@ -42,9 +43,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
- * 审批规则（实施方案 5.1、5.3、5.4，2026-10-05 用户反馈后的收窄）：
- * 污点分两类，同时成立且动作会外发才确认；本地动作不受污点影响；「本次任务内」勾选后同类不再问；
- * 没人能作答时立即返回；五个开关管对应的工具。
+ * 权限模式（docs/research/tool-redesign/Movo 权限模式方案.md）：默认 YOLO 一律不问；
+ * 手动审批固定问付款、密码、删东西、发消息和提交，其余类别与应用按用户加的规则问；
+ * 卡片只有允许 / 拒绝；没人能作答时立即返回；五个开关管对应的工具能不能用。
  */
 @RunWith(RobolectricTestRunner::class)
 class ApprovalPolicyTest {
@@ -52,12 +53,11 @@ class ApprovalPolicyTest {
     private data class In(val text: String) : ToolInput
     private data class Out(val ok: Boolean) : ToolOutput
 
-    /** 可配置的假工具：声明污点、风险、外发。 */
+    /** 可配置的假工具：声明这一步属于哪类动作、在哪个应用里。 */
     private class Fake(
         override val name: String,
-        private val taints: Set<TaintKind> = emptySet(),
-        private val risk: Risk = Risk.LOCAL,
-        private val exfiltrates: Boolean = false,
+        private val category: ApprovalCategory? = null,
+        private val appPackage: String? = null,
     ) : ToolContract<In, Out> {
         var executed = 0
         override val domain = ToolDomain.DEVICE
@@ -65,20 +65,26 @@ class ApprovalPolicyTest {
         override fun schema(env: ToolEnvironment) = JSONObject().put("type", "object")
         override fun parse(args: ToolArgs, env: ToolEnvironment) = In(args.raw.optString("text"))
         override fun resolve(input: In, env: ToolEnvironment) = CallResolution(
-            risk = risk, sensitivity = Sensitivity.NORMAL, resources = emptySet(), exfiltrates = exfiltrates,
+            risk = Risk.LOCAL, sensitivity = Sensitivity.NORMAL, resources = emptySet(),
+            category = category, appPackage = appPackage,
         )
         override fun execute(input: In, resolution: CallResolution, ctx: ToolContext): Verdict<Out> {
             executed++
             return Verdict.Read(Out(true))
         }
         override fun renderForModel(output: Out) = ModelContent.Json(JSONObject().put("ok", output.ok))
-        override fun taintKinds(input: In) = taints
     }
 
-    private val untrustedReader = Fake("fake_web_read", taints = setOf(TaintKind.UNTRUSTED))
-    private val personalReader = Fake("fake_sms_read", taints = setOf(TaintKind.PERSONAL))
-    private val localAction = Fake("fake_alarm")
-    private val outbound = Fake("fake_upload", exfiltrates = true)
+    private val plain = Fake("fake_alarm")
+    private val pay = Fake("fake_pay", ApprovalCategory.PAYMENT)
+    private val delete = Fake("fake_delete", ApprovalCategory.DELETE)
+    private val send = Fake("fake_send", ApprovalCategory.SEND)
+    private val password = Fake("fake_password", ApprovalCategory.PASSWORD)
+    private val system = Fake("fake_setting", ApprovalCategory.SYSTEM)
+    private val outbound = Fake("fake_upload", ApprovalCategory.OUTBOUND)
+    private val inBank = Fake("fake_tap_bank", appPackage = "com.example.bank")
+    private val inChat = Fake("fake_tap_chat", appPackage = "com.example.chat")
+    private val all = listOf(plain, pay, delete, send, password, system, outbound, inBank, inChat)
 
     private class Recorder(
         private val decision: ApprovalDecision,
@@ -92,10 +98,11 @@ class ApprovalPolicyTest {
         }
     }
 
-    private fun pipeline(interaction: UserInteraction, env: ToolEnvironment = ToolEnvironment()): ToolPipeline {
+    private fun pipeline(interaction: UserInteraction, policy: ApprovalPolicy): ToolPipeline {
         val provider = object : ToolProvider {
-            override val tools: List<AgentTool> = listOf(untrustedReader, personalReader, localAction, outbound).map { ContractTool(it) }
+            override val tools: List<AgentTool> = all.map { ContractTool(it) }
         }
+        val env = ToolEnvironment(approvalPolicy = policy)
         return ToolPipeline(
             registry = ToolRegistry(listOf(provider)),
             environment = { env },
@@ -110,61 +117,95 @@ class ApprovalPolicyTest {
     private fun call(name: String, args: String = "{}") = AgentModelClient.ToolCall("c-$name", name, args)
 
     @Test
-    fun readingOnlyUntrustedContent_doesNotGateOutbound() {
+    fun yolo_isTheDefault_andNeverAsks() {
+        assertEquals(PermissionMode.YOLO, ToolEnvironment().approvalPolicy.mode)
         val recorder = Recorder(ApprovalDecision.Declined)
-        val p = pipeline(recorder)
-        p.execute(call("fake_web_read"))
-        val r = p.execute(call("fake_upload"))
-        assertEquals("ok", r.status)
-        assertTrue(recorder.requests.isEmpty())
+        val p = pipeline(recorder, ApprovalPolicy.YOLO)
+        for (tool in all) assertEquals(tool.name, "ok", p.execute(call(tool.name)).status)
+        assertTrue("YOLO 下付款、删除、发送也不弹卡", recorder.requests.isEmpty())
+        assertTrue(all.all { it.executed == 1 })
     }
 
     @Test
-    fun bothTaintKinds_gateOutbound_withReadableCard() {
+    fun manual_alwaysAsksHighSensitive_only() {
         val recorder = Recorder(ApprovalDecision.Declined)
-        val p = pipeline(recorder)
-        p.execute(call("fake_web_read"))
-        p.execute(call("fake_sms_read"))
-        val r = p.execute(call("fake_upload", """{"text":"hello"}"""))
-        assertEquals("USER_DECLINED", r.errorCode)
-        val request = recorder.requests.single()
-        assertEquals(ApprovalReason.TAINTED, request.reason)
-        assertFalse("确认卡不贴原始 JSON", request.detail.contains("{"))
-        assertEquals(0, outbound.executed)
+        val p = pipeline(recorder, ApprovalPolicy.MANUAL_BUILT_IN)
+        for (tool in listOf(pay, delete, send, password)) {
+            assertEquals(tool.name, "USER_DECLINED", p.execute(call(tool.name)).errorCode)
+            assertEquals(0, tool.executed)
+        }
+        for (tool in listOf(plain, system, outbound, inBank)) {
+            assertEquals("没加规则的类别和应用不问：${tool.name}", "ok", p.execute(call(tool.name)).status)
+        }
+        assertEquals(
+            listOf(ApprovalCategory.PAYMENT, ApprovalCategory.DELETE, ApprovalCategory.SEND, ApprovalCategory.PASSWORD),
+            recorder.requests.map { it.category },
+        )
     }
 
     @Test
-    fun bothTaintKinds_doNotGateLocalActions() {
+    fun manual_asksForCategoriesAndAppsTheUserAdded() {
         val recorder = Recorder(ApprovalDecision.Declined)
-        val p = pipeline(recorder)
-        p.execute(call("fake_web_read"))
-        p.execute(call("fake_sms_read"))
-        assertEquals("ok", p.execute(call("fake_alarm")).status)
-        assertTrue("设闹钟、调音量这类本地动作不受污点影响", recorder.requests.isEmpty())
+        val policy = ApprovalPolicy(
+            mode = PermissionMode.MANUAL,
+            categories = setOf(ApprovalCategory.SYSTEM),
+            apps = setOf("com.example.bank"),
+        )
+        val p = pipeline(recorder, policy)
+        assertEquals("USER_DECLINED", p.execute(call("fake_setting")).errorCode)
+        assertEquals("USER_DECLINED", p.execute(call("fake_tap_bank")).errorCode)
+        assertEquals("ok", p.execute(call("fake_upload")).status)
+        assertEquals("ok", p.execute(call("fake_tap_chat")).status)
+        assertEquals(2, recorder.requests.size)
+        assertNull("应用规则命中时类别为空", recorder.requests[1].category)
     }
 
     @Test
-    fun taskScope_rememberedForTheRestOfTheRun() {
-        val recorder = Recorder(ApprovalDecision.Approved(remember = true))
-        val p = pipeline(recorder)
-        p.execute(call("fake_web_read"))
-        p.execute(call("fake_sms_read"))
-        p.execute(call("fake_upload"))
-        p.execute(call("fake_upload"))
-        assertEquals(1, recorder.requests.size)
-        assertEquals(ToolPipeline.TASK_SCOPE_LABEL, recorder.requests.single().rememberScope)
-        assertEquals(2, outbound.executed)
+    fun card_isReadable_andExplainsWhy() {
+        val recorder = Recorder(ApprovalDecision.Declined)
+        val policy = ApprovalPolicy(mode = PermissionMode.MANUAL, categories = setOf(ApprovalCategory.OUTBOUND))
+        val p = pipeline(recorder, policy)
+        p.execute(call("fake_pay", """{"text":"hello"}"""))
+        p.execute(call("fake_upload", """{"text":"hello"}"""))
+        val (payCard, uploadCard) = recorder.requests
+        assertFalse("确认卡不贴原始 JSON", payCard.detail.contains("{"))
+        assertEquals("手动审批时，付款、转账都会先问你。", payCard.reason)
+        assertEquals("你设了「把内容发到外部」先问你。", uploadCard.reason)
+        assertFalse("原因单独一行，不拼进正文", uploadCard.detail.contains("先问你"))
+    }
+
+    @Test
+    fun approvedOnce_isAskedAgainNextTime() {
+        val recorder = Recorder(ApprovalDecision.Approved)
+        val p = pipeline(recorder, ApprovalPolicy.MANUAL_BUILT_IN)
+        assertEquals("ok", p.execute(call("fake_pay")).status)
+        assertEquals("ok", p.execute(call("fake_pay")).status)
+        assertEquals("卡片没有「记住」，每次都问", 2, recorder.requests.size)
+        assertEquals(2, pay.executed)
     }
 
     @Test
     fun noOneToAnswer_returnsImmediatelyWithoutWaiting() {
-        val recorder = Recorder(ApprovalDecision.Approved(remember = false), available = false)
-        val p = pipeline(recorder)
-        p.execute(call("fake_web_read"))
-        p.execute(call("fake_sms_read"))
-        val r = p.execute(call("fake_upload"))
+        val recorder = Recorder(ApprovalDecision.Approved, available = false)
+        val p = pipeline(recorder, ApprovalPolicy.MANUAL_BUILT_IN)
+        val r = p.execute(call("fake_pay"))
         assertEquals(ToolErrorCode.UNSUPPORTED.name, r.errorCode)
         assertTrue(recorder.requests.isEmpty())
+        assertEquals(0, pay.executed)
+    }
+
+    @Test
+    fun policy_ignoresHighSensitiveInUserRules_andYoloIgnoresRules() {
+        val yoloWithRules = ApprovalPolicy(
+            mode = PermissionMode.YOLO,
+            categories = setOf(ApprovalCategory.SYSTEM),
+            apps = setOf("com.example.bank"),
+        )
+        assertFalse(yoloWithRules.shouldAsk(ApprovalCategory.SYSTEM, null))
+        assertFalse(yoloWithRules.shouldAsk(null, "com.example.bank"))
+        assertFalse(yoloWithRules.shouldAsk(ApprovalCategory.PAYMENT, null))
+        assertFalse(ApprovalPolicy.MANUAL_BUILT_IN.shouldAsk(null, null))
+        assertEquals(ApprovalCategory.entries.filterNot { it.highSensitive }, ApprovalCategory.optional)
     }
 
     @Test

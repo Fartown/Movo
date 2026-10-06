@@ -2,6 +2,9 @@ package io.github.fartown.movo.agent.tools.file
 
 import androidx.test.core.app.ApplicationProvider
 import io.github.fartown.movo.agent.model.AgentModelClient
+import io.github.fartown.movo.agent.tools.core.PermissionMode
+import io.github.fartown.movo.agent.tools.core.ApprovalPolicy
+import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.ApprovalDecision
 import io.github.fartown.movo.agent.tools.core.ApprovalRequest
 import io.github.fartown.movo.agent.tools.core.ContractTool
@@ -169,7 +172,7 @@ class FileToolsTest {
     }
 
     @Test
-    fun fileWrite_externalPath_requiresApproval_declineBlocks() {
+    fun fileWrite_outsideWorkspace_filesRule_declineBlocks() {
         var executed = false
         val watchingBackend = object : FileWriteBackend {
             override fun exists(path: String) = false
@@ -188,7 +191,11 @@ class FileToolsTest {
         }
         val p = ToolPipeline(
             registry = ToolRegistry(listOf(prov)),
-            environment = { ToolEnvironment() },
+            environment = {
+                ToolEnvironment(
+                    approvalPolicy = ApprovalPolicy(mode = PermissionMode.MANUAL, categories = setOf(ApprovalCategory.FILES)),
+                )
+            },
             appContext = ApplicationProvider.getApplicationContext(),
             logger = AndroidAgentLogger,
             runId = "run1",

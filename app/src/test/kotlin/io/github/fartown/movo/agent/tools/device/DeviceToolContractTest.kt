@@ -31,7 +31,7 @@ class DeviceToolContractTest {
     private val approveAll = object : UserInteraction {
         override val available = true
         override fun ask(question: UserQuestion, timeoutMs: Long) = UserAnswer.Declined
-        override fun approve(request: ApprovalRequest, timeoutMs: Long) = ApprovalDecision.Approved(remember = false)
+        override fun approve(request: ApprovalRequest, timeoutMs: Long) = ApprovalDecision.Approved
     }
 
     private fun <I : ToolInput, O : ToolOutput> pipeline(

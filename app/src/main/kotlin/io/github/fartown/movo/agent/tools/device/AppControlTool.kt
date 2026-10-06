@@ -1,5 +1,6 @@
 package io.github.fartown.movo.agent.tools.device
 
+import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
 import io.github.fartown.movo.agent.tools.core.ModelContent
@@ -52,7 +53,7 @@ internal interface AppControlBackend {
 }
 
 /**
- * app_control（回读型，external，需确认，需 Root）：强制停止、冻结、解冻一个应用。
+ * app_control（回读型，external，需 Root，归为「改系统设置」）：强制停止、冻结、解冻一个应用。
  * 回读到预期状态 → Done(ReadBack)；只有退出码没有回读 → Unknown；自我保护名单 → Failed(UNSUPPORTED, policy_denied)。
  */
 internal class AppControlTool(
@@ -61,7 +62,7 @@ internal class AppControlTool(
     override val name = "app_control"
     override val domain = ToolDomain.APP
     override val summary =
-        "强制停止、冻结或解冻一个应用（精确包名，需 Root，需确认）。" +
+        "强制停止、冻结或解冻一个应用（精确包名，需 Root）。" +
             "action：force_stop、freeze、unfreeze。可能影响系统应用。"
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
@@ -83,13 +84,11 @@ internal class AppControlTool(
     override fun approvalPreview(input: AppControlInput): ApprovalPreview {
         val app = io.github.fartown.movo.agent.tools.ui.appLabel(input.packageName)
         return when (input.action) {
-            AppControlAction.FORCE_STOP -> ApprovalPreview("强行停止「$app」？", "强行停止「$app」\n它会立刻退出，没保存的内容可能丢失。")
-            AppControlAction.FREEZE -> ApprovalPreview("冻结「$app」？", "冻结「$app」\n冻结后它不能打开、也收不到消息，解冻后恢复。")
-            AppControlAction.UNFREEZE -> ApprovalPreview("解冻「$app」？", "解冻「$app」\n解冻后它恢复正常使用。")
+            AppControlAction.FORCE_STOP -> ApprovalPreview("强行停止「$app」？", "强行停止「$app」，没保存的内容可能丢失")
+            AppControlAction.FREEZE -> ApprovalPreview("冻结「$app」？", "冻结「$app」，冻结后它不能打开、也收不到消息")
+            AppControlAction.UNFREEZE -> ApprovalPreview("解冻「$app」？", "解冻「$app」")
         }
     }
-
-    override fun approvalScope(input: AppControlInput): String = "${input.packageName}/${input.action.name.lowercase()}"
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): AppControlInput {
         val pkg = args.nonBlank("package")
@@ -99,9 +98,10 @@ internal class AppControlTool(
 
     override fun resolve(input: AppControlInput, env: ToolEnvironment): CallResolution =
         CallResolution(
-            risk = Risk.EXTERNAL,            // 中央派生要求确认
+            risk = Risk.EXTERNAL,
             sensitivity = Sensitivity.NORMAL,
             resources = setOf(ResourceKey(ToolResource.DEVICE)),   // 改应用状态独占设备
+            category = ApprovalCategory.SYSTEM,
             // 自我保护名单在审批前拒绝：不先弹确认卡再拒。
             reject = if (isProtected(input.packageName)) {
                 ToolError(

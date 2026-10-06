@@ -29,7 +29,7 @@
   <string name="movo_permission_overlay_off">悬浮窗未开启</string>
   <string name="movo_permission_accessibility_off">无障碍未开启</string>
   <string name="movo_tools_group_basic">基础能力</string>
-  <string name="movo_tools_group_sensitive">敏感权限</string>
+  <string name="movo_tools_group_sensitive">个人数据与系统</string>
   <string name="movo_tools_group_environment">环境</string>
   <string name="movo_tools_browser">网页浏览</string>
   <string name="movo_tools_browser_desc">搜索网页，打开链接并阅读正文</string>
@@ -42,7 +42,7 @@
   <string name="movo_tools_sensitive_action">敏感设备操作</string>
   <string name="movo_tools_sensitive_action_desc">修改系统设置，打开或关闭网络与蓝牙</string>
   <string name="movo_tools_sensitive_footer_1">读到的敏感内容只用于当前任务，不写入对话记录。</string>
-  <string name="movo_tools_sensitive_footer_2">开启「敏感设备操作」时，会先请你确认。</string>
+  <string name="movo_tools_sensitive_footer_2">关掉后 Movo 不会用，也不会打开对应应用去看。</string>
   <string name="movo_tools_all">全部工具</string>
   <string name="movo_tools_confirm_title">开启敏感设备操作？</string>
   <string name="movo_tools_confirm_message">Movo 将可以修改系统设置、打开或关闭网络与蓝牙。随时可以在这里关闭。</string>

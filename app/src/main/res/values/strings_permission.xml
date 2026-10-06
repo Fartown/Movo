@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="tools_permission_group">Permissions</string>
+  <string name="tools_permission_footer_1">YOLO: Movo just does it without stopping to ask.</string>
+  <string name="tools_permission_footer_2">Ask me: asks before paying, passwords, deleting and sending.</string>
+  <string name="permission_title">Permissions</string>
+  <string name="permission_mode">Permission mode</string>
+  <string name="permission_mode_yolo">YOLO</string>
+  <string name="permission_mode_yolo_desc">Do everything without stopping to ask</string>
+  <string name="permission_mode_manual">Ask me</string>
+  <string name="permission_mode_manual_desc">Ask before paying, passwords, deleting and sending</string>
+  <string name="permission_fixed_title">Always asked in Ask me mode</string>
+  <string name="permission_fixed_value">Always</string>
+  <string name="permission_fixed_payment">Payments and transfers</string>
+  <string name="permission_fixed_payment_desc">Tapping pay or transfer buttons</string>
+  <string name="permission_fixed_password">Entering passwords</string>
+  <string name="permission_fixed_password_desc">Typing into password fields</string>
+  <string name="permission_fixed_delete">Deleting things</string>
+  <string name="permission_fixed_delete_desc">Deleting files, clearing memory, uninstalling apps</string>
+  <string name="permission_fixed_send">Sending messages and forms</string>
+  <string name="permission_fixed_send_desc">Tapping send or submit, submitting web forms</string>
+  <string name="permission_fixed_footer">These are always asked in Ask me mode and can\'t be turned off.</string>
+  <string name="permission_rules_title">Also ask me before</string>
+  <string name="permission_rule_system">Changing system settings</string>
+  <string name="permission_rule_system_desc">Settings, Wi‑Fi and Bluetooth, stopping or freezing apps</string>
+  <string name="permission_rule_root">Root commands</string>
+  <string name="permission_rule_root_desc">Running terminal commands as root</string>
+  <string name="permission_rule_install">Installing skills</string>
+  <string name="permission_rule_install_desc">Installing skills from GitHub</string>
+  <string name="permission_rule_outbound">Sending content out</string>
+  <string name="permission_rule_outbound_desc">URLs with parameters, network commands, external MCP tools</string>
+  <string name="permission_rule_files">Writing outside the workspace</string>
+  <string name="permission_rule_files_desc">Writing files outside Movo\'s workspace</string>
+  <string name="permission_rules_footer">All off by default. Only applies in Ask me mode.</string>
+  <string name="permission_apps_title">Ask me at every step in these apps</string>
+  <string name="permission_apps_count" formatted="true">%d</string>
+  <string name="permission_apps_add">Add app</string>
+  <string name="permission_apps_remove">Remove</string>
+  <string name="permission_apps_footer">None by default. Only applies in Ask me mode.</string>
+  <string name="permission_add_title">Add app</string>
+  <string name="permission_add_search">Search apps</string>
+  <string name="permission_add_section">Installed apps</string>
+  <string name="permission_add_sorted">By name</string>
+  <string name="permission_add_action">Add</string>
+  <string name="permission_add_added">Added</string>
+  <string name="permission_add_empty">No matching apps</string>
+</resources>

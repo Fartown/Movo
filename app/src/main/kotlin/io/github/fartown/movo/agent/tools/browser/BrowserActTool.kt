@@ -1,8 +1,7 @@
 package io.github.fartown.movo.agent.tools.browser
 
-import io.github.fartown.movo.agent.tools.core.ApprovalDecision
-import io.github.fartown.movo.agent.tools.core.ApprovalReason
-import io.github.fartown.movo.agent.tools.core.ApprovalRequest
+import io.github.fartown.movo.agent.tools.core.ApprovalCategory
+import io.github.fartown.movo.agent.tools.core.ApprovalNeed
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.ResourceKey
@@ -20,6 +19,7 @@ import io.github.fartown.movo.agent.tools.core.ToolInput
 import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.ToolResource
 import io.github.fartown.movo.agent.tools.core.Verdict
+import io.github.fartown.movo.agent.tools.core.confirmConsequence
 import io.github.fartown.movo.agent.tools.core.fail
 import io.github.fartown.movo.agent.tools.core.objectSchema
 import org.json.JSONObject
@@ -168,7 +168,7 @@ internal class BrowserActTool(
                         ToolError(ToolErrorCode.NOT_ACTIONABLE, "目标元素不可输入"),
                     )
                 }
-                // 提交点确认：表单含密码/支付、method=post、按钮文字命中提交点；search/GET 表单不确认。
+                // 提交点：表单含密码/支付、method=post、按钮文字命中提交点；search/GET 表单不算。
                 if (target.submitPoint && !target.searchRole) {
                     confirmSubmit(ctx, request, target)?.let { return it }
                 }
@@ -189,48 +189,18 @@ internal class BrowserActTool(
         }
     }
 
-    /** 返回非 null 表示被拒绝/无法确认（直接作为最终 Verdict）；null 表示已批准，继续执行。 */
+    /** 提交表单归为「发消息和提交表单」：手动审批时问用户。返回非 null 表示不执行（直接作为最终 Verdict）。 */
     private fun confirmSubmit(
         ctx: ToolContext,
         request: BrowserActRequest,
         target: BrowserActTarget,
     ): Verdict<BrowserActOutput>? {
-        if (!ctx.interaction.available) {
-            return Verdict.Failed(
-                ToolError(
-                    ToolErrorCode.UNSUPPORTED,
-                    "这一步可能提交表单/发送，需要用户确认，但当前入口无法确认；本次未执行",
-                    hint = "在最终回复中说明需要用户确认的提交动作，不要绕过",
-                    detail = "no_interactive_surface",
-                ),
-            )
-        }
-        val decision = ctx.interaction.approve(
-            ApprovalRequest(
-                toolName = name,
-                title = "在网页上提交？",
-                detail = "${target.summary.take(120)}\n这一步可能提交表单或把内容发出去。",
-                rememberScope = null,
-                reason = ApprovalReason.DECLARED_EFFECT,
-            ),
-            APPROVAL_TIMEOUT_MS,
+        val need = ApprovalNeed(
+            category = ApprovalCategory.SEND,
+            title = "在网页上提交？",
+            detail = target.summary.take(120),
         )
-        ctx.checkCancelled()
-        return when (decision) {
-            is ApprovalDecision.Approved -> null
-            ApprovalDecision.Declined -> Verdict.Failed(
-                ToolError(ToolErrorCode.USER_DECLINED, "用户拒绝了这次提交", hint = "询问用户下一步怎么做"),
-            )
-            ApprovalDecision.TimedOut -> Verdict.Failed(
-                ToolError(ToolErrorCode.APPROVAL_TIMEOUT, "用户没有确认，本次未执行"),
-            )
-            ApprovalDecision.Unavailable -> Verdict.Failed(
-                ToolError(
-                    ToolErrorCode.UNSUPPORTED, "需要确认但当前无法显示确认；本次未执行",
-                    detail = "no_interactive_surface",
-                ),
-            )
-        }
+        return ctx.confirmConsequence(name, need, APPROVAL_TIMEOUT_MS)?.let { Verdict.Failed(it) }
     }
 
     override fun renderForModel(output: BrowserActOutput): ModelContent {

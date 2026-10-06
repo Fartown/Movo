@@ -2,6 +2,7 @@ package io.github.fartown.movo.agent.tools.personal
 
 import androidx.test.core.app.ApplicationProvider
 import io.github.fartown.movo.agent.model.AgentModelClient
+import io.github.fartown.movo.agent.tools.core.ApprovalPolicy
 import io.github.fartown.movo.agent.tools.core.ApprovalDecision
 import io.github.fartown.movo.agent.tools.core.ApprovalRequest
 import io.github.fartown.movo.agent.tools.core.ContractTool
@@ -98,7 +99,7 @@ class PersonalToolsTest {
     private val approveAll = object : UserInteraction {
         override val available = true
         override fun ask(question: UserQuestion, timeoutMs: Long) = UserAnswer.Declined
-        override fun approve(request: ApprovalRequest, timeoutMs: Long) = ApprovalDecision.Approved(remember = false)
+        override fun approve(request: ApprovalRequest, timeoutMs: Long) = ApprovalDecision.Approved
     }
 
     private val declineAll = object : UserInteraction {
@@ -141,11 +142,11 @@ class PersonalToolsTest {
     }
 
     @Test
-    fun personalSearch_sms_requiresApproval_declinedBlocks() {
-        val p = pipeline(fullEnv, declineAll)
+    fun personalSearch_sms_noCardEvenInManualMode() {
+        // 读个人数据由「个人数据与系统」开关管能不能用，不再首读确认（权限模式方案）。
+        val p = pipeline(fullEnv.copy(approvalPolicy = ApprovalPolicy.MANUAL_BUILT_IN), declineAll)
         val result = p.execute(call("personal_search", """{"source":"sms","query":"快递"}"""))
-        assertEquals("error", result.status)
-        assertEquals("USER_DECLINED", result.errorCode)
+        assertEquals("ok", JSONObject(result.content).getString("status"))
     }
 
     @Test

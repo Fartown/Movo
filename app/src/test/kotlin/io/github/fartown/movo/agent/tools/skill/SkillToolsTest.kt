@@ -2,6 +2,9 @@ package io.github.fartown.movo.agent.tools.skill
 
 import androidx.test.core.app.ApplicationProvider
 import io.github.fartown.movo.agent.model.AgentModelClient
+import io.github.fartown.movo.agent.tools.core.PermissionMode
+import io.github.fartown.movo.agent.tools.core.ApprovalPolicy
+import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.ApprovalDecision
 import io.github.fartown.movo.agent.tools.core.ApprovalRequest
 import io.github.fartown.movo.agent.tools.core.ContractTool
@@ -48,7 +51,7 @@ class SkillToolsTest {
     private val approve = object : UserInteraction {
         override val available = true
         override fun ask(question: UserQuestion, timeoutMs: Long) = UserAnswer.Declined
-        override fun approve(request: ApprovalRequest, timeoutMs: Long) = ApprovalDecision.Approved(false)
+        override fun approve(request: ApprovalRequest, timeoutMs: Long) = ApprovalDecision.Approved
     }
     private val decline = object : UserInteraction {
         override val available = true
@@ -60,6 +63,7 @@ class SkillToolsTest {
         readBackend: SkillReadBackend = FakeRead(SkillReadResult.NotFound),
         installBackend: SkillInstallBackend = FakeInstall(SkillInstallOutcome.Installed(emptyList())),
         interaction: UserInteraction = UserInteraction.NONE,
+        env: ToolEnvironment = ToolEnvironment(),
     ): ToolPipeline {
         val provider = object : ToolProvider {
             override val tools = listOf(
@@ -69,7 +73,7 @@ class SkillToolsTest {
         }
         return ToolPipeline(
             registry = ToolRegistry(listOf(provider)),
-            environment = { ToolEnvironment() },
+            environment = { env },
             appContext = ApplicationProvider.getApplicationContext(),
             logger = AndroidAgentLogger,
             runId = "run1",
@@ -131,21 +135,26 @@ class SkillToolsTest {
     }
 
     @Test
-    fun install_declined_userDeclined() {
-        val p = pipeline(interaction = decline)
+    fun install_installRule_declined_userDeclined() {
+        val rule = ToolEnvironment(
+            approvalPolicy = ApprovalPolicy(mode = PermissionMode.MANUAL, categories = setOf(ApprovalCategory.INSTALL)),
+        )
+        val p = pipeline(interaction = decline, env = rule)
         val r = p.execute(call("skill_install", """{"action":"install","repository":"o/r","paths":["skills/alpha"]}"""))
         assertEquals("USER_DECLINED", r.errorCode)
     }
 
     @Test
-    fun install_conflict_confirmThenInstalls() {
+    fun install_conflict_returnsConflictWithoutReplacing() {
         val backend = FakeInstall(
             SkillInstallOutcome.Conflict(listOf(SkillConflictView("alpha", "alpha", "user"))),
         )
         val p = pipeline(installBackend = backend, interaction = approve)
         val r = p.execute(call("skill_install", """{"action":"install","repository":"o/r","paths":["skills/alpha"]}"""))
-        assertEquals("ok", JSONObject(r.content).getString("status"))
-        assertEquals(true, backend.lastReplace) // 确认后以 replace 重装
+        // 同名冲突不再弹卡当场替换：回给模型，由它确认用户意图后带 replace=true 重试。
+        assertEquals("CONFLICT", r.errorCode)
+        assertTrue(JSONObject(r.content).toString().contains("alpha"))
+        assertEquals(false, backend.lastReplace)
     }
 
     @Test
