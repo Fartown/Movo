@@ -1,6 +1,7 @@
 package io.github.fartown.movo
 
 import android.app.Application
+import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import io.github.fartown.movo.agent.skill.SkillRuntime
@@ -47,18 +48,30 @@ class MovoApp : Application(), XposedServiceHelper.OnServiceListener {
      * 只在 debug 包里：数据目录里有 profile-startup 标记时，从进程启动起采样 20 秒到 files/startup.trace
      * （查进程刚起来时主线程被谁占着；系统 am profile 在电视上写不了文件）。
      */
-    private fun debugStartupProfile() {
+    private fun debugStartupProfile(base: Context) {
         if (!BuildConfig.DEBUG) return
-        val marker = java.io.File(filesDir, "profile-startup")
+        val marker = java.io.File(base.filesDir, "profile-startup")
         if (!marker.delete()) return
-        val trace = java.io.File(filesDir, "startup.trace").apply { delete() }
+        val trace = java.io.File(base.filesDir, "startup.trace").apply { delete() }
         android.os.Debug.startMethodTracingSampling(trace.path, 64 * 1024 * 1024, 1000)
-        android.os.Handler(mainLooper).postDelayed({ android.os.Debug.stopMethodTracing() }, 20_000)
+        // attachBaseContext 时还没有 base context，不能用 mainLooper（会空指针，进程起不来）。
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ android.os.Debug.stopMethodTracing() }, 20_000)
+    }
+
+    /** 进程启动各阶段距进程创建过了多久（logcat「MovoStartup」，正式包也打，用来量冷启动）。 */
+    private fun startupMark(stage: String) {
+        android.util.Log.i("MovoStartup", "$stage +${android.os.SystemClock.uptimeMillis() - android.os.Process.getStartUptimeMillis()}ms")
+    }
+
+    override fun attachBaseContext(base: Context) {
+        startupMark("attach")
+        debugStartupProfile(base)
+        super.attachBaseContext(base)
     }
 
     override fun onCreate() {
+        startupMark("onCreate")
         super.onCreate()
-        debugStartupProfile()
         Prefs.initLocal(this)
         if (!AppProcessPolicy.shouldInitializeFullRuntime(Application.getProcessName(), packageName)) {
             return
@@ -86,6 +99,7 @@ class MovoApp : Application(), XposedServiceHelper.OnServiceListener {
         }
         // 设备专属的初始化（手机：唤醒词监听、预测性返回、Xposed 服务监听）。
         FlavorModule.initializers.forEach { it(this) }
+        startupMark("onCreate.end")
     }
 
     override fun onServiceBind(service: XposedService) {
