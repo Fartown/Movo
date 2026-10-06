@@ -109,6 +109,34 @@ class DesignShotsTest {
     @Test
     fun toolSettings() = shot("19-settings-tools") { ToolSettingsScreen(onNavigate = {}, onBack = {}) }
 
+    /** 定稿 23-6：运行日志页最下面的「完整日志」卡（开关、清空、保存说明）。 */
+    @Test
+    fun runLogFullLogCard() {
+        val diagnostics = io.github.fartown.movo.diagnostics.MemoryDiagnostics
+        diagnostics.buffer.clear()
+        fun run(id: String, vararg events: String) = events.forEach { event ->
+            diagnostics.record("runtime", event, context = io.github.fartown.movo.diagnostics.DiagnosticContext(run = id))
+        }
+        run("R801", "run.started", "run.completed", "run.ended")
+        run("R802", "run.started", "run.failed", "run.ended")
+        val root = java.nio.file.Files.createTempDirectory("run-log-shot").toFile()
+        val store = io.github.fartown.movo.diagnostics.runlog.RunLogStore(root, elapsedClock = { 0L })
+        io.github.fartown.movo.diagnostics.runlog.RunLog.install(store, "shot") { true }
+        try {
+            val session = store.open("R801")!!
+            session.record("tool_end", mapOf("result" to "x".repeat(40_000)))
+            store.close(session, io.github.fartown.movo.diagnostics.runlog.RunLogRecord("run_end", 0, 0, mapOf("status" to "completed"), control = true))
+            store.awaitIdle()
+            shot("23-06-run-log-full-log-card") {
+                io.github.fartown.movo.ui.screens.diagnostics.DiagnosticsScreen(onBack = {}, onOpenRun = {}, onOpenSystem = {})
+            }
+        } finally {
+            io.github.fartown.movo.diagnostics.runlog.RunLog.install(null, "", { false })
+            store.shutdown()
+            diagnostics.buffer.clear()
+        }
+    }
+
     @Test
     fun systemAssistant() = shot("settings-system-assistant") { SystemAssistantScreen(onNavigate = {}, onBack = {}) }
 

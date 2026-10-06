@@ -242,7 +242,7 @@ internal class RootShellDeviceController(
             }
             if (!rootAvailable()) return nodeActionJson("tap", result)
         }
-        return inputCommand("input tap $x $y", "tap")
+        return inputCommand("input tap $x $y", "tap", touchAt = x to y)
     }
 
     fun longPress(x: Int, y: Int, durationMs: Int): String {
@@ -260,7 +260,7 @@ internal class RootShellDeviceController(
             }
             if (!rootAvailable()) return nodeActionJson("long_press", result)
         }
-        return inputCommand("input swipe $x $y $x $y $duration", "long_press")
+        return inputCommand("input swipe $x $y $x $y $duration", "long_press", touchAt = x to y)
     }
 
     fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int): String {
@@ -285,7 +285,7 @@ internal class RootShellDeviceController(
             }
             if (!rootAvailable()) return nodeActionJson("swipe", result)
         }
-        return inputCommand("input swipe $x1 $y1 $x2 $y2 $duration", "swipe")
+        return inputCommand("input swipe $x1 $y1 $x2 $y2 $duration", "swipe", touchAt = x1 to y1)
     }
 
     fun scroll(direction: String): String {
@@ -942,11 +942,13 @@ internal class RootShellDeviceController(
                 "INVALID_NODE_BOUNDS",
                 "滚动区域过小或不在屏幕内",
             )
-        val result = runSuText(
-            "input swipe ${gesture.start.x} ${gesture.start.y} " +
-                "${gesture.end.x} ${gesture.end.y} 300",
-            timeoutSeconds = 8,
-        )
+        val result = AgentTouchInjection.touchAt(gesture.start.x.toFloat(), gesture.start.y.toFloat()) {
+            runSuText(
+                "input swipe ${gesture.start.x} ${gesture.start.y} " +
+                    "${gesture.end.x} ${gesture.end.y} 300",
+                timeoutSeconds = 8,
+            )
+        }
         if (result.output == "ROOT_REQUIRED" && result.exitCode == -1) return rootRequired()
         val commandOutcome = ShellActionOutcomePolicy.classify(result.exitCode)
         if (commandOutcome == ShellActionOutcomePolicy.Outcome.FAILED) {
@@ -1083,9 +1085,16 @@ internal class RootShellDeviceController(
                 "${node.desc}|${node.bounds.toShortString()}"
         }
 
-    private fun inputCommand(command: String, tool: String): String {
+    /** [touchAt] = 这条命令按下的屏幕坐标（点按、长按、滑动的起点）：挡在那里的展开卡先让开。 */
+    private fun inputCommand(command: String, tool: String, touchAt: Pair<Int, Int>? = null): String {
         if (!rootAvailable()) return rootRequired()
-        val result = runSuText(command, timeoutSeconds = 8)
+        val result = if (touchAt == null) {
+            AgentTouchInjection.during { runSuText(command, timeoutSeconds = 8) }
+        } else {
+            AgentTouchInjection.touchAt(touchAt.first.toFloat(), touchAt.second.toFloat()) {
+                runSuText(command, timeoutSeconds = 8)
+            }
+        }
         if (result.output == "ROOT_REQUIRED" && result.exitCode == -1) return rootRequired()
         return when (ShellActionOutcomePolicy.classify(result.exitCode)) {
             ShellActionOutcomePolicy.Outcome.SUCCEEDED -> {

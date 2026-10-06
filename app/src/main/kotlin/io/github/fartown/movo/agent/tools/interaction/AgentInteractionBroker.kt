@@ -113,8 +113,10 @@ internal class BrokeredUserInteraction(
     private fun awaitReply(prompt: InteractionPrompt, timeoutMs: Long): InteractionReply? {
         broker.register(prompt.requestId)   // 先登记，防止回传早于等待
         runCatching { emit(prompt) }
+        io.github.fartown.movo.diagnostics.runlog.RunLogRecorder.interactionShown(prompt)
         return try {
             broker.await(prompt.requestId, timeoutMs, cancelled)
+                .also { reply -> io.github.fartown.movo.diagnostics.runlog.RunLogRecorder.interactionReplied(prompt, reply) }
         } finally {
             // 无论作答 / 取消 / 超时，都通知界面收起对应的卡（避免卡片残留）。
             runCatching { onResolved(prompt.requestId) }

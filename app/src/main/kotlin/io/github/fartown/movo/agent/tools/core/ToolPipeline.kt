@@ -44,6 +44,8 @@ internal class ToolPipeline(
     /** 每轮开始时刷新环境快照并生成目录。 */
     fun catalog(): JSONArray {
         currentEnvironment = environment()
+        // 运行日志取这一轮已经加载的权限档位，不单独读取设置。
+        io.github.fartown.movo.diagnostics.runlog.RunLogRecorder.permissionMode(currentEnvironment.approvalPolicy.mode.wire)
         return registry.catalog(currentEnvironment, loadedDeferred)
     }
 

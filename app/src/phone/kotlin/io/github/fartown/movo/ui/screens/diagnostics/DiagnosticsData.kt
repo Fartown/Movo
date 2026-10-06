@@ -36,6 +36,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.input.pointer.pointerInput
@@ -232,15 +233,17 @@ internal fun ExportAction(fileName: String, buildText: () -> String) {
             ExportMenu(
                 state = menu,
                 onDismiss = { menu.targetState = false },
-                onExportFile = {
-                    menu.targetState = false
-                    launcher.launch(fileName)
-                },
-                onCopy = {
-                    menu.targetState = false
-                    copyToClipboard(context, buildText())
-                    done.trigger()
-                },
+                items = listOf(
+                    ExportMenuItem("导出为 Markdown 文件", MovoIcons.Download) {
+                        menu.targetState = false
+                        launcher.launch(fileName)
+                    },
+                    ExportMenuItem("复制到剪贴板", MovoIcons.Copy) {
+                        menu.targetState = false
+                        copyToClipboard(context, buildText())
+                        done.trigger()
+                    },
+                ),
             )
         }
     }
@@ -254,6 +257,18 @@ private val MenuShadowRoom = MovoSpacing.section + MovoSpacing.lg
 
 /** Figma 27 的菜单宽。 */
 private val MenuMinWidth = 220.dp
+
+/** 有两行项（带说明）时的菜单宽（定稿 23、规范 Popover/Menu）。 */
+private val MenuWideWidth = 272.dp
+
+/** 菜单的一项：[caption] 是第二行说明；不可用时图标与标题 40%、说明写原因（规范 Popover/Menu）。 */
+internal class ExportMenuItem(
+    val label: String,
+    val icon: MovoIconData,
+    val caption: String? = null,
+    val enabled: Boolean = true,
+    val onClick: () -> Unit,
+)
 
 /** 锚在导出按钮下方：顶部贴顶栏底（按钮下 6），右缘对齐边距线。 */
 private class ExportMenuPosition(
@@ -274,11 +289,10 @@ private class ExportMenuPosition(
 
 /** `Popover/Menu`：圆角 20、内边距 8、项高 44 圆角 12、E3；从锚点缩放 0.96 → 1 淡入 `fast`，退场淡出 120ms（规范 9.3）。 */
 @Composable
-private fun ExportMenu(
+internal fun ExportMenu(
     state: MutableTransitionState<Boolean>,
     onDismiss: () -> Unit,
-    onExportFile: () -> Unit,
-    onCopy: () -> Unit,
+    items: List<ExportMenuItem>,
 ) {
     val density = LocalDensity.current
     val reduced = LocalReducedMotion.current
@@ -311,39 +325,59 @@ private fun ExportMenu(
                 },
                 exit = fadeOut(MovoMotion.fastExit()),
             ) {
+                val wide = items.any { it.caption != null }
                 Column(
                     modifier = Modifier
-                        .width(IntrinsicSize.Max)
-                        .widthIn(min = MenuMinWidth)
+                        .then(if (wide) Modifier.width(MenuWideWidth) else Modifier.width(IntrinsicSize.Max).widthIn(min = MenuMinWidth))
                         .movoSurface(RoundedCornerShape(MovoRadius.lg), MovoElevation.Overlay)
                         .padding(MovoSpacing.sm),
                 ) {
-                    MenuItem("导出为 Markdown 文件", MovoIcons.Download, onExportFile)
-                    MenuItem("复制到剪贴板", MovoIcons.Copy, onCopy)
+                    items.forEach { MenuItem(it) }
                 }
             }
         }
     }
 }
 
+/** 一行项高 44；两行项上下 10，图标对齐第一行；不可用项图标与标题 40%，说明照常（写原因）。 */
 @Composable
-private fun MenuItem(label: String, icon: MovoIconData, onClick: () -> Unit) {
+private fun MenuItem(item: ExportMenuItem) {
     val shape = RoundedCornerShape(MovoRadius.sm)
+    val twoLine = item.caption != null
+    val dim = if (item.enabled) 1f else 0.4f
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(MovoSize.touchTarget)
+            .then(if (twoLine) Modifier else Modifier.height(MovoSize.touchTarget))
             .clip(shape)
-            .movoClickable(PressKind.Row, shape = shape, onClick = onClick)
-            .padding(horizontal = MovoSpacing.md),
-        verticalAlignment = Alignment.CenterVertically,
+            .movoClickable(PressKind.Row, shape = shape, enabled = item.enabled, onClick = item.onClick)
+            .padding(horizontal = MovoSpacing.md, vertical = if (twoLine) 10.dp else 0.dp),
+        verticalAlignment = if (twoLine) Alignment.Top else Alignment.CenterVertically,
     ) {
-        MovoIcon(icon, contentDescription = null, size = MovoSize.iconMedium, tint = MovoColors.textPrimary)
+        MovoIcon(
+            item.icon,
+            contentDescription = null,
+            modifier = Modifier.padding(top = if (twoLine) 1.dp else 0.dp).alpha(dim),
+            size = MovoSize.iconMedium,
+            tint = MovoColors.textPrimary,
+        )
         Spacer(Modifier.width(MovoSpacing.md))
-        Text(label, style = MovoTypography.bodyRegular, color = MovoColors.textPrimary, maxLines = 1)
+        Column {
+            Text(
+                item.label,
+                style = MovoTypography.bodyRegular,
+                color = MovoColors.textPrimary,
+                maxLines = 1,
+                modifier = Modifier.alpha(dim),
+            )
+            item.caption?.let { caption ->
+                Spacer(Modifier.height(2.dp))
+                Text(caption, style = MovoTypography.labelRegular, color = MovoColors.textSecondary)
+            }
+        }
     }
 }
 
-private fun copyToClipboard(context: Context, text: String) {
+internal fun copyToClipboard(context: Context, text: String) {
     context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Movo 运行日志", text))
 }

@@ -130,6 +130,15 @@ internal class ContractTool<I : ToolInput, O : ToolOutput>(
             code = ToolErrorCode.OUTCOME_UNKNOWN, message = verdict.reason, hint = verdict.next,
         )
         is Verdict.Failed -> ToolOutcome(status = verdict.error.code.status, error = verdict.error)
+    }.copy(verdict = verdictName(verdict))
+
+    private fun verdictName(verdict: Verdict<O>): String = when (verdict) {
+        is Verdict.Read -> "read"
+        is Verdict.Done -> "done"
+        is Verdict.Dispatched -> "dispatched"
+        is Verdict.Backgrounded -> "backgrounded"
+        is Verdict.Unknown -> "unknown"
+        is Verdict.Failed -> "failed"
     }
 
     private fun ok(

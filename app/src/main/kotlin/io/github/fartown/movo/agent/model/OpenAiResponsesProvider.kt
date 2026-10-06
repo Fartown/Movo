@@ -76,9 +76,10 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
         val config = request.effectiveConfig
         val requestJson = buildRequestJson(config, request.messages, request.effectiveTools)
         if (credentials != null) ChatGptCodexRequest.applyBody(requestJson, request.sessionId)
-        val body = requestJson
-            .toString()
-            .toRequestBody(JSON_MEDIA_TYPE)
+        val requestText = requestJson.toString()
+        // 完整运行日志：最终发出去的请求体（ChatGPT 的改写之后）原样记一份；401 后重发再记一份。
+        io.github.fartown.movo.diagnostics.runlog.RunLogRecorder.requestBody(requestText)
+        val body = requestText.toRequestBody(JSON_MEDIA_TYPE)
         val headers = okhttp3.Headers.Builder()
             .add("Content-Type", "application/json; charset=utf-8")
             .add("Accept", "text/event-stream")
@@ -194,6 +195,8 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
             kind: AssistantBlockKind,
             family: String,
             delta: String,
+            /** 思考的原始事件类型（运行日志用）。 */
+            rawType: String? = null,
         ) {
             if (delta.isEmpty()) return
             val identity = event.contentIdentity(family)
@@ -218,7 +221,7 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
                 }
             }
             block.content.append(delta)
-            onEvent(ProviderEvent.BlockDelta(kind, block.contentIndex, delta))
+            onEvent(ProviderEvent.BlockDelta(kind, block.contentIndex, delta, rawType?.let { listOf(ProviderRawPart(it, delta)) }))
         }
 
         fun finishContentEvent(event: JSONObject, family: String, authoritativeKey: String) {
@@ -297,6 +300,7 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
                                 RESPONSE_REASONING_SUMMARY_FAMILY
                             },
                             delta = delta,
+                            rawType = type,
                         )
                     }
                 }

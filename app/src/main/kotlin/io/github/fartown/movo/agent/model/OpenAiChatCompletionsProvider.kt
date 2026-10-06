@@ -49,14 +49,16 @@ internal object OpenAiChatCompletionsProvider : AgentProviderClient {
             .also { ProviderRequestHeaders.mergeInto(it, config.baseUrl, config.customHeaders, request.sessionId) }
             .build()
 
-        val requestBody = buildRequestJson(config, request.messages, request.effectiveTools).apply {
+        val requestText = buildRequestJson(config, request.messages, request.effectiveTools).apply {
             if (!request.purpose.allowsTools) {
                 remove("tools")
                 remove("tool_choice")
             }
         }
             .toString()
-            .toRequestBody(JSON_MEDIA_TYPE)
+        // 完整运行日志：最终发出去的请求体原样记一份。
+        io.github.fartown.movo.diagnostics.runlog.RunLogRecorder.requestBody(requestText)
+        val requestBody = requestText.toRequestBody(JSON_MEDIA_TYPE)
 
         val trace = ModelRequestTrace.forRequest(request, id)
         val httpRequest = Request.Builder()
@@ -155,7 +157,7 @@ internal object OpenAiChatCompletionsProvider : AgentProviderClient {
             activeVisibleBlock = null
         }
 
-        fun appendVisibleDelta(kind: AssistantBlockKind, delta: String) {
+        fun appendVisibleDelta(kind: AssistantBlockKind, delta: String, rawParts: List<ProviderRawPart>? = null) {
             if (delta.isEmpty()) return
             var block = activeVisibleBlock
             if (block?.kind != kind) {
@@ -169,7 +171,7 @@ internal object OpenAiChatCompletionsProvider : AgentProviderClient {
                 }
             }
             block.content.append(delta)
-            onEvent(ProviderEvent.BlockDelta(kind, block.contentIndex, delta))
+            onEvent(ProviderEvent.BlockDelta(kind, block.contentIndex, delta, rawParts))
         }
 
         readProviderSse(stream, runController, trace) { _, data ->
@@ -196,10 +198,11 @@ internal object OpenAiChatCompletionsProvider : AgentProviderClient {
                 error("模型接口 SSE 以 error 结束")
             }
             val delta = choice.optJSONObject("delta") ?: JSONObject()
-            val reasoningDelta = visibleReasoningDelta(delta)
+            val reasoningParts = visibleReasoningParts(delta)
+            val reasoningDelta = reasoningParts.joinToString("") { it.text }
             if (reasoningDelta.isNotEmpty()) {
                 reasoningContent.append(reasoningDelta)
-                appendVisibleDelta(AssistantBlockKind.THINKING, reasoningDelta)
+                appendVisibleDelta(AssistantBlockKind.THINKING, reasoningDelta, reasoningParts)
             }
             if (delta.has("content") && !delta.isNull("content")) {
                 val text = delta.optString("content")
@@ -313,21 +316,23 @@ internal object OpenAiChatCompletionsProvider : AgentProviderClient {
         val content: StringBuilder = StringBuilder(),
     )
 
-    private fun visibleReasoningDelta(delta: JSONObject): String {
+    /** 这一片的思考，按服务商原始类型分段（运行日志拆开记；界面用拼起来的文字）。 */
+    private fun visibleReasoningParts(delta: JSONObject): List<ProviderRawPart> {
         // 同一分片的纯文本与结构化字段可重复携带相同思考，只消费一种表示。
         for (key in listOf("reasoning_content", "reasoning")) {
-            (delta.opt(key) as? String)?.takeIf { it.isNotEmpty() }?.let { return it }
+            (delta.opt(key) as? String)?.takeIf { it.isNotEmpty() }?.let { return listOf(ProviderRawPart(key, it)) }
         }
-        val details = delta.optJSONArray("reasoning_details") ?: return ""
-        return buildString {
+        val details = delta.optJSONArray("reasoning_details") ?: return emptyList()
+        return buildList {
             for (index in 0 until details.length()) {
                 val detail = details.optJSONObject(index) ?: continue
-                val key = when (detail.optString("type")) {
+                val type = detail.optString("type")
+                val key = when (type) {
                     "reasoning.text" -> "text"
                     "reasoning.summary" -> "summary"
                     else -> continue
                 }
-                (detail.opt(key) as? String)?.let(::append)
+                (detail.opt(key) as? String)?.takeIf { it.isNotEmpty() }?.let { add(ProviderRawPart(type, it)) }
             }
         }
     }

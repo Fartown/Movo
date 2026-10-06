@@ -83,6 +83,16 @@ class OpenAiChatCompletionsProviderTest {
             assertEquals("第一段第二段第三段摘要", response.assistantMessage.getString("reasoning_content"))
             assertEquals(listOf("第一段", "第二段", "第三段摘要"), events.filterIsInstance<ProviderEvent.BlockDelta>()
                 .filter { it.kind == AssistantBlockKind.THINKING }.map { it.delta })
+            // 运行日志按服务商原始类型记：同一片里的 reasoning.text 和 reasoning.summary 拆开。
+            assertEquals(
+                listOf(
+                    listOf("reasoning_content" to "第一段"),
+                    listOf("reasoning" to "第二段"),
+                    listOf("reasoning.text" to "第三段", "reasoning.summary" to "摘要"),
+                ),
+                events.filterIsInstance<ProviderEvent.BlockDelta>().filter { it.kind == AssistantBlockKind.THINKING }
+                    .map { delta -> delta.rawParts.orEmpty().map { it.type to it.text } },
+            )
             assertEquals("第一段第二段第三段摘要", events.filterIsInstance<ProviderEvent.BlockEnd>()
                 .single { it.kind == AssistantBlockKind.THINKING }.content)
         }

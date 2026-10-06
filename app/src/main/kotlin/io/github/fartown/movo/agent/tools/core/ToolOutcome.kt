@@ -129,6 +129,11 @@ internal data class ToolOutcome(
     val evidence: String? = null,
     /** 执行卡这一步的界面视图（工具可视化方案）；不发给模型。 */
     val view: ToolUiView? = null,
+    /**
+     * 合同工具给出的原始结果类型：read / done / dispatched / backgrounded / unknown / failed（见 [Verdict]）。
+     * 只给运行日志用；不经合同的结果（参数错误、审批拒绝等）为空。
+     */
+    val verdict: String? = null,
 ) {
     val isOk: Boolean get() = status == ToolStatus.OK
 

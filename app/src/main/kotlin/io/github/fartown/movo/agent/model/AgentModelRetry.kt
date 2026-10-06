@@ -23,6 +23,7 @@ internal class AgentModelRetry(
     ): Result {
         var round = initialRound
         var retries = 0
+        var previousAttempt: String? = null
         while (true) {
             controller.throwIfCancelled()
             onEvent(AgentEvent.RoundStarted(round, request.messages.length()))
@@ -30,9 +31,15 @@ internal class AgentModelRetry(
             var callbackFailed = false
             val trace = ModelRequestTrace(request, provider.id, round, retries + 1)
             val traceBinding = ModelRequestTrace.bind(trace)
+            // 完整运行日志：每次尝试恰好一条 attempt_start 和一条 attempt_end（压缩请求也经过这里）。
+            val attemptLog = io.github.fartown.movo.diagnostics.runlog.RunLogRecorder.attemptStarted(
+                trace.context.request, round, previousAttempt, request.purpose,
+            )
+            previousAttempt = trace.context.request
             try {
                 val response = provider.complete(request, controller) { event ->
                     if (event is ProviderEvent.HostedToolStarted) hostedToolStarted = true
+                    attemptLog?.onProviderEvent(event)
                     try {
                         onProviderEvent(round, event)
                     } catch (failure: Exception) {
@@ -41,8 +48,10 @@ internal class AgentModelRetry(
                     }
                 }
                 trace.success()
+                attemptLog?.succeeded(response.assistantMessage)
                 return Result(round, response)
             } catch (failure: Exception) {
+                attemptLog?.failed(failure, controller.isCancelled || Thread.currentThread().isInterrupted)
                 trace.failed(failure, controller.isCancelled || Thread.currentThread().isInterrupted, callbackFailed)
                 controller.throwIfCancelled()
                 if (callbackFailed || Thread.currentThread().isInterrupted) throw failure

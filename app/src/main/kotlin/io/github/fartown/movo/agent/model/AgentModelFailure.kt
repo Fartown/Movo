@@ -18,6 +18,8 @@ internal class AgentModelFailure(
     val recoveryAllowed: Boolean = true,
     val providerCode: String? = null,
     val providerType: String? = null,
+    /** 服务商返回的错误原文（HTTP 错误体前 16KB、SSE 错误事件），只给运行日志用。 */
+    val responseBody: String? = null,
 ) : IllegalStateException(message, cause) {
     companion object {
         private val transientStatus = setOf(408, 429, 500, 502, 503, 504, 524, 529)
@@ -36,7 +38,7 @@ internal class AgentModelFailure(
                 null
             }
             if (isContextOverflow(error)) return AgentModelFailure(
-                "CONTEXT_OVERFLOW", false, "模型上下文超过容量限制。",
+                "CONTEXT_OVERFLOW", false, "模型上下文超过容量限制。", responseBody = body,
             )
             val permanent = isPermanent(error, body)
             return AgentModelFailure(
@@ -53,12 +55,13 @@ internal class AgentModelFailure(
                 },
                 providerCode = error?.optString("code"),
                 providerType = error?.optString("type"),
+                responseBody = body,
             )
         }
 
         fun stream(error: JSONObject, message: String): AgentModelFailure {
             if (isContextOverflow(error)) return AgentModelFailure(
-                "CONTEXT_OVERFLOW", false, "模型上下文超过容量限制。",
+                "CONTEXT_OVERFLOW", false, "模型上下文超过容量限制。", responseBody = error.toString(),
             )
             val codes = listOf(
                 error.optString("code"),
@@ -72,6 +75,7 @@ internal class AgentModelFailure(
                 message = message,
                 providerCode = error.optString("code"),
                 providerType = error.optString("type"),
+                responseBody = error.toString(),
             )
         }
 

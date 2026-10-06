@@ -25,11 +25,14 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityManager
+import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import io.github.fartown.movo.ui.model.AgentInteractionUiState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -279,6 +282,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         override fun onActivityDestroyed(activity: android.app.Activity) = Unit
     }
     private val panelIdleToken = Any()
+    /** 手指正按在展开卡上：不自动收回（Agent 自己注入的手势不算）。 */
+    private val panelHold = PanelTouchHold()
+    /** 注册给 [io.github.fartown.movo.agent.device.AgentTouchInjection]：Agent 要按的点被展开卡或悬浮球挡住时先让开。 */
+    private val overlayYield: (Float, Float) -> (() -> Unit)? = { x, y -> yieldOverlaysTo(x, y) }
     private var hasExecutedForegroundTool = false
     /** 这一轮悬浮球离开过待命、显示过执行中（用户在 Movo 外面能看到这一轮在跑）。 */
     private var runShownOnOrb = false
@@ -292,6 +299,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     override fun onCreate() {
         super.onCreate()
         liveInstance = this
+        io.github.fartown.movo.agent.device.AgentTouchInjection.overlayYield = overlayYield
         savedStateRegistryController.performRestore(null)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
@@ -389,6 +397,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     override fun onDestroy() {
         finishInstrumentationFixture()
         if (liveInstance === this) liveInstance = null
+        if (io.github.fartown.movo.agent.device.AgentTouchInjection.overlayYield === overlayYield) {
+            io.github.fartown.movo.agent.device.AgentTouchInjection.overlayYield = null
+        }
         application.unregisterActivityLifecycleCallbacks(appActivityCallbacks)
         io.github.fartown.movo.agent.overlay.OrbPrefs.prefs(this).unregisterOnSharedPreferenceChangeListener(orbPrefsListener)
         AgentAccessibilityService.removeInstanceListener(onAccessibilityInstanceChanged)
@@ -410,6 +421,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             )
         }
         pendingStartRequest = null
+        activeSession?.takeIf { !it.isTerminal }?.let { io.github.fartown.movo.diagnostics.runlog.RunLog.stop(it.runId, "runtime.destroyed") }
         activeSession?.cancel("Agent Runtime 服务已停止")
         activeSession = null
         backgroundRun = null
@@ -473,6 +485,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
                 AgentRuntimeWire.MSG_CANCEL -> {
                     val runId = msg.data?.let(AgentRuntimeWire::runIdFromBundle).orEmpty()
+                    // App 自己发来的取消已在 App 侧记了来源；其他进程发来的在这里记。
+                    if (runId.isNotBlank() && msg.sendingUid != Process.myUid()) {
+                        io.github.fartown.movo.diagnostics.runlog.RunLog.stop(runId, "external:${msg.sendingUid}")
+                    }
                     if (runId.isNotBlank()) cancelRun(runId)
                 }
 
@@ -664,6 +680,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             ?.takeIf { it.source == AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE && replyTo != null }
             ?.let { request.runId to it.key }
         isResultConversation = fromResultCard || FlavorModule.surfaces.isConversationVisible(conversationTarget)
+        activeSession?.takeIf { !it.isTerminal }?.let { io.github.fartown.movo.diagnostics.runlog.RunLog.stop(it.runId, "runtime.replaced") }
         activeSession?.controller?.cancel()
         // 被替换的任务若在等审批 / 提问，它的等待已随取消结束：卡片（App 内与悬浮）一并收起，不等它迟到的「已处理」。
         InteractionCardCoordinator.clearRun(activeSession?.runId)
@@ -1139,6 +1156,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             if (monitors.value.isNotEmpty()) endMonitorTask() else dismissAndStop()
             return
         }
+        if (!session.isTerminal) io.github.fartown.movo.diagnostics.runlog.RunLog.stop(session.runId, "overlay")
         cancelRun(session.runId)
         val conversationId = monitorConversationOf(
             backgroundRun?.takeIf { it.session === session }?.conversationTarget ?: resultConversationTarget,
@@ -1307,6 +1325,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     private fun requestPause() {
+        activeSession?.takeIf { !it.isTerminal }?.let { io.github.fartown.movo.diagnostics.runlog.RunLog.pause(it.runId) }
         activeSession?.controller?.pause()
         activeSession?.broadcast(AgentEvent.RunPaused)
         state.value = state.value.markPaused()
@@ -1314,6 +1333,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     private fun requestResume() {
         pausedForTyping = false
+        activeSession?.takeIf { !it.isTerminal }?.let { io.github.fartown.movo.diagnostics.runlog.RunLog.resume(it.runId) }
         activeSession?.controller?.resume()
         activeSession?.broadcast(AgentEvent.RunResumed)
         state.value = state.value.markResumed()
@@ -1335,6 +1355,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                     return
                 }
             } else {
+                io.github.fartown.movo.diagnostics.runlog.RunLog.supplement(session.runId, supplementText)
                 AndroidAgentLogger.info(
                     "Agent runtime supplement received: index=${event.index}, chars=${event.text.length}"
                 )
@@ -1355,6 +1376,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         if (supplementText.isBlank()) return false
         val session = activeSession?.takeIf { it.runId == runId && !it.isTerminal } ?: return false
         val event = session.steer(supplementText) { recordSupplementEvent(supplementText) } ?: return false
+        io.github.fartown.movo.diagnostics.runlog.RunLog.supplement(runId, supplementText)
         AndroidAgentLogger.info(
             "Agent runtime supplement received from app: index=${event.index}, chars=${event.text.length}"
         )
@@ -1730,8 +1752,75 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             collapsed.value = true
             return
         }
+        // 上次为 Agent 让开时窗口设成了不接触摸；窗口还没移走就又展开时恢复。
+        setWindowTouchable(bubbleView, bubbleParams, touchable = true)
         collapsed.value = false
         scheduleBubbleAutoCollapse()
+    }
+
+    /**
+     * Agent 要从屏幕上的 ([x], [y]) 按下，而 Movo 自己的浮层挡在那里（规范 8.1）：展开卡立刻不接触摸并收起；悬浮球照常显示、
+     * 这一下暂不接触摸，按完恢复（返回的恢复动作）。等窗口变化生效（[OVERLAY_YIELD_SETTLE_MS]）再让 Agent 按，
+     * 免得这一下被浮层收走、按到卡片上的「结束任务」「暂停」，或点开了卡片。在注入线程上调用；主线程上不等。
+     */
+    private fun yieldOverlaysTo(x: Float, y: Float): (() -> Unit)? {
+        if (Looper.myLooper() == Looper.getMainLooper()) return null
+        val checked = java.util.concurrent.CountDownLatch(1)
+        val panelYielded = java.util.concurrent.atomic.AtomicBoolean(false)
+        val orbYielded = java.util.concurrent.atomic.AtomicBoolean(false)
+        val posted = mainHandler.post {
+            try {
+                if (windowBlocks(bubbleView, bubbleParams, x, y)) {
+                    panelYielded.set(true)
+                    setWindowTouchable(bubbleView, bubbleParams, touchable = false)
+                    AndroidAgentLogger.info("Agent overlay yields to an agent touch: panel")
+                    collapseBubble()
+                }
+                if (windowBlocks(orbView, orbParams, x, y)) {
+                    orbYielded.set(true)
+                    setWindowTouchable(orbView, orbParams, touchable = false)
+                    AndroidAgentLogger.info("Agent overlay yields to an agent touch: orb")
+                }
+            } finally {
+                checked.countDown()
+            }
+        }
+        if (!posted) return null
+        val answered = runCatching {
+            checked.await(OVERLAY_YIELD_CHECK_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        }.getOrDefault(false)
+        if (answered && (panelYielded.get() || orbYielded.get())) android.os.SystemClock.sleep(OVERLAY_YIELD_SETTLE_MS)
+        // 主线程没来得及回答时也恢复一次（判断可能在之后才执行）；悬浮球本来就接触摸时是空操作。
+        if (!answered || orbYielded.get()) return { mainHandler.post { setWindowTouchable(orbView, orbParams, touchable = true) } }
+        return null
+    }
+
+    /** 这个浮层窗口是否显示着、接触摸，并且盖住屏幕上的 ([x], [y])。整块窗口都接触摸（展开卡含阴影余量和球侧通道，收起动画期间也是）。 */
+    private fun windowBlocks(view: View?, lp: WindowManager.LayoutParams?, x: Float, y: Float): Boolean {
+        if (view == null || lp == null || !view.isAttachedToWindow || view.visibility != View.VISIBLE) return false
+        if (lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE != 0) return false
+        // 按窗口参数和量好的大小算（与 [OrbGeometry] 同一套绝对坐标）；不读窗口的实际位置，刚移动、刚加上时读到的是上一帧。
+        if (view.width <= 0 || view.height <= 0) return false
+        val display = displaySize()
+        val gravity = Gravity.getAbsoluteGravity(lp.gravity, view.layoutDirection)
+        return OrbGeometry.windowBounds(display.x, display.y, gravity, lp.x, lp.y, view.width, view.height).contains(x, y)
+    }
+
+    private fun setWindowTouchable(view: View?, lp: WindowManager.LayoutParams?, touchable: Boolean) {
+        val wm = windowManager ?: return
+        if (view == null || lp == null || !view.isAttachedToWindow) return
+        val nextFlags = if (touchable) {
+            lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        } else {
+            lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        }
+        if (lp.flags == nextFlags) return
+        lp.flags = nextFlags
+        runCatching { wm.updateViewLayout(view, lp) }.onFailure { throwable ->
+            AndroidAgentLogger.warnThrottled("runtime_overlay_touch_update_failed") {
+                "Agent runtime overlay touch update failed: type=${throwable.safeLogType()}"
+            }
+        }
     }
 
     /** 收起：先让展开卡缩回球心（250ms），再移除窗口。 */
@@ -1765,19 +1854,35 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         panelNotice.value = null
     }
 
-    /** 展开卡 4s 无操作自动收回；暂停态、输入补充时不收回（规范 8.1）。 */
+    /**
+     * 展开卡 4s 无操作自动收回；暂停态、输入补充时不收回（规范 8.1）。手指按在卡片上不算无操作：
+     * 按住期间不收，抬起后重新计时；系统无障碍「操作时限」调长时跟着变长。
+     */
     private fun scheduleBubbleAutoCollapse() {
         mainHandler.removeCallbacksAndMessages(panelIdleToken)
+        if (panelHold.held) return
         mainHandler.postDelayed({
             val lp = bubbleParams
             val typing = lp != null && lp.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE == 0
-            if (!collapsed.value && state.value.phase == AgentOverlayPhase.RUNNING && !typing && !VoiceSessionManager.active &&
-                endedTask.value == null
+            if (!collapsed.value && !panelHold.held && state.value.phase == AgentOverlayPhase.RUNNING && !typing &&
+                !VoiceSessionManager.active && endedTask.value == null
             ) {
                 collapseBubble()
             }
-        }, panelIdleToken, PANEL_AUTO_COLLAPSE_MS)
+        }, panelIdleToken, panelAutoCollapseMs())
     }
+
+    /** 手指按在展开卡上（[down]）时停掉自动收回，全部抬起后重新计时；Agent 注入的手势不算。 */
+    private fun onPanelTouch(down: Boolean) {
+        if (!panelHold.onTouch(down)) {
+            if (down) AndroidAgentLogger.info("Agent panel touch ignored: injected by the agent")
+            return
+        }
+        if (down) mainHandler.removeCallbacksAndMessages(panelIdleToken) else scheduleBubbleAutoCollapse()
+    }
+
+    private fun panelAutoCollapseMs(): Long =
+        PanelAutoCollapse.timeoutMs(getSystemService(AccessibilityManager::class.java))
 
     private val bubbleRemovalToken = Any()
 
@@ -1785,36 +1890,39 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun showBubble(wm: WindowManager): Boolean {
         if (bubbleView != null) return true
         val bubble = createOverlayComposeView {
-            FlavorModule.runSurface.Bubble(
-                state = state.value,
-                onCollapse = ::collapseBubble,
-                onPause = ::requestPause,
-                onResume = ::requestResume,
-                onStop = ::requestStop,
-                onSupplementModeChange = ::setBubbleInputMode,
-                onSupplement = ::requestSupplement,
-                onSupplementKeyboardRequested = ::onSupplementKeyboardRequested,
-                anchorEnd = orbOnEnd.value,
-                visible = bubbleVisible.value,
-                onInteraction = ::scheduleBubbleAutoCollapse,
-                voice = VoiceSessionManager.state.collectAsState().value,
-                onStartVoice = ::startPanelVoice,
-                onEndVoice = VoiceSessionManager::switchToText,
-                onOpenResult = ::onOrbTapped,
-                notice = panelNotice.value,
-                orbCenterOnScreen = { orbCenterOnScreen.value },
-                orbLiftPx = { ((bubbleParams?.y ?: bubbleBaseY) - bubbleBaseY).toFloat() },
-                // 展开卡的球侧通道盖住了隐形的真球：落在球上的点按、长按、拖动按悬浮球处理。
-                onOrbTap = ::onOrbTapped,
-                onOrbLongPress = ::onOrbLongPressed,
-                onOrbDragStart = ::onOrbDragStart,
-                onOrbDrag = ::handleDrag,
-                onOrbDragEnd = ::onOrbDragEnd,
-                taskPanel = taskPanel(),
-                onEndMonitors = ::endMonitorTask,
-                onUndoEnd = ::undoTaskEnding,
-                onOpenMonitorConversation = ::openMonitorConversation,
-            )
+            // 只观察、不消费：手指按在卡片上时不自动收回，免得卡片在手指下收起、这一下点到下面的 App。
+            Box(Modifier.observePanelTouches(::onPanelTouch)) {
+                FlavorModule.runSurface.Bubble(
+                    state = state.value,
+                    onCollapse = ::collapseBubble,
+                    onPause = ::requestPause,
+                    onResume = ::requestResume,
+                    onStop = ::requestStop,
+                    onSupplementModeChange = ::setBubbleInputMode,
+                    onSupplement = ::requestSupplement,
+                    onSupplementKeyboardRequested = ::onSupplementKeyboardRequested,
+                    anchorEnd = orbOnEnd.value,
+                    visible = bubbleVisible.value,
+                    onInteraction = ::scheduleBubbleAutoCollapse,
+                    voice = VoiceSessionManager.state.collectAsState().value,
+                    onStartVoice = ::startPanelVoice,
+                    onEndVoice = VoiceSessionManager::switchToText,
+                    onOpenResult = ::onOrbTapped,
+                    notice = panelNotice.value,
+                    orbCenterOnScreen = { orbCenterOnScreen.value },
+                    orbLiftPx = { ((bubbleParams?.y ?: bubbleBaseY) - bubbleBaseY).toFloat() },
+                    // 展开卡的球侧通道盖住了隐形的真球：落在球上的点按、长按、拖动按悬浮球处理。
+                    onOrbTap = ::onOrbTapped,
+                    onOrbLongPress = ::onOrbLongPressed,
+                    onOrbDragStart = ::onOrbDragStart,
+                    onOrbDrag = ::handleDrag,
+                    onOrbDragEnd = ::onOrbDragEnd,
+                    taskPanel = taskPanel(),
+                    onEndMonitors = ::endMonitorTask,
+                    onUndoEnd = ::undoTaskEnding,
+                    onOpenMonitorConversation = ::openMonitorConversation,
+                )
+            }
         }
         val lp = bubbleLayoutParams()
         runCatching { wm.addView(bubble, lp) }.onFailure { throwable ->
@@ -3058,7 +3166,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         const val APP_LEAVE_SETTLE_MS = 300L
         /** 交接等对话浮层回报的上限（浮层进场最多等内容 400ms + 两帧，留足余量）。 */
         const val SHEET_HANDOFF_TIMEOUT_MS = 1_500L
-        const val PANEL_AUTO_COLLAPSE_MS = 4_000L
+        /** 为 Agent 让开：等主线程判断浮层是否挡住的上限。 */
+        const val OVERLAY_YIELD_CHECK_MS = 300L
+        /** 为 Agent 让开：浮层设成不接触摸后，等输入系统用上新窗口状态的时间。 */
+        const val OVERLAY_YIELD_SETTLE_MS = 250L
         /** 从展开卡发起语音后，语音服务报告「没能开始」时转述到展开卡的时间窗。 */
         const val PANEL_VOICE_NOTICE_WINDOW_MS = 3_000L
         const val IME_TRACK_INTERVAL_MS = 60L

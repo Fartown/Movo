@@ -1082,6 +1082,8 @@ internal class AgentAppState(
     }
 
     fun deleteConversation(conversationId: String) {
+        // 完整运行日志随对话一起删除。
+        io.github.fartown.movo.diagnostics.runlog.RunLog.deleteConversation(conversationId)
         forgetMonitorsOf(conversationId)
         if (voiceSession.ownsConversation(conversationId)) voiceSession.end("对话已删除，语音已结束")
         if (queuedTextSubmission?.conversationId == conversationId) queuedTextSubmission = null
@@ -1775,7 +1777,7 @@ internal class AgentAppState(
             val leaseId = "prepare:$runId"
             val acquired = AgentExecutionService.acquire(appContext, leaseId, task = runId) {
                 scope.launch(Dispatchers.Main.immediate) {
-                    if (currentRunId == runId) stopCurrentRun()
+                    if (currentRunId == runId) stopCurrentRun("app.lease_stop")
                 }
             }
             if (!acquired) {
@@ -1986,15 +1988,20 @@ internal class AgentAppState(
 
     override fun cancelVoiceRun(runId: String) {
         if (currentRunId == runId && voiceRunListeners.containsKey(runId)) {
-            stopCurrentRun() // Also records cancellation while role preparation is pending.
+            stopCurrentRun("app.voice") // Also records cancellation while role preparation is pending.
         } else {
+            io.github.fartown.movo.diagnostics.runlog.RunLog.stop(runId, "app.voice")
             scope.launch(Dispatchers.IO) { AgentRuntimeClient(appContext, AndroidAgentLogger).cancelRun(runId) }
         }
     }
 
-    override fun stopCurrentRun() {
+    override fun stopCurrentRun() = stopCurrentRun("app.stop")
+
+    /** [source] 记进完整运行日志：这次停止是从哪里来的。 */
+    private fun stopCurrentRun(source: String) {
         val runId = currentRunId ?: return
         if (!stopRequestedRunIds.add(runId)) return
+        io.github.fartown.movo.diagnostics.runlog.RunLog.stop(runId, source)
         endMonitorsOwnedBy(runId)
         scope.launch(Dispatchers.IO) {
             AgentRuntimeClient(appContext, AndroidAgentLogger).cancelRun(runId)
@@ -2430,8 +2437,11 @@ internal class AgentAppState(
         persistSupplement: Boolean = true,
     ) {
         if (isReplyRewrite(runId)) {
-            if (event is AgentEvent.RunStarted && runId in stopRequestedRunIds) scope.launch(Dispatchers.IO) {
-                AgentRuntimeClient(appContext, AndroidAgentLogger).cancelRun(runId)
+            if (event is AgentEvent.RunStarted && runId in stopRequestedRunIds) {
+                io.github.fartown.movo.diagnostics.runlog.RunLog.stop(runId, "app.resend_rewrite")
+                scope.launch(Dispatchers.IO) {
+                    AgentRuntimeClient(appContext, AndroidAgentLogger).cancelRun(runId)
+                }
             }
             return
         }
@@ -2598,8 +2608,11 @@ internal class AgentAppState(
             }
 
             is AgentEvent.RunStarted -> {
-                if (runId in stopRequestedRunIds) scope.launch(Dispatchers.IO) {
-                    AgentRuntimeClient(appContext, AndroidAgentLogger).cancelRun(runId)
+                if (runId in stopRequestedRunIds) {
+                    io.github.fartown.movo.diagnostics.runlog.RunLog.stop(runId, "app.resend")
+                    scope.launch(Dispatchers.IO) {
+                        AgentRuntimeClient(appContext, AndroidAgentLogger).cancelRun(runId)
+                    }
                 }
                 // 运行时已在执行这一轮：准备期间到的监听事件现在可以并入了（重放时不触发）。
                 startedRunIds += runId
@@ -3040,6 +3053,7 @@ internal class AgentAppState(
         AndroidAgentLogger.info("Monitor event turn yields to a user run")
         // 准备阶段由 stopRequestedRunIds 拦下；已交给运行时的由取消结束，结果按「让路」撤回而不是「已停止」。
         stopRequestedRunIds += runId
+        io.github.fartown.movo.diagnostics.runlog.RunLog.stop(runId, "app.yield_to_user")
         scope.launch(Dispatchers.IO) { AgentRuntimeClient(appContext, AndroidAgentLogger).cancelRun(runId) }
     }
 

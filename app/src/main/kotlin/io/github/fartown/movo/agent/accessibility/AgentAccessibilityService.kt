@@ -30,6 +30,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import io.github.fartown.movo.flavor.FlavorModule
+import io.github.fartown.movo.agent.device.AgentTouchInjection
 import io.github.fartown.movo.agent.device.ScrollAxis
 import io.github.fartown.movo.agent.device.ScrollAxisContract
 import io.github.fartown.movo.agent.device.ScrollDirection
@@ -925,6 +926,8 @@ open class AgentAccessibilityService : AccessibilityService() {
 
     fun gestureTap(x: Float, y: Float, durationMs: Long = 50): NodeActionResult =
         dispatchGestureResult(
+            x,
+            y,
             Path().apply {
                 moveTo(x, y)
                 lineTo(x, y)
@@ -941,6 +944,8 @@ open class AgentAccessibilityService : AccessibilityService() {
         durationMs: Long,
     ): NodeActionResult =
         dispatchGestureResult(
+            x1,
+            y1,
             Path().apply {
                 moveTo(x1, y1)
                 lineTo(x2, y2)
@@ -1833,7 +1838,22 @@ open class AgentAccessibilityService : AccessibilityService() {
             MainThreadCallResult.OUTCOME_UNKNOWN -> ActionDispatch.OUTCOME_UNKNOWN
         }
 
+    /**
+     * 从 ([startX], [startY]) 按下的手势（[AgentTouchInjection]）：挡在起点上的展开卡先让开；执行期间标记为 Agent 注入，
+     * 落在 Movo 浮层上的这一下不当成用户的手指。手势整个归按下那一点所在的窗口，所以只看起点。
+     */
     private fun dispatchGestureResult(
+        startX: Float,
+        startY: Float,
+        path: Path,
+        durationMs: Long,
+        successMethod: String,
+    ): NodeActionResult {
+        if (Looper.myLooper() == Looper.getMainLooper()) return dispatchGestureNow(path, durationMs, successMethod)
+        return AgentTouchInjection.touchAt(startX, startY) { dispatchGestureNow(path, durationMs, successMethod) }
+    }
+
+    private fun dispatchGestureNow(
         path: Path,
         durationMs: Long,
         successMethod: String,
