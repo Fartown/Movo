@@ -89,6 +89,10 @@ class UiToolsTest {
         assertTrue(result.sensitive) // PRIVATE
         assertEquals("obs1", json.getJSONObject("data").getString("observation_id"))
         assertEquals(1L, json.getJSONObject("data").getLong("gen"))
+        // 屏幕文字和截图一样可能是别的应用的内容，只在本次运行中显示。
+        val view = result.outcome!!.view!!
+        assertEquals("你好", (view.blocks.single() as io.github.fartown.movo.agent.tools.core.ToolUiBlock.Items).items.single().title)
+        assertTrue(view.transient)
     }
 
     @Test
@@ -468,6 +472,50 @@ class UiToolsTest {
 
     // ---- 假后端 ----
 
+    // ---- 执行卡标题与视图（工具可视化方案）----
+
+    private fun title(tool: io.github.fartown.movo.agent.tools.core.AgentTool, args: String) =
+        tool.stepTitle(ToolArgs(JSONObject(args)), accessibilityEnv)
+
+    @Test
+    fun stepTitle_tapNamesTheObservedNode() {
+        val backend = FakeUiBackend(observedNodes = mapOf(3 to UiNodeProbe(text = "搜索系统设置项")))
+        val tap = ContractTool(UiTapTool(backend, backend))
+        assertEquals("点按「搜索系统设置项」", title(tap, """{"index":3,"observation_id":"obs1"}"""))
+        assertEquals("长按「搜索系统设置项」", title(tap, """{"index":3,"observation_id":"obs1","hold_ms":600}"""))
+        assertEquals("点按屏幕 (100, 200)", title(tap, """{"x":100,"y":200}"""))
+    }
+
+    @Test
+    fun stepTitle_inputNeverShowsAPassword() {
+        val plain = FakeUiBackend(focusedPassword = false)
+        assertEquals("输入「蓝牙」", title(ContractTool(UiInputTool(plain, plain)), """{"text":"蓝牙"}"""))
+        val password = FakeUiBackend(focusedPassword = true)
+        assertEquals("在密码框输入 7 个字符", title(ContractTool(UiInputTool(password, password)), """{"text":"hunter2"}"""))
+        // 判断不了是不是密码框：只写字数。
+        val unknown = FakeUiBackend(focusedPassword = null)
+        val masked = title(ContractTool(UiInputTool(unknown, unknown)), """{"text":"hunter2"}""")
+        assertEquals("输入 7 个字", masked)
+        val node = FakeUiBackend(observedNodes = mapOf(0 to UiNodeProbe(text = null, password = true)))
+        assertFalse(title(ContractTool(UiInputTool(node, node)), """{"text":"hunter2","index":0,"observation_id":"obs1"}""")!!.contains("hunter2"))
+    }
+
+    @Test
+    fun view_inputAndScrollSummaries() {
+        val backend = FakeUiBackend(
+            inputResult = UiInputResult.Written("set_text", true, 2, false, "com.example.app", false),
+            scrollResult = UiScrollResult.Finished(true, true, "com.example.app"),
+        )
+        val input = pipeline(provider(ContractTool(UiInputTool(backend, backend))), accessibilityEnv)
+            .execute(call("ui_input", """{"text":"蓝牙"}""")).outcome!!.view!!
+        assertEquals("已输入", input.summary)
+        val scroll = pipeline(provider(ContractTool(UiScrollTool(backend, backend))), accessibilityEnv)
+            .execute(call("ui_scroll", """{"direction":"down"}""")).outcome!!.view!!
+        assertEquals("已滚动 · 到头了", scroll.summary)
+        assertEquals("向下滚动", title(ContractTool(UiScrollTool(backend, backend)), """{"direction":"down"}"""))
+        assertEquals("按「返回」", title(ContractTool(UiKeyTool(backend, backend)), """{"key":"back"}"""))
+    }
+
     private class FakeUiBackend(
         override val selfPackage: String = "io.github.fartown.movo",
         private val foreground: String? = "com.example.app",
@@ -483,6 +531,7 @@ class UiToolsTest {
         private val keyResult: UiInjectResult = UiInjectResult.Dispatched("global", "com.example.app", false),
         private val waitResult: UiWaitResult = UiWaitResult.Finished(true, 0, null),
         private val focusedPassword: Boolean? = null,
+        private val observedNodes: Map<Int, UiNodeProbe> = emptyMap(),
     ) : UiObserveBackend, UiActionBackend {
         var tapCalled = false
         var swipeCalled = false
@@ -493,6 +542,7 @@ class UiToolsTest {
         override fun observationPackage(observationId: String): String? = observationPackageMap[observationId]
         override fun observe(request: UiObserveRequest, env: ToolEnvironment) = observeResult
         override fun focusedInputIsPassword(): Boolean? = focusedPassword
+        override fun observedNode(observationId: String, index: Int): UiNodeProbe? = observedNodes[index]
 
         override fun backend(env: ToolEnvironment): InjectionBackend = when {
             env.accessibilityUsable -> InjectionBackend.ACCESSIBILITY

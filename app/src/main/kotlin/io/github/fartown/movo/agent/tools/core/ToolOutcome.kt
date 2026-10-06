@@ -127,6 +127,8 @@ internal data class ToolOutcome(
     val effectVerified: Boolean? = null,
     /** 验证证据摘要（给 UI/日志；模型投影只用 status）。 */
     val evidence: String? = null,
+    /** 执行卡这一步的界面视图（工具可视化方案）；不发给模型。 */
+    val view: ToolUiView? = null,
 ) {
     val isOk: Boolean get() = status == ToolStatus.OK
 

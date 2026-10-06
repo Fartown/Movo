@@ -1,5 +1,11 @@
 package io.github.fartown.movo.agent.tools.personal
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiDuration
+import io.github.fartown.movo.agent.tools.core.uiText
+import io.github.fartown.movo.agent.tools.core.uiTime
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.Risk
@@ -94,6 +100,26 @@ internal class HealthReadTool(
             is HealthReadResult.Unavailable -> Verdict.Failed(result.error)
             null -> Verdict.Failed(ToolError(ToolErrorCode.SOURCE_UNAVAILABLE, "健康数据暂时读不到"))
         }
+    }
+
+    override fun uiTitle(input: HealthReadInput): String =
+        if (input.days <= 1) "查看今天的健康数据" else "查看最近 ${input.days} 天的健康数据"
+
+    override fun renderForUi(input: HealthReadInput, output: HealthReadOutput): ToolUiView {
+        if (!output.hasData) return ToolUiView(summary = "没有数据")
+        val labels = mapOf(
+            "steps" to "步数", "sleep" to "睡眠", "exercise" to "运动", "heart_rate" to "心率",
+            "weight" to "体重", "spo2" to "血氧", "oxygen_saturation" to "血氧",
+        )
+        val fields = output.summary.keys().asSequence().map { key ->
+            ToolUiBlock.Field(labels[key] ?: key, output.summary.opt(key).uiText())
+        }.toList()
+        val steps = output.summary.opt("steps")?.let { "步数 ${it.uiText(40)}" }
+        return ToolUiView(
+            summary = steps ?: "${fields.size} 项",
+            blocks = listOf(ToolUiBlock.Fields(fields)).filter { fields.isNotEmpty() },
+            transient = true,
+        )
     }
 
     override fun renderForModel(output: HealthReadOutput): ModelContent =

@@ -1,5 +1,11 @@
 package io.github.fartown.movo.agent.tools.device
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiFields
+import io.github.fartown.movo.agent.tools.core.uiItems
+import io.github.fartown.movo.agent.tools.core.uiText
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.Risk
@@ -61,6 +67,15 @@ internal class AppSearchTool(
         val apps = backend.search(input.query, input.limit).take(input.limit)
         return Verdict.Read(AppSearchOutput(apps))
     }
+
+    override fun uiTitle(input: AppSearchInput): String = "搜索应用「${input.query.forTitle()}」"
+
+    override fun renderForUi(input: AppSearchInput, output: AppSearchOutput): ToolUiView = ToolUiView(
+        summary = if (output.apps.isEmpty()) "没找到" else "找到 ${output.apps.size} 个",
+        blocks = listOf(
+            ToolUiBlock.Items(output.apps.map { ToolUiBlock.Item(it.name, it.packageName, icon = it.packageName) }),
+        ).filter { output.apps.isNotEmpty() },
+    )
 
     override fun renderForModel(output: AppSearchOutput): ModelContent {
         val array = JSONArray()

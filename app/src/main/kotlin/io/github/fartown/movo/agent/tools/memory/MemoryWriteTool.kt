@@ -1,5 +1,8 @@
 package io.github.fartown.movo.agent.tools.memory
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
 import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
@@ -202,6 +205,25 @@ internal class MemoryWriteTool(
                 next = "用 memory_read 回读 revision 确认",
             )
         }
+    }
+
+    /** 标题会存进对话记录，不写记忆内容；内容在展开里（只在本次运行中显示）。 */
+    override fun uiTitle(input: MemoryWriteInput): String = when (input.mode) {
+        MemoryWriteMode.APPEND -> "记住一条"
+        MemoryWriteMode.REPLACE -> if (input.newText.isNullOrEmpty()) "从记忆里删掉一段" else "修改记忆"
+        MemoryWriteMode.CLEAR -> "清空记忆"
+    }
+
+    override fun renderForUi(input: MemoryWriteInput, output: MemoryWriteOutput): ToolUiView = when (input.mode) {
+        MemoryWriteMode.APPEND -> ToolUiView(
+            summary = "已记住",
+            blocks = listOfNotNull(input.newText?.takeIf { it.isNotBlank() }?.let { ToolUiBlock.Preview(it, label = "记住") }),
+        )
+        MemoryWriteMode.REPLACE -> ToolUiView(
+            summary = if (input.newText.isNullOrEmpty()) "已删掉" else "已修改",
+            blocks = listOf(ToolUiBlock.Change(input.oldText, input.newText?.takeIf { it.isNotEmpty() })),
+        )
+        MemoryWriteMode.CLEAR -> ToolUiView(summary = "已清空")
     }
 
     override fun renderForModel(output: MemoryWriteOutput): ModelContent = ModelContent.Json(

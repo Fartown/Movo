@@ -1,5 +1,11 @@
 package io.github.fartown.movo.agent.tools.personal
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiDuration
+import io.github.fartown.movo.agent.tools.core.uiText
+import io.github.fartown.movo.agent.tools.core.uiTime
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.Risk
@@ -125,6 +131,18 @@ internal class SmsCodeReadTool(
             )
         return Verdict.Read(SmsCodeReadOutput(codes))
     }
+
+    override fun uiTitle(input: SmsCodeReadInput): String = "读取验证码"
+
+    /** 验证码是机密：只写找到几个和来自谁，不写验证码本身。 */
+    override fun renderForUi(input: SmsCodeReadInput, output: SmsCodeReadOutput): ToolUiView = ToolUiView(
+        summary = when {
+            output.codes.isEmpty() -> "没找到"
+            output.codes.size == 1 -> "找到 1 个" + output.codes.single().from?.takeIf { it.isNotBlank() }?.let { " · 来自 $it" }.orEmpty()
+            else -> "找到 ${output.codes.size} 个"
+        },
+        transient = true,
+    )
 
     override fun renderForModel(output: SmsCodeReadOutput): ModelContent {
         val array = JSONArray()

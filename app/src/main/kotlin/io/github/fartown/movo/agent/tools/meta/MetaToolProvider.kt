@@ -1,5 +1,7 @@
 package io.github.fartown.movo.agent.tools.meta
 
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.ToolUiView
 import io.github.fartown.movo.agent.tools.core.AgentTool
 import io.github.fartown.movo.agent.tools.core.Concurrency
 import io.github.fartown.movo.agent.tools.core.PromptSection
@@ -145,6 +147,9 @@ internal class MetaToolProvider : ToolProvider {
         override fun risk(args: ToolArgs, env: ToolEnvironment) = Risk.READ
         override fun concurrency(args: ToolArgs, env: ToolEnvironment) = Concurrency.Exclusive(ToolResource.CONVERSATION)
 
+        override fun stepTitle(args: ToolArgs, env: ToolEnvironment): String? =
+            args.raw.optString("question").takeIf { it.isNotBlank() }?.let { "问你：${it.forTitle(30)}" }
+
         override fun execute(args: ToolArgs, ctx: ToolContext): ToolOutcome {
             val question = args.nonBlank("question")
             if (question.codePointLength() > 200) invalidArgs("question 最多 200 字")
@@ -173,7 +178,7 @@ internal class MetaToolProvider : ToolProvider {
                     JSONObject().put("answer", answer.text).apply {
                         answer.optionIndex?.let { put("option_index", it) }
                     },
-                )
+                ).copy(view = ToolUiView(summary = "你选了「${answer.text.forTitle(30)}」"))
                 UserAnswer.Declined -> ToolOutcome.error(
                     ToolErrorCode.USER_DECLINED,
                     "用户取消了提问",

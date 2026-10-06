@@ -1,5 +1,8 @@
 package io.github.fartown.movo.agent.tools.clockmedia
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
 import io.github.fartown.movo.agent.tools.core.ModelContent
@@ -110,6 +113,20 @@ internal class VolumeSetTool(
         )
         // 系统钳制导致不一致仍算达成（Done + warning），回读本身就是本次动作的证据。
         return Verdict.Done(output, Evidence.ReadBack("${input.stream.name.lowercase()}=${readBack.actualPercent}%"))
+    }
+
+    override fun uiTitle(input: VolumeSetInput): String = "${input.stream.uiLabel()}音量调到 ${input.percent}%"
+
+    override fun renderForUi(input: VolumeSetInput, output: VolumeSetOutput): ToolUiView = ToolUiView(
+        summary = if (output.clamped) "实际是 ${output.actualPercent}%（系统限制）" else "现在 ${output.actualPercent}%",
+    )
+
+    private fun VolumeStream.uiLabel(): String = when (this) {
+        VolumeStream.MUSIC -> "媒体"
+        VolumeStream.RING -> "铃声"
+        VolumeStream.ALARM -> "闹钟"
+        VolumeStream.NOTIFICATION -> "通知"
+        VolumeStream.CALL -> "通话"
     }
 
     override fun renderForModel(output: VolumeSetOutput): ModelContent = ModelContent.Json(

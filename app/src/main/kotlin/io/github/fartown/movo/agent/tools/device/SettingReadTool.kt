@@ -1,5 +1,11 @@
 package io.github.fartown.movo.agent.tools.device
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiFields
+import io.github.fartown.movo.agent.tools.core.uiItems
+import io.github.fartown.movo.agent.tools.core.uiText
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.Risk
@@ -83,6 +89,16 @@ internal class SettingReadTool(
         }
         return Verdict.Read(SettingReadOutput(input.namespace, values))
     }
+
+    override fun uiTitle(input: SettingReadInput): String =
+        "读取设置 · " + input.keys.take(2).joinToString("、") { settingLabel(it) } + if (input.keys.size > 2) " 等" else ""
+
+    override fun renderForUi(input: SettingReadInput, output: SettingReadOutput): ToolUiView = ToolUiView(
+        summary = output.values.entries.singleOrNull()?.let { (_, v) -> v ?: "未设置" } ?: "${output.values.size} 项",
+        blocks = listOf(
+            ToolUiBlock.Fields(output.values.map { (k, v) -> ToolUiBlock.Field(settingLabel(k), v ?: "未设置") }),
+        ),
+    )
 
     override fun renderForModel(output: SettingReadOutput): ModelContent {
         val values = JSONObject()

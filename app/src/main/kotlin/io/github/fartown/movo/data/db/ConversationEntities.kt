@@ -106,4 +106,6 @@ internal data class ConversationMessageEntity(
     /** 工具步骤开始 / 结束时刻（毫秒，v22 起）；旧数据为 null。 */
     @ColumnInfo(name = "started_at") val startedAt: Long? = null,
     @ColumnInfo(name = "finished_at") val finishedAt: Long? = null,
+    /** 工具步骤的界面视图 JSON（v23 起）；只存非临时视图（截图、个人数据不存）。 */
+    @ColumnInfo(name = "tool_view_json") val toolViewJson: String? = null,
 )

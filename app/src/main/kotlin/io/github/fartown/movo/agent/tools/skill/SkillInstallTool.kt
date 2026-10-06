@@ -1,5 +1,9 @@
 package io.github.fartown.movo.agent.tools.skill
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiFields
 import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
@@ -179,6 +183,28 @@ internal class SkillInstallTool(
             )
             is SkillInstallOutcome.Failed -> Verdict.Failed(ToolError(o.code, o.message))
         }
+    }
+
+    override fun uiTitle(input: SkillInstallInput): String = when (input.action) {
+        SkillInstallAction.CURATED -> "浏览精选技能"
+        SkillInstallAction.INSPECT -> "查看技能仓库 · ${input.repository.orEmpty().forTitle(30)}"
+        SkillInstallAction.INSTALL -> "安装技能 · ${input.repository.orEmpty().forTitle(30)}"
+    }
+
+    override fun renderForUi(input: SkillInstallInput, output: SkillInstallOutput): ToolUiView {
+        if (output.action == SkillInstallAction.INSTALL) {
+            return ToolUiView(
+                summary = "已装 ${output.installed.size} 个",
+                blocks = listOf(ToolUiBlock.Items(output.installed.map { ToolUiBlock.Item(it.name) })).filter { output.installed.isNotEmpty() },
+            )
+        }
+        val items = output.discover?.items.orEmpty()
+        return ToolUiView(
+            summary = if (items.isEmpty()) "没有技能" else "${items.size} 个技能",
+            blocks = listOf(
+                ToolUiBlock.Items(items.map { ToolUiBlock.Item(it.name, it.path, trailing = "已装".takeIf { _ -> it.installed }) }),
+            ).filter { items.isNotEmpty() },
+        )
     }
 
     override fun renderForModel(output: SkillInstallOutput): ModelContent {

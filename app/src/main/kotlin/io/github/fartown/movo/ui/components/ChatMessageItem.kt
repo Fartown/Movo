@@ -1434,6 +1434,8 @@ internal fun WorkSteps(
         ),
     ) { mutableSetOf() }
     val reduced = io.github.fartown.movo.ui.theme.LocalReducedMotion.current
+    // 同时只展开一步（定稿 20、规范 Run/StepDetail）：展开哪一步记在这张卡上。
+    val expandedStep = rememberSaveable { mutableStateOf<String?>(null) }
     // 步骤增删（执行中较早的步骤收进「前面 N 步」、新步骤出现）：离场的行先淡出再收起高度，下面的行跟着平滑上移，
     // 不一帧跳（真机 reserve5：一帧 304px）；执行中新增的行高度从顶部展开（淡入上移 6 仍由 MovoEntrance 做）。
     // 变化期间卡片外框直接跟随里层高度（[WorkCardInnerResize]），不叠两层高度动画。
@@ -1450,6 +1452,7 @@ internal fun WorkSteps(
             )
         }
     }
+    androidx.compose.runtime.CompositionLocalProvider(LocalWorkStepExpansion provides expandedStep) {
     Column(modifier = modifier) {
         io.github.fartown.movo.ui.components.movo.MovoAnimatedRows(
             items = messages,
@@ -1511,6 +1514,25 @@ internal fun WorkSteps(
             }
         }
     }
+    }
+}
+
+/**
+ * 执行卡里当前展开的那一步（同时只展开一步，定稿 20）。不在执行卡里（旧样式独立行）时为空，各行自己记。
+ */
+internal val LocalWorkStepExpansion =
+    androidx.compose.runtime.compositionLocalOf<androidx.compose.runtime.MutableState<String?>?> { null }
+
+/** 执行卡里一步的展开状态：在执行卡里由卡片统一管（只开一步），否则各行自己记。 */
+@Composable
+private fun rememberStepExpansion(id: String): Pair<Boolean, () -> Unit> {
+    val shared = LocalWorkStepExpansion.current
+    if (shared != null) {
+        val expanded = shared.value == id
+        return expanded to { shared.value = if (expanded) null else id }
+    }
+    var local by rememberSaveable(id) { mutableStateOf(false) }
+    return local to { local = !local }
 }
 
 /** 整行可点的按压反馈（列表行：只叠加、不缩放，规范 9.3.1）。 */
@@ -3323,12 +3345,12 @@ private fun ThinkingRow(
     }
 
     if (compact) {
-        // 执行卡里的思考（3.2）：默认只显示两行摘要（思考中也是），点这一步才展开全文。
-        var stepExpanded by rememberSaveable(message.id) { mutableStateOf(false) }
+        // 执行卡里的思考（3.2）：默认只显示两行摘要（思考中也是），点这一步才展开全文；同时只展开一步。
+        val (stepExpanded, toggleStep) = rememberStepExpansion(message.id)
         WorkThinkingStep(
             message = message,
             expanded = stepExpanded,
-            onToggle = { stepExpanded = !stepExpanded },
+            onToggle = toggleStep,
             streamingState = streamingState,
             completedMarkdownState = completedMarkdownState,
             stableMarkdownState = stableMarkdownState,
@@ -3514,13 +3536,15 @@ private fun ToolActivityInline(
     }
 
     if (compact) {
+        val (stepExpanded, toggleStep) = rememberStepExpansion(message.id)
         WorkToolStep(
             message = message,
             title = title,
             // 规范 5：并列分隔用不带空格的「·」；运行时摘要沿用旧写法「 · 」，显示时统一。
             subtitle = (failureSubtitle ?: browserSubtitle ?: message.stepSummary())?.replace(" · ", "·"),
-            expanded = isExpanded,
-            onToggle = { isExpanded = !isExpanded },
+            expandable = message.isExpandable(showBrowserShortcut),
+            expanded = stepExpanded,
+            onToggle = toggleStep,
             showBrowserShortcut = showBrowserShortcut,
             browserSnapshot = browserSnapshot,
             onOpenBrowser = onOpenBrowser,
@@ -3718,6 +3742,18 @@ private fun ToolActivityInline(
             }
         }
     }
+}
+
+/**
+ * 有新东西可看的步骤才能展开（定稿 20）：有展开块、命令、浏览器预览，或截图在重启后只剩占位。
+ * 一句话的步骤（点按、输入…）、机密、个人数据重启后只剩第二行的，都不能展开；旧数据结果多于一行时照旧能展开。
+ */
+private fun ToolActivityMessageUi.isExpandable(showBrowserShortcut: Boolean): Boolean {
+    if (showBrowserShortcut) return true
+    if (!command.isNullOrBlank()) return true
+    view?.let { return it.blocks.isNotEmpty() }
+    if (imageCount > 0) return true
+    return (resultSummary?.lines()?.count { it.isNotBlank() } ?: 0) > 1
 }
 
 /** 工具步骤第二行：成功时取结果第一行（如包名、门店信息），运行中与没有结果时不显示。 */
@@ -4050,6 +4086,7 @@ private fun WorkToolStep(
     message: ToolActivityMessageUi,
     title: String,
     subtitle: String?,
+    expandable: Boolean,
     expanded: Boolean,
     onToggle: () -> Unit,
     showBrowserShortcut: Boolean,
@@ -4060,7 +4097,8 @@ private fun WorkToolStep(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .movoClickableRow(onToggle)
+            // 一句话的步骤、机密、重启后只剩摘要的步骤没有可展开的内容，整行不可点（定稿 20）。
+            .then(if (expandable) Modifier.movoClickableRow(onToggle) else Modifier)
             .padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
         Row(verticalAlignment = Alignment.Top) {
@@ -4120,7 +4158,7 @@ private fun WorkToolStep(
         }
         // 展开：高度 `standard`，内容与高度同时开始淡入 `fast`（不等待，第一帧就有内容）（规范 9.3「展开 / 收起」）。
         AnimatedVisibility(
-            visible = expanded,
+            visible = expanded && expandable,
             enter = fadeIn(
                 tween(
                     io.github.fartown.movo.ui.theme.MovoMotion.FAST,
@@ -4131,6 +4169,9 @@ private fun WorkToolStep(
                 shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), shrinkTowards = Alignment.Top),
         ) {
             ReportWorkCardInnerResize()
+            val view = message.view
+            // 旧数据（没有视图）：沿用原来的「结果」全文；有视图时第二行已是关键结果，展开只放块。
+            val legacyResult = view == null && message.imageCount == 0 && !message.resultSummary.isNullOrBlank()
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -4138,34 +4179,38 @@ private fun WorkToolStep(
                     .clip(RoundedCornerShape(12.dp))
                     .background(io.github.fartown.movo.ui.theme.MovoColors.bgSurfaceMuted)
                     .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 if (!message.command.isNullOrBlank()) {
-                    ToolCommandBlock(
-                        command = message.command,
-                        context = message.argumentsSummary,
-                        modifier = Modifier.padding(bottom = if (message.resultSummary.isNullOrBlank()) 0.dp else 10.dp),
-                    )
+                    ToolCommandBlock(command = message.command, context = stringResource(R.string.tool_step_command))
                 }
-                if (!message.resultSummary.isNullOrBlank()) {
-                    Text(
-                        text = stringResource(R.string.ui_result_0a2c91),
-                        style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
-                        color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
-                    )
-                    Text(
-                        text = message.resultSummary,
-                        style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular,
-                        color = io.github.fartown.movo.ui.theme.MovoColors.textPrimary,
-                        maxLines = 10,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                when {
+                    view != null && view.blocks.isNotEmpty() -> ToolStepBlocks(view)
+                    // 截图只在本次运行中显示：重启后视图没了，留一句说明（定稿 20 · 13）。
+                    view == null && message.imageCount > 0 -> ToolStepImageGone()
+                }
+                if (legacyResult) {
+                    Column {
+                        Text(
+                            text = stringResource(R.string.ui_result_0a2c91),
+                            style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
+                            color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                        )
+                        Text(
+                            text = message.resultSummary.orEmpty(),
+                            style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular,
+                            color = io.github.fartown.movo.ui.theme.MovoColors.textPrimary,
+                            maxLines = 10,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
                 if (showBrowserShortcut) {
                     browserSnapshot?.takeIf { it.available }?.let { snapshot ->
-                        BrowserPagePreview(snapshot = snapshot, modifier = Modifier.padding(top = 8.dp))
+                        BrowserPagePreview(snapshot = snapshot)
                     }
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.End,
                     ) {
                         io.github.fartown.movo.ui.components.movo.MovoPillButton(

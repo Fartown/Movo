@@ -1,5 +1,8 @@
 package io.github.fartown.movo.agent.tools.ui
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.InjectionBackend
 import io.github.fartown.movo.agent.tools.core.ModelContent
@@ -140,6 +143,11 @@ internal class UiTapTool(
             )
         }
     }
+
+    override fun uiTitle(input: UiTapInput): String = tapTitle(registry, input.target, input.holdMs)
+
+    override fun renderForUi(input: UiTapInput, output: UiAfter): ToolUiView =
+        ToolUiView(summary = afterSummary(if (input.holdMs > 0) "已长按" else "已点按", output.packageName, output.windowChanged))
 
     override fun renderForModel(output: UiAfter): ModelContent =
         ModelContent.Json(

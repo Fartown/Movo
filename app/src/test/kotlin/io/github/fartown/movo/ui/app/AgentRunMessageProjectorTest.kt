@@ -547,4 +547,29 @@ class AgentRunMessageProjectorTest {
         assertFalse(interruptedNotice.running)
         assertEquals(base + completed, projector.finishContextCompaction(runId, base + completed, "上下文压缩已中断"))
     }
+
+    @Test
+    fun toolSearchIsHidden_andViewsAttachToTheStep() {
+        val projector = AgentRunMessageProjector(nowElapsedRealtime = { 1_000L })
+        val runId = "run-view"
+        var messages: List<AgentChatMessageUi> = emptyList()
+        messages = projector.startTool(runId, AgentEvent.ToolStarted(1, "c0", "tool_search", "加载工具"), messages)
+        messages = projector.finishTool(
+            runId,
+            AgentEvent.ToolFinished(1, "c0", "tool_search", "完成", 0, 0, success = true),
+            messages,
+        )
+        assertTrue("tool_search 不进执行卡", messages.none { it is ToolActivityMessageUi })
+
+        val view = io.github.fartown.movo.agent.tools.core.ToolUiView(summary = "退出码 0")
+        messages = projector.startTool(runId, AgentEvent.ToolStarted(1, "c1", "terminal_run", "运行 · echo hi"), messages)
+        messages = projector.finishTool(
+            runId,
+            AgentEvent.ToolFinished(1, "c1", "terminal_run", "退出码 0", 0, 0, success = true, view = view),
+            messages,
+        )
+        val step = messages.filterIsInstance<ToolActivityMessageUi>().single()
+        assertEquals("运行 · echo hi", step.argumentsSummary)
+        assertEquals(view, step.view)
+    }
 }

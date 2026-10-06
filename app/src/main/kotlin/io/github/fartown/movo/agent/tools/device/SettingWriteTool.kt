@@ -1,5 +1,11 @@
 package io.github.fartown.movo.agent.tools.device
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiFields
+import io.github.fartown.movo.agent.tools.core.uiItems
+import io.github.fartown.movo.agent.tools.core.uiText
 import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
@@ -139,6 +145,13 @@ internal class SettingWriteTool(
             Evidence.ReadBack("${input.key}=$readBack"),
         )
     }
+
+    override fun uiTitle(input: SettingWriteInput): String = "修改设置 · ${settingLabel(input.key)}"
+
+    override fun renderForUi(input: SettingWriteInput, output: SettingWriteOutput): ToolUiView = ToolUiView(
+        summary = "${output.previous ?: "未设置"} → ${output.value ?: "未设置"}",
+        blocks = listOf(ToolUiBlock.Change(output.previous, output.value, label = settingLabel(output.key))),
+    )
 
     override fun renderForModel(output: SettingWriteOutput): ModelContent =
         ModelContent.Json(

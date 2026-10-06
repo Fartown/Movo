@@ -305,6 +305,8 @@ internal class AgentRunMessageProjector(
         event: AgentEvent.ToolStarted,
         messages: List<AgentChatMessageUi>,
     ): List<AgentChatMessageUi> {
+        // tool_search 是模型给自己加载工具，对用户没有意义，不进执行卡（工具可视化方案 C 级）。
+        if (event.name in HIDDEN_TOOLS) return messages
         // 工具执行发生在对应 assistant 工具块完整返回之后；此时直接追加即可保留
         // 工具前说明、工具活动与下一轮结果的真实时间顺序。
         val message = ToolActivityMessageUi(
@@ -345,6 +347,7 @@ internal class AgentRunMessageProjector(
                     resultSummary = event.resultSummary,
                     imageCount = event.imageCount,
                     finishedAtMillis = event.atMillis.takeIf { it > 0L } ?: message.finishedAtMillis,
+                    view = event.view ?: message.view,
                 )
             } else {
                 message
@@ -590,3 +593,6 @@ internal class AgentRunMessageProjector(
 }
 
 private const val MAX_TOOL_RESULT_PREVIEW_CHARS = 48
+
+/** 不在执行卡里显示的工具（只在运行日志里保留，工具可视化方案 C 级）。 */
+private val HIDDEN_TOOLS = setOf("tool_search")

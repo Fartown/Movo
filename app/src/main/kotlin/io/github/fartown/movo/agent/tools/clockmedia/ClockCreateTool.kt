@@ -1,5 +1,8 @@
 package io.github.fartown.movo.agent.tools.clockmedia
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
 import io.github.fartown.movo.agent.tools.core.ModelContent
@@ -167,6 +170,34 @@ internal class ClockCreateTool(
                 ),
             )
         }
+    }
+
+    override fun uiTitle(input: ClockCreateInput): String = when (input.type) {
+        ClockType.ALARM -> "新建闹钟 · %02d:%02d".format(input.hour, input.minute) +
+            input.repeatDays.takeIf { it.isNotEmpty() }?.let { " · ${repeatLabel(it)}" }.orEmpty()
+        ClockType.TIMER -> "新建计时器 · ${durationLabel(input.durationSeconds)}"
+    } + input.label?.takeIf { it.isNotBlank() }?.let { "「${it.forTitle(12)}」" }.orEmpty()
+
+    override fun renderForUi(input: ClockCreateInput, output: ClockCreateOutput): ToolUiView =
+        ToolUiView(summary = if (output.verified) "已创建（已核实）" else "已发出，没能核实")
+
+    private fun repeatLabel(days: List<WeekDay>): String {
+        val set = days.toSet()
+        return when {
+            set.size == 7 -> "每天"
+            set == setOf(WeekDay.MONDAY, WeekDay.TUESDAY, WeekDay.WEDNESDAY, WeekDay.THURSDAY, WeekDay.FRIDAY) -> "工作日"
+            set == setOf(WeekDay.SATURDAY, WeekDay.SUNDAY) -> "周末"
+            else -> days.sortedBy { (it.calendarDay + 5) % 7 }.joinToString("") { "一二三四五六日"[(it.calendarDay + 5) % 7].toString() }
+                .let { "周$it" }
+        }
+    }
+
+    private fun durationLabel(seconds: Int): String = when {
+        seconds % 3600 == 0 -> "${seconds / 3600} 小时"
+        seconds >= 3600 -> "${seconds / 3600} 小时 ${seconds % 3600 / 60} 分"
+        seconds % 60 == 0 -> "${seconds / 60} 分钟"
+        seconds > 60 -> "${seconds / 60} 分 ${seconds % 60} 秒"
+        else -> "$seconds 秒"
     }
 
     override fun renderForModel(output: ClockCreateOutput): ModelContent {

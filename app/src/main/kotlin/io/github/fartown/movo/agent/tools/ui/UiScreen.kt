@@ -429,3 +429,42 @@ internal data class UiAfter(
     /** ui_key 的键名。 */
     val key: String? = null,
 ) : ToolOutput
+
+// ---------------------------------------------------------------------------
+// 执行卡（工具可视化方案）：屏幕动作的标题与结果用同一套说法
+// ---------------------------------------------------------------------------
+
+/** 点按 / 长按的对象：观察里的节点叫法；坐标时写位置。只查进程内的观察记录，不抓新树。 */
+internal fun tapTitle(registry: UiObservationRegistry, target: UiTarget, holdMs: Int): String {
+    val verb = if (holdMs > 0) "长按" else "点按"
+    return when (target) {
+        is UiTarget.Element -> registry.observedNode(target.observationId, target.index)?.displayName()
+            ?.let { "$verb「$it」" } ?: "${verb}屏幕上的第 ${target.index} 个元素"
+        is UiTarget.Point -> "${verb}屏幕 (${target.x.toInt()}, ${target.y.toInt()})"
+        is UiTarget.Area -> "${verb}屏幕区域"
+    }
+}
+
+/** 动作后的去向：换了应用就写进了哪个应用。 */
+internal fun afterSummary(verb: String, packageName: String?, windowChanged: Boolean): String =
+    if (windowChanged && !packageName.isNullOrBlank()) "$verb · 进入「${appLabel(packageName)}」" else verb
+
+internal fun ScrollDirection.label(): String = when (this) {
+    ScrollDirection.UP -> "向上"
+    ScrollDirection.DOWN -> "向下"
+    ScrollDirection.LEFT -> "向左"
+    ScrollDirection.RIGHT -> "向右"
+}
+
+internal fun UiKeyCode.label(): String = when (this) {
+    UiKeyCode.BACK -> "返回"
+    UiKeyCode.HOME -> "回到桌面"
+    UiKeyCode.RECENTS -> "最近任务"
+    UiKeyCode.ENTER -> "回车"
+    UiKeyCode.NOTIFICATIONS -> "通知栏"
+    UiKeyCode.QUICK_SETTINGS -> "快捷设置"
+    UiKeyCode.LOCK_SCREEN -> "锁屏"
+    UiKeyCode.SCREENSHOT -> "截屏"
+    UiKeyCode.DISMISS_NOTIFICATIONS -> "清除通知"
+}
+

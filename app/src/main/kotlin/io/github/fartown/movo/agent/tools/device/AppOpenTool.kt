@@ -1,5 +1,11 @@
 package io.github.fartown.movo.agent.tools.device
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiFields
+import io.github.fartown.movo.agent.tools.core.uiItems
+import io.github.fartown.movo.agent.tools.core.uiText
 import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
@@ -210,6 +216,23 @@ internal class AppOpenTool(
         val array = JSONArray()
         matches.take(10).forEach { array.put(JSONObject().put("name", it.name).put("package", it.packageName)) }
         return JSONObject().put("candidates", array).toString()
+    }
+
+    override fun uiTitle(input: AppOpenInput): String = when (val t = input.target) {
+        is AppOpenTarget.ByPackage -> "打开「${io.github.fartown.movo.agent.tools.ui.appLabel(t.packageName)}」"
+        is AppOpenTarget.ByName -> "打开「${t.name.forTitle()}」"
+        is AppOpenTarget.ByUri -> "打开链接 · ${t.uri.forTitle(40)}"
+    }
+
+    override fun renderForUi(input: AppOpenInput, output: AppOpenOutput): ToolUiView {
+        val app = output.targetPackage?.let { io.github.fartown.movo.agent.tools.ui.appLabel(it) }
+        return ToolUiView(
+            summary = when {
+                output.foreground && app != null -> "已打开「$app」"
+                output.foreground -> "已打开"
+                else -> "已发出打开请求，前台还不是它"
+            },
+        )
     }
 
     override fun renderForModel(output: AppOpenOutput): ModelContent =

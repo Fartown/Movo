@@ -1,6 +1,10 @@
 package io.github.fartown.movo.agent.tools.mcp
 
 import io.github.fartown.movo.agent.model.AgentModelClient
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiFields
 import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
@@ -182,6 +186,13 @@ internal class McpCallTool(
         return executeMcpCall(backend, entry, input.arguments, ctx)
     }
 
+    override fun uiTitle(input: McpCallInput): String {
+        val entry = catalog.find(input.toolName)
+        return entry?.let { "调用 ${it.server.name} · ${it.definition.name}" } ?: "调用 MCP · ${input.toolName}"
+    }
+
+    override fun renderForUi(input: McpCallInput, output: McpToolOutput): ToolUiView = mcpUiView(output)
+
     override fun renderForModel(output: McpToolOutput): ModelContent = renderMcpOutput(output)
 
     override fun images(output: McpToolOutput): List<AgentModelClient.ModelImage> = output.images
@@ -228,6 +239,10 @@ internal class McpDirectTool(
         ctx: ToolContext,
     ): Verdict<McpToolOutput> = executeMcpCall(backend, entry, input.arguments, ctx)
 
+    override fun uiTitle(input: McpDirectInput): String = "调用 ${entry.server.name} · ${entry.definition.name}"
+
+    override fun renderForUi(input: McpDirectInput, output: McpToolOutput): ToolUiView = mcpUiView(output)
+
     override fun renderForModel(output: McpToolOutput): ModelContent = renderMcpOutput(output)
 
     override fun images(output: McpToolOutput): List<AgentModelClient.ModelImage> = output.images
@@ -236,3 +251,22 @@ internal class McpDirectTool(
         const val MAX_DESCRIPTION_CHARS = 200
     }
 }
+
+/** MCP 返回内容：文本开头 + 结构化结果的键值；图片由 ContractTool 加进视图。 */
+internal fun mcpUiView(output: McpToolOutput): ToolUiView {
+    val text = output.content.joinToString("\n\n").trim()
+    val blocks = listOfNotNull(
+        text.takeIf { it.isNotBlank() }?.let { ToolUiBlock.Preview(it, more = output.truncated) },
+        output.structured?.takeIf { it.length() > 0 && text.isBlank() }?.uiFields(),
+    )
+    return ToolUiView(
+        summary = when {
+            text.isNotBlank() -> "返回 ${text.length} 字"
+            output.structured != null -> "返回 ${output.structured.length()} 项"
+            output.images.isNotEmpty() -> "返回 ${output.images.size} 张图片"
+            else -> "完成"
+        },
+        blocks = blocks,
+    )
+}
+

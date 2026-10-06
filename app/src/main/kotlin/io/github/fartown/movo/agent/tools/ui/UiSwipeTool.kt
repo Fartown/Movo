@@ -1,5 +1,8 @@
 package io.github.fartown.movo.agent.tools.ui
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.InjectionBackend
 import io.github.fartown.movo.agent.tools.core.ModelContent
@@ -106,6 +109,20 @@ internal class UiSwipeTool(
             )
         }
     }
+
+    override fun uiTitle(input: UiSwipeInput): String {
+        val dx = input.x2 - input.x
+        val dy = input.y2 - input.y
+        val direction = if (kotlin.math.abs(dx) >= kotlin.math.abs(dy)) {
+            if (dx >= 0) "向右" else "向左"
+        } else {
+            if (dy >= 0) "向下" else "向上"
+        }
+        return "${direction}滑动"
+    }
+
+    override fun renderForUi(input: UiSwipeInput, output: UiAfter): ToolUiView =
+        ToolUiView(summary = afterSummary("已滑动", output.packageName, output.windowChanged))
 
     override fun renderForModel(output: UiAfter): ModelContent =
         ModelContent.Json(JSONObject().put("after", afterJson(output.packageName, output.windowChanged)))

@@ -86,8 +86,12 @@ internal class ContractTool<I : ToolInput, O : ToolOutput>(
         val r = memoResolution ?: return ToolOutcome.error(ToolErrorCode.INVALID_ARGUMENTS, "参数解析失败")
         // 审批前策略拒绝短路：黑名单/锁屏等不先弹确认卡再拒（走 approval 前）。
         r.reject?.let { return ToolOutcome(status = it.code.status, error = it) }
-        return bridge(contract.execute(input, r, ctx))
+        return bridge(contract.execute(input, r, ctx), input, ctx)
     }
+
+    /** 只解析参数、不调后端（执行前就要显示），解析失败时没有标题。 */
+    override fun stepTitle(args: ToolArgs, env: ToolEnvironment): String? =
+        runCatching { contract.uiTitle(contract.parse(args, env)) }.getOrNull()
 
     // ---- 单次解析记忆（按引用相等的 args + env 缓存，review A4）----
     private var memoArgs: ToolArgs? = null
@@ -113,12 +117,12 @@ internal class ContractTool<I : ToolInput, O : ToolOutput>(
     private fun parsed(args: ToolArgs, env: ToolEnvironment): I? { compute(args, env); return memoInput }
     private fun resolution(args: ToolArgs, env: ToolEnvironment): CallResolution? { compute(args, env); return memoResolution }
 
-    private fun bridge(verdict: Verdict<O>): ToolOutcome = when (verdict) {
-        is Verdict.Read -> ok(verdict.output, verified = null, evidence = null, extra = null)
-        is Verdict.Done -> ok(verdict.output, verified = true, evidence = describe(verdict.evidence), extra = null)
-        is Verdict.Dispatched -> ok(verdict.output, verified = false, evidence = null, extra = null)
+    private fun bridge(verdict: Verdict<O>, input: I, ctx: ToolContext): ToolOutcome = when (verdict) {
+        is Verdict.Read -> ok(verdict.output, verified = null, evidence = null, extra = null, input = input, ctx = ctx)
+        is Verdict.Done -> ok(verdict.output, verified = true, evidence = describe(verdict.evidence), extra = null, input = input, ctx = ctx)
+        is Verdict.Dispatched -> ok(verdict.output, verified = false, evidence = null, extra = null, input = input, ctx = ctx)
         is Verdict.Backgrounded -> ok(
-            verdict.output, verified = false, evidence = "job=${verdict.job.jobId}",
+            verdict.output, verified = false, evidence = "job=${verdict.job.jobId}", input = input, ctx = ctx,
             // job_id 必须进模型投影，否则模型无法后续 terminal_job 查询（review B3）
             extra = JSONObject().put("job_id", verdict.job.jobId).put("running", true).put("reason", verdict.job.reason),
         )
@@ -128,16 +132,50 @@ internal class ContractTool<I : ToolInput, O : ToolOutput>(
         is Verdict.Failed -> ToolOutcome(status = verdict.error.code.status, error = verdict.error)
     }
 
-    private fun ok(output: O, verified: Boolean?, evidence: String?, extra: JSONObject?): ToolOutcome {
+    private fun ok(
+        output: O,
+        verified: Boolean?,
+        evidence: String?,
+        extra: JSONObject?,
+        input: I,
+        ctx: ToolContext,
+    ): ToolOutcome {
         val content = contract.renderForModel(output)
         val data = (content as? ModelContent.Json)?.obj ?: JSONObject()
         extra?.keys()?.forEach { k -> data.put(k, extra.get(k)) }
         val text = (content as? ModelContent.Text)?.text
+        val images = contract.images(output)
         return ToolOutcome.ok(
-            data = data, textBody = text, warnings = contract.warnings(output), images = contract.images(output),
+            data = data, textBody = text, warnings = contract.warnings(output), images = images,
             // 回填解析阶段判定的敏感度：决定结果在历史里是否脱敏。
             sensitivity = memoResolution?.sensitivity,
-        ).copy(effectVerified = verified, evidence = evidence)
+        ).copy(effectVerified = verified, evidence = evidence, view = uiView(input, output, images, ctx))
+    }
+
+    /**
+     * 执行卡这一步的视图（工具可视化方案 §5.1）：工具给的视图 + 图片（只存进程内缩略图），按敏感度处理——
+     * 机密只留摘要；带图的只在本次运行中显示（§6 决策 1）。个人数据由工具自己把视图标为临时（§6 决策 2），
+     * 不按 PRIVATE 一刀切：终端输出、记忆、设置这类重启后仍要能展开。
+     */
+    private fun uiView(
+        input: I,
+        output: O,
+        images: List<io.github.fartown.movo.agent.model.AgentModelClient.ModelImage>,
+        ctx: ToolContext,
+    ): ToolUiView? {
+        val base = runCatching { contract.renderForUi(input, output) }.getOrNull()
+        val sensitivity = memoResolution?.sensitivity ?: Sensitivity.NORMAL
+        if (sensitivity == Sensitivity.SECRET) return base?.summaryOnly()?.copy(transient = true)?.bounded()
+        val imageKeys = images.mapIndexedNotNull { index, image ->
+            runCatching { io.github.fartown.movo.agent.media.ToolStepImages.put(ctx.toolCallId, index, image) }.getOrNull()
+        }
+        if (base == null && imageKeys.isEmpty()) return null
+        val view = base ?: ToolUiView()
+        val blocks = if (imageKeys.isEmpty()) view.blocks else listOf(ToolUiBlock.Images(imageKeys)) + view.blocks
+        return view.copy(
+            blocks = blocks,
+            transient = view.transient || imageKeys.isNotEmpty(),
+        ).bounded()
     }
 
     private fun describe(evidence: Evidence): String = when (evidence) {

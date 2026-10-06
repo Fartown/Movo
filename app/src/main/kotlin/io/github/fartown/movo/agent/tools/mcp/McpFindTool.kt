@@ -1,5 +1,9 @@
 package io.github.fartown.movo.agent.tools.mcp
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiFields
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.Risk
@@ -88,6 +92,15 @@ internal class McpFindTool(
         }
         return Verdict.Read(McpFindOutput(matches, filtered.size))
     }
+
+    override fun uiTitle(input: McpFindInput): String = "查找 MCP 工具「${input.query.forTitle()}」"
+
+    override fun renderForUi(input: McpFindInput, output: McpFindOutput): ToolUiView = ToolUiView(
+        summary = if (output.matches.isEmpty()) "没找到" else "找到 ${output.matches.size} 个",
+        blocks = listOf(
+            ToolUiBlock.Items(output.matches.map { ToolUiBlock.Item(it.name, it.description.takeIf { d -> d.isNotBlank() }, it.server) }),
+        ).filter { output.matches.isNotEmpty() },
+    )
 
     override fun renderForModel(output: McpFindOutput): ModelContent {
         val array = JSONArray()

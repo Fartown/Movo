@@ -105,6 +105,9 @@ internal interface AgentTool {
     fun approvalTitle(args: ToolArgs): String = name
 
     /** 执行。超时由工具自己处理：只读超时返回 TIMEOUT，动作超时返回 OUTCOME_UNKNOWN。 */
+    /** 执行卡这一步的标题（动作 + 对象）；为空时界面用通用叫法。 */
+    fun stepTitle(args: ToolArgs, env: ToolEnvironment): String? = null
+
     fun execute(args: ToolArgs, ctx: ToolContext): ToolOutcome
 }
 

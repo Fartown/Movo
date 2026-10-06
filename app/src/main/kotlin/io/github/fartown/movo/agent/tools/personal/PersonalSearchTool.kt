@@ -1,5 +1,11 @@
 package io.github.fartown.movo.agent.tools.personal
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiDuration
+import io.github.fartown.movo.agent.tools.core.uiText
+import io.github.fartown.movo.agent.tools.core.uiTime
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.Risk
@@ -206,6 +212,41 @@ internal class PersonalSearchTool(
                 toolWarnings = result.warnings,
             ),
         )
+    }
+
+    override fun uiTitle(input: PersonalSearchInput): String =
+        "搜索${input.source.uiLabel()}" + input.query?.takeIf { it.isNotBlank() }?.let { "「${it.forTitle()}」" }.orEmpty()
+
+    /** 只列标题和时间，不显示正文（工具可视化方案 §6 决策 2）；整步只在本次运行中显示。 */
+    override fun renderForUi(input: PersonalSearchInput, output: PersonalSearchOutput): ToolUiView {
+        val items = output.items.map { item ->
+            val title = item.title?.takeIf { it.isNotBlank() } ?: item.from?.takeIf { it.isNotBlank() } ?: "（无标题）"
+            val subtitle = listOfNotNull(
+                item.from?.takeIf { it.isNotBlank() && it != title },
+                item.timeMillis?.let { uiTime(it) },
+            ).joinToString(" · ").ifBlank { null }
+            ToolUiBlock.Item(title, subtitle)
+        }
+        val more = if (output.nextCursor != null) " · 还有更多" else ""
+        return ToolUiView(
+            summary = if (items.isEmpty()) "没找到" else "找到 ${items.size} 条$more",
+            blocks = listOf(ToolUiBlock.Items(items)).filter { items.isNotEmpty() },
+            transient = true,
+        )
+    }
+
+    private fun PersonalSource.uiLabel(): String = when (this) {
+        PersonalSource.NOTIFICATIONS -> "通知"
+        PersonalSource.CONTACTS -> "通讯录"
+        PersonalSource.CALL_LOG -> "通话记录"
+        PersonalSource.SMS -> "短信"
+        PersonalSource.CALENDAR -> "日程"
+        PersonalSource.NOTES -> "便签"
+        PersonalSource.RECORDING_SUMMARIES -> "录音摘要"
+        PersonalSource.COLOROS_MEMORY -> "系统记忆"
+        PersonalSource.PLACES -> "地点"
+        PersonalSource.ORDERS -> "订单"
+        PersonalSource.CLIPBOARD_HISTORY -> "剪贴板历史"
     }
 
     override fun renderForModel(output: PersonalSearchOutput): ModelContent {

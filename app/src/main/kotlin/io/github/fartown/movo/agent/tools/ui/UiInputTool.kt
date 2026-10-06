@@ -1,5 +1,8 @@
 package io.github.fartown.movo.agent.tools.ui
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
 import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.ApprovalNeed
 import io.github.fartown.movo.agent.tools.core.CallResolution
@@ -212,6 +215,32 @@ internal class UiInputTool(
                 ToolError(ToolErrorCode.PERMISSION_REQUIRED, "无障碍不可用，无法输入"),
             )
         }
+    }
+
+    /**
+     * 标题写输入的内容；密码框（或判断不了是不是密码框）只写字数，密码不能出现在执行卡和对话记录里。
+     * 只查进程内的观察记录和当前焦点，不抓新树。
+     */
+    override fun uiTitle(input: UiInputInput): String {
+        val password = input.element?.let { registry.observedNode(it.observationId, it.index)?.password }
+            ?: registry.focusedInputIsPassword()
+        val oneLine = input.text.replace(Regex("\\s+"), " ").trim()
+        val typed = when {
+            oneLine.isEmpty() -> "清空输入框"
+            password == true -> "在密码框输入 ${input.text.length} 个字符"
+            password == null -> "输入 ${input.text.length} 个字"
+            else -> "输入「${oneLine.forTitle()}」"
+        }
+        return if (input.submit) "${typed}并提交" else typed
+    }
+
+    override fun renderForUi(input: UiInputInput, output: UiInputOutput): ToolUiView {
+        val verb = when {
+            output.textVerified -> "已输入"
+            else -> "已输入（读不回来，没法核对）"
+        }
+        val submitted = if (output.submitted) "$verb · 已提交" else verb
+        return ToolUiView(summary = afterSummary(submitted, output.packageName, output.windowChanged))
     }
 
     override fun renderForModel(output: UiInputOutput): ModelContent = ModelContent.Json(

@@ -1,6 +1,9 @@
 package io.github.fartown.movo.agent.tools.ui
 
 import io.github.fartown.movo.agent.model.AgentModelClient
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.ResourceKey
@@ -88,6 +91,27 @@ internal class UiObserveTool(
             )
             is UiObserveResult.Observed -> Verdict.Read(UiObserveOutput(result))
         }
+    }
+
+    override fun uiTitle(input: UiObserveInput): String =
+        input.query?.takeIf { it.isNotBlank() }?.let { "在屏幕上找「${it.forTitle()}」" } ?: "查看屏幕"
+
+    /** 摘要写在哪个应用、看到多少元素；截图由 ContractTool 加进视图；没截图时列出看到的主要文字。 */
+    override fun renderForUi(input: UiObserveInput, output: UiObserveOutput): ToolUiView {
+        val o = output.observed
+        val summary = listOfNotNull(
+            o.packageName?.takeIf { it.isNotBlank() }?.let { "「${appLabel(it)}」" },
+            "${o.nodes.size} 个元素".takeIf { o.nodes.isNotEmpty() },
+            "截图".takeIf { o.screenshotAttached },
+        ).joinToString(" · ").ifBlank { "已查看" }
+        val texts = o.nodes.mapNotNull { node -> (node.text ?: node.desc)?.takeIf { it.isNotBlank() } }.distinct()
+        val blocks = if (o.screenshotAttached || texts.isEmpty()) {
+            emptyList()
+        } else {
+            listOf(ToolUiBlock.Items(texts.map { ToolUiBlock.Item(it) }))
+        }
+        // 屏幕文字和截图一样可能是别的应用的内容（银行、聊天），只在本次运行中显示。
+        return ToolUiView(summary = summary, blocks = blocks, transient = blocks.isNotEmpty())
     }
 
     override fun renderForModel(output: UiObserveOutput): ModelContent {

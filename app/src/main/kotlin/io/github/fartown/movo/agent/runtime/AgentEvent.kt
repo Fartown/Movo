@@ -197,6 +197,8 @@ internal sealed interface AgentEvent {
         val imageBytes: Int,
         /** 可选：旧版本 Runtime 不发送，消费端缺省时回退到摘要文本判断。 */
         val success: Boolean? = null,
+        /** 执行卡这一步的界面视图（工具可视化方案）；旧版本 Runtime 与非类型化工具为空。 */
+        val view: io.github.fartown.movo.agent.tools.core.ToolUiView? = null,
     ) : AgentEvent, AgentEvent.Timed {
         /** 事件发生时刻（毫秒）；0 表示旧版本 Runtime 未记录。不参与相等比较，用于执行卡与执行详情的每步用时。 */
         override var atMillis: Long = 0L

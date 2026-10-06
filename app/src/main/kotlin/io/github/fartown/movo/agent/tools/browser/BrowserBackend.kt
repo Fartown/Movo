@@ -180,3 +180,8 @@ internal class BrowserException(
     val hint: String? = null,
     val detail: String? = null,
 ) : RuntimeException(message)
+
+/** 执行卡上写的网址：只写域名（没有协议、路径和参数）。 */
+internal fun uiHost(url: String): String =
+    runCatching { java.net.URI(url).host }.getOrNull()?.removePrefix("www.")?.takeIf { it.isNotBlank() } ?: url.take(40)
+

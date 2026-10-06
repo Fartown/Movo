@@ -1,5 +1,12 @@
 package io.github.fartown.movo.agent.tools.terminal
 
+import io.github.fartown.movo.agent.tools.core.TerminalBody
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.fileName
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiBytes
+import io.github.fartown.movo.agent.tools.core.uiTime
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
 import io.github.fartown.movo.agent.tools.core.ModelContent
@@ -155,6 +162,40 @@ internal class TerminalJobTool(
                 next = "用 terminal_job list 或 read 核实任务是否仍在运行，不要直接重复 stop",
             )
         }
+    }
+
+    override fun uiTitle(input: TerminalJobInput): String = when (input.action) {
+        TerminalJobAction.LIST -> "查看后台命令"
+        TerminalJobAction.READ -> "读取后台命令的输出"
+        TerminalJobAction.WRITE -> "向后台命令输入"
+        TerminalJobAction.STOP -> "停止后台命令"
+    }
+
+    override fun renderForUi(input: TerminalJobInput, output: TerminalJobOutput): ToolUiView {
+        TerminalBody.parse(output.textBody)?.let { body ->
+            return ToolUiView(summary = body.exitCode?.let { body.summary() } ?: "还在运行", blocks = body.outputBlocks())
+        }
+        val json = output.json ?: return ToolUiView(summary = "完成")
+        json.optJSONArray("jobs")?.let { jobs ->
+            val items = (0 until jobs.length()).mapNotNull { jobs.optJSONObject(it) }.map { job ->
+                ToolUiBlock.Item(
+                    title = job.optString("description").ifBlank { job.optString("command") },
+                    subtitle = job.optString("command").takeIf { job.optString("description").isNotBlank() },
+                    trailing = if (job.optBoolean("running")) "运行中" else job.opt("exit_code")?.let { "退出码 $it" },
+                )
+            }
+            return ToolUiView(
+                summary = if (items.isEmpty()) "没有后台命令" else "${items.size} 个",
+                blocks = listOf(ToolUiBlock.Items(items)).filter { items.isNotEmpty() },
+            )
+        }
+        return ToolUiView(
+            summary = when (input.action) {
+                TerminalJobAction.STOP -> "已停止"
+                TerminalJobAction.WRITE -> "已输入"
+                else -> if (json.optBoolean("running")) "还在运行" else json.opt("exit_code")?.let { "退出码 $it" } ?: "完成"
+            },
+        )
     }
 
     override fun renderForModel(output: TerminalJobOutput): ModelContent =

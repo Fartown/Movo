@@ -6,8 +6,9 @@ import org.json.JSONObject
 
 /** Runtime 事件的稳定 JSON 投影；只编码 IPC 已公开的安全字段。 */
 internal object AgentEventJsonCodec {
+    /** 归档用：不带只在本次运行中显示的工具视图。 */
     fun encode(event: AgentEvent): String = bundleToJson(
-        AgentRuntimeWire.eventToBundle(event)
+        AgentRuntimeWire.eventToBundle(event, forArchive = true)
     ).toString()
 
     fun decode(raw: String): AgentEvent? = runCatching {

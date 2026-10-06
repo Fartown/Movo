@@ -215,4 +215,20 @@ class TerminalToolsTest {
         assertEquals("unknown", r.status)
         assertEquals("OUTCOME_UNKNOWN", r.errorCode)
     }
+
+    // ---- 执行卡视图 ----
+
+    @Test
+    fun view_terminalShowsExitCodeAndOutput() {
+        val p = pipeline(env = ToolEnvironment())
+        val echo = call("terminal_run", """{"command":"echo hi"}""")
+        assertEquals("运行 · echo hi", p.stepTitle(echo))
+        val view = p.execute(echo).outcome!!.view!!
+        assertEquals("退出码 0 · 输出 1 行", view.summary)
+        val output = view.blocks.single() as io.github.fartown.movo.agent.tools.core.ToolUiBlock.Output
+        assertEquals("hi", output.text)
+        assertEquals("输出", output.label)
+        assertFalse("终端输出重启后仍能展开（真机 V9）", view.transient)
+        assertEquals("已转到后台运行", p.execute(call("terminal_run", """{"command":"sleep 100"}""")).outcome!!.view!!.summary)
+    }
 }

@@ -310,6 +310,9 @@ internal object AgentModelClient {
 
     fun interface ToolExecutor {
         fun execute(toolCall: ToolCall): ToolResult
+
+        /** 执行卡这一步的标题（动作 + 对象，工具可视化方案 §5.1）；为空时由 [AgentTraceFormatter] 兜底。 */
+        fun stepTitle(toolCall: ToolCall): String? = null
     }
 
     data class ToolCall(

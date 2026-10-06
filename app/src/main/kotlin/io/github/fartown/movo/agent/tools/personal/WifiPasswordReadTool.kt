@@ -1,5 +1,11 @@
 package io.github.fartown.movo.agent.tools.personal
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiDuration
+import io.github.fartown.movo.agent.tools.core.uiText
+import io.github.fartown.movo.agent.tools.core.uiTime
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.Risk
@@ -81,6 +87,15 @@ internal class WifiPasswordReadTool(
             ?: return Verdict.Failed(ToolError(ToolErrorCode.SOURCE_UNAVAILABLE, "读不到已保存的 Wi‑Fi 配置"))
         return Verdict.Read(WifiPasswordReadOutput(items))
     }
+
+    override fun uiTitle(input: WifiPasswordReadInput): String =
+        "读取 Wi‑Fi 密码" + input.ssid?.takeIf { it.isNotBlank() }?.let { " · ${it.forTitle()}" }.orEmpty()
+
+    /** 密码是机密：只写读到几个网络。 */
+    override fun renderForUi(input: WifiPasswordReadInput, output: WifiPasswordReadOutput): ToolUiView = ToolUiView(
+        summary = if (output.items.isEmpty()) "没找到" else "已读取 ${output.items.size} 个网络",
+        transient = true,
+    )
 
     override fun renderForModel(output: WifiPasswordReadOutput): ModelContent {
         val array = JSONArray()

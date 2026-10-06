@@ -1,5 +1,12 @@
 package io.github.fartown.movo.agent.tools.file
 
+import io.github.fartown.movo.agent.tools.core.TerminalBody
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.fileName
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiBytes
+import io.github.fartown.movo.agent.tools.core.uiTime
 import io.github.fartown.movo.agent.tools.core.ApprovalCategory
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
@@ -129,6 +136,20 @@ internal class FileWriteTool(
         )
         return Verdict.Done(output, evidence)
     }
+
+    override fun uiTitle(input: FileWriteInput): String =
+        (if (input.mode == FileWriteMode.APPEND) "追加到文件 · " else "写入文件 · ") + input.path.fileName().forTitle(30)
+
+    override fun renderForUi(input: FileWriteInput, output: FileWriteOutput): ToolUiView = ToolUiView(
+        summary = when {
+            output.created -> "新建 · ${uiBytes(output.bytesWritten)}"
+            input.mode == FileWriteMode.APPEND -> "追加 ${input.content.lines().size} 行"
+            else -> "已覆盖 · ${uiBytes(output.bytesWritten)}"
+        },
+        blocks = listOf(
+            ToolUiBlock.Output(input.content, label = if (input.mode == FileWriteMode.APPEND) "追加的内容 · ${output.path}" else output.path),
+        ).filter { input.content.isNotBlank() },
+    )
 
     override fun renderForModel(output: FileWriteOutput): ModelContent = ModelContent.Json(
         JSONObject()

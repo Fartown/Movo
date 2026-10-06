@@ -26,7 +26,7 @@ import androidx.room.migration.Migration
         CharacterEntity::class,
         UserPersonaEntity::class,
     ],
-    version = 22,
+    version = 23,
     exportSchema = false,
 )
 internal abstract class MovoDatabase : RoomDatabase() {
@@ -65,6 +65,7 @@ internal abstract class MovoDatabase : RoomDatabase() {
                         MIGRATION_19_20,
                         MIGRATION_20_21,
                         MIGRATION_21_22,
+                        MIGRATION_22_23,
                     )
                     .addCallback(object : Callback() {
                         override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) { createTextChunkCleanup(db) }
@@ -96,6 +97,10 @@ internal abstract class MovoDatabase : RoomDatabase() {
         }
 
         /** 工具步骤的开始 / 结束时刻，用于执行卡计时与每步用时（设计规范 8.1、8.8）。 */
+        internal val MIGRATION_22_23 = Migration(22, 23) { database ->
+            database.execSQL("ALTER TABLE conversation_messages ADD COLUMN tool_view_json TEXT")
+        }
+
         internal val MIGRATION_21_22 = Migration(21, 22) { database ->
             database.execSQL("ALTER TABLE conversation_messages ADD COLUMN started_at INTEGER")
             database.execSQL("ALTER TABLE conversation_messages ADD COLUMN finished_at INTEGER")

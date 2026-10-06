@@ -1,5 +1,8 @@
 package io.github.fartown.movo.agent.tools.memory
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.MemoryScope
 import io.github.fartown.movo.agent.tools.core.ModelContent
@@ -174,6 +177,19 @@ internal class MemoryReadTool(
             hasMore = rendered < included.size,
         )
     }
+
+    /** 标题会存进对话记录，不写记忆内容；检索词是你自己说的，可以写。 */
+    override fun uiTitle(input: MemoryReadInput): String =
+        input.query?.takeIf { it.isNotBlank() }?.let { "在记忆里找「${it.forTitle()}」" } ?: "读取记忆"
+
+    override fun renderForUi(input: MemoryReadInput, output: MemoryReadOutput): ToolUiView = ToolUiView(
+        summary = when {
+            output.content.isBlank() -> "没有记忆"
+            output.matchedLines != null -> "找到 ${output.matchedLines} 行"
+            else -> "${output.lineCount} 行"
+        },
+        blocks = listOf(ToolUiBlock.Preview(output.content, more = output.hasMore)).filter { output.content.isNotBlank() },
+    )
 
     override fun renderForModel(output: MemoryReadOutput): ModelContent = ModelContent.Json(
         JSONObject()

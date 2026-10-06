@@ -1,5 +1,11 @@
 package io.github.fartown.movo.agent.tools.personal
 
+import io.github.fartown.movo.agent.tools.core.ToolUiBlock
+import io.github.fartown.movo.agent.tools.core.ToolUiView
+import io.github.fartown.movo.agent.tools.core.forTitle
+import io.github.fartown.movo.agent.tools.core.uiDuration
+import io.github.fartown.movo.agent.tools.core.uiText
+import io.github.fartown.movo.agent.tools.core.uiTime
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.Risk
@@ -124,6 +130,41 @@ internal class UsageReadTool(
             return Verdict.Failed(ToolError(ToolErrorCode.SOURCE_UNAVAILABLE, "系统未返回应用使用记录"))
         }
         return Verdict.Read(UsageReadOutput(input.view, items))
+    }
+
+    override fun uiTitle(input: UsageReadInput): String {
+        val app = input.packageName?.let { "「${io.github.fartown.movo.agent.tools.ui.appLabel(it)}」" }.orEmpty()
+        return when (input.view) {
+            UsageView.SUMMARY -> "查看${app}使用时长"
+            UsageView.RECENT -> "查看最近用过的应用".takeIf { app.isEmpty() } ?: "查看最近用${app}的记录"
+        }
+    }
+
+    override fun renderForUi(input: UsageReadInput, output: UsageReadOutput): ToolUiView {
+        val items = output.items.map { item ->
+            when (input.view) {
+                UsageView.SUMMARY -> ToolUiBlock.Item(
+                    title = item.appName,
+                    trailing = item.foregroundMs?.let { uiDuration(it) },
+                    icon = item.packageName,
+                )
+                UsageView.RECENT -> ToolUiBlock.Item(
+                    title = item.appName,
+                    trailing = item.resumedAtMillis?.let { uiTime(it) },
+                    icon = item.packageName,
+                )
+            }
+        }
+        val total = output.items.mapNotNull { it.foregroundMs }.sum()
+        return ToolUiView(
+            summary = when {
+                items.isEmpty() -> "没有记录"
+                input.view == UsageView.SUMMARY && total > 0 -> "共 ${uiDuration(total)}"
+                else -> "${items.size} 条"
+            },
+            blocks = listOf(ToolUiBlock.Items(items)).filter { items.isNotEmpty() },
+            transient = true,
+        )
     }
 
     override fun renderForModel(output: UsageReadOutput): ModelContent {
