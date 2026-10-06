@@ -5,6 +5,8 @@ import androidx.room.withTransaction
 import io.github.fartown.movo.data.db.ConversationContextCheckpointEntity
 import io.github.fartown.movo.data.db.ConversationEntity
 import io.github.fartown.movo.data.db.ConversationMessageEntity
+import io.github.fartown.movo.data.db.ConversationModelMessageEntity
+import io.github.fartown.movo.data.db.ModelLogMigration
 import io.github.fartown.movo.data.db.ConversationStateEntity
 import io.github.fartown.movo.data.db.MovoDatabase
 import io.github.fartown.movo.data.db.ProviderEntity
@@ -30,16 +32,29 @@ internal data class MovoBackupDocument(
     val selectedModelId: String? = null,
     val conversations: List<ConversationEntity> = emptyList(),
     val messages: List<ConversationMessageEntity> = emptyList(),
+    /** v1 / v2 的模型历史（每个对话两大块 JSON）；v3 起不再导出，导入时拆成 [modelMessages] 的行。 */
     val contextCheckpoints: List<ConversationContextCheckpointEntity> = emptyList(),
+    /** v3 起：发给模型的消息，一条一行（docs/solutions/conversation-storage）。 */
+    val modelMessages: List<MovoBackupModelMessage> = emptyList(),
     val conversationState: ConversationStateEntity? = null,
     val memoryMd: String = "",
     val roleplay: CharacterBackupData? = null,
 ) {
     companion object {
         const val FORMAT = "movo-backup"
-        const val SCHEMA_VERSION = 2
+        const val SCHEMA_VERSION = 3
     }
 }
+
+/** 发给模型的一条消息：对应 conversation_model_messages 里 history / journal 两段的一行。 */
+@Serializable
+internal data class MovoBackupModelMessage(
+    val conversationId: String,
+    val log: String,
+    val seq: Int,
+    /** 单条 ConversationMessage 的 JSON（已脱敏、不含图片）。 */
+    val message: String,
+)
 
 @Serializable
 internal data class MovoBackupProvider(
@@ -103,9 +118,13 @@ internal object MovoBackupRepository {
                     database.conversationDao().replaceAll(
                         conversations = document.conversations.map { CharacterBackupTransfer.remapConversation(it, avatarPaths) },
                         messages = document.messages,
-                        contextCheckpoints = document.contextCheckpoints,
+                        contextCheckpoints = emptyList(),
                         state = document.conversationState,
                     )
+                    // 模型历史一条一行写回（v1 / v2 的整块 JSON 先拆开）。
+                    document.modelLogs().forEach { (key, messages) ->
+                        database.conversationDao().appendModelMessages(key.first, key.second, 0, null, messages)
+                    }
                     document.roleplay?.let { roleplay ->
                         database.characterDao().replaceAll(
                             roleplay.characters.map { it.copy(avatarPath = avatarPaths[it.id]) },
@@ -167,7 +186,9 @@ internal object MovoBackupRepository {
             selectedModelId = settings.selectedModelId,
             conversations = conversationRows,
             messages = conversations.messages(),
-            contextCheckpoints = conversations.contextCheckpoints(),
+            modelMessages = conversations.backupModelMessages().map {
+                MovoBackupModelMessage(it.conversationId, it.log, it.seq, it.messageJson)
+            },
             conversationState = conversations.state(),
             memoryMd = AgentMemoryRepository.snapshot().content,
             roleplay = CharacterBackupTransfer.snapshot(appContext, conversationRows),
@@ -237,6 +258,14 @@ internal object MovoBackupRepository {
         if (messagePositions.size != messagePositions.toSet().size) {
             throw MovoBackupException("备份中的消息顺序重复")
         }
+        val modelLogs = setOf(ConversationModelMessageEntity.LOG_HISTORY, ConversationModelMessageEntity.LOG_JOURNAL)
+        if (document.modelMessages.any { it.conversationId !in conversationIds || it.log !in modelLogs || it.seq < 0 }) {
+            throw MovoBackupException("备份中的模型历史缺少所属会话或格式无效")
+        }
+        val modelPositions = document.modelMessages.map { Triple(it.conversationId, it.log, it.seq) }
+        if (modelPositions.size != modelPositions.toSet().size) {
+            throw MovoBackupException("备份中的模型历史顺序重复")
+        }
         val checkpointIds = document.contextCheckpoints.map { it.conversationId }
         if (checkpointIds.size != checkpointIds.toSet().size) {
             throw MovoBackupException("备份中的上下文检查点重复")
@@ -264,6 +293,23 @@ internal object MovoBackupRepository {
             else CharacterBackupTransfer.validateBindings(document.conversations)
         } catch (failure: IllegalArgumentException) {
             throw MovoBackupException("备份中的角色数据无效", failure)
+        }
+    }
+
+    /** 每个对话的 history / journal 两段：v3 直接按行；v1 / v2 把检查点的整块 JSON 拆成行（journal 为空时取 history）。 */
+    private fun MovoBackupDocument.modelLogs(): Map<Pair<String, String>, List<String>> {
+        if (modelMessages.isNotEmpty()) {
+            return modelMessages.groupBy { it.conversationId to it.log }
+                .mapValues { (_, rows) -> rows.sortedBy { it.seq }.map { it.message } }
+        }
+        return buildMap {
+            contextCheckpoints.forEach { checkpoint ->
+                val history = ModelLogMigration.elements(checkpoint.historyJson) ?: return@forEach
+                val journal = if (checkpoint.journalJson.isBlank()) history
+                    else ModelLogMigration.elements(checkpoint.journalJson) ?: history
+                if (history.isNotEmpty()) put(checkpoint.conversationId to ConversationModelMessageEntity.LOG_HISTORY, history)
+                if (journal.isNotEmpty()) put(checkpoint.conversationId to ConversationModelMessageEntity.LOG_JOURNAL, journal)
+            }
         }
     }
 

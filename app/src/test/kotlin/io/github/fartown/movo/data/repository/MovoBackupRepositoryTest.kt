@@ -4,6 +4,7 @@ import io.github.fartown.movo.data.datastore.SettingsDataStore
 import io.github.fartown.movo.data.db.ConversationContextCheckpointEntity
 import io.github.fartown.movo.data.db.ConversationEntity
 import io.github.fartown.movo.data.db.ConversationMessageEntity
+import io.github.fartown.movo.data.db.ConversationModelMessageEntity
 import io.github.fartown.movo.data.db.ConversationStateEntity
 import io.github.fartown.movo.data.db.MovoDatabase
 import io.github.fartown.movo.data.db.ProviderWithModelsSeed
@@ -88,6 +89,9 @@ class MovoBackupRepositoryTest {
             ),
             state = ConversationStateEntity(selectedConversationId = conversation.id),
         )
+        val history = listOf("{\"role\":\"user\",\"content\":\"保留这条消息\"}", "{\"role\":\"assistant\",\"content\":\"${"长".repeat(20_000)}\"}")
+        MovoDatabase.get(context).conversationDao().appendModelMessages(conversation.id, ConversationModelMessageEntity.LOG_HISTORY, 0, null, history)
+        MovoDatabase.get(context).conversationDao().appendModelMessages(conversation.id, ConversationModelMessageEntity.LOG_JOURNAL, 0, null, history)
 
         val output = ByteArrayOutputStream()
         val exported = MovoBackupRepository.export(context, output)
@@ -114,6 +118,9 @@ class MovoBackupRepositoryTest {
             "保留这条消息",
             MovoDatabase.get(context).conversationDao().messages().single().content,
         )
+        // v3：模型历史一条一行导出、导入，长的一条照样完整。
+        assertEquals(history, MovoDatabase.get(context).conversationDao().modelLog(conversation.id, ConversationModelMessageEntity.LOG_HISTORY))
+        assertEquals(history, MovoDatabase.get(context).conversationDao().modelLog(conversation.id, ConversationModelMessageEntity.LOG_JOURNAL))
         val restoredSettings = SettingsDataStore.settings()
         assertEquals(provider.id, restoredSettings.selectedProviderId)
         assertEquals(provider.models.first().id, restoredSettings.selectedModelId)
@@ -165,6 +172,23 @@ class MovoBackupRepositoryTest {
         val restoredBinding = Json.decodeFromString<RoleplayBinding>(row.roleplayJson)
         assertTrue(java.io.File(restoredBinding.avatarPath!!).isFile)
         assertEquals(CharacterRepository.get(profile.id)?.avatarPath, restoredBinding.avatarPath)
+    }
+
+    @Test
+    fun versionTwoBackupSplitsItsCheckpointsIntoModelMessageRows() = runBlocking {
+        val backup = """{"format":"movo-backup","schemaVersion":2,"exportedAt":0,
+            "conversations":[{"id":"c2","title":"旧备份","thinkingEnabled":false,"createdAt":1,"updatedAt":1}],
+            "contextCheckpoints":[{"conversationId":"c2",
+              "historyJson":"[{\"role\":\"user\",\"content\":\"一\"},{\"role\":\"assistant\",\"content\":\"二\"}]",
+              "journalJson":""}]}"""
+
+        MovoBackupRepository.import(context, ByteArrayInputStream(backup.toByteArray()))
+
+        val dao = MovoDatabase.get(context).conversationDao()
+        val expected = listOf("{\"role\":\"user\",\"content\":\"一\"}", "{\"role\":\"assistant\",\"content\":\"二\"}")
+        assertEquals(expected, dao.modelLog("c2", ConversationModelMessageEntity.LOG_HISTORY))
+        assertEquals(expected, dao.modelLog("c2", ConversationModelMessageEntity.LOG_JOURNAL))
+        assertEquals(emptyList<ConversationContextCheckpointEntity>(), dao.contextCheckpoints())
     }
 
     @Test

@@ -36,7 +36,8 @@ internal object ModelLogMigration {
         ).use { cursor -> buildString { while (cursor.moveToNext()) append(cursor.getString(0)) } }
     }
 
-    private fun elements(raw: String?): List<String>? {
+    /** 一段旧的整块 JSON 拆成一条一行（备份导入 v1 / v2 也用）；解析不了返回 null。 */
+    fun elements(raw: String?): List<String>? {
         if (raw.isNullOrBlank()) return emptyList()
         val array = runCatching { JSONArray(raw) }.getOrNull() ?: return null
         // 每个元素按合法 JSON 存：对象 / 数组原样，字符串要带引号（旧数据里有裸字符串）。

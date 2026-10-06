@@ -254,6 +254,17 @@ internal interface ConversationDao : ChunkedTextDao {
     @Query("DELETE FROM conversation_model_messages WHERE conversation_id = :conversationId AND log = :log")
     suspend fun deleteModelLog(conversationId: String, log: String)
 
+    /** 备份：全部对话的 history / journal 两段（不含执行中的进行中记录），长消息拼回原文。 */
+    @Query("SELECT * FROM conversation_model_messages WHERE log IN ('history', 'journal') ORDER BY conversation_id, log, seq")
+    suspend fun backupModelMessageRows(): List<ConversationModelMessageEntity>
+
+    @Transaction
+    suspend fun backupModelMessages(): List<ConversationModelMessageEntity> = backupModelMessageRows().map { row ->
+        row.copy(messageJson = restoreText(ConversationModelMessageEntity.TABLE,
+            ConversationModelMessageEntity.chunkOwner(row.conversationId, row.log, row.seq),
+            ConversationModelMessageEntity.TEXT_FIELD, row.messageJson))
+    }
+
     /** 一轮执行的进行中记录（不管属于哪个对话）。 */
     @Query("DELETE FROM conversation_model_messages WHERE log IN (:logs)")
     suspend fun deleteLogs(logs: List<String>)
