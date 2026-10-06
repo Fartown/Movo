@@ -325,6 +325,12 @@ internal class AgentAppState(
         }
     }
 
+    /**
+     * 服务商、所选模型或 ChatGPT 登录变化时算好的模型配置，开跑时直接用；输入一变先清空，算好前现读。
+     * 现读一次要把服务商表读三遍、再写一次选择，电视上约 0.4 s。
+     */
+    @Volatile private var runtimeConfigCache: AgentModelClient.ModelConfig? = null
+
     private fun observeRuntimeSelection() {
         scope.launch(Dispatchers.IO) {
             combine(
@@ -337,14 +343,16 @@ internal class AgentAppState(
             }
                 .distinctUntilChanged()
                 .collectLatest { (providerId, modelId, providers, chatGptLoggedIn) ->
+                    runtimeConfigCache = null
                     val pickerState = AgentModelPickerProjector.project(
                         providers = providers,
                         selectedProviderId = providerId,
                         selectedModelId = modelId,
                         chatGptLoggedIn = chatGptLoggedIn,
                     )
-                    val capabilities = RuntimeConfigRepository.currentRuntimeConfig()
-                        ?.reasoningCapabilities
+                    val runtimeConfig = RuntimeConfigRepository.currentRuntimeConfig()
+                    runtimeConfigCache = runtimeConfig
+                    val capabilities = runtimeConfig?.reasoningCapabilities
                     withContext(Dispatchers.Main) {
                         modelPickerState = pickerState.copy(
                             isChanging = modelPickerState.isChanging,
@@ -1685,7 +1693,7 @@ internal class AgentAppState(
             } else {
                 ReasoningEffort.OFF
             }
-            val config = RuntimeConfigRepository.currentRuntimeConfig()?.copy(
+            val config = (runtimeConfigCache ?: RuntimeConfigRepository.currentRuntimeConfig())?.copy(
                 terminalTools = agentBooleanForUi(Prefs.Keys.AGENT_TERMINAL_TOOLS),
                 browserTools = agentBooleanForUi(Prefs.Keys.AGENT_BROWSER_TOOLS),
                 deviceDirectTools = agentBooleanForUi(Prefs.Keys.AGENT_DEVICE_DIRECT_TOOLS),

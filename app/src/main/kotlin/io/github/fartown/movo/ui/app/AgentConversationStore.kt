@@ -1,6 +1,7 @@
 package io.github.fartown.movo.ui.app
 
 import android.content.Context
+import kotlinx.coroutines.async
 import io.github.fartown.movo.agent.model.AgentConversationCodec
 import io.github.fartown.movo.agent.model.AgentModelClient
 import io.github.fartown.movo.agent.roleplay.RoleplayBinding
@@ -65,10 +66,24 @@ internal object AgentConversationStore {
     /** 已写进数据库的最新一份（由 [saveMutex] 保护）。 */
     private var writtenGeneration = 0L
 
-    fun load(context: Context): Snapshot =
-        runBlocking(Dispatchers.IO) {
-            loadSnapshot(context.applicationContext)
+    /** [preload] 在后台读好的一份，只给下一次 [load] 用一次；写过库就作废。 */
+    @Volatile private var preloaded: kotlinx.coroutines.Deferred<Snapshot>? = null
+
+    /**
+     * 提前在后台读出全部会话。电视进程常驻，开机就预读，第一次打开界面、第一次唤醒都不用在主线程上等数据库
+     * （电视上整库解码要 1–2 s）。
+     */
+    fun preload(context: Context, scope: kotlinx.coroutines.CoroutineScope): kotlinx.coroutines.Deferred<Snapshot> =
+        synchronized(requestLock) {
+            preloaded ?: scope.async(Dispatchers.IO) { loadSnapshot(context.applicationContext) }.also { preloaded = it }
         }
+
+    fun load(context: Context): Snapshot {
+        val pending = synchronized(requestLock) { preloaded.also { preloaded = null } }
+        return runBlocking(Dispatchers.IO) {
+            pending?.let { runCatching { it.await() }.getOrNull() } ?: loadSnapshot(context.applicationContext)
+        }
+    }
 
     suspend fun save(
         context: Context,
@@ -97,6 +112,7 @@ internal object AgentConversationStore {
      * 每段流式输出都要保存时，不再每次把所有会话整库重写一遍。
      */
     suspend fun commit(context: Context, request: SaveRequest) {
+        synchronized(requestLock) { preloaded = null }
         val appContext = context.applicationContext
         saveMutex.withLock {
             if (writtenGeneration >= request.generation) return

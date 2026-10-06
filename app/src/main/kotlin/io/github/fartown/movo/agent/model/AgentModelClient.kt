@@ -192,6 +192,7 @@ internal object AgentModelClient {
             purpose = if (rewriteReply) ProviderRequestPurpose.REPLY_REWRITE else ProviderRequestPurpose.CHAT,
             roleplayContext = roleplayContext,
             initialSupplementIndex = initialSupplementIndex,
+            finishingTools = if (rewriteReply) emptySet() else io.github.fartown.movo.flavor.FlavorModule.finishingTools,
             toolsForRound = {
                 val capabilities = capabilitiesProvider()
                 val nextToolGuide = if (rewriteReply) "" else toolGuide?.let { runCatching(it).getOrDefault("") }

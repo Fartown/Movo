@@ -735,6 +735,90 @@ class AgentModelClientLoopTest {
         assertEquals(1, eventEntries.first().content.split("[系统通知 - 非用户输入]").size - 1)
     }
 
+    @Test
+    fun finishingToolWithReplyEndsTheRunWithoutAnotherModelRound() {
+        var requestTools: JSONArray? = null
+        val provider = ScriptedProvider(listOf { request, _ ->
+            requestTools = request.tools
+            assistant(finishReason = "tool_calls", toolCalls = listOf(
+                toolCall("call-open", "app_open", """{"name":"哔哩哔哩","reply":"已打开哔哩哔哩"}"""),
+            ))
+        })
+        val executedArgs = mutableListOf<String>()
+        val messages = JSONArray().put(AgentConversationCodec.userTextMessage("打开哔哩哔哩"))
+
+        val result = finishingLoop(messages, provider) { call ->
+            executedArgs += call.argumentsJson
+            AgentModelClient.ToolResult(JSONObject().put("ok", true).toString())
+        }.run()
+
+        assertEquals("已打开哔哩哔哩", result.content)
+        assertEquals(1, provider.requests.size)
+        assertEquals("工具拿不到 reply", listOf("""{"name":"哔哩哔哩"}"""), executedArgs)
+        assertEquals("assistant", messages.getJSONObjectFromEnd(1).getString("role"))
+        assertEquals("已打开哔哩哔哩", messages.getJSONObjectFromEnd(1).getString("content"))
+        val tools = (0 until requestTools!!.length()).associate { index ->
+            val function = requestTools!!.getJSONObject(index).getJSONObject("function")
+            function.getString("name") to function.getJSONObject("parameters").getJSONObject("properties")
+        }
+        assertTrue(tools.getValue("app_open").has(AgentLoop.FINISH_REPLY_ARG))
+        assertFalse(tools.getValue("ui_observe").has(AgentLoop.FINISH_REPLY_ARG))
+    }
+
+    @Test
+    fun finishingToolWithoutReplyKeepsGoing() {
+        val provider = ScriptedProvider(
+            assistant(finishReason = "tool_calls", toolCalls = listOf(toolCall("call-open", "app_open", """{"name":"哔哩哔哩"}"""))),
+            assistant(finishReason = "tool_calls", toolCalls = listOf(toolCall("call-look", "ui_observe", "{}"))),
+            assistant(content = "已搜到罗翔", finishReason = "stop"),
+        )
+        val result = finishingLoop(JSONArray().put(AgentConversationCodec.userTextMessage("打开哔哩哔哩搜罗翔")), provider) {
+            AgentModelClient.ToolResult(JSONObject().put("ok", true).toString())
+        }.run()
+
+        assertEquals("已搜到罗翔", result.content)
+        assertEquals(3, provider.requests.size)
+    }
+
+    @Test
+    fun failedFinishingToolLetsTheModelHandleIt() {
+        val provider = ScriptedProvider(
+            assistant(finishReason = "tool_calls", toolCalls = listOf(
+                toolCall("call-open", "app_open", """{"name":"芒果TV","reply":"已打开芒果TV"}"""),
+            )),
+            assistant(content = "电视上没有装芒果TV", finishReason = "stop"),
+        )
+        val result = finishingLoop(JSONArray().put(AgentConversationCodec.userTextMessage("打开芒果TV")), provider) {
+            AgentModelClient.ToolResult(JSONObject().put("ok", false).put("message", "没有安装").toString(), status = "error")
+        }.run()
+
+        assertEquals("电视上没有装芒果TV", result.content)
+        assertEquals(2, provider.requests.size)
+    }
+
+    private fun finishingLoop(
+        messages: JSONArray,
+        provider: ScriptedProvider,
+        execute: (AgentModelClient.ToolCall) -> AgentModelClient.ToolResult,
+    ) = AgentLoop(
+        config = modelConfig(),
+        messages = messages,
+        tools = JSONArray()
+            .put(functionTool("app_open", JSONObject().put("name", JSONObject().put("type", "string"))))
+            .put(functionTool("ui_observe", JSONObject())),
+        provider = provider,
+        toolExecutor = AgentModelClient.ToolExecutor { call -> execute(call) },
+        runController = AgentRunController(),
+        traceFormatter = AgentTraceFormatter(),
+        onEvent = {},
+        finishingTools = setOf("app_open"),
+    )
+
+    private fun functionTool(name: String, properties: JSONObject) = JSONObject()
+        .put("type", "function")
+        .put("function", JSONObject().put("name", name).put("description", name)
+            .put("parameters", JSONObject().put("type", "object").put("properties", properties)))
+
     private fun monitorReceived(seq: Int, anchor: Boolean) = AgentEvent.MonitorEventReceived(
         taskId = "m1", name = "喝水提醒", kind = "event", seq = seq, atMillis = 0L, text = "tick", anchor = anchor,
     )

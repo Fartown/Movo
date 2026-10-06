@@ -64,6 +64,12 @@ internal interface Flavor {
     /** 这些工具成功后，本轮回答念完就结束语音会话（例如电视打开了其他 App，不再继续听节目声音）。默认不结束。 */
     val voiceHandoffTools: Set<String> get() = emptySet()
 
+    /**
+     * 这些工具的调用可以顺带写好回答（参数 reply）：模型判断这一步做完任务就结束时填写，工具成功后直接用它结束本轮，
+     * 省掉只为说一句「已打开」的那一轮模型请求。默认不开。
+     */
+    val finishingTools: Set<String> get() = emptySet()
+
     /** 距上次语音结束超过这么久再开语音就开新对话；null 表示一直沿用当前对话（手机）。 */
     val voiceNewConversationAfterMs: Long? get() = null
 

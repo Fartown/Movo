@@ -26,6 +26,8 @@ class TvMainActivity : ComponentActivity() {
         else notice = "权限未授予，暂时不能录音。可以重新点击开始语音授权。"
     }
     override fun onCreate(savedInstanceState: Bundle?) {
+        debugProfile(intent)
+        val createdAt = android.os.SystemClock.elapsedRealtime()
         super.onCreate(savedInstanceState)
         TvAppSurfaces.attach(this)
         TvBackHandler.init(this)
@@ -34,6 +36,18 @@ class TvMainActivity : ComponentActivity() {
         val app = AgentAppSession.get(this)
         debugText(intent)
         setContent { TvTheme { TvHome(app, notice, { notice = it }, requestedPage) { requestedPage = null } } }
+        // 打开 App 到画出第一帧（黑屏时长）。
+        val decor = window.decorView
+        decor.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                decor.viewTreeObserver.removeOnPreDrawListener(this)
+                decor.post {
+                    io.github.fartown.movo.diagnostics.MemoryDiagnostics.record("tv.ui", "first_frame", fields = mapOf(
+                        "duration_ms" to android.os.SystemClock.elapsedRealtime() - createdAt))
+                }
+                return true
+            }
+        })
     }
     override fun onResume() {
         super.onResume()
@@ -76,6 +90,17 @@ class TvMainActivity : ComponentActivity() {
         moveTaskToBack(true)
     }
 
+    /**
+     * 只在 debug 包里：`am start … --ez io.github.fartown.movo.tv.PROFILE true` 从创建界面起采样 8 秒，
+     * 写到 files/start.trace（系统 am profile 在电视上被 SELinux 拦住，写不了文件）。
+     */
+    private fun debugProfile(intent: Intent) {
+        if (!io.github.fartown.movo.BuildConfig.DEBUG || !intent.getBooleanExtra(EXTRA_PROFILE, false)) return
+        val trace = java.io.File(filesDir, "start.trace").apply { delete() }
+        android.os.Debug.startMethodTracingSampling(trace.path, 64 * 1024 * 1024, 1000)
+        android.os.Handler(mainLooper).postDelayed({ android.os.Debug.stopMethodTracing() }, 8000)
+    }
+
     private fun requiredPermissions(): Array<String> = if (TclPcmInput.supported(this)) arrayOf(
         Manifest.permission.RECORD_AUDIO, Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE,
     ) else arrayOf(Manifest.permission.RECORD_AUDIO)
@@ -101,5 +126,7 @@ class TvMainActivity : ComponentActivity() {
         /** debug 包测试用：直接发一句文字指令。 */
         const val EXTRA_TEXT = "io.github.fartown.movo.tv.TEXT"
         const val EXTRA_NEW_CONVERSATION = "io.github.fartown.movo.tv.NEW_CONVERSATION"
+        /** debug 包测试用：采样打开界面的过程。 */
+        const val EXTRA_PROFILE = "io.github.fartown.movo.tv.PROFILE"
     }
 }

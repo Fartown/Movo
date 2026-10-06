@@ -36,6 +36,8 @@ internal class AgentLoop(
     private val purpose: ProviderRequestPurpose = ProviderRequestPurpose.CHAT,
     private val roleplayContext: RoleplayRunContext? = null,
     initialSupplementIndex: Int = 0,
+    /** 这些工具的调用可以带 [FINISH_REPLY_ARG]：成功后直接用它作为回答结束本轮，不再请求一轮模型（见 Flavor.finishingTools）。 */
+    private val finishingTools: Set<String> = emptySet(),
 ) {
     data class Result(
         val content: String,
@@ -90,7 +92,7 @@ internal class AgentLoop(
             runController.throwIfCancelled()
             if (purpose.allowsTools) appendPendingSteeringMessage()
 
-            val roundTools = if (purpose.allowsTools) toolsForRound?.invoke() ?: tools else JSONArray()
+            val roundTools = if (purpose.allowsTools) withFinishReply(toolsForRound?.invoke() ?: tools) else JSONArray()
             toolCallValidator = AgentToolCallValidator(roundTools)
             publishTranscript()
             context.compact(roundTools)
@@ -203,8 +205,21 @@ internal class AgentLoop(
                 }
                 appendToolImages(round, outcomes)
                 publishTranscript()
-                round += 1
-                continue
+                val finish = finishReply(providerResponse.stopReason, outcomes)
+                if (finish == null) {
+                    round += 1
+                    continue
+                }
+                appendMessage(JSONObject().put("role", "assistant").put("content", finish)
+                    .put("_movo_message_id", "assistant-$operationId-$round-finish"))
+                publishTranscript()
+                if (appendPendingSteeringOrSeal()) {
+                    round += 1
+                    continue
+                }
+                context.compact(roundTools, final = true)
+                onEvent(AgentEvent.RunFinished(round = round, contentChars = finish.length))
+                return Result(content = finish, reasoningContent = reasoningSnapshot(), sensitiveToolCallIds = sensitiveToolCallIds.toSet())
             }
 
             publishTranscript()
@@ -230,6 +245,35 @@ internal class AgentLoop(
                 sensitiveToolCallIds = sensitiveToolCallIds.toSet(),
             )
         }
+    }
+
+    /** 给 [finishingTools] 里的工具加上可选的 [FINISH_REPLY_ARG]；其他工具原样不动。 */
+    private fun withFinishReply(roundTools: JSONArray): JSONArray {
+        if (finishingTools.isEmpty()) return roundTools
+        val result = JSONArray()
+        for (index in 0 until roundTools.length()) {
+            val tool = roundTools.optJSONObject(index)
+            val function = tool?.optJSONObject("function")
+            val properties = function?.optJSONObject("parameters")?.optJSONObject("properties")
+            if (function == null || properties == null || function.optString("name") !in finishingTools) {
+                result.put(roundTools.opt(index))
+                continue
+            }
+            val copy = JSONObject(tool.toString())
+            copy.getJSONObject("function").getJSONObject("parameters").getJSONObject("properties").put(FINISH_REPLY_ARG,
+                JSONObject().put("type", "string").put("description", FINISH_REPLY_DESCRIPTION))
+            result.put(copy)
+        }
+        return result
+    }
+
+    /** 这一轮只调用了一个 [finishingTools] 工具、带了回答且成功：返回这句回答，本轮就此结束。 */
+    private fun finishReply(stopReason: AssistantStopReason, outcomes: List<ToolOutcome>): String? {
+        val outcome = outcomes.singleOrNull() ?: return null
+        if (stopReason != AssistantStopReason.TOOL_USE || outcome.call.name !in finishingTools) return null
+        if (!traceFormatter.isSuccessResult(outcome.result)) return null
+        return runCatching { JSONObject(outcome.call.argumentsJson).optString(FINISH_REPLY_ARG).trim() }
+            .getOrNull()?.takeIf { it.isNotEmpty() }
     }
 
     /** 本轮已并入的监听事件条数（每次合并算一条）；到上限后剩下的留给下一个事件轮，一轮不会被事件拖着停不下来。 */
@@ -307,7 +351,7 @@ internal class AgentLoop(
         )
 
         val result = try {
-            toolExecutor.execute(toolCall)
+            toolExecutor.execute(withoutFinishReply(toolCall))
         } catch (throwable: Exception) {
             runController.throwIfCancelled()
             AgentModelClient.ToolResult(
@@ -324,6 +368,14 @@ internal class AgentLoop(
 
         emitToolFinished(round, toolCall, result)
         return ToolOutcome(toolCall, result)
+    }
+
+    private fun withoutFinishReply(call: AgentModelClient.ToolCall): AgentModelClient.ToolCall {
+        if (call.name !in finishingTools) return call
+        val args = runCatching { JSONObject(call.argumentsJson) }.getOrNull() ?: return call
+        if (!args.has(FINISH_REPLY_ARG)) return call
+        args.remove(FINISH_REPLY_ARG)
+        return call.copy(argumentsJson = args.toString())
     }
 
     private fun rejectedToolOutcome(
@@ -470,6 +522,9 @@ internal class AgentLoop(
     internal companion object {
         /** 一轮里最多并入几次监听事件（每次可合并多条）；超出的留给下一个事件轮。 */
         const val MAX_EVENT_INJECTIONS = 3
+        const val FINISH_REPLY_ARG = "reply"
+        const val FINISH_REPLY_DESCRIPTION =
+            "这一步做完整个任务就结束时填：成功后直接对用户说的一句话（如「已打开哔哩哔哩」），不会再有下一轮。之后还要继续操作就不填。"
     }
 }
 
