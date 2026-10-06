@@ -2,6 +2,7 @@ package io.github.fartown.movo.agent.overlay
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import io.github.fartown.movo.BuildConfig
 import io.github.fartown.movo.agent.monitor.MonitorToolProvider
 import io.github.fartown.movo.agent.tools.AgentToolSubsystem
 import io.github.fartown.movo.agent.tools.ToolServices
@@ -27,8 +28,11 @@ class AgentOverlayTextTest {
     @Test
     fun everyTypedAndMonitorToolHasAnOverlayLabel() {
         val names = registeredToolNames() + MCP_BUDGET_TOOLS
-        assertTrue("registry should expose the typed tools and monitor tools: $names", names.size >= 46)
-        assertTrue(names.containsAll(MonitorToolProvider(context).tools.map { it.name }))
+        // 电视的工具集是白名单（没有监控、文件、终端等），只检查已注册的工具都有显示名。
+        if (BuildConfig.FLAVOR == "phone") {
+            assertTrue("registry should expose the typed tools and monitor tools: $names", names.size >= 46)
+            assertTrue(names.containsAll(MonitorToolProvider(context).tools.map { it.name }))
+        }
         val missing = names.filter { toolDisplayNameResource(it) == null }
         assertEquals("tools shown with their raw English name on the overlay", emptyList<String>(), missing)
     }

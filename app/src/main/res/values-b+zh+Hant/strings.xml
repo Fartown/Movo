@@ -219,6 +219,7 @@
   <string name="tool_long_press_element">長按元素</string>
   <string name="tool_swipe">滑動</string>
   <string name="tool_scroll">捲動</string>
+  <string name="tool_move_focus">移動焦點</string>
   <string name="tool_scroll_element">捲動元素</string>
   <string name="tool_input_text">輸入文字</string>
   <string name="tool_replace_text">取代文字</string>
