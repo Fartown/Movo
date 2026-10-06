@@ -34,6 +34,9 @@ internal class MetaToolProvider : ToolProvider {
 
     override val tools: List<AgentTool> = listOf(ToolSearch(), AskUser())
 
+    /** 「工具结果与提问」讲所有工具结果怎么读：语音轮没有 ask_user、也没有可加载的按需工具时也要保留。 */
+    override val promptSectionCoversAllTools: Boolean get() = true
+
     override val promptSection = PromptSection(
         id = "meta",
         domain = ToolDomain.META,
@@ -46,11 +49,17 @@ internal class MetaToolProvider : ToolProvider {
         """.trimIndent(),
     )
 
-    /** 没有可加载的按需工具时 tool_search 不在目录里，不教模型去调它。 */
+    /**
+     * 没有可加载的按需工具时 tool_search 不在目录里，不教模型去调它。
+     * 答复会被念出来时没有 ask_user，改教它在答复里直接问（语音简短回复方案 §3.1）。
+     */
     override fun promptSection(env: ToolEnvironment): PromptSection {
         val searchAvailable = tools.first { it.name == "tool_search" }.availability(env) is ToolAvailability.Available
-        if (searchAvailable) return promptSection
-        return promptSection.copy(text = promptSection.text.lineSequence().filterNot { "tool_search" in it }.joinToString("\n"))
+        val lines = promptSection.text.lineSequence()
+            .filter { searchAvailable || "tool_search" !in it }
+            .map { line -> if (env.spokenReply && "ask_user" in line) SPOKEN_ASK_LINE else line }
+            .joinToString("\n")
+        return if (lines == promptSection.text) promptSection else promptSection.copy(text = lines)
     }
 
     private inner class ToolSearch : AgentTool {
@@ -140,9 +149,11 @@ internal class MetaToolProvider : ToolProvider {
             integer("timeout_seconds", "等待时长，默认 120", min = 10, max = 600)
         }
 
-        override fun availability(env: ToolEnvironment): ToolAvailability =
-            if (env.interactive) ToolAvailability.Available
-            else ToolAvailability.Unavailable(ToolErrorCode.UNSUPPORTED, "当前入口无法向用户提问")
+        override fun availability(env: ToolEnvironment): ToolAvailability = when {
+            !env.interactive -> ToolAvailability.Unavailable(ToolErrorCode.UNSUPPORTED, "当前入口无法向用户提问")
+            env.spokenReply -> ToolAvailability.Unavailable(ToolErrorCode.UNSUPPORTED, "语音里提问卡片不会被念出来")
+            else -> ToolAvailability.Available
+        }
 
         override fun risk(args: ToolArgs, env: ToolEnvironment) = Risk.READ
         override fun concurrency(args: ToolArgs, env: ToolEnvironment) = Concurrency.Exclusive(ToolResource.CONVERSATION)
@@ -201,6 +212,8 @@ internal class MetaToolProvider : ToolProvider {
 
     companion object {
         val NAMES = setOf("tool_search", "ask_user")
+        private const val SPOKEN_ASK_LINE =
+            "- 缺少必要信息、或有多个候选需要用户选择时，在最终答复里直接用一句话问，不要猜；危险动作的确认由系统自动处理。"
     }
 }
 

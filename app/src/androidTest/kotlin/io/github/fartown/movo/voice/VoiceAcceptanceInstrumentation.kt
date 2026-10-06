@@ -163,6 +163,22 @@ class VoiceAcceptanceInstrumentation : Instrumentation() {
                 val endFrom = events.size
                 feed("end_session")
                 awaitEvent("ended", endFrom)
+            } else if (options.getString("mode") == "brevity") {
+                // 语音简短回复方案 §6：真机上逐句走完整语音链路。每轮要有念出来的答复、不能用提问卡片；
+                // 字数和时长从 events.json 离线核对（.docs/voice-brevity/device/）。
+                val clips = options.getString("clips")?.split(",")?.map(String::trim)?.filter(String::isNotEmpty)
+                    ?: BREVITY_CLIPS
+                for (clip in clips) {
+                    val from = events.size
+                    val answer = round(clip)
+                    check(answer.text.isNotBlank()) { "$clip: empty spoken answer" }
+                    check(events.drop(from).none { it.name == "tool.started" && it.text == "ask_user" }) {
+                        "$clip: ask_user card used in a spoken turn"
+                    }
+                }
+                val endIndex = events.size
+                feed("end_session")
+                awaitEvent("ended", endIndex)
             } else {
                 val first = round("r1_remember")
                 // Memory is proven by the subsequent recall, not one particular acknowledgement.
@@ -420,6 +436,13 @@ class VoiceAcceptanceInstrumentation : Instrumentation() {
             }
             SystemClock.sleep(100)
         }
+    }
+
+    private companion object {
+        /** 缺信息那句放最后：模型会在答复里问「定几点」，接着就结束会话。 */
+        val BREVITY_CLIPS = listOf(
+            "brevity_recipe", "brevity_sky", "brevity_battery", "brevity_express", "brevity_settings", "brevity_alarm_missing",
+        )
     }
 
     private fun round(clip: String): Event {

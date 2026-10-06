@@ -47,6 +47,8 @@ internal data class ToolEnvironment(
     val conversationId: String? = null,
     /** 当前入口可以向用户提问与请求确认（后台定时任务等不行）。 */
     val interactive: Boolean = true,
+    /** 这一轮的答复会被念出来（语音会话、超级小爱）：提问卡片上的字不会念，所以不给 ask_user。审批照常。 */
+    val spokenReply: Boolean = false,
     /** 审批设置（设置 → 工具）：默认 YOLO 全部直接做；手动审批时高敏和规则命中的动作弹卡。 */
     val approvalPolicy: ApprovalPolicy = ApprovalPolicy.YOLO,
     val modelInputs: Set<ModelInput> = setOf(ModelInput.TEXT, ModelInput.IMAGE),

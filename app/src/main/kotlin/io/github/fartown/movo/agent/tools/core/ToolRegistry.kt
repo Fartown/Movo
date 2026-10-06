@@ -38,11 +38,16 @@ internal class ToolRegistry(private val providers: List<ToolProvider>) : AutoClo
 
     fun deferredTools(): List<AgentTool> = tools.filter { it.exposure == Exposure.DEFERRED }
 
-    /** 至少有一个工具可用的领域，才注入它的用法分节。 */
-    fun promptSections(env: ToolEnvironment): List<PromptSection> =
-        providers.mapNotNull { provider ->
-            provider.promptSection(env)?.takeIf { provider.tools.any { tool -> isAvailable(tool, env) } }
+    /** 至少有一个工具可用的领域，才注入它的用法分节；通用规则分节只要有任何工具可用就注入。 */
+    fun promptSections(env: ToolEnvironment): List<PromptSection> {
+        val anyAvailable = tools.any { tool -> isAvailable(tool, env) }
+        return providers.mapNotNull { provider ->
+            provider.promptSection(env)?.takeIf {
+                if (provider.promptSectionCoversAllTools) anyAvailable
+                else provider.tools.any { tool -> isAvailable(tool, env) }
+            }
         }
+    }
 
     override fun close() {
         providers.forEach { provider -> runCatching { provider.close() } }

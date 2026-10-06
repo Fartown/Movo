@@ -14,18 +14,53 @@ class AgentRoleplayRuntimeTest {
     fun voiceStyleIsAppliedToCharacterWithoutReplacingPersonaOrEnteringHistory() {
         val originalConfig = config()
         val response = AgentModelClient.complete(
-            config = originalConfig, prompt = "你好", roleplayContext = roleplay(), voiceConversation = true,
+            config = originalConfig, prompt = "你好", roleplayContext = roleplay(), spokenReply = SpokenReply.MOVO_VOICE,
             provider = provider { request ->
                 val text = request.messages.toString()
                 assertTrue(text.contains("林舟"))
-                assertTrue(text.contains("当前通过语音对话交流"))
+                assertTrue(text.contains("【语音模式】"))
+                assertTrue(text.contains("语气、称呼和人设照旧，只有格式和长短按这里"))
+                // 语音轮长短交给语音段，人设只管语气；不再要求 Markdown。
+                assertTrue(text.contains("角色交流的语言、语气和叙事方式以人物设定"))
+                assertFalse(text.contains("GitHub Flavored Markdown"))
                 assertFalse(text.contains("PROVIDER_IDENTITY"))
                 assertEquals(originalConfig.model, request.config.model)
                 reply("你好。")
             }, toolExecutor = { error("本次不应执行工具") },
         )
-        assertTrue(response.transcript.none { it.role == "system" || it.content.contains("当前通过语音对话交流") })
-        assertFalse(originalConfig.systemPrompt.contains("当前通过语音对话交流"))
+        assertTrue(response.transcript.none { it.role == "system" || it.content.contains("【语音模式】") })
+        assertFalse(originalConfig.systemPrompt.contains("【语音模式】"))
+    }
+
+    /** 角色卡的补充设定每轮追加在末尾；语音段仍要是最后一条系统消息（语音简短回复方案 §2.2）。 */
+    @Test
+    fun voiceRulesStayLastAfterCharacterPostHistoryInstructions() {
+        val card = CharacterCardCodec.create("林舟").withEdits(description = "一位旅人", postHistoryInstructions = "说话带一点江湖气")
+        AgentModelClient.complete(
+            config = config(), prompt = "你好",
+            roleplayContext = RoleplayRunContext("fixture", card, "旅伴", ""), spokenReply = SpokenReply.MOVO_VOICE,
+            provider = provider { request ->
+                val systems = (0 until request.messages.length()).map(request.messages::getJSONObject)
+                    .filter { it.optString("role") == "system" }.map { it.optString("content") }
+                assertTrue(systems.any { it.contains("说话带一点江湖气") })
+                assertTrue(systems.last().startsWith("【语音模式】"))
+                reply("你好。")
+            }, toolExecutor = { error("本次不应执行工具") },
+        )
+    }
+
+    @Test
+    fun textTurnsKeepTheirLengthAndMarkdownRules() {
+        AgentModelClient.complete(
+            config = config(), prompt = "你好", roleplayContext = roleplay(),
+            provider = provider { request ->
+                val text = request.messages.toString()
+                assertTrue(text.contains("角色交流的语言、语气、长短和叙事方式以人物设定"))
+                assertTrue(text.contains("GitHub Flavored Markdown"))
+                assertFalse(text.contains("【语音模式】"))
+                reply("你好。")
+            }, toolExecutor = { error("本次不应执行工具") },
+        )
     }
 
     @Test

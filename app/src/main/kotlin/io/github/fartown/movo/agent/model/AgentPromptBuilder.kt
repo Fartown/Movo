@@ -17,17 +17,17 @@ internal object AgentPromptBuilder {
         memoryContext: AgentMemoryContext = AgentMemoryContext.DISABLED,
         rootAvailable: Boolean = false,
         roleplayContext: RoleplayRunContext? = null,
-        voiceConversation: Boolean = false,
+        spokenReply: SpokenReply = SpokenReply.NONE,
         toolGuide: String = "",
         /**
-         * 环境信息（当前时间、时区），作为系统块最后一条系统消息（工具重构方案「环境信息」）。
+         * 环境信息（当前时间、时区），作为系统块最后一条系统消息（工具重构方案「环境信息」）；语音轮在它之后还有语音段。
          * 曾试过加在用户消息开头，真机上模型把它当成用户新说的话（主动报时、做无关的事），所以放进系统消息。
          * 每次任务固定一次：同一任务内各轮前缀不变，提示缓存照常命中。
          */
         environment: String = "",
     ): JSONArray {
         val messages = buildSystemMessages(
-            config, skillContext, memoryContext, rootAvailable, roleplayContext, voiceConversation, toolGuide, environment,
+            config, skillContext, memoryContext, rootAvailable, roleplayContext, spokenReply, toolGuide, environment,
         )
         history.forEach { item ->
             runCatching { AgentConversationCodec.toJsonObject(item) }.getOrNull()?.let(messages::put)
@@ -51,7 +51,7 @@ internal object AgentPromptBuilder {
         memoryContext: AgentMemoryContext,
         rootAvailable: Boolean,
         roleplayContext: RoleplayRunContext? = null,
-        voiceConversation: Boolean = false,
+        spokenReply: SpokenReply = SpokenReply.NONE,
         /** 类型化工具各领域的用法分节（ToolPipeline.promptSections），作为一条系统消息注入。 */
         toolGuide: String = "",
         environment: String = "",
@@ -92,17 +92,14 @@ internal object AgentPromptBuilder {
                         "回答和调用工具前后的过渡说明都使用用户的语言（用户说中文就用中文），交流自然、友善，不刻意奉承；有不同判断时说明依据，发现错误时直接承认并修正，不反复道歉。" +
                             "简单问题直接简短回答；用户要求详细说明时提供足够的解释和必要示例。"
                     } else {
-                        "角色交流的语言、语气、长短和叙事方式以人物设定、对话示例及用户当前要求为准。"
+                        // 语音轮的长短交给末尾的语音段，人设只管语气（语音简短回复方案 §2.2）。
+                        if (spokenReply.spoken) "角色交流的语言、语气和叙事方式以人物设定、对话示例及用户当前要求为准。"
+                        else "角色交流的语言、语气、长短和叙事方式以人物设定、对话示例及用户当前要求为准。"
                     }) +
                     "完成工具操作后简要说明实际结果，不只说‘完成了’；失败、部分完成或结果尚未确认时明确说明，不把尝试执行当成成功。" +
                     "说明没执行或失败的原因时用人话（例如‘你拒绝了这一步’），不写工具返回的错误码（如 USER_DECLINED）和英文字段名。" +
-                    (if (roleplayContext == null) {
-                        "最终答复使用合法且克制的 GitHub Flavored Markdown：普通交流默认用简短自然段；" +
-                            "只有分组、步骤或比较确实提升可读性时才使用标题、列表或表格，不用整句粗体冒充标题；"
-                    } else {
-                        "角色正文使用合法的 GitHub Flavored Markdown；剧情段落和对白排版遵循角色风格与用户要求；"
-                    }) +
-                    "表格的表头、分隔行和每个数据行必须各自独占一行，表格前后留空行；不要为了显得结构化而滥用格式。" +
+                    // 语音轮的答复会被念出来：格式要求交给末尾的语音段，这里不再要求 Markdown，免得两条打架。
+                    (if (spokenReply.spoken) "" else markdownRules(roleplayContext != null)) +
                     "需要看屏幕时调用 ui_observe，默认只返回节点、不附截图；" +
                     "节点为空、目标无法唯一识别、界面以 Canvas、地图、图片或二维码等视觉内容为主，或任务依赖颜色、图像、空间布局时，" +
                     "再设 screenshot=true；截图与节点来自同一次观察，禁止把新截图与旧节点混用；节点被截断但语义仍有效时，" +
@@ -164,9 +161,6 @@ internal object AgentPromptBuilder {
         }
         if (toolGuide.isNotBlank()) messages.put(systemMessage("各类工具的用法：\n$toolGuide"))
         roleplayContext?.personaMessage()?.let(messages::put)
-        if (voiceConversation) messages.put(systemMessage(
-            "当前通过语音对话交流。未要求长答时尽量用一至三句自然口语回答；保持用户要求、角色设定和工具执行规则。",
-        ))
         buildMemorySystemMessage(memoryContext, writable = roleplayContext == null)?.let(messages::put)
         buildSkillSystemMessage(skillContext)?.let(messages::put)
         if (environment.isNotBlank()) {
@@ -179,7 +173,51 @@ internal object AgentPromptBuilder {
                 ),
             )
         }
+        // 放在全部系统消息最后：答复会被念出来，这段要压得住前面的格式要求和历史回答的示范。
+        // 角色会话每轮投影时追加的补充设定也排在它前面（RoleplayRunContext.projectMessages）。
+        spokenReplyMessage(spokenReply, roleplay = roleplayContext != null)?.let(messages::put)
         return messages
+    }
+
+    /** 标记语音段，角色投影追加消息后据此把它挪回最后。只用于系统消息，拼进 instructions 时不会带出去。 */
+    const val SPOKEN_REPLY_MARKER = "_movo_spoken_reply"
+
+    private fun markdownRules(roleplay: Boolean): String =
+        (if (roleplay) {
+            "角色正文使用合法的 GitHub Flavored Markdown；剧情段落和对白排版遵循角色风格与用户要求；"
+        } else {
+            "最终答复使用合法且克制的 GitHub Flavored Markdown：普通交流默认用简短自然段；" +
+                "只有分组、步骤或比较确实提升可读性时才使用标题、列表或表格，不用整句粗体冒充标题；"
+        }) +
+            "表格的表头、分隔行和每个数据行必须各自独占一行，表格前后留空行；不要为了显得结构化而滥用格式。"
+
+    /**
+     * 语音段（语音简短回复方案 §2.3）。只覆盖格式和长短，如实说明结果的要求照旧；
+     * 改措辞后用 .docs/voice-brevity/eval/run_eval.py 回归。
+     */
+    private fun spokenReplyMessage(spokenReply: SpokenReply, roleplay: Boolean): JSONObject? {
+        if (!spokenReply.spoken) return null
+        val moreResults = if (spokenReply == SpokenReply.XIAOAI) {
+            "说总数和与用户问题最相关的一到三条，不要逐条念。"
+        } else {
+            "说总数和与用户问题最相关的一到三条，其余的说在 Movo 里能看到，不要逐条念。"
+        }
+        val text = "【语音模式】这一轮用户在用语音和你说话。你的最终答复会被念出来，屏幕上显示的也是同一段文字，用户可能没在看屏幕。" +
+            "下面的要求替代前面关于 Markdown 格式和回答长短的说明，前面对话里用过标题、列表或表格也一样；" +
+            "如实说明结果、证据和不确定性的要求照旧，用户这句话里的明确要求优先。\n" +
+            "1. 像打电话一样说话：一般一到两句完整的短句，中文大约 60 字以内，其他语言同样一两句；先说结论或结果，不铺垫、不复述用户的话。" +
+            "不要为了变短把很多信息挤成一长串。\n" +
+            "2. 只写能直接念的纯文字，不用 Markdown 和表情；数字、时间、金额照常用阿拉伯数字写。" +
+            "网址、文件路径、包名、订单号不念；取件码、时间、金额照常说；电话号码、验证码、密码只在用户这句话明确要时才说。\n" +
+            "3. 做完操作用一句话说结果，例如「好了，亮度调到一半了」。没做成、只做了一部分，或还没确认生效时，" +
+            "直接说是哪种情况、原因和用户接下来能做什么，这时不要说「好了」。\n" +
+            "4. 工具查到很多条结果时，${moreResults}纯问答不要这样说，挑最相关的两三项说完即可。\n" +
+            "5. 用户明确要长内容（讲故事、详细讲讲、念全文）时可以说长，用短句。用户明确说「一步步教我」时，先说前两三步，再问要不要接着说；" +
+            "只问「怎么做」时，用两三句把整个做法说完。「介绍一下」「说说」按普通问题处理。\n" +
+            "6. 答完就停，不要用提问或提议收尾，比如「要我说得更细吗」「要不要听更细的步骤」「要不要我帮你……」「还有什么需要吗」。" +
+            "只有两种情况可以问：缺关键信息时，在答复里直接用一句话问；用户要长内容、你分段讲时，问要不要接着说。" +
+            (if (roleplay) "\n语气、称呼和人设照旧，只有格式和长短按这里。" else "")
+        return systemMessage(text).put(SPOKEN_REPLY_MARKER, true)
     }
 
     private fun buildMemorySystemMessage(context: AgentMemoryContext, writable: Boolean): JSONObject? {

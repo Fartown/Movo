@@ -117,6 +117,8 @@ internal interface ToolProvider : AutoCloseable {
     val promptSection: PromptSection? get() = null
     /** 按当前环境给出用法分节；分节里提到的工具不可用时，提供方可以去掉相应的句子。 */
     fun promptSection(env: ToolEnvironment): PromptSection? = promptSection
+    /** 分节讲的是所有工具通用的规则（如工具结果怎么读）：只要有任何工具可用就注入，不看本领域工具是否可用。 */
+    val promptSectionCoversAllTools: Boolean get() = false
     override fun close() = Unit
 }
 

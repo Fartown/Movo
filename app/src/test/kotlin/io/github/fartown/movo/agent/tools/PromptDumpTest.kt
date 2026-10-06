@@ -27,11 +27,15 @@ class PromptDumpTest {
     fun dumpPromptIfRequested() {
         val out = System.getenv("MOVO_DUMP_PROMPT") ?: return
         val prompt = System.getenv("MOVO_DUMP_PROMPT_TEXT") ?: "Create file /sdcard/Download/movo-test.txt with the content first line"
+        // MOVO_DUMP_SPOKEN=MOVO_VOICE / XIAOAI：导出语音轮的请求（语音段、去掉 ask_user），供 .docs/voice-brevity/eval 回归。
+        val spokenReply = System.getenv("MOVO_DUMP_SPOKEN")?.let { io.github.fartown.movo.agent.model.SpokenReply.valueOf(it) }
+            ?: io.github.fartown.movo.agent.model.SpokenReply.NONE
         // 小米云真机：无 Root，无障碍、通知等权限已开。
         val env = ToolEnvironment(
             rootAvailable = false, accessibilityAvailable = true, notificationAccess = true,
             usageAccess = true, locationAccess = true, linuxReady = false,
             conversationBound = true, memoryScope = MemoryScope.REAL, interactive = true,
+            spokenReply = spokenReply.spoken,
         )
         val config = AgentModelClient.ModelConfig(
             baseUrl = "https://example.invalid/api/plan/v3",
@@ -61,6 +65,7 @@ class PromptDumpTest {
                 history = emptyList(),
                 skillContext = SkillContext(installedSkills = emptyList()),
                 rootAvailable = false,
+                spokenReply = spokenReply,
                 toolGuide = guide,
                 environment = AgentPromptBuilder.environmentLine(),
             )

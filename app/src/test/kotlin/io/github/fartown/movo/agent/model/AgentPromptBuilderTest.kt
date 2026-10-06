@@ -214,6 +214,43 @@ class AgentPromptBuilderTest {
         assertEquals("明天早上七点叫我", messages.getJSONObject(messages.length() - 1).getString("content"))
     }
 
+    /** 语音简短回复方案 §2.2–2.3：语音段是最后一条系统消息；语音轮不要求 Markdown；文字轮一字不变。 */
+    @Test
+    fun spokenTurnsPutVoiceRulesLastAndDropOnlyTheMarkdownRules() {
+        fun build(spokenReply: SpokenReply) = AgentPromptBuilder.buildInitialMessages(
+            config = modelConfig("", terminalTools = true, browserTools = true),
+            prompt = "番茄炒蛋怎么做",
+            images = emptyList(),
+            history = emptyList(),
+            skillContext = SkillContext.EMPTY,
+            spokenReply = spokenReply,
+            toolGuide = "## 时钟与音频\n- clock_create 回读核实",
+            environment = "当前时间：2026-10-06 星期二 09:30（Asia/Shanghai，UTC+08:00）",
+        ).systemContents()
+
+        val text = build(SpokenReply.NONE)
+        assertTrue(text.last().startsWith("环境信息"))
+        assertTrue(text.none { "【语音模式】" in it })
+        assertTrue(text.first().contains("GitHub Flavored Markdown"))
+        assertTrue(text.first().contains("表格的表头、分隔行"))
+
+        val voice = build(SpokenReply.MOVO_VOICE)
+        assertEquals(text.size + 1, voice.size)
+        assertTrue(voice.last().startsWith("【语音模式】"))
+        assertTrue(voice.last().contains("其余的说在 Movo 里能看到"))
+        assertTrue(voice[voice.size - 2].startsWith("环境信息"))
+        assertTrue(voice.none { "GitHub Flavored Markdown" in it || "表格的表头、分隔行" in it })
+        // 只去掉格式要求：如实说明结果、简单问题简短回答这些照旧。
+        assertTrue(voice.first().contains("简单问题直接简短回答"))
+        assertTrue(voice.first().contains("失败、部分完成或结果尚未确认时明确说明"))
+        // 除了核心规则里那段格式要求，其他系统消息和文字轮完全相同。
+        assertEquals(text.drop(1), voice.drop(1).dropLast(1))
+
+        val xiaoai = build(SpokenReply.XIAOAI).last()
+        assertTrue(xiaoai.startsWith("【语音模式】"))
+        assertFalse("小爱的结果不进 Movo 对话记录", xiaoai.contains("Movo 里能看到"))
+    }
+
     @Test
     fun environmentLineNamesDateWeekdayTimeAndZone() {
         val now = java.time.ZonedDateTime.of(2026, 10, 6, 9, 5, 0, 0, java.time.ZoneId.of("Asia/Shanghai"))
