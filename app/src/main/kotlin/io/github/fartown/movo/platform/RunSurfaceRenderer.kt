@@ -62,6 +62,8 @@ internal interface RunSurfaceRenderer {
         onOpenResult: () -> Unit,
         notice: String?,
         orbCenterOnScreen: () -> Offset?,
+        /** 展开卡窗口为避让键盘比原位抬高了多少（px）：卡片里的球心相应下移。 */
+        orbLiftPx: () -> Float,
         onOrbTap: () -> Unit,
         onOrbLongPress: () -> Unit,
         onOrbDragStart: () -> Unit,
