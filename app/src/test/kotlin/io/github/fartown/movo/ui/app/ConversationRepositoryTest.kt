@@ -125,6 +125,19 @@ class ConversationRepositoryTest {
     }
 
     @Test
+    fun modelMessagesKeepTheRawResponsesOutputForReplay() = runBlocking {
+        // 提示缓存（#21）：助手消息带着模型原始输出项和来源，按行存储后必须原样读回，才能在下一轮原样回放。
+        val raw = message("assistant", "已打开").copy(
+            responsesOutputJson = """[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"已打开"}]}]""",
+            responsesOrigin = "ark|doubao-seed",
+        )
+        repository.saveConversation("c1", state(emptyList()), "", updatedAt = 1).await()
+        repository.syncModelLog("c1", ConversationModelMessageEntity.LOG_HISTORY, emptyList(), listOf(raw)).await()
+
+        assertEquals(listOf(raw), repository.load("c1")!!.state.history)
+    }
+
+    @Test
     fun longModelMessageIsChunkedAndDeletingTheConversationRemovesEverything() = runBlocking {
         val long = message("tool", "节点".repeat(20_000))
         repository.saveConversation("c1", state(listOf(user("u1", "看看屏幕"))), "", updatedAt = 1).await()

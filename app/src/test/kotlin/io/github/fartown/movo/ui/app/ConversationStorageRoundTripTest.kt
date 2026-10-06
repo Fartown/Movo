@@ -60,8 +60,8 @@ class ConversationStorageRoundTripTest {
             ),
             input = "", isStreaming = false, thinkingEnabled = false,
         )
-        AgentConversationStore.save(context, "c1", mapOf("c1" to state), mapOf("c1" to "Wi‑Fi"), mapOf("c1" to 1L))
-        val restored = AgentConversationStore.load(context).conversationsById.getValue("c1").messages
+        ConversationStoreTestDriver.save(context, "c1", mapOf("c1" to state), mapOf("c1" to "Wi‑Fi"), mapOf("c1" to 1L))
+        val restored = ConversationStoreTestDriver.load(context).conversationsById.getValue("c1").messages
         assertEquals(listOf(true, false), restored.filterIsInstance<AgentMessageUi>().map { it.narration })
     }
 
