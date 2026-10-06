@@ -122,7 +122,7 @@ import java.net.URI
         page == PAGE_VOICE_KEYS -> TvPage("豆包语音") {
             LaunchedEffect(Unit) { config.load() }
             fun filled(v: String) = if (v.isBlank()) "未填写" else "已填写"
-            TvCard(listOf(
+            TvCard(autoFocus = true, rows = listOf(
                 TvRowSpec(R.drawable.tv_ic_key_round, "API Key", value = filled(config.voiceKey)) { open("edit:voice.api") },
                 TvRowSpec(R.drawable.tv_ic_key_round, "App Key", value = filled(config.voiceApp)) { open("edit:voice.app") },
                 TvRowSpec(R.drawable.tv_ic_key_round, "Access Key", value = filled(config.voiceAccess)) { open("edit:voice.access") },
@@ -149,7 +149,7 @@ import java.net.URI
     var wake by remember { mutableStateOf(TclWakeService.enabled(context)) }
     var notice by remember { mutableStateOf("") }
     TvPage("语音与唤醒") {
-        TvCard(listOf(
+        TvCard(autoFocus = true, rows = listOf(
             TvRowSpec(R.drawable.tv_ic_mic, "「小T小T」唤醒",
                 subtitle = if (status.wakeSupported) "开启后由 Movo 回答，电视自带的小T不再响应" else "这台电视不支持",
                 switch = wake) { notice = TclWakeService.toggle(context); wake = TclWakeService.enabled(context) },
@@ -172,7 +172,7 @@ import java.net.URI
     }
     fun on(value: Boolean, yes: String = "已开启", no: String = "未开启") = if (value) yes else no
     TvPage("权限") {
-        TvCard(title = "让 Movo 能操作电视", rows = listOf(
+        TvCard(autoFocus = true, title = "让 Movo 能操作电视", rows = listOf(
             TvRowSpec(R.drawable.tv_ic_pointer, "操作其他应用", subtitle = "读懂界面、帮你点选；系统里叫「无障碍」",
                 value = on(status.accessibility), alert = !status.accessibility) {
                 if (AgentAccessibilityService.isAvailable()) notice = "已开启"
@@ -211,7 +211,7 @@ import java.net.URI
     var notice by remember { mutableStateOf("") }
     LaunchedEffect(Unit) { config.load() }
     TvPage("模型") {
-        TvCard(listOf(
+        TvCard(autoFocus = true, rows = listOf(
             TvRowSpec(R.drawable.tv_ic_link, "服务地址", value = runCatching { URI(config.base).host }.getOrNull() ?: config.base.ifBlank { "未填写" }) { open("edit:model.base") },
             TvRowSpec(R.drawable.tv_ic_sparkles, "模型", value = config.model.ifBlank { "未填写" }) { open("edit:model.id") },
             TvRowSpec(R.drawable.tv_ic_key_round, "访问密钥", value = if (config.key.isBlank()) "未填写" else "已填写") { open("edit:model.key") },

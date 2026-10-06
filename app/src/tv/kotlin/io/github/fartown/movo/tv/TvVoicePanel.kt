@@ -68,6 +68,8 @@ internal object TvVoicePanel {
     private var lingerUntil = 0L
     private var lingerText: String? = null
     private var yieldUntil = 0L
+    /** 本次语音会话开始前的最后一条消息；只显示它之后的回答，新会话不带出上一个会话的旧回答。 */
+    private var sessionBaseline: String? = null
     private var choiceFocus = 0
     private var choices: Choices? = null
     private val dimTask = Runnable { root?.animate()?.alpha(0.5f)?.setDuration(DIM_WINDOW_MS)?.start() }
@@ -99,6 +101,7 @@ internal object TvVoicePanel {
     fun showYield() {
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post(::showYield); return }
         choices = null
+        lingerUntil = 0
         yieldUntil = SystemClock.elapsedRealtime() + YIELD_MS
         main.postDelayed(::refresh, YIELD_MS + 50)
         refresh()
@@ -139,6 +142,7 @@ internal object TvVoicePanel {
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post(::refresh); return }
         val voice = VoiceSessionManager.state.value
         if (voice.active) { observeApp(); yieldUntil = 0 }
+        if (voice.active && !lastActive) sessionBaseline = app?.homeState?.messages?.lastOrNull()?.id
         if (lastActive && !voice.active) startLinger(voice)
         lastActive = voice.active
         val service = AgentAccessibilityService.current()
@@ -175,8 +179,9 @@ internal object TvVoicePanel {
 
     private fun model(voice: VoiceSessionUiState): Model? {
         val session = app
-        val turn = session?.homeState?.messages.orEmpty().asReversed().takeWhile { it !is UserMessageUi }
-        val lastUser = session?.homeState?.messages?.lastOrNull { it is UserMessageUi } as? UserMessageUi
+        val messages = sessionMessages()
+        val turn = messages.asReversed().takeWhile { it !is UserMessageUi }
+        val lastUser = messages.lastOrNull { it is UserMessageUi } as? UserMessageUi
         val answer = turn.firstOrNull { it is AgentMessageUi } as? AgentMessageUi
         val tools = turn.filterIsInstance<ToolActivityMessageUi>()
         val busy = session?.voiceRuntimeBusy == true
@@ -196,6 +201,8 @@ internal object TvVoicePanel {
                 ?: Model(TvOrbRing.Speaking, Icon.Speaker, "正在回答", SECONDARY)
             VoiceChannel.Listening, VoiceChannel.Off -> when {
                 voice.transcript.isNotBlank() -> Model(TvOrbRing.Listening, Icon.BarsOn, voice.transcript, TEXT, fromStart = true)
+                // 任务在跑时会话仍可继续听；环境声音会把通道拉回「听」，此时优先显示在做什么。
+                busy -> working(tools, lastUser)
                 answer != null -> {
                     val card = parseChoices(answer.content)
                     Model(TvOrbRing.Listening, Icon.BarsOff, summary(answer), SECONDARY, hint = if (card == null) longHint(answer) else null, choices = card)
@@ -212,8 +219,14 @@ internal object TvVoicePanel {
         return Model(TvOrbRing.Working, Icon.None, label?.let { "正在$it" } ?: (lastUser?.content ?: "正在处理"), if (label != null) TEXT else SECONDARY, sub = step)
     }
 
-    private fun latestAnswer(): AgentMessageUi? = app?.homeState?.messages.orEmpty().asReversed()
+    private fun latestAnswer(): AgentMessageUi? = sessionMessages().asReversed()
         .takeWhile { it !is UserMessageUi }.firstOrNull { it is AgentMessageUi } as? AgentMessageUi
+
+    private fun sessionMessages(): List<io.github.fartown.movo.ui.model.AgentChatMessageUi> {
+        val all = app?.homeState?.messages.orEmpty()
+        val start = sessionBaseline?.let { id -> all.indexOfLast { it.id == id } } ?: -1
+        return if (start >= 0) all.drop(start + 1) else if (sessionBaseline == null) all else emptyList()
+    }
 
     /** 一行要点：取第一句有内容的文字，去掉 Markdown 记号。 */
     private fun summary(answer: AgentMessageUi): String = summaryOf(answer.content)

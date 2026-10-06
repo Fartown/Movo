@@ -95,5 +95,9 @@ internal object FlavorModule : Flavor {
         io.github.fartown.movo.tv.TvAssistantPermission.restoreIfEnabled(it)
         io.github.fartown.movo.tv.TvBackHandler.init(it)
         io.github.fartown.movo.tv.TvVoicePanel.init(it)
+        io.github.fartown.movo.tv.TclWakeService.restoreIfEnabled(it)
+        io.github.fartown.movo.agent.accessibility.AgentAccessibilityService.addInstanceListener {
+            io.github.fartown.movo.tv.TclWakeService.restoreIfEnabled(it)
+        }
     })
 }

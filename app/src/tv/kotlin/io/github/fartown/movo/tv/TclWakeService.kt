@@ -73,6 +73,7 @@ internal class TclWakeService : Service() {
     }
     override fun onCreate() {
         super.onCreate()
+        alive = true
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel("tv_wake", "电视唤醒接管", NotificationManager.IMPORTANCE_LOW))
         val open = PendingIntent.getActivity(this, 0, Intent(this, TvMainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -115,6 +116,7 @@ internal class TclWakeService : Service() {
         stopSelf()
     }
     override fun onDestroy() {
+        alive = false
         stopping = true; main.removeCallbacksAndMessages(null)
         runCatching { call("sceneEnable", JSONObject().put("isOpen", false).put("sceneId", packageName).toString()) }
         if (registered) runCatching { transaction(2) { request, reply ->
@@ -133,6 +135,24 @@ internal class TclWakeService : Service() {
         private fun prefs(context: Context) = context.getSharedPreferences("tv_wake", MODE_PRIVATE)
         fun enabled(context: Context) = prefs(context).getBoolean("enabled", false)
         fun status(context: Context) = prefs(context).getString("status", "唤醒接管未开启").orEmpty()
+        @Volatile private var alive = false
+
+        /**
+         * 换包、重启或进程被杀后服务不会自己回来，设置里却还留着上一个进程写的「已连接」，小T照常抢答（2026-10-06 真机）。
+         * 进程起来、无障碍重新连上、开机 / 更新广播时调用：开着接管就把服务拉起来，状态先改成「正在连接」。
+         */
+        fun restoreIfEnabled(context: Context) {
+            if (alive || !enabled(context) || !TclPcmInput.supported(context)) return
+            status(context, "正在连接小T唤醒服务")
+            val intent = Intent(context, TclWakeService::class.java)
+            // TCL Android 9 拒绝后台进程的 startForegroundService；系统绑定的无障碍服务可以启动普通服务，onCreate 里再转前台。
+            val started = runCatching {
+                if (io.github.fartown.movo.agent.accessibility.AgentAccessibilityService.current() != null) context.startService(intent)
+                else context.startForegroundService(intent)
+            }.isSuccess
+            MemoryDiagnostics.record("tv.voice", "wake.restore", fields = mapOf("started" to started))
+            if (!started) status(context, "接管没能自动恢复，请在设置里重新打开")
+        }
         private fun status(context: Context, message: String) { prefs(context).edit().putString("status", message).apply() }
         fun toggle(context: Context): String {
             if (enabled(context)) {

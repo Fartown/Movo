@@ -125,26 +125,30 @@ internal class TvRowSpec(
  * 行：56 高、图标 20、标题 15 Medium、右侧值 13 次要色 + 箭头 16，分隔线从文字起点开始（×1.5）。
  * 焦点行整行浅紫（卡内内缩 6、圆角 36 = 42 − 6），它和上一行的分隔线隐藏。
  */
-@Composable internal fun TvCard(rows: List<TvRowSpec>, modifier: Modifier = Modifier, title: String? = null) {
+@Composable internal fun TvCard(rows: List<TvRowSpec>, modifier: Modifier = Modifier, title: String? = null, autoFocus: Boolean = false) {
     var focusedIndex by remember { mutableStateOf(-1) }
+    val first = remember { FocusRequester() }
+    val firstAction = if (autoFocus) rows.indexOfFirst { it.onClick != null && it.focusRequester == null } else -1
+    if (firstAction >= 0) LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
     val shape = RoundedCornerShape(42.dp)
     Column(modifier.fillMaxWidth().clip(shape).background(TvTokens.surface, shape).border(1.dp, TvTokens.hairline, shape)
         .padding(top = if (title == null) 6.dp else 0.dp, bottom = 6.dp)) {
         if (title != null) Text(title, Modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 6.dp),
             fontSize = 20.sp, lineHeight = 28.sp, fontWeight = FontWeight.Medium, color = TvTokens.secondary)
         rows.forEachIndexed { index, spec ->
-            TvRow(spec, divider = index < rows.lastIndex && focusedIndex != index && focusedIndex != index + 1) { focused ->
+            TvRow(spec, if (index == firstAction) first else spec.focusRequester,
+                divider = index < rows.lastIndex && focusedIndex != index && focusedIndex != index + 1) { focused ->
                 if (focused) focusedIndex = index else if (focusedIndex == index) focusedIndex = -1
             }
         }
     }
 }
 
-@Composable private fun TvRow(spec: TvRowSpec, divider: Boolean, onFocus: (Boolean) -> Unit) {
+@Composable private fun TvRow(spec: TvRowSpec, requester: FocusRequester?, divider: Boolean, onFocus: (Boolean) -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val action = spec.onClick
     Box(Modifier.fillMaxWidth()
-        .then(spec.focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
+        .then(requester?.let { Modifier.focusRequester(it) } ?: Modifier)
         .onFocusChanged { focused = it.isFocused; onFocus(it.isFocused) }
         .then(if (action != null) Modifier.clickable(remember { MutableInteractionSource() }, indication = null, onClick = action) else Modifier)) {
         if (focused) Box(Modifier.matchParentSize().padding(horizontal = 6.dp).background(TvTokens.selected, RoundedCornerShape(36.dp)))
