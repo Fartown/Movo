@@ -43,8 +43,22 @@ class MovoApp : Application(), XposedServiceHelper.OnServiceListener {
         fun onServiceStateChanged(service: XposedService?)
     }
 
+    /**
+     * 只在 debug 包里：数据目录里有 profile-startup 标记时，从进程启动起采样 20 秒到 files/startup.trace
+     * （查进程刚起来时主线程被谁占着；系统 am profile 在电视上写不了文件）。
+     */
+    private fun debugStartupProfile() {
+        if (!BuildConfig.DEBUG) return
+        val marker = java.io.File(filesDir, "profile-startup")
+        if (!marker.delete()) return
+        val trace = java.io.File(filesDir, "startup.trace").apply { delete() }
+        android.os.Debug.startMethodTracingSampling(trace.path, 64 * 1024 * 1024, 1000)
+        android.os.Handler(mainLooper).postDelayed({ android.os.Debug.stopMethodTracing() }, 20_000)
+    }
+
     override fun onCreate() {
         super.onCreate()
+        debugStartupProfile()
         Prefs.initLocal(this)
         if (!AppProcessPolicy.shouldInitializeFullRuntime(Application.getProcessName(), packageName)) {
             return

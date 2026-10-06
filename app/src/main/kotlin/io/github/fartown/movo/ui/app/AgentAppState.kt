@@ -796,7 +796,9 @@ internal class AgentAppState(
 
         runConversationIds[runId] = conversationId
         updateConversation(conversationId, existing.copy(isStreaming = true, isCompacting = checkpoint.operation == AgentRuntimeWire.OP_COMPACT))
-        restoreRunEvents(runId, checkpoint.events)
+        // 这一轮的界面行在执行中已经写进对话（存储重构第 2 步），直接保留只做收尾；
+        // 只有升级前留下的旧事件日志才按事件重放（重放会先清掉这一轮的行再重建）。
+        if (checkpoint.events.isNotEmpty()) restoreRunEvents(runId, checkpoint.events)
         flushPendingRunDelta(runId)
         updateRunTrace(runId) { messages ->
             val finalizedThinking = runMessageProjector.finalizeThinking(runId, messages)
