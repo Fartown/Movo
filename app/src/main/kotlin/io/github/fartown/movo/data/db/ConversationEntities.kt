@@ -9,7 +9,7 @@ import io.github.fartown.movo.data.model.ReasoningEffort
 import kotlinx.serialization.Serializable
 
 @Serializable
-@Entity(tableName = "conversations")
+@Entity(tableName = "conversations", indices = [Index("updated_at")])
 internal data class ConversationEntity(
     @PrimaryKey val id: String,
     val title: String,
@@ -22,6 +22,11 @@ internal data class ConversationEntity(
     @ColumnInfo(name = "revisions_json", defaultValue = "''") val revisionsJson: String = "",
     @ColumnInfo(name = "created_at") val createdAt: Long,
     @ColumnInfo(name = "updated_at") val updatedAt: Long,
+)
+
+internal data class MessageSortKey(
+    val id: String,
+    @ColumnInfo(name = "sort_index") val sortIndex: Long,
 )
 
 internal data class ConversationMetadata(
@@ -85,7 +90,8 @@ internal data class ConversationStateEntity(
 internal data class ConversationMessageEntity(
     @PrimaryKey val id: String,
     @ColumnInfo(name = "conversation_id") val conversationId: String,
-    @ColumnInfo(name = "sort_index") val sortIndex: Int,
+    /** 对话内的排序键（v24 起按间隔分配：追加取最大值 + 1024，中间插入取前后两行的中值）。 */
+    @ColumnInfo(name = "sort_index") val sortIndex: Long,
     val type: String,
     val content: String,
     @ColumnInfo(name = "images_json") val imagesJson: String = "[]",
@@ -109,3 +115,40 @@ internal data class ConversationMessageEntity(
     /** 工具步骤的界面视图 JSON（v23 起）；只存非临时视图（截图、个人数据不存）。 */
     @ColumnInfo(name = "tool_view_json") val toolViewJson: String? = null,
 )
+
+/**
+ * 发给模型的消息（v24 起），一条一行，取代 conversation_context_checkpoints 里的两大块 JSON。
+ * [LOG_HISTORY] 是发给模型的历史：每轮只追加，压缩、删轮、编辑、重新生成时只重写这一个对话的这一段；
+ * [LOG_JOURNAL] 是完整记录：只追加，删轮时重写这一个对话的这一段。
+ */
+@Entity(
+    tableName = "conversation_model_messages",
+    foreignKeys = [
+        ForeignKey(
+            entity = ConversationEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["conversation_id"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index(value = ["conversation_id", "log", "seq"], unique = true)],
+)
+internal data class ConversationModelMessageEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "conversation_id") val conversationId: String,
+    val log: String,
+    val seq: Int,
+    @ColumnInfo(name = "run_id") val runId: String? = null,
+    /** 单条 ConversationMessage（已脱敏、不含图片）；超过 16K 字符存在 agent_text_chunks。 */
+    @ColumnInfo(name = "message_json") val messageJson: String,
+) {
+    companion object {
+        const val TABLE = "conversation_model_messages"
+        const val LOG_HISTORY = "history"
+        const val LOG_JOURNAL = "journal"
+        const val TEXT_FIELD = "message"
+
+        /** 分块的主人：与删除触发器里拼出的 owner_id 一致。 */
+        fun chunkOwner(conversationId: String, log: String, seq: Int) = "$conversationId/$log/$seq"
+    }
+}

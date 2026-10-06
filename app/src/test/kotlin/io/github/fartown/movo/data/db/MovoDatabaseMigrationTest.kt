@@ -56,6 +56,7 @@ class MovoDatabaseMigrationTest {
                 MovoDatabase.MIGRATION_20_21,
                 MovoDatabase.MIGRATION_21_22,
                 MovoDatabase.MIGRATION_22_23,
+                MovoDatabase.MIGRATION_23_24,
             )
             .build()
         try {
@@ -84,6 +85,12 @@ class MovoDatabaseMigrationTest {
                 }
             val provider = runBlocking(Dispatchers.IO) {
                 database.providerDao().providerById("provider-1")!!.toDomain()
+            }
+            val modelLogs = runBlocking(Dispatchers.IO) {
+                listOf("conv-1", "conv-oversized").associateWith { id ->
+                    database.conversationDao().modelLog(id, ConversationModelMessageEntity.LOG_HISTORY) to
+                        database.conversationDao().modelLog(id, ConversationModelMessageEntity.LOG_JOURNAL)
+                }
             }
             val migratedMessage = runBlocking(Dispatchers.IO) {
                 database.conversationDao().messages().single()
@@ -116,6 +123,11 @@ class MovoDatabaseMigrationTest {
             assertEquals("[\"${"x".repeat(140_000)}\"]", oversizedCheckpoint?.historyJson)
             assertEquals(oversizedCheckpoint?.historyJson, oversizedCheckpoint?.journalJson)
             assertEquals("[]", clearedLegacyHistory)
+            // v24：检查点里的模型历史拆成一条一行；journal 为空时取 history；大的一条照样分块存取。
+            assertEquals(listOf("{\"role\":\"user\",\"content\":\"保留上下文\"}"), modelLogs.getValue("conv-1").first)
+            assertEquals(modelLogs.getValue("conv-1").first, modelLogs.getValue("conv-1").second)
+            assertEquals(listOf("\"${"x".repeat(140_000)}\""), modelLogs.getValue("conv-oversized").first)
+            assertEquals(modelLogs.getValue("conv-oversized").first, modelLogs.getValue("conv-oversized").second)
             assertEquals("[]", conversations.first { it.id == "conv-1" }.appliedRuntimeRunIdsJson)
             assertEquals("", conversations.first { it.id == "conv-1" }.roleplayJson)
             assertEquals("", conversations.first { it.id == "conv-1" }.revisionsJson)

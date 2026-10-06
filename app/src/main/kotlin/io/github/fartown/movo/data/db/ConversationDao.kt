@@ -156,6 +156,104 @@ internal interface ConversationDao : ChunkedTextDao {
     @Query("DELETE FROM conversation_state")
     suspend fun deleteState()
 
+    // —— 按对话、按行读写（v24 起，docs/solutions/conversation-storage）——
+
+    @Query("SELECT * FROM conversations WHERE id = :conversationId")
+    suspend fun conversationEntityRow(conversationId: String): ConversationEntity?
+
+    @Transaction
+    suspend fun conversationEntity(conversationId: String): ConversationEntity? =
+        conversationEntityRow(conversationId)?.let { row ->
+            row.copy(
+                appliedRuntimeRunIdsJson = restoreText("conversations", row.id, "runs", row.appliedRuntimeRunIdsJson),
+                roleplayJson = restoreText("conversations", row.id, "roleplay", row.roleplayJson),
+                revisionsJson = restoreText("conversations", row.id, "revisions", row.revisionsJson),
+            )
+        }
+
+    @Query("SELECT EXISTS(SELECT 1 FROM conversations WHERE id = :conversationId)")
+    suspend fun conversationExists(conversationId: String): Boolean
+
+    @Query("DELETE FROM conversations WHERE id = :conversationId")
+    suspend fun deleteConversationRow(conversationId: String)
+
+    @Query("SELECT * FROM conversation_messages WHERE conversation_id = :conversationId ORDER BY sort_index ASC")
+    suspend fun messageRowsOf(conversationId: String): List<ConversationMessageEntity>
+
+    @Transaction
+    suspend fun messagesOf(conversationId: String): List<ConversationMessageEntity> =
+        messageRowsOf(conversationId).map { restoreMessage(it) }
+
+    @Query("SELECT id, sort_index FROM conversation_messages WHERE conversation_id = :conversationId")
+    suspend fun messageSortKeys(conversationId: String): List<MessageSortKey>
+
+    @Query("DELETE FROM conversation_messages WHERE id IN (:ids)")
+    suspend fun deleteMessageRows(ids: List<String>)
+
+    @Query("UPDATE conversation_messages SET sort_index = :sortIndex WHERE id = :id")
+    suspend fun updateMessageSortIndex(id: String, sortIndex: Long)
+
+    /** 侧栏预览：每个对话排在最后的那一行。 */
+    @Query(
+        "SELECT m.* FROM conversation_messages m WHERE m.conversation_id IN (:conversationIds) AND m.sort_index = " +
+            "(SELECT MAX(sort_index) FROM conversation_messages WHERE conversation_id = m.conversation_id)"
+    )
+    suspend fun lastMessageRows(conversationIds: List<String>): List<ConversationMessageEntity>
+
+    @Transaction
+    suspend fun lastMessages(conversationIds: List<String>): List<ConversationMessageEntity> =
+        lastMessageRows(conversationIds).map { restoreMessage(it) }
+
+    /** 搜索：标题、正文（含分块的长正文）、工具名与摘要里出现 [pattern]（LIKE，已转义）。 */
+    @Query(
+        "SELECT id FROM conversations WHERE title LIKE :pattern ESCAPE '\\' " +
+            "UNION SELECT conversation_id FROM conversation_messages WHERE content LIKE :pattern ESCAPE '\\' " +
+            "OR tool_name LIKE :pattern ESCAPE '\\' OR arguments_summary LIKE :pattern ESCAPE '\\' " +
+            "OR result_summary LIKE :pattern ESCAPE '\\' " +
+            "UNION SELECT m.conversation_id FROM agent_text_chunks t JOIN conversation_messages m ON m.id = t.owner_id " +
+            "WHERE t.owner_table = 'conversation_messages' AND t.field = 'content' AND t.content LIKE :pattern ESCAPE '\\'"
+    )
+    suspend fun searchConversationIds(pattern: String): List<String>
+
+    @Insert
+    suspend fun insertModelMessageRow(row: ConversationModelMessageEntity): Long
+
+    @Query("SELECT * FROM conversation_model_messages WHERE conversation_id = :conversationId AND log = :log ORDER BY seq ASC")
+    suspend fun modelMessageRows(conversationId: String, log: String): List<ConversationModelMessageEntity>
+
+    @Query("SELECT COUNT(*) FROM conversation_model_messages WHERE conversation_id = :conversationId AND log = :log")
+    suspend fun modelMessageCount(conversationId: String, log: String): Int
+
+    @Query("DELETE FROM conversation_model_messages WHERE conversation_id = :conversationId AND log = :log")
+    suspend fun deleteModelLog(conversationId: String, log: String)
+
+    /** 一段模型消息（[ConversationModelMessageEntity.LOG_HISTORY] 或 LOG_JOURNAL），按顺序还原成单条 JSON。 */
+    @Transaction
+    suspend fun modelLog(conversationId: String, log: String): List<String> =
+        modelMessageRows(conversationId, log).map { row ->
+            restoreText(ConversationModelMessageEntity.TABLE, ConversationModelMessageEntity.chunkOwner(conversationId, log, row.seq),
+                ConversationModelMessageEntity.TEXT_FIELD, row.messageJson)
+        }
+
+    @Transaction
+    suspend fun appendModelMessages(conversationId: String, log: String, firstSeq: Int, runId: String?, messages: List<String>) {
+        messages.forEachIndexed { offset, message ->
+            val seq = firstSeq + offset
+            insertModelMessageRow(ConversationModelMessageEntity(
+                conversationId = conversationId, log = log, seq = seq, runId = runId,
+                messageJson = storeText(ConversationModelMessageEntity.TABLE,
+                    ConversationModelMessageEntity.chunkOwner(conversationId, log, seq), ConversationModelMessageEntity.TEXT_FIELD, message),
+            ))
+        }
+    }
+
+    @Transaction
+    suspend fun replaceModelLog(conversationId: String, log: String, messages: List<String>) {
+        deleteModelLog(conversationId, log)
+        appendModelMessages(conversationId, log, 0, null, messages)
+    }
+
+    /** 整库替换：只剩备份导入在用（对话的日常保存按行写，见上）。 */
     @Transaction
     suspend fun replaceAll(
         conversations: List<ConversationEntity>,

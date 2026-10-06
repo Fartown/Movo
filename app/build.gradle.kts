@@ -182,9 +182,6 @@ android {
 
     testBuildType = if (voiceTestRelease) "release" else "debug"
 
-    // Room 表结构导出（v23 起）：迁移测试用 MigrationTestHelper 按这些 JSON 建旧版数据库。
-    sourceSets.getByName("test").assets.srcDir("$projectDir/schemas")
-
     testOptions {
         unitTests.isIncludeAndroidResources = true
         // 设计还原截图：./gradlew :app:testPhoneDebugUnitTest -PmovoShots=true --tests '*DesignShotsTest*'
@@ -198,6 +195,7 @@ android {
     }
 }
 
+// Room 表结构导出（v23 起）：迁移测试按这些 JSON 建旧版数据库（RoomSchemaFixture）。
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }

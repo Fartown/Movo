@@ -21,6 +21,13 @@ internal object AgentConversationCodec {
     fun encodeConversationCheckpoint(messages: List<AgentModelClient.ConversationMessage>): String =
         encodeTranscriptForStorage(messages)
 
+    /** 单条消息的存储形式（conversation_model_messages 一行）：与整段存储同样脱敏、去掉图片。 */
+    fun encodeMessageForStorage(message: AgentModelClient.ConversationMessage): String =
+        json.encodeToString(sanitizeMessage(message))
+
+    fun decodeStoredMessage(raw: String): AgentModelClient.ConversationMessage =
+        json.decodeFromString<AgentModelClient.ConversationMessage>(raw)
+
     fun decodeTranscript(raw: String?): List<AgentModelClient.ConversationMessage> =
         if (raw.isNullOrBlank()) {
             emptyList()

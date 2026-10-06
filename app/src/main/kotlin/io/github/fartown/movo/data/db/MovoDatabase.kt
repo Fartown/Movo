@@ -13,6 +13,7 @@ import androidx.room.migration.Migration
         ConversationEntity::class,
         ConversationContextCheckpointEntity::class,
         ConversationMessageEntity::class,
+        ConversationModelMessageEntity::class,
         ConversationStateEntity::class,
         ProviderEntity::class,
         ProviderModelEntity::class,
@@ -26,7 +27,7 @@ import androidx.room.migration.Migration
         CharacterEntity::class,
         UserPersonaEntity::class,
     ],
-    version = 23,
+    version = 24,
     exportSchema = true,
 )
 internal abstract class MovoDatabase : RoomDatabase() {
@@ -66,6 +67,7 @@ internal abstract class MovoDatabase : RoomDatabase() {
                         MIGRATION_20_21,
                         MIGRATION_21_22,
                         MIGRATION_22_23,
+                        MIGRATION_23_24,
                     )
                     .addCallback(object : Callback() {
                         override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) { createTextChunkCleanup(db) }
@@ -101,6 +103,24 @@ internal abstract class MovoDatabase : RoomDatabase() {
             database.execSQL("ALTER TABLE conversation_messages ADD COLUMN tool_view_json TEXT")
         }
 
+        /**
+         * 对话存储重构（docs/solutions/conversation-storage）：模型历史从检查点里的两大块 JSON 拆成一条一行；
+         * 检查点表这个版本保留不删、不再写，下个版本删除。
+         */
+        internal val MIGRATION_23_24 = Migration(23, 24) { database ->
+            database.execSQL(CREATE_MODEL_MESSAGES_SQL)
+            database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_conversation_model_messages_conversation_id_log_seq` " +
+                "ON `conversation_model_messages` (`conversation_id`, `log`, `seq`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_conversations_updated_at` ON `conversations` (`updated_at`)")
+            ModelLogMigration.migrate(database)
+            createTextChunkCleanup(database)
+        }
+
+        private const val CREATE_MODEL_MESSAGES_SQL = "CREATE TABLE IF NOT EXISTS `conversation_model_messages` (" +
+            "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `conversation_id` TEXT NOT NULL, `log` TEXT NOT NULL, " +
+            "`seq` INTEGER NOT NULL, `run_id` TEXT, `message_json` TEXT NOT NULL, " +
+            "FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )"
+
         internal val MIGRATION_21_22 = Migration(21, 22) { database ->
             database.execSQL("ALTER TABLE conversation_messages ADD COLUMN started_at INTEGER")
             database.execSQL("ALTER TABLE conversation_messages ADD COLUMN finished_at INTEGER")
@@ -131,6 +151,14 @@ internal abstract class MovoDatabase : RoomDatabase() {
                     database.execSQL("CREATE TRIGGER IF NOT EXISTS ${table}_text_cleanup AFTER DELETE ON $table " +
                         "BEGIN DELETE FROM agent_text_chunks WHERE owner_table = '$table' AND owner_id = OLD.$key; END")
                 }
+            if (database.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'conversation_model_messages'")
+                    .use { it.moveToFirst() }) {
+                // 主人 = 对话/段/序号，与 ConversationModelMessageEntity.chunkOwner 一致。
+                database.execSQL("CREATE TRIGGER IF NOT EXISTS conversation_model_messages_text_cleanup " +
+                    "AFTER DELETE ON conversation_model_messages BEGIN DELETE FROM agent_text_chunks " +
+                    "WHERE owner_table = 'conversation_model_messages' AND " +
+                    "owner_id = OLD.conversation_id || '/' || OLD.log || '/' || OLD.seq; END")
+            }
         }
 
         internal val MIGRATION_18_19 = Migration(18, 19) { database ->
