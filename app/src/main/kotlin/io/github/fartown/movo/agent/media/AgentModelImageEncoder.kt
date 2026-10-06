@@ -81,7 +81,7 @@ internal object AgentModelImageEncoder {
     ): AgentModelClient.ModelImage =
         encodeBitmap(bitmap, source, screenProfile, flattenAlpha = false)
 
-    /** 助理入口截图直接进入网络请求，使用视觉模型尺寸避免全屏无损图撑大请求体。 */
+    /** 助理入口截图直接进入网络请求：统一编码为 JPEG、去掉透明通道，不缩放。 */
     fun screenContext(
         bitmap: Bitmap,
         source: String,

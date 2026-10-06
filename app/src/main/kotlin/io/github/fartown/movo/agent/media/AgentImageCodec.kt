@@ -44,7 +44,7 @@ internal object AgentImageCodec {
         AgentModelImageEncoder.screen(bytes, source, mimeHint)
             ?: error("无法解码图片")
 
-    /** Root screencap 只允许无损换编码，不改变截图尺寸。 */
+    /** Root screencap 统一编码为 JPEG（与其他模型输入一致），不改变截图尺寸。 */
     fun fromScreenBytes(
         bytes: ByteArray,
         source: String,
@@ -58,7 +58,7 @@ internal object AgentImageCodec {
         source: String,
     ): AgentModelClient.ModelImage = AgentModelImageEncoder.screen(bitmap, source)
 
-    /** 助理消息里的屏幕上下文使用有界视觉编码，不改变通用屏幕观察的无损合同。 */
+    /** 助理消息里的屏幕上下文：统一编码为 JPEG、去掉透明通道，不缩放（截图像素要与设备坐标对应）。 */
     fun fromScreenContextBitmap(
         bitmap: Bitmap,
         source: String,
@@ -72,7 +72,7 @@ internal object AgentImageCodec {
         image: AgentModelClient.ModelImage,
     ): AgentModelClient.ModelImage? = AgentModelImageEncoder.preview(context, image)
 
-    /** 文件工具图片会在发送模型前压缩，避免多张原图撑大 OpenAI 兼容请求体。 */
+    /** 文件工具图片在发送模型前统一重编码为 JPEG，不缩放。 */
     fun fromToolFile(file: File, source: String): AgentModelClient.ModelImage? = runCatching {
         AgentModelImageEncoder.toolVision(file.readBytesLimited(), source)
     }.getOrNull()

@@ -21,6 +21,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -146,8 +147,11 @@ class AgentRuntimeWireTest {
     }
 
     @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE) // 真实编解码图片
     fun largeImageBodyUsesFileDescriptorAndStaysOutOfBinderBundle() {
-        val imageBytes = ByteArray(600_000) { index -> (index % 251).toByte() }
+        // 真实的大图（噪点 PNG 压不小），运行时收到后统一转成 JPEG、尺寸不变。
+        val imageBytes = noisePng(width = 400, height = 400)
+        assertTrue(imageBytes.size > 300_000)
         val dataUrl = "data:image/png;base64,${Base64.encodeToString(imageBytes, Base64.NO_WRAP)}"
         val request = AgentRuntimeWire.RunRequest(
             runId = "run-large-image",
@@ -186,14 +190,17 @@ class AgentRuntimeWireTest {
                 AgentRuntimeWire.incomingRunRequestFromBundle(bundle)
             )
             assertEquals(request.copy(images = emptyList()), materialized.copy(images = emptyList()))
-            assertEquals(request.images.single().reference, materialized.images.single().reference)
-            assertEquals(request.images.single().mimeType, materialized.images.single().mimeType)
-            assertEquals(request.images.single().bytes, materialized.images.single().bytes)
-            assertEquals(request.images.single().source, materialized.images.single().source)
+            val image = materialized.images.single()
+            assertTrue(image.reference.startsWith("data:image/jpeg;base64,"))
+            assertEquals("image/jpeg", image.mimeType)
+            assertEquals(400, image.width)
+            assertEquals(400, image.height)
+            assertEquals(request.images.single().source, image.source)
         }
     }
 
     @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE) // 真实编解码图片
     fun localImageReferenceIsNotBase64EncodedUntilRuntimeIngestsIt() {
         val context = RuntimeEnvironment.getApplication()
         val sourceFile = File(context.cacheDir, "runtime-wire-source-${System.nanoTime()}.png")
@@ -231,9 +238,12 @@ class AgentRuntimeWireTest {
                         AgentRuntimeWire.toBundle(request, prepared.images)
                     )
                 )
-                assertTrue(materialized.images.single().reference.startsWith("data:image/"))
-                assertTrue(materialized.images.single().reference.contains(";base64,"))
-                assertEquals(sourceFile.length().toInt(), materialized.images.single().bytes)
+                // 本地图片到运行时后才读出正文，并统一转成 JPEG、尺寸不变。
+                val ingested = materialized.images.single()
+                assertTrue(ingested.reference.startsWith("data:image/jpeg;base64,"))
+                assertEquals(8, ingested.width)
+                assertEquals(8, ingested.height)
+                assertTrue(ingested.bytes > 0)
             }
         } finally {
             sourceFile.delete()
@@ -682,5 +692,19 @@ class AgentRuntimeWireTest {
         }
         // run_id / request_id 缺失时安全返回 null（不投递到错误的 run）。
         assertNull(AgentRuntimeWire.interactionReplyFromBundle(android.os.Bundle()))
+    }
+
+    private fun noisePng(width: Int, height: Int): ByteArray {
+        val random = java.util.Random(42)
+        val pixels = IntArray(width * height) { 0xFF000000.toInt() or random.nextInt(0x1000000) }
+        val bitmap = Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
+        return try {
+            java.io.ByteArrayOutputStream().use { output ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+                output.toByteArray()
+            }
+        } finally {
+            bitmap.recycle()
+        }
     }
 }

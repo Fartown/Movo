@@ -733,9 +733,13 @@ internal class RootShellTerminalController(
             timeoutSeconds = timeout.toLong(),
             environment = environment,
         )
-        val outcome = when (result.exitCode) {
-            0 -> "succeeded"
-            -2 -> "timed_out"
+        // 中断时进程树是后台杀的：shell 可能先于自己被杀就正常退出（例如 `wait` 等到的子进程被杀后返回 0），
+        // 不能凭退出码 0 报成功。
+        val interrupted = processSupervisor.closing
+        val outcome = when {
+            interrupted -> "interrupted"
+            result.exitCode == 0 -> "succeeded"
+            result.exitCode == -2 -> "timed_out"
             else -> "failed"
         }
         val action = if (toolName == "terminal") "open_and_exec" else "run_command"
@@ -743,7 +747,7 @@ internal class RootShellTerminalController(
             "Agent terminal action=$action outcome=$outcome identity=$normalizedIdentity " +
                 "environment=${environment.wireName} " +
                 "timeoutSeconds=$timeout commandChars=${trimmed.length} exitCode=${result.exitCode}"
-        if (result.exitCode == 0) {
+        if (result.exitCode == 0 && !interrupted) {
             logger.info(logMessage)
         } else {
             logger.warn(logMessage)
@@ -756,7 +760,8 @@ internal class RootShellTerminalController(
         val stdout = rawStdout.truncateForJson()
         val stderr = if (mergeStderr) "" else result.stderr.truncateForJson()
         return JSONObject()
-            .put("ok", result.exitCode == 0)
+            .put("ok", result.exitCode == 0 && !interrupted)
+            .put("interrupted", interrupted)
             .put("tool", toolName)
             .put("action", if (toolName == "terminal") "open_and_exec" else JSONObject.NULL)
             .put("identity", normalizedIdentity)

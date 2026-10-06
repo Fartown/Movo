@@ -9,6 +9,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -257,9 +258,21 @@ class BreenoRequestImagesTest {
     }
 
     @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE) // 真实编解码图片
     fun inlineImageIsNoLongerRejectedByBinderStringBudget() {
+        // 真实图片的 data URL（噪点 PNG，base64 超过 30 万字符）：不会因为 Binder 字符串预算被拒。
+        val random = java.util.Random(7)
+        val pixels = IntArray(300 * 300) { 0xFF000000.toInt() or random.nextInt(0x1000000) }
+        val bitmap = android.graphics.Bitmap.createBitmap(pixels, 300, 300, android.graphics.Bitmap.Config.ARGB_8888)
+        val png = java.io.ByteArrayOutputStream().use { output ->
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output)
+            output.toByteArray()
+        }
+        bitmap.recycle()
+        val dataUrl = "data:image/png;base64," + android.util.Base64.encodeToString(png, android.util.Base64.NO_WRAP)
+        assertTrue(dataUrl.length > 300_000)
         val snapshot = BreenoRequestImages.captureText(
-            text = "data:image/png;base64," + "A".repeat(300_000),
+            text = dataUrl,
             source = "image.data",
         )
 

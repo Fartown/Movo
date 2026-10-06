@@ -133,6 +133,10 @@ internal class ShellProcessSupervisor(
         }
     }
 
+    /** 已开始中断（[beginClosing]）：此后返回的命令结果都按被中断处理。 */
+    val closing: Boolean
+        get() = synchronized(activeProcesses) { isClosing }
+
     fun takeRemainingProcesses(): List<Process> = synchronized(activeProcesses) {
         activeProcesses.toList().also { activeProcesses.clear() }
     }
