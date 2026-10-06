@@ -261,7 +261,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private val appActivityCallbacks = object : android.app.Application.ActivityLifecycleCallbacks {
         override fun onActivityResumed(activity: android.app.Activity) {
             mainHandler.removeCallbacksAndMessages(appLeaveToken)
-            mainHandler.post(::updateStandbyOrbVisibility)
+            mainHandler.post {
+                // 又回到 Movo 的页面：收回球里那次交接作废，按页面在前台藏球。
+                if (sheetHandoff == SheetHandoff.RETURNED) setSheetHandoff(SheetHandoff.NONE) else updateStandbyOrbVisibility()
+            }
         }
         override fun onActivityPaused(activity: android.app.Activity) {
             // 离开 Movo 的页面稍等再判断：Movo 页面之间切换（例如对话浮层「展开到 App」）时，旧页暂停到新页恢复之间有一段空档，
@@ -2272,12 +2275,26 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 lp.x = animator.animatedValue as Int
                 runCatching { wm.updateViewLayout(view, lp) }
                 publishOrbRect()
+                // 吸附途中点开的展开卡跟着球走，到边时仍贴着球（不然停在点开那一刻的位置，和球错开）。
+                followOrbWithBubble()
             }
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: android.animation.Animator) = publishOrbRect()
             })
             start()
         }
+    }
+
+    /** 展开卡窗口横向跟到悬浮球当前的位置（键盘避让的纵向抬高不动）。 */
+    private fun followOrbWithBubble() {
+        val wm = windowManager ?: return
+        val bubble = bubbleView ?: return
+        val lp = bubbleParams ?: return
+        val placed = bubbleLayoutParams()
+        if (lp.gravity == placed.gravity && lp.x == placed.x) return
+        lp.gravity = placed.gravity
+        lp.x = placed.x
+        runCatching { wm.updateViewLayout(bubble, lp) }
     }
 
     private fun orbLayoutParams(): WindowManager.LayoutParams =
@@ -2618,11 +2635,18 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
      */
     private fun updateStandbyOrbVisibility() {
         val view = orbView ?: return
+        // 浮层收回球里之后页面已经离开：交接结束，之后照常判断。
+        if (sheetHandoff == SheetHandoff.RETURNED && !VoiceSurfaceTracker.appVisible) {
+            mainHandler.removeCallbacksAndMessages(sheetHandoffToken)
+            sheetHandoff = SheetHandoff.NONE
+        }
+        // Movo 自己的页面挡在前面：对话浮层与球交接的两段除外（[SheetHandoff]）。
+        val movoInFront = VoiceSurfaceTracker.appVisible && sheetHandoff == SheetHandoff.NONE
         // 结束后会话引用要等结果被查看才清掉，是否「执行中」按阶段判断（真机：只看 activeSession 时 ✓ 一直不淡出）。
         val phase = state.value.phase
         val running = !standby.value && activeSession != null &&
             (phase == AgentOverlayPhase.RUNNING || phase == AgentOverlayPhase.PAUSED)
-        val show = if (VoiceSurfaceTracker.appVisible) {
+        val show = if (movoInFront) {
             // Movo 自己的界面在前台时一律藏起（含执行中 / 暂停）：App 里已有执行卡、暂停提示条与主按钮，
             // 悬浮球和展开卡只会重复并压住这些控件（2026-09-27 定）。离开后按当时的状态出现。
             false
@@ -2631,16 +2655,16 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             true
         } else {
             val holdingResult = !running && !standby.value &&
-                android.os.SystemClock.uptimeMillis() < resultOrbVisibleUntil && !VoiceSurfaceTracker.appVisible
+                android.os.SystemClock.uptimeMillis() < resultOrbVisibleUntil
             // 监听中任务没完：常驻关也显示（规范 8.1）；刚结束可撤销、或监听刚自己结束（等唤醒的一轮）时也留着。
             val monitoring = monitorsKeepOrb()
             running || holdingResult || monitoring ||
-                (!running && !standby.value && !collapsed.value && !VoiceSurfaceTracker.appVisible)
+                (!running && !standby.value && !collapsed.value)
         }
         // 注意：这里不能取消 [orbFadeToken] 上的回调——那是 3 秒后的这次复查本身（原来在这里取消，✓ 永远不淡出）。
         AndroidAgentLogger.info(
             "Agent orb visibility: show=$show running=$running phase=$phase standby=${standby.value} monitors=${monitors.value.size} " +
-                "appVisible=${VoiceSurfaceTracker.appVisible} collapsed=${collapsed.value}",
+                "appVisible=${VoiceSurfaceTracker.appVisible} handoff=$sheetHandoff collapsed=${collapsed.value}",
         )
         if (show) {
             view.animate().cancel()
@@ -2655,7 +2679,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             stopIfOverlayUnneeded()
             return
         }
-        if (VoiceSurfaceTracker.appVisible || io.github.fartown.movo.ui.theme.isReducedMotion(this)) {
+        if (movoInFront || io.github.fartown.movo.ui.theme.isReducedMotion(this)) {
             view.visibility = View.GONE
             stopIfOverlayUnneeded()
             return
@@ -2895,10 +2919,34 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         orbCenterOnScreen.value = androidx.compose.ui.geometry.Offset(disc.centerX, disc.centerY)
     }
 
-    /** 从悬浮球打开对话浮层前登记起点：浮层从球的位置长出来（Q4）。 */
+    /** 从悬浮球打开对话浮层前登记起点：浮层从球的位置长出来（Q4）。浮层真正开始长出来之前球留着（[SheetHandoff.OPENING]）。 */
     private fun markSheetFromOrb() {
         publishOrbRect()
-        orbDiscRect?.let { FlavorModule.surfaces.expandConversationFromOrb(it) }
+        val rect = orbDiscRect ?: return
+        FlavorModule.surfaces.expandConversationFromOrb(rect)
+        setSheetHandoff(SheetHandoff.OPENING)
+    }
+
+    /**
+     * 对话浮层与悬浮球的交接（Q4，规范 9.5「从球里长出、收回球里」）：
+     * - [OPENING]：点了球、浮层还在准备内容，还没开始从球里长出来——球留着，不能先没了（原来浮层页面一恢复球就藏，
+     *   中间空一段才见浮层长出来）；
+     * - [RETURNED]：浮层已经收回球里——球立刻接上，不等页面暂停后再判断（原来中间空约 8 帧，看起来是球先消失）。
+     * 其余时候按 Movo 页面是否在前台（[VoiceSurfaceTracker.appVisible]）。
+     */
+    private enum class SheetHandoff { NONE, OPENING, RETURNED }
+
+    private var sheetHandoff = SheetHandoff.NONE
+    private val sheetHandoffToken = Any()
+
+    private fun setSheetHandoff(value: SheetHandoff) {
+        mainHandler.removeCallbacksAndMessages(sheetHandoffToken)
+        sheetHandoff = value
+        // 浮层没打开、没回报（打开失败、被系统拦下）时不能让球一直无视 Movo 页面在前台。
+        if (value != SheetHandoff.NONE) {
+            mainHandler.postDelayed({ setSheetHandoff(SheetHandoff.NONE) }, sheetHandoffToken, SHEET_HANDOFF_TIMEOUT_MS)
+        }
+        updateStandbyOrbVisibility()
     }
 
     internal companion object {
@@ -2943,6 +2991,16 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         var orbDiscRect: android.graphics.Rect? = null
             private set
 
+        /** 对话浮层开始从球里长出来（或不带动画直接出现）：球此刻让位。主线程调用。 */
+        fun onSheetCoversOrb() {
+            liveInstance?.takeIf { it.sheetHandoff == SheetHandoff.OPENING }?.setSheetHandoff(SheetHandoff.NONE)
+        }
+
+        /** 对话浮层收回到球里了：球立刻接上（页面随后才暂停）。主线程调用。 */
+        fun onSheetReturnedToOrb() {
+            liveInstance?.setSheetHandoff(SheetHandoff.RETURNED)
+        }
+
         /** 当前悬浮球位置；没有悬浮球时取默认停靠位置（右边缘距边 8、球心在 75% 屏高）。 */
         fun orbDiscRectOrDefault(context: Context): android.graphics.Rect {
             orbDiscRect?.let { return it }
@@ -2963,8 +3021,14 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 android.graphics.Point().also { @Suppress("DEPRECATION") wm.defaultDisplay.getRealSize(it) }
             }
 
-        /** 浮窗按整块屏幕的绝对坐标摆放：不被状态栏、导航栏、刘海推开（悬浮球、展开卡、移除区共用，见 [OrbGeometry]）。 */
+        /**
+         * 浮窗按整块屏幕的绝对坐标摆放：不被状态栏、导航栏、刘海推开（悬浮球、展开卡、移除区共用，见 [OrbGeometry]）；
+         * 位置变化不让系统补动画：开着系统动画（手机默认）时，窗口左上角一变——展开卡按内容长大、悬浮球拖动 / 吸附——
+         * 系统会把整块窗口从旧位置平移到新位置，展开卡就从屏幕角落滑进来，不是从球里长出（10-07 小米真机逐帧实测；
+         * 云真机默认关了系统动画，之前一直没测到）。位置都由我们逐帧给出，不需要它。
+         */
         private fun WindowManager.LayoutParams.inDisplayCoordinates() {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) setCanPlayMoveAnimation(false)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 setFitInsetsTypes(0)
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
@@ -2992,6 +3056,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
         /** Movo 页面暂停后多久再判断悬浮球显隐（跳过页面之间切换的空档）。 */
         const val APP_LEAVE_SETTLE_MS = 300L
+        /** 交接等对话浮层回报的上限（浮层进场最多等内容 400ms + 两帧，留足余量）。 */
+        const val SHEET_HANDOFF_TIMEOUT_MS = 1_500L
         const val PANEL_AUTO_COLLAPSE_MS = 4_000L
         /** 从展开卡发起语音后，语音服务报告「没能开始」时转述到展开卡的时间窗。 */
         const val PANEL_VOICE_NOTICE_WINDOW_MS = 3_000L
