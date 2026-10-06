@@ -89,14 +89,14 @@ issue 提及文件的处理：
 | 连续对话 | 与手机同一套会话；回答完 **10 秒**没人说话收起（手机 45 秒）；最后 3 秒胶囊慢慢变暗（**1-a**），开口立即恢复；收起直接淡出，不出声 |
 | 播放 / 打开 App | 开始播放媒体立即结束会话，不再追问（沿用 `DoubaoDialogEngine` 的媒体接管结束） |
 | 遥控器 | 返回 = 停（取消任务、结束会话）；朗读时确认 = 打断；方向、主页、频道、媒体、数字等操作键 = 你来操作：停任务、结束会话，胶囊显示「你来操作，我先停下」2 秒后淡出，按键照常交给前台应用；音量、静音、语音键不影响会话；Movo 自己的页面在前台时不接管 |
-| 首页 | 待机页：大光球默认获焦（确认 = 开始说），标题「说『小T小T』，或按确认键开始」，下面三个示例说法；左下对话记录、设置，没有输入框 |
+| App 页面 | 2026-10-06 定稿（焦点 F-a 整行浅紫）：App 只做基本配置——首页 = 一句状态 + 一张清单（语音与唤醒 / 权限 / 模型 / 关于），配置二级页，「看全文」阅读页；不做对话页、对话记录、示例说法、文字输入。视觉逐项取手机设置页规范 × 1.5（`docs/DESIGN_SYSTEM.md` §14.1） |
 
 为什么是 10 秒：官方给出秒数的追问窗口在 8–15 秒，多数 10 秒（Google Assistant 8 或 10 秒，两份帮助页不一；华为智慧屏小艺 10 秒；Gemini Live 15 秒）；会话期间节目被暂停（Fire TV 要求暂停或压到 30–40%），不宜干等手机的 45 秒；播放媒体后不进入追问是 Google、Alexa、华为的共同做法。来源：support.google.com/assistant/answer/9249169、support.google.com/googlehome/answer/7685981、consumer.huawei.com/cn/support/content/zh-cn00759948、developer.amazon.com/docs/fire-tv/managing-audio-focus.html、amazon.com/gp/help/customer/display.html?nodeId=202201630。
 
 实现要点（共享代码只加默认值，手机行为不变）：
 
 - `Flavor` 新增 `voiceIdleTimeoutMs`（默认 45 秒，电视 10 秒）、`voiceLocalCommands` / `onVoiceLocalCommand`（默认空）；`VoiceTurnCoordinator` 遇到本地口令发 `Local` 动作而不是提交任务；`VoiceConversationController.idleEndsAt` 给胶囊算变暗时机。
-- 电视侧：`TvVoicePanel`（胶囊与选项卡）、`TvOrb`（按手机光球参数重画）、`TvBackHandler`（遥控器规则）、`TvHome` 待机页、`TvMainActivity` 支持直接打开对话页（阅读页）。
+- 电视侧：`TvVoicePanel`（胶囊与选项卡）、`TvOrb`（按手机光球参数重画）、`TvBackHandler`（遥控器规则）、`TvHome` / `TvSettings` / `TvControls`（配置首页、二级页、阅读页，定稿见 §14.1）、`TvMainActivity` 支持直接打开阅读页。
 - 没做的：「确认 = 说完」——实时对话由服务端断句，没有立即结束一句的接口；按确认在你说话时不交给节目，停顿约 1.65 秒后自动发送。
 
 验证：`testPhoneDebugUnitTest`、`testTvDebugUnitTest`、`lintTvDebug -PlintNewApiOnly`（NewApi 0）、两个 flavor 的 debug 包构建。**真机未验证**：唤醒 → 识别 → 回答 → 10 秒变暗收起 → 插话打断 → 说「第二个」→「看全文」→ 拿遥控器让出，等 TCL 连上后由自动化测试按此顺序跑。
@@ -550,7 +550,7 @@ internal object FlavorModule {
 
 ### 5.9 电视界面
 
-- **落点**：`src/tv/.../tv/`。v2 已实现：待机首页（`TvHome` 的 `home` 页）、对话 / 阅读页（`conversation` 页）、语音胶囊与选项小卡（`TvVoicePanel`）、光球（`TvOrb`）；设置沿用 P1 页面。
+- **落点**：`src/tv/.../tv/`。已实现：配置首页与阅读页（`TvHome`）、二级页（`TvSettings`）、组件（`TvControls`：卡片、行、开关、按钮、光球）、语音胶囊与选项小卡（`TvVoicePanel`）。App 只做基本配置（2026-10-06 用户决定）。
 - **复用**：消费 `K/ui/model/` 下的 UiState 和留在 main 的会话状态类，不复用手机的 miuix 视图。Markdown 解析（`StreamingGfmParser`）复用，渲染自写。
 - **焦点组件**：在 Compose foundation 上自写轻量焦点组件（Q4）。每个可操作元素有清晰焦点态；进入页面有默认焦点（首页在光球上）；焦点顺序可预期、不丢焦点；返回键连续按最终回主页。
 - **语音优先**：首页和提示先写说法，遥控器按键只作补充，不能成为唯一入口；节目上不常驻按键提示。

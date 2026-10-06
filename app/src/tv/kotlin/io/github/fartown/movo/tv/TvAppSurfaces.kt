@@ -36,10 +36,10 @@ internal object TvAppSurfaces : AppSurfaces {
         return true
     }
 
-    /** 打开 Movo 的对话页看完整回答（「看全文」）。 */
+    /** 打开 Movo 的阅读页看完整回答（「看全文」）；按返回回到节目。 */
     fun openReading(context: Context): Boolean = runCatching {
         context.startActivity(android.content.Intent(context, TvMainActivity::class.java)
-            .putExtra(TvMainActivity.EXTRA_PAGE, TvMainActivity.PAGE_CONVERSATION)
+            .putExtra(TvMainActivity.EXTRA_PAGE, TvMainActivity.PAGE_READING)
             .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP))
     }.isSuccess
 

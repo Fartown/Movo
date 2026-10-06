@@ -32,7 +32,7 @@ class TvMainActivity : ComponentActivity() {
         autoListen = intent.getBooleanExtra(MovoAssistantVoiceService.EXTRA_AUTO_LISTEN, false)
         requestedPage = intent.getStringExtra(EXTRA_PAGE)
         val app = AgentAppSession.get(this)
-        setContent { TvTheme { TvHome(app, notice, ::startVoice, { notice = it }, requestedPage) { requestedPage = null } } }
+        setContent { TvTheme { TvHome(app, notice, { notice = it }, requestedPage) { requestedPage = null } } }
     }
     override fun onResume() {
         super.onResume()
@@ -78,8 +78,8 @@ class TvMainActivity : ComponentActivity() {
     }
     companion object {
         const val ACTION_ASSISTANT = "io.github.fartown.movo.tv.ASSISTANT"
-        /** 打开时直接进入的页面，例如「看全文」进对话页。 */
+        /** 打开时直接进入的页面：「看全文」进阅读页。 */
         const val EXTRA_PAGE = "io.github.fartown.movo.tv.PAGE"
-        const val PAGE_CONVERSATION = "conversation"
+        const val PAGE_READING = "reading"
     }
 }
