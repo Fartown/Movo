@@ -32,6 +32,7 @@ class TvMainActivity : ComponentActivity() {
         autoListen = intent.getBooleanExtra(MovoAssistantVoiceService.EXTRA_AUTO_LISTEN, false)
         requestedPage = intent.getStringExtra(EXTRA_PAGE)
         val app = AgentAppSession.get(this)
+        debugText(intent)
         setContent { TvTheme { TvHome(app, notice, { notice = it }, requestedPage) { requestedPage = null } } }
     }
     override fun onResume() {
@@ -57,8 +58,24 @@ class TvMainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         intent.getStringExtra(EXTRA_PAGE)?.let { requestedPage = it }
+        debugText(intent)
         if (intent.getBooleanExtra(MovoAssistantVoiceService.EXTRA_AUTO_LISTEN, false)) ensureVoiceStarted()
     }
+    /**
+     * 只在 debug 包里：`am start -n <pkg>/io.github.fartown.movo.tv.TvMainActivity --es io.github.fartown.movo.tv.TEXT "在腾讯视频搜狂飙"`
+     * 直接把一句文字交给 Movo 执行，然后退到后台让它操作电视——测工具功能不用对着电视说话。
+     */
+    private fun debugText(intent: Intent) {
+        if (!io.github.fartown.movo.BuildConfig.DEBUG) return
+        val text = intent.getStringExtra(EXTRA_TEXT)?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        intent.removeExtra(EXTRA_TEXT)
+        val app = AgentAppSession.get(this)
+        if (intent.getBooleanExtra(EXTRA_NEW_CONVERSATION, true)) app.createConversation()
+        app.sendCurrentMessage(text)
+        io.github.fartown.movo.diagnostics.MemoryDiagnostics.record("tv.debug", "text.sent", fields = mapOf("chars" to text.length))
+        moveTaskToBack(true)
+    }
+
     private fun requiredPermissions(): Array<String> = if (TclPcmInput.supported(this)) arrayOf(
         Manifest.permission.RECORD_AUDIO, Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE,
     ) else arrayOf(Manifest.permission.RECORD_AUDIO)
@@ -81,5 +98,8 @@ class TvMainActivity : ComponentActivity() {
         /** 打开时直接进入的页面：「看全文」进阅读页。 */
         const val EXTRA_PAGE = "io.github.fartown.movo.tv.PAGE"
         const val PAGE_READING = "reading"
+        /** debug 包测试用：直接发一句文字指令。 */
+        const val EXTRA_TEXT = "io.github.fartown.movo.tv.TEXT"
+        const val EXTRA_NEW_CONVERSATION = "io.github.fartown.movo.tv.NEW_CONVERSATION"
     }
 }

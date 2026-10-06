@@ -1162,6 +1162,14 @@ internal class AgentAppState(
         }
     }
 
+    override fun voiceFreshConversationId(): String {
+        check(!homeState.isCompacting && !modelPickerState.isChanging) {
+            "请等上下文整理和模型切换完成后再开始语音"
+        }
+        if (selectedConversationId != null && homeState.messages.isNotEmpty() && !voiceRuntimeBusy) createConversation()
+        return voiceConversationId()
+    }
+
     override fun retainVoiceDraft(conversationId: String, text: String, images: List<PendingImageUi>) {
         if (text.isBlank()) return
         val state = conversationsById[conversationId] ?: return
@@ -1633,7 +1641,12 @@ internal class AgentAppState(
 
         val preparationJob = scope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
             // write-ahead：用户消息未提交前不把可能产生副作用的 run 交给 Runtime。
-            if (!initialPersistence.await()) {
+            val persistStartedAt = android.os.SystemClock.elapsedRealtime()
+            val persisted = initialPersistence.await()
+            io.github.fartown.movo.diagnostics.MemoryDiagnostics.record("app", "run.persisted", fields = mapOf(
+                "duration_ms" to android.os.SystemClock.elapsedRealtime() - persistStartedAt,
+                "messages" to state.messages.size, "ok" to persisted))
+            if (!persisted) {
                 withContext(Dispatchers.Main) {
                     applyRunResult(
                         runId,

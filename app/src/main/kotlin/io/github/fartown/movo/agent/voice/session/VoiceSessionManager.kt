@@ -28,6 +28,8 @@ internal interface VoiceConversationHost {
     val voiceSelectedConversationId: String?
     val voiceRuntimeBusy: Boolean
     fun voiceConversationId(): String
+    /** 另起一个新对话给这次语音用；默认沿用 [voiceConversationId]。 */
+    fun voiceFreshConversationId(): String = voiceConversationId()
     fun retainVoiceDraft(conversationId: String, text: String, images: List<PendingImageUi> = emptyList())
     fun pendingVoiceImages(conversationId: String): List<PendingImageUi>
     fun sendVoiceMessage(
@@ -64,6 +66,8 @@ internal open class VoiceSessionOwner(
         const val NOTICE_MILLIS = 8_000L
     }
 
+    /** 上次语音结束的时刻（elapsedRealtime）；0 = 本进程还没结束过。 */
+    private var lastEndedAt = 0L
     private val mutableState = MutableStateFlow(VoiceSessionUiState())
     val state: StateFlow<VoiceSessionUiState> = mutableState.asStateFlow()
     private var host: ServiceHost? = null
@@ -106,7 +110,11 @@ internal open class VoiceSessionOwner(
     fun beginSession(context: Context): Boolean {
         val conversations = app ?: return false
         if (busy) return active
-        val id = runCatching { conversations.voiceConversationId() }.getOrElse {
+        // 电视：隔一段时间再叫就开新对话，历史不越积越长（每轮请求更快，也不把旧的电视声音带进来）。
+        val fresh = io.github.fartown.movo.flavor.FlavorModule.voiceNewConversationAfterMs?.let { gap ->
+            lastEndedAt == 0L || android.os.SystemClock.elapsedRealtime() - lastEndedAt > gap
+        } == true
+        val id = runCatching { if (fresh) conversations.voiceFreshConversationId() else conversations.voiceConversationId() }.getOrElse {
             val reason = it.message ?: "暂时无法开始语音"
             publish("ended", false, reason, "", notice = reason)
             return false
@@ -220,6 +228,7 @@ internal open class VoiceSessionOwner(
 
     /** [notice] 非空表示这次发布要（重新）展示结束原因；为空时沿用当前提示，直到过期或下一次开始。 */
     private fun publish(event: String, active: Boolean, status: String, transcript: String, notice: String? = null) {
+        if (event == "ended") lastEndedAt = android.os.SystemClock.elapsedRealtime()
         val previous = state.value
         val pending = active && VoiceSessionUiState.autoSendPendingAfter(event, previous.autoSendPending)
         mutableState.value = previous.copy(

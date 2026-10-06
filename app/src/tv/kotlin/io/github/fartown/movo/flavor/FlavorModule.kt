@@ -61,6 +61,9 @@ internal object FlavorModule : Flavor {
     /** 打开了其他 App（含直达视频搜索）后，回答念完就结束会话：不留在后台把节目声音当成你在说话。 */
     override val voiceHandoffTools: Set<String> = setOf("app_open", "video_search")
 
+    /** 隔 2 分钟以上再叫「小T小T」就开新对话：刚问完接着问仍能接上文，隔久了从头开始，请求更快。 */
+    override val voiceNewConversationAfterMs: Long = 120_000L
+
     /** 「看全文」在本地打开阅读页，不交给模型。 */
     override val voiceLocalCommands: Set<String> = setOf("看全文", "看看全文", "打开全文", "全文", "放大看看", "看完整的")
 
