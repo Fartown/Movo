@@ -56,9 +56,6 @@ class TvMainActivity : ComponentActivity() {
         setIntent(intent)
         if (intent.getBooleanExtra(MovoAssistantVoiceService.EXTRA_AUTO_LISTEN, false)) ensureVoiceStarted()
     }
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
-        TvBackHandler.onKeyEvent(event) || super.dispatchKeyEvent(event)
-
     private fun requiredPermissions(): Array<String> = if (TclPcmInput.supported(this)) arrayOf(
         Manifest.permission.RECORD_AUDIO, Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE,
     ) else arrayOf(Manifest.permission.RECORD_AUDIO)

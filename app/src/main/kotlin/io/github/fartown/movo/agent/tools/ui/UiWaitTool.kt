@@ -110,7 +110,7 @@ internal class UiWaitTool(
             is UiWaitCondition.Package -> UiWaitRequest(null, WaitMatch.CONTAINS, false, c.packageName, null, input.timeoutMs)
             is UiWaitCondition.Duration -> UiWaitRequest(null, WaitMatch.CONTAINS, false, null, c.durationMs, input.timeoutMs)
         }
-        return when (val result = backend.waitFor(request, ctx.env)) {
+        return when (val result = backend.waitFor(request, ctx.env, ctx::checkCancelled)) {
             is UiWaitResult.Finished -> Verdict.Read(UiWaitOutput(result.matched, result.elapsedMs, result.node))
             is UiWaitResult.PermissionRequired -> Verdict.Failed(
                 ToolError(ToolErrorCode.PERMISSION_REQUIRED, "无障碍不可用，无法等待屏幕条件"),

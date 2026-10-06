@@ -1,6 +1,7 @@
 package io.github.fartown.movo.platform
 
 import android.content.Context
+import android.content.Intent
 import io.github.fartown.movo.MovoApp
 import io.github.fartown.movo.agent.tools.ToolProviderInputs
 import io.github.fartown.movo.agent.tools.core.ApprovalMode
@@ -35,6 +36,11 @@ internal interface Flavor {
 
     /** Optional screenshot route for devices without accessibility screenshot support. */
     val screenCapture: DeviceScreenCapture? get() = null
+
+    /** Start a user execution service, whose onCreate immediately posts its foreground notification. */
+    fun startExecutionService(context: Context, intent: Intent) {
+        checkNotNull(context.startForegroundService(intent))
+    }
 
     /** 语音会话的宿主：语音轮次写进哪一份会话状态。 */
     fun voiceHost(context: Context): VoiceConversationHost

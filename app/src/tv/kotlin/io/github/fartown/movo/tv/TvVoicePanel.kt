@@ -47,7 +47,7 @@ internal object TvVoicePanel {
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post(::refresh); return }
         val state = VoiceSessionManager.state.value
         val service = AgentAccessibilityService.current()
-        if (screenshotSuppressed || TvAppSurfaces.visible || (!state.active && state.notice.isNullOrBlank()) || service == null) { remove(); return }
+        if (screenshotSuppressed || TvConversationOverlay.enabled || TvAppSurfaces.visible || (!state.active && state.notice.isNullOrBlank()) || service == null) { remove(); return }
         if (owner !== service) remove()
         if (window == null) {
             val density = service.resources.displayMetrics.density

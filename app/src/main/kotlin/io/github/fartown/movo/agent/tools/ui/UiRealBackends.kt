@@ -350,20 +350,28 @@ internal class RealUiScreenBackend(
         return injectResult(controller.pressKey(button), methodFallback = "key", before = before)
     }
 
-    override fun waitFor(request: UiWaitRequest, env: ToolEnvironment): UiWaitResult {
+    override fun waitFor(request: UiWaitRequest, env: ToolEnvironment, checkCancelled: () -> Unit): UiWaitResult {
+        checkCancelled()
         if (request.durationMs != null) {
             val waitMs = minOf(request.durationMs, request.timeoutMs).toLong().coerceAtLeast(0)
-            val start = System.currentTimeMillis()
-            runCatching { Thread.sleep(waitMs) }
-            return UiWaitResult.Finished(matched = true, elapsedMs = System.currentTimeMillis() - start, node = null)
+            val start = System.nanoTime()
+            while (true) {
+                checkCancelled()
+                val remaining = waitMs - (System.nanoTime() - start) / 1_000_000
+                if (remaining <= 0) break
+                Thread.sleep(minOf(remaining, 100))
+            }
+            return UiWaitResult.Finished(matched = request.durationMs <= request.timeoutMs,
+                elapsedMs = (System.nanoTime() - start) / 1_000_000, node = null)
         }
         if (!env.accessibilityUsable && !env.rootAvailable) return UiWaitResult.PermissionRequired
         val start = System.currentTimeMillis()
         val json = when {
             request.text != null -> controller.waitForText(
                 request.text, request.timeoutMs, includeDesc = true, matchMode = request.match.name.lowercase(),
+                checkCancelled = checkCancelled,
             )
-            request.packageName != null -> controller.waitForPackage(request.packageName, request.timeoutMs)
+            request.packageName != null -> controller.waitForPackage(request.packageName, request.timeoutMs, checkCancelled)
             else -> return UiWaitResult.Finished(matched = false, elapsedMs = 0, node = null)
         }
         val obj = parse(json)

@@ -189,7 +189,7 @@ internal class AgentExecutionService : Service() {
             val registry = if (label == R.string.monitor_execution_label) monitorLeases else leases
             if (!registry.acquire(id, allowBoundFallback, label, task, onStop)) return true
             return try {
-                context.applicationContext.startForegroundService(Intent(context, AgentExecutionService::class.java))
+                FlavorModule.startExecutionService(context.applicationContext, Intent(context, AgentExecutionService::class.java))
                 true
             } catch (failure: RuntimeException) {
                 registry.release(id)

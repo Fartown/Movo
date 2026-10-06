@@ -1247,6 +1247,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     private fun showOverlay() {
+        if (!FlavorModule.runSurface.usesRuntimeWindows) return
         if (orbView != null && overlayOwner !== overlayContext()) rebuildOverlayIfOwnerChanged()
         if (orbView != null) {
             // 悬浮球已常驻：只补上边缘光晕（正在淡出的撤销淡出）。

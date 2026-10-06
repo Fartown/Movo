@@ -18,6 +18,7 @@ import io.github.fartown.movo.ui.theme.ProvideReducedMotion
  * P2 换成语音面板（实施方案 §5.8）。
  */
 internal object TvRunSurfaceRenderer : RunSurfaceRenderer {
+    override val usesRuntimeWindows = false
     @Composable
     override fun Host(context: Context, isNightMode: () -> Boolean, content: @Composable () -> Unit) {
         MaterialTheme(colorScheme = if (isNightMode()) darkColorScheme() else lightColorScheme()) {

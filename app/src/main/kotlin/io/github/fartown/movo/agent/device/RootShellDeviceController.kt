@@ -524,13 +524,14 @@ internal class RootShellDeviceController(
             .toString()
     }
 
-    fun waitForText(text: String, timeoutMs: Int, includeDesc: Boolean, matchMode: String): String {
+    fun waitForText(text: String, timeoutMs: Int, includeDesc: Boolean, matchMode: String, checkCancelled: () -> Unit = {}): String {
         val needle = text.trim()
         if (needle.isBlank()) return errorJson("INVALID_ARGUMENT", "text 不能为空")
         val timeout = timeoutMs.coerceIn(500, 60_000)
         val deadline = System.currentTimeMillis() + timeout
         var attempts = 0
         while (System.currentTimeMillis() <= deadline) {
+            checkCancelled()
             attempts++
             val service = AgentAccessibilityService.current()
             if (service == null && !rootAvailable()) return accessibilityUnavailable()
@@ -566,7 +567,7 @@ internal class RootShellDeviceController(
             .toString()
     }
 
-    fun waitForPackage(packageName: String, timeoutMs: Int): String {
+    fun waitForPackage(packageName: String, timeoutMs: Int, checkCancelled: () -> Unit = {}): String {
         val target = packageName.trim()
         if (target.isBlank()) return errorJson("INVALID_ARGUMENT", "package_name 不能为空")
         val timeout = timeoutMs.coerceIn(500, 60_000)
@@ -574,6 +575,7 @@ internal class RootShellDeviceController(
         var attempts = 0
         var lastPackage = ""
         while (System.currentTimeMillis() <= deadline) {
+            checkCancelled()
             attempts++
             val service = AgentAccessibilityService.current()
             if (service == null && !rootAvailable()) return accessibilityUnavailable()

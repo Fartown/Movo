@@ -167,6 +167,9 @@ internal class SherpaWakeEngine(private val context: Context) : WakeWordEngine {
                 if (!enabled || paused || epoch != session || version != configVersion) return
                 val buffer = AudioRecord.getMinBufferSize(16_000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
                 check(buffer > 0) { "无法初始化唤醒麦克风" }
+                if (context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    throw SecurityException("唤醒麦克风权限未授予")
+                }
                 audio = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, 16_000,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(buffer, 6_400))
                 recorder = audio

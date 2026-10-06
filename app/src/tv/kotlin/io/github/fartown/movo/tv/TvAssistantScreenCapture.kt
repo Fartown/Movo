@@ -110,8 +110,17 @@ internal object TvAssistantScreenCapture : DeviceScreenCapture {
                 if (active == null) complete(request.id, DeviceScreenCapture.Result(failure = "ASSISTANT_DISCONNECTED"))
                 else runCatching {
                     TvVoicePanel.suppressForScreenshot(true)
-                    active.showSession(Bundle().apply { putLong(REQUEST_ID, request.id) },
-                        VoiceInteractionSession.SHOW_WITH_ASSIST or VoiceInteractionSession.SHOW_WITH_SCREENSHOT)
+                    TvConversationOverlay.suppressForScreenshot(true)
+                    // Let the removed overlay surface disappear before the system samples a frame.
+                    main.postDelayed({
+                        if (synchronized(stateLock) { pending !== request }) return@postDelayed
+                        runCatching {
+                            active.showSession(Bundle().apply { putLong(REQUEST_ID, request.id) },
+                                VoiceInteractionSession.SHOW_WITH_ASSIST or VoiceInteractionSession.SHOW_WITH_SCREENSHOT)
+                        }.onFailure {
+                            complete(request.id, DeviceScreenCapture.Result(failure = "ASSISTANT_REQUEST_REJECTED"))
+                        }
+                    }, 100)
                 }.onFailure {
                     complete(request.id, DeviceScreenCapture.Result(failure = "ASSISTANT_REQUEST_REJECTED"))
                 }
@@ -129,7 +138,10 @@ internal object TvAssistantScreenCapture : DeviceScreenCapture {
                 }
                 request.result
             }
-            main.post { TvVoicePanel.suppressForScreenshot(false) }
+            main.post {
+                TvConversationOverlay.suppressForScreenshot(false)
+                TvVoicePanel.suppressForScreenshot(false)
+            }
             MemoryDiagnostics.record("tv.capture", if (result.bitmap == null) "failed" else "completed",
                 fields = mapOf("source" to "system_assistant", "request" to request.id,
                     "duration_ms" to SystemClock.elapsedRealtime() - startedAt,

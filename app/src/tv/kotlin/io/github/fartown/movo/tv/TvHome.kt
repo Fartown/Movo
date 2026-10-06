@@ -16,6 +16,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -28,10 +29,12 @@ import io.github.fartown.movo.ui.model.SystemNoticeMessageUi
 import io.github.fartown.movo.ui.model.UserMessageUi
 
 @Composable internal fun TvHome(app: AgentAppState, notice: String, startVoice: () -> Unit, showNotice: (String) -> Unit) {
+    val context = LocalContext.current
     var page by rememberSaveable { mutableStateOf("home") }
     val voice by VoiceSessionManager.state.collectAsState()
     val startFocus = remember { FocusRequester() }
     BackHandler(page != "home" && !voice.active && !app.voiceRuntimeBusy) { page = "home" }
+    BackHandler(voice.active || app.voiceRuntimeBusy) { TvBackHandler.cancel() }
     if (page == "settings") {
         TvSettings(onBack = { page = "home" }, showNotice = showNotice)
         return
@@ -111,13 +114,24 @@ import io.github.fartown.movo.ui.model.UserMessageUi
         if (currentNotice.isNotBlank()) TvBody(currentNotice, secondary = true)
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             TvButton(if (voice.active) "结束语音" else "开始语音", Modifier.focusRequester(startFocus), primary = true, onClick = startVoice)
-            TvButton("文字输入") { page = "text" }
+            TvButton("文字输入") {
+                if (TvConversationOverlay.show(context, autoListen = false)) {
+                    (context as? android.app.Activity)?.moveTaskToBack(true)
+                } else page = "text"
+            }
             if (app.voiceRuntimeBusy) TvButton("停止任务") { TvBackHandler.cancel() }
             else TvButton("新对话") { VoiceSessionManager.end(); app.createConversation() }
             TvButton("历史") { page = "history" }
             TvButton("设置") { page = "settings" }
         }
-        TvHint(if (voice.active) "返回键取消本轮 · 回答结束后可以继续说话" else "方向键选择 · 确认键进入 · 返回键退出")
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            TvButton("悬浮助手") {
+                if (TvConversationOverlay.show(context, autoListen = false)) {
+                    (context as? android.app.Activity)?.moveTaskToBack(true)
+                } else showNotice("请先开启 Movo 无障碍连接，再打开悬浮助手。")
+            }
+            TvHint(if (voice.active) "返回键取消本轮" else "方向键选择 · 确认键进入")
+        }
     }
 }
 

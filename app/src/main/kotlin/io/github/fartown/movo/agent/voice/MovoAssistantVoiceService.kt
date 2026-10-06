@@ -127,6 +127,7 @@ internal class MovoAssistantVoiceService : Service(), VoiceSessionOwner.ServiceH
 
         /** Safe across processes: the Activity opens first, then starts audio while visible. */
         fun showAssistant(context: Context, autoListen: Boolean) {
+            if (FlavorModule.surfaces.showAssistant(context, autoListen)) return
             if (VoiceSurfaceTracker.chatVisible) {
                 if (autoListen) VoiceEntry.startInPlace(context)
                 return

@@ -63,6 +63,7 @@ internal object AgentOverlayVisibilityPolicy {
         this?.trim()?.lowercase() in entrySurfaceDismissalTools
 
     private val foregroundDrivingTools = setOf(
+        "app_open", "ui_tap", "ui_focus", "ui_scroll", "ui_swipe", "ui_input", "ui_key", "media_control", "volume_set",
         "launch_app",
         "open_uri",
         "tap",
@@ -89,6 +90,7 @@ internal object AgentOverlayVisibilityPolicy {
     )
 
     private val foregroundOperationTools = setOf(
+        "ui_observe", "ui_wait",
         "observe_screen",
         "ui_observe",
         "ui_wait",

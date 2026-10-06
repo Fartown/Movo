@@ -61,6 +61,7 @@ android {
         targetSdk = 36
         testInstrumentationRunner = "io.github.fartown.movo.voice.VoiceAcceptanceInstrumentation"
         // versionCode 规则：yyyyMMdd + 两位当日序号（01 起），发版时随 versionName 一起手动递增。
+        //noinspection HighAppVersionCode
         versionCode = 2026092306
         versionName = "3.0.9"
 

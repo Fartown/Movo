@@ -20,10 +20,10 @@ internal class TvDeviceToolProvider(services: ToolServices) : ToolProvider {
 
 internal class TvMediaToolProvider(services: ToolServices) : ToolProvider {
     override val tools: List<AgentTool> = listOf(
-        ContractTool(MediaControlTool(RealMediaControlBackend(services.context, services.root()))),
+        ContractTool(TvMediaControlTool(services.context)),
         ContractTool(VolumeSetTool(RealVolumeSetBackend(services.context))),
     )
     override val promptSection = PromptSection("tv_media", ToolDomain.CLOCK_MEDIA,
-        "电视播放控制：media_control 只表示媒体键已派发；暂停、继续、快进、快退、换集后须核实播放器实际变化，" +
-            "不能把派发成功说成播放成功。volume_set 按回读的 actual_percent 确认实际音量，静音设为 0。")
+        "电视播放控制：media_control 的 status 读取当前播放器状态和进度；动作带实际回读验证。" +
+            "跳转是播放器近似定位，必须按 confirmed_position_ms 和 seek_error_ms 报告落点；播放时 position_ms 是推算值。未知结果先查状态，不能直接重复快进、快退或换集。volume_set 按回读的 actual_percent 确认实际音量，静音设为 0。")
 }

@@ -574,6 +574,6 @@ class UiToolsTest {
         override fun scroll(request: UiScrollRequest, env: ToolEnvironment) = scrollResult
         override fun input(request: UiInputRequest, env: ToolEnvironment) = inputResult
         override fun key(request: UiKeyRequest, env: ToolEnvironment) = keyResult
-        override fun waitFor(request: UiWaitRequest, env: ToolEnvironment) = waitResult
+        override fun waitFor(request: UiWaitRequest, env: ToolEnvironment, checkCancelled: () -> Unit) = waitResult
     }
 }

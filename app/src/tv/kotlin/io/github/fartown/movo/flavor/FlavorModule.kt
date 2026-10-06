@@ -42,6 +42,19 @@ internal object FlavorModule : Flavor {
     override val screenCapture: io.github.fartown.movo.platform.DeviceScreenCapture =
         io.github.fartown.movo.tv.TvAssistantScreenCapture
 
+    override fun startExecutionService(context: Context, intent: android.content.Intent) {
+        // TCL Android 9 silently rejects startForegroundService from its bound assistant
+        // (default_borbid), even with APP_AUTO_START allowed, then kills it for an FGS ANR.
+        // A system-bound accessibility service can start an ordinary service; onCreate
+        // still attempts foreground promotion. The bound-service lifetime avoids that FGS
+        // timeout when the OEM rejects promotion; task leases still stop it when work ends.
+        if (android.os.Build.VERSION.SDK_INT == 28 &&
+            android.os.Build.MANUFACTURER.startsWith("TCL", ignoreCase = true) &&
+            io.github.fartown.movo.agent.accessibility.AgentAccessibilityService.current() != null) {
+            checkNotNull(context.startService(intent))
+        } else super.startExecutionService(context, intent)
+    }
+
     override fun voiceHost(context: Context): VoiceConversationHost = AgentAppSession.get(context)
 
     override fun voiceInput(context: Context, onError: (String) -> Unit) =

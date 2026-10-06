@@ -1,6 +1,7 @@
 package io.github.fartown.movo.platform
 
 import android.app.Activity
+import android.content.Context
 import android.graphics.Rect
 import io.github.fartown.movo.agent.runtime.AgentConversationTarget
 
@@ -14,6 +15,9 @@ internal interface AppSurfaces {
 
     /** 语音助手入口打开 [conversationActivity] 时使用的 action。 */
     val assistantAction: String
+
+    /** A device may host the conversation in an accessibility window without pausing the player. */
+    fun showAssistant(context: Context, autoListen: Boolean): Boolean = false
 
     /** [target] 对应的会话是否正显示在会话界面上。 */
     fun isConversationVisible(target: AgentConversationTarget?): Boolean

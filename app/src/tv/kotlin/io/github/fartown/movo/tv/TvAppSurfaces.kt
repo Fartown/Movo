@@ -1,6 +1,7 @@
 package io.github.fartown.movo.tv
 
 import android.app.Activity
+import android.content.Context
 import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
@@ -21,9 +22,13 @@ internal object TvAppSurfaces : AppSurfaces {
     override val conversationActivity: Class<out Activity> = TvMainActivity::class.java
     override val assistantAction: String = TvMainActivity.ACTION_ASSISTANT
 
-    override fun isConversationVisible(target: AgentConversationTarget?): Boolean = visible
+    override fun showAssistant(context: Context, autoListen: Boolean): Boolean =
+        TvConversationOverlay.show(context, autoListen)
+
+    override fun isConversationVisible(target: AgentConversationTarget?): Boolean = visible || TvConversationOverlay.expanded
 
     override fun hideConversationForDeviceOperation(): Boolean {
+        if (!TvConversationOverlay.yieldToDevice()) return false
         val current = activity.get() ?: return true
         if (!visible || current.isFinishing) return true
         if (Looper.myLooper() == Looper.getMainLooper()) return current.moveTaskToBack(true)

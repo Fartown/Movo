@@ -69,11 +69,22 @@ import java.net.URI
     BackHandler { back() }
     Column(Modifier.fillMaxSize().background(TvTokens.canvas).padding(horizontal = 64.dp, vertical = 40.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        TvTitle(when (page) { "model" -> "配置模型"; "voice" -> "配置豆包语音"; "record" -> "录音检测"; "screen" -> "屏幕读取权限"; else -> "设置" })
+        TvTitle(when (page) { "model" -> "配置模型"; "voice" -> "配置豆包语音"; "record" -> "录音检测"; "screen" -> "屏幕读取权限"; "media" -> "播放控制权限"; else -> "设置" })
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             when (page) {
                 "record" -> TvRecordingTestPage(context)
                 "screen" -> TvScreenPermissionPage()
+                "media" -> {
+                    TvBody(if (TvMediaAccess.enabled(context)) "播放控制已授权" else "播放控制尚未授权")
+                    TvHint("允许媒体会话访问后，可读取当前影片、播放状态和进度，并验证暂停、继续和快进快退。系统将其列在通知使用权中；此服务不读取或保存通知内容。")
+                    TvButton("打开系统通知使用权设置", primary = true) {
+                        notice = runCatching { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+                            .fold({ "请选择 Movo 播放控制，可在这里授权或撤销权限" }, { "本机缺少权限设置页，需要通过安装工具完成一次授权。日常播放控制无需连接电脑。" })
+                    }
+                    TvButton("检查播放控制授权") {
+                        notice = if (TvMediaAccess.enabled(context)) "播放控制已授权" else "播放控制尚未授权"
+                    }
+                }
                 "model" -> {
                     TvHint("OpenAI 兼容接口。修改后保存到此电视；现有其他服务商会保留。")
                     TvField("服务地址", base) { base = it }
@@ -130,6 +141,7 @@ import java.net.URI
                     TvButton("配置模型", primary = true) { page = "model" }
                     TvButton("配置豆包语音") { page = "voice" }
                     TvButton("屏幕读取权限") { page = "screen" }
+                    TvButton("播放控制权限") { page = "media" }
                     TvButton("录音检测") { page = "record" }
                     TvHint(if (TclPcmInput.supported(context)) "拾音来源：TCL 内置远场麦克风" else "拾音来源：系统麦克风")
                     TvButton("授权录音") {

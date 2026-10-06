@@ -202,7 +202,7 @@ internal interface UiActionBackend {
     fun scroll(request: UiScrollRequest, env: ToolEnvironment): UiScrollResult
     fun input(request: UiInputRequest, env: ToolEnvironment): UiInputResult
     fun key(request: UiKeyRequest, env: ToolEnvironment): UiInjectResult
-    fun waitFor(request: UiWaitRequest, env: ToolEnvironment): UiWaitResult
+    fun waitFor(request: UiWaitRequest, env: ToolEnvironment, checkCancelled: () -> Unit = {}): UiWaitResult
 }
 
 internal data class UiTapRequest(val target: UiTarget, val holdMs: Int, val backend: InjectionBackend)
