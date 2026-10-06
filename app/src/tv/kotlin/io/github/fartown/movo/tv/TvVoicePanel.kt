@@ -140,15 +140,35 @@ internal object TvVoicePanel {
     /** 反问小卡正显示着（这时要先看方向键、数字键和确认键）。 */
     internal val showingChoices: Boolean get() = choices != null
 
+    /** 小卡按下时收下的键（抬起时才执行），以及收下的时刻。 */
+    private var choiceKeyDown = KeyEvent.KEYCODE_UNKNOWN
+    private var choiceKeyDownAt = 0L
+
+    /** 小卡收下了某个键、还没抬起（这期间不能关掉拦截）；超过 2 秒当作抬起丢了。 */
+    internal val holdingChoiceKey: Boolean get() =
+        choiceKeyDown != KeyEvent.KEYCODE_UNKNOWN && SystemClock.uptimeMillis() - choiceKeyDownAt < TvBackHandler.HOLD_TIMEOUT_MS
+
     /** 反问小卡出现时才接管方向键、数字键和确认键；其余时间所有按键都交给前台应用。 */
     fun onKeyEvent(event: KeyEvent): Boolean {
-        val card = choices ?: return false
-        if (root == null) return false
         val code = event.keyCode
+        val card = choices
+        if (card == null || root == null) {
+            // 按下时小卡收下了，抬起前小卡没了：抬起也收下，不让前台应用只收到半个按键。
+            if (code == choiceKeyDown && event.action == KeyEvent.ACTION_UP) { choiceKeyDown = KeyEvent.KEYCODE_UNKNOWN; return true }
+            return false
+        }
         val number = if (code in KeyEvent.KEYCODE_1..KeyEvent.KEYCODE_9) code - KeyEvent.KEYCODE_1 else -1
         val handled = code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN ||
             code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER || number in card.items.indices
-        if (!handled || event.action != KeyEvent.ACTION_UP) return handled
+        if (!handled) return false
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            if (event.repeatCount == 0) { choiceKeyDown = code; choiceKeyDownAt = SystemClock.uptimeMillis() }
+            return true
+        }
+        if (event.action != KeyEvent.ACTION_UP) return true
+        // 只执行自己收到过按下的键：按下交给了别人（例如那时小卡还没出现），抬起也交还。
+        if (code != choiceKeyDown) return false
+        choiceKeyDown = KeyEvent.KEYCODE_UNKNOWN
         when {
             code == KeyEvent.KEYCODE_DPAD_UP -> { choiceFocus = (choiceFocus - 1).coerceAtLeast(0); refresh() }
             code == KeyEvent.KEYCODE_DPAD_DOWN -> { choiceFocus = (choiceFocus + 1).coerceAtMost(card.items.lastIndex); refresh() }

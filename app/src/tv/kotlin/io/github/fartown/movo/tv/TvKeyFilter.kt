@@ -45,9 +45,14 @@ internal object TvKeyFilter {
         update()
     }
 
-    /** Movo 这时需不需要先看遥控器按键。 */
-    internal fun keysNeeded(voiceActive: Boolean, taskRunning: Boolean, overlayExpanded: Boolean, choicesShowing: Boolean) =
-        voiceActive || taskRunning || overlayExpanded || choicesShowing
+    /**
+     * Movo 这时需不需要先看遥控器按键。[overlayEnabled]：用户打开了浮窗模式（菜单键收起 / 展开浮窗），
+     * 这是用户自己选的，拦截一直开着。
+     */
+    internal fun keysNeeded(
+        voiceActive: Boolean, taskRunning: Boolean, overlayExpanded: Boolean, choicesShowing: Boolean,
+        overlayEnabled: Boolean = false,
+    ) = voiceActive || taskRunning || overlayExpanded || choicesShowing || overlayEnabled
 
     fun update() {
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post(::update); return }
@@ -57,9 +62,13 @@ internal object TvKeyFilter {
             taskRunning = AgentAppSession.peek()?.voiceRuntimeBusy == true,
             overlayExpanded = TvConversationOverlay.expanded,
             choicesShowing = TvVoicePanel.showingChoices,
+            overlayEnabled = TvConversationOverlay.enabled,
         )
-        // 按下时被 Movo 收下的键，等它抬起再关，前台应用不会只收到半个按键。
-        if (!needed && TvBackHandler.holdingKey) return
+        // 按下时被 Movo 收下的键，等它抬起再关，前台应用不会只收到半个按键（超过 2 秒当作抬起丢了）。
+        if (!needed && (TvBackHandler.holdingKey || TvVoicePanel.holdingChoiceKey)) {
+            main.postDelayed(::update, TvBackHandler.HOLD_TIMEOUT_MS)
+            return
+        }
         if (needed == filtering) return
         val info = service.serviceInfo ?: return
         info.flags = if (needed) info.flags or AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS

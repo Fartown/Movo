@@ -36,8 +36,19 @@ internal object TvBackHandler : KeyInterceptor {
 
     fun cancel(): Boolean = stop("本轮已取消")
 
-    /** Movo 按下时收下了某个键、还没抬起（这期间不能关掉拦截）。 */
-    internal val holdingKey: Boolean get() = consuming || consumingCode != KeyEvent.KEYCODE_UNKNOWN
+    private var consumedAt = 0L
+
+    /**
+     * Movo 按下时收下了某个键、还没抬起（这期间不能关掉拦截）。超过 [HOLD_TIMEOUT_MS] 当作抬起丢了，自动放开，
+     * 免得拦截永远关不掉。
+     */
+    internal val holdingKey: Boolean get() {
+        if (!consuming && consumingCode == KeyEvent.KEYCODE_UNKNOWN) return false
+        if (android.os.SystemClock.uptimeMillis() - consumedAt < HOLD_TIMEOUT_MS) return true
+        consuming = false
+        consumingCode = KeyEvent.KEYCODE_UNKNOWN
+        return false
+    }
 
     private fun stop(message: String): Boolean {
         // 只看已经建好的会话：没建过就没有在跑的任务，不为一个按键去建它（要读数据库，会卡住按键）。
@@ -50,18 +61,22 @@ internal object TvBackHandler : KeyInterceptor {
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
+        // 按下时 Movo 收下的键，重复和抬起也先由这里收下：前台应用不能只收到半个按键，
+        // 按下后才出现的选项卡也不能把这次抬起当成一次选择。
+        if (consumingCode == event.keyCode && (event.action == KeyEvent.ACTION_UP || event.repeatCount > 0)) {
+            if (event.action == KeyEvent.ACTION_UP) { consumingCode = KeyEvent.KEYCODE_UNKNOWN; TvKeyFilter.update() }
+            return true
+        }
         if (TvConversationOverlay.onKeyEvent(event)) return true
         if (TvVoicePanel.onKeyEvent(event)) return true
         if (event.keyCode == KeyEvent.KEYCODE_BACK) {
-            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) consuming = cancel()
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                consuming = cancel()
+                consumedAt = android.os.SystemClock.uptimeMillis()
+            }
             val handled = consuming
             if (event.action == KeyEvent.ACTION_UP) { consuming = false; TvKeyFilter.update() }
             return handled
-        }
-        // 按下时消费的键，抬起也要消费，前台应用不能只收到半个按键。
-        if (consumingCode == event.keyCode) {
-            if (event.action == KeyEvent.ACTION_UP) { consumingCode = KeyEvent.KEYCODE_UNKNOWN; TvKeyFilter.update() }
-            return true
         }
         if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount != 0) return false
         val session = AgentAppSession.peek()
@@ -82,8 +97,12 @@ internal object TvBackHandler : KeyInterceptor {
             }
         }
         consumingCode = event.keyCode
+        consumedAt = android.os.SystemClock.uptimeMillis()
         return true
     }
+
+    /** 收下的键超过这么久没抬起，当作抬起丢了。 */
+    internal const val HOLD_TIMEOUT_MS = 2_000L
 
     /**
      * 一次按下该怎么处理。Movo 自己的页面在前台时不接管：那里的方向键就是在用 Movo。

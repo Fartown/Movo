@@ -23,6 +23,27 @@ class TvKeyFilterTest {
         assertTrue("任务在执行", TvKeyFilter.keysNeeded(false, true, false, false))
         assertTrue("对话浮窗展开", TvKeyFilter.keysNeeded(false, false, true, false))
         assertTrue("选项小卡显示着", TvKeyFilter.keysNeeded(false, false, false, true))
+        assertTrue("浮窗模式开着（菜单键要能展开浮窗）", TvKeyFilter.keysNeeded(false, false, false, false, overlayEnabled = true))
+    }
+
+    @Test
+    fun theReleaseOfAKeyMovoTookIsTakenFirstAndAStuckHoldExpires() {
+        val handler = TvBackHandler
+        val code = TvBackHandler::class.java.getDeclaredField("consumingCode").apply { isAccessible = true }
+        val at = TvBackHandler::class.java.getDeclaredField("consumedAt").apply { isAccessible = true }
+
+        // 朗读中按确认被 Movo 收下：抬起由 Movo 收下，不交给选项卡，也不漏给前台应用。
+        code.setInt(handler, KeyEvent.KEYCODE_DPAD_CENTER)
+        at.setLong(handler, android.os.SystemClock.uptimeMillis())
+        assertTrue(handler.holdingKey)
+        assertTrue(handler.onKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER)))
+        assertFalse(handler.holdingKey)
+
+        // 抬起丢了：2 秒后自动放开，拦截能关掉。
+        code.setInt(handler, KeyEvent.KEYCODE_DPAD_CENTER)
+        at.setLong(handler, android.os.SystemClock.uptimeMillis() - TvBackHandler.HOLD_TIMEOUT_MS - 1)
+        assertFalse(handler.holdingKey)
+        assertEquals(KeyEvent.KEYCODE_UNKNOWN, code.getInt(handler))
     }
 
     @Test

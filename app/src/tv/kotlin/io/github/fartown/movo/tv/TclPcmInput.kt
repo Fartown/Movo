@@ -32,6 +32,9 @@ internal class TclPcmInput(
     @Volatile private var outputSuppressed = false
     override fun setOutputSuppressed(suppressed: Boolean) { outputSuppressed = suppressed }
 
+    /** 一个语音会话一份：滤波器跨采音分段保留，换会话从头收敛。 */
+    private var echo = TclEchoPipeline(gain = MIC_GAIN)
+
     override fun start(feed: (ByteArray) -> Unit) = synchronized(lock) {
         check(!running.get()) { "内置麦克风已经开始采音" }
         check(app.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED &&
@@ -40,6 +43,7 @@ internal class TclPcmInput(
         }
         check(owner.compareAndSet(false, true)) { "内置麦克风正在使用，请稍后重试" }
         running.set(true)
+        echo = TclEchoPipeline(gain = MIC_GAIN)
         try {
             worker = thread(name = "movo-tcl-pcm", isDaemon = true) {
                 try {
@@ -97,25 +101,32 @@ internal class TclPcmInput(
         }
         val began = SystemClock.elapsedRealtime()
         var total = 0L
+        var echoReported = false
         try {
             while (running.get() && !raw.exists() && SystemClock.elapsedRealtime() - began < 4000) Thread.sleep(25)
             if (!running.get()) return
             check(raw.exists()) { "小T未创建采音文件，请确认内置麦克风已启用" }
             var lastData = SystemClock.elapsedRealtime()
             RandomAccessFile(raw, "r").use { input ->
-                val reader = TclWavPcm(input, gain = 16, raw = true)
+                val reader = TclWavPcm(input, gain = MIC_GAIN, raw = true)
                 while (running.get()) {
                     val now = SystemClock.elapsedRealtime()
                     // Recycle only while our own answer has explicitly muted microphone delivery.
                     // Normal speech remains continuous across the OEM EQ interface's old 20 s limit.
                     if (outputSuppressed && now - began > 30000) break
                     check(raw.length() < 128L * 1024 * 1024) { "连续采音达到安全存储上限，请重新开始语音" }
-                    val pcm = reader.read()
+                    // 用扬声器参考消掉节目声后再送去识别（.docs/tv-audio-aec）。
+                    val pcm = reader.read { raw -> echo.process(raw) }
                     if (pcm == null) {
                         check(now - lastData < 4000) { "内置麦克风没有返回音频" }
                         Thread.sleep(25)
                     } else {
-                        feed(pcm); total += pcm.size; lastData = now
+                        if (echo.echoCancelling != null && !echoReported) {
+                            echoReported = true
+                            MemoryDiagnostics.record("tv.voice", "capture.echo", fields = mapOf("cancelling" to echo.echoCancelling))
+                        }
+                        if (pcm.isNotEmpty()) feed(pcm)
+                        total += pcm.size; lastData = now
                     }
                 }
             }
@@ -139,7 +150,24 @@ internal class TclPcmInput(
     }
 
     companion object {
-            private const val WAV_NAME = "original_0.wav"
+        /**
+         * 进程启动时收拾上一个进程留下的采音：Movo 在会话中途崩溃或被回收时没来得及发停止，
+         * TCL 会一直把原始录音写进公共存储（隐私、磁盘）。新进程里还没人采音，发一次停止、删掉文件。
+         */
+        fun stopOrphanCapture(context: Context) {
+            if (owner.get() || !supported(context)) return
+            val app = context.applicationContext
+            app.sendBroadcast(Intent("com.tcl.walleve.stoplogaudio").setPackage("com.tcl.walleve"))
+            val stale = File(app.getExternalFilesDir(null), "tcl-live.pcm")
+            if (stale.exists()) {
+                MemoryDiagnostics.record("tv.voice", "capture.orphan", fields = mapOf("bytes" to stale.length()))
+                stale.delete()
+            }
+        }
+
+        /** 内置麦克风电平很低：消完回声后放大 16 倍再送去识别（与之前只取第 0 路时相同）。 */
+        private const val MIC_GAIN = 16
+        private const val WAV_NAME = "original_0.wav"
         private val source = File("/sdcard/walleve/cae_record")
         private val owner = AtomicBoolean(false)
 

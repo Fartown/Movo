@@ -56,7 +56,12 @@ internal object TvConversationOverlay {
     private var snapshotObserver: ObserverHandle? = null
     private val snapshotApplyPending = AtomicBoolean(false)
     @Volatile var enabled = false
-        private set
+        private set(value) {
+            val changed = field != value
+            field = value
+            // 浮窗模式开着时菜单键要先经过 Movo。
+            if (changed) TvKeyFilter.update()
+        }
     @Volatile var expanded = false
         private set(value) {
             val changed = field != value

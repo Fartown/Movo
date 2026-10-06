@@ -98,6 +98,7 @@ internal object FlavorModule : Flavor {
     /** 电视不启用唤醒词、预测性返回与 Xposed。 */
     override val initializers: List<(MovoApp) -> Unit> = listOf({
         io.github.fartown.movo.tv.TvAssistantPermission.restoreIfEnabled(it)
+        io.github.fartown.movo.tv.TclPcmInput.stopOrphanCapture(it)
         io.github.fartown.movo.tv.TvBackHandler.init(it)
         io.github.fartown.movo.tv.TvVoicePanel.init(it)
         io.github.fartown.movo.tv.TvKeyFilter.init(it)

@@ -8,7 +8,8 @@ internal class TclWavPcm(private val file: RandomAccessFile, private val gain: I
     private var position = dataOffset
     private var rawValidated = false
 
-    fun read(maxFrames: Int = 3200): ByteArray? {
+    /** 读出新到的帧，交给 [decode] 转成 16 位单声道（默认只取第 0 路麦克风）。 */
+    fun read(maxFrames: Int = 3200, decode: (ByteArray) -> ByteArray = { channelZero(it, gain) }): ByteArray? {
         require(maxFrames > 0)
         if (dataOffset < 0 && !header()) return null
         check(file.length() >= position) { "TCL 采音文件被截断，已停止读取" }
@@ -27,7 +28,7 @@ internal class TclWavPcm(private val file: RandomAccessFile, private val gain: I
             rawValidated = true
         }
         position += raw.size
-        return channelZero(raw, gain)
+        return decode(raw)
     }
 
     private fun header(): Boolean {
@@ -67,6 +68,30 @@ internal class TclWavPcm(private val file: RandomAccessFile, private val gain: I
 
     companion object {
         const val FRAME_BYTES = 24
+
+        /**
+         * 拆出麦克风（第 0 路）与扬声器参考（第 4、5 路平均），[-1, 1] 浮点（.docs/tv-audio-aec：
+         * 6 路 = 2 麦克风 + 2 空 + 2 参考，参考取自音量调节之后）。参考通道标记对不上时参考返回 null。
+         */
+        fun micAndReference(raw: ByteArray): Pair<FloatArray, FloatArray?> {
+            require(raw.size % FRAME_BYTES == 0)
+            val frames = raw.size / FRAME_BYTES
+            val tagged = frames > 0 && raw[16] == 0.toByte() && raw[17] == 3.toByte() &&
+                raw[20] == 0.toByte() && raw[21] == 7.toByte()
+            val mic = FloatArray(frames)
+            val ref = if (tagged) FloatArray(frames) else null
+            for (frame in 0 until frames) {
+                val offset = frame * FRAME_BYTES
+                mic[frame] = high16(raw, offset) / 32768f
+                if (ref != null) ref[frame] = (high16(raw, offset + 16) + high16(raw, offset + 20)) / 65536f
+            }
+            return mic to ref
+        }
+
+        // 低 16 位是厂商的通道标记，声音在高 16 位。
+        private fun high16(raw: ByteArray, offset: Int): Int =
+            ((raw[offset + 2].toInt() and 255) or (raw[offset + 3].toInt() shl 8)).toShort().toInt()
+
         fun channelZero(raw: ByteArray, gain: Int = 1): ByteArray {
             require(gain in 1..64)
             require(raw.size % FRAME_BYTES == 0)
