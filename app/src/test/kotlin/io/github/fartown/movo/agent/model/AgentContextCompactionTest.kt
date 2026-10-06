@@ -98,7 +98,7 @@ class AgentContextCompactionTest {
         val before = original.toString()
         val session = AgentContextSession(config, original, 1, "operation", provider { _, _ ->
             response("半截摘要", "length")
-        }, AgentRunController(), { emptySet() }, {}, { fail("不应提交快照") })
+        }, AgentRunController(), {}, { fail("不应提交快照") })
         assertThrows(AgentModelFailure::class.java) { session.compact(JSONArray(), force = true) }
         assertEquals(before, original.toString())
         assertNull(session.snapshot())
@@ -113,7 +113,7 @@ class AgentContextCompactionTest {
             val session = AgentContextSession(config, original, 1, "operation", provider { _, _ ->
                 if (cancel) controller.cancel()
                 response("有界摘要")
-            }, controller, { emptySet() }, {}, { throw IllegalStateException("fixture storage failure") })
+            }, controller, {}, { throw IllegalStateException("fixture storage failure") })
             assertThrows(Exception::class.java) { session.compact(JSONArray(), force = true) }
             assertEquals(before, original.toString())
             assertNull(session.snapshot())
@@ -121,7 +121,8 @@ class AgentContextCompactionTest {
     }
 
     @Test
-    fun summaryInputRedactsSensitiveToolsAndOpaqueReasoningAndImages() {
+    /** 工具参数和结果不再脱敏，照常进摘要；思考原文、加密输出项和瞬时截图仍不进摘要。 */
+    fun summaryInputKeepsToolDataButDropsOpaqueReasoningAndImages() {
         val messages = JSONArray().put(JSONObject().put("role", "system").put("content", "规则"))
         messages.put(AgentConversationCodec.userTextMessage("旧任务"))
         val assistant = JSONObject().put("role", "assistant").put("content", "读取结果")
@@ -138,11 +139,12 @@ class AgentContextCompactionTest {
         messages.put(pending)
         val compacted = AgentContextCompactor(config, provider { request, _ ->
             val text = request.messages.toString()
-            listOf("SECRET_ARGUMENT", "SECRET_RESULT", "PRIVATE_THINKING", "OPAQUE_SECRET", "PRIVATE_IMAGE").forEach {
-                assertFalse("摘要包含敏感数据 $it", text.contains(it))
+            listOf("SECRET_ARGUMENT", "SECRET_RESULT").forEach { assertTrue("摘要缺少工具数据 $it", text.contains(it)) }
+            listOf("PRIVATE_THINKING", "OPAQUE_SECRET", "PRIVATE_IMAGE").forEach {
+                assertFalse("摘要不该包含 $it", text.contains(it))
             }
-            response("已读取过信息，原始敏感结果未保留。")
-        }, AgentRunController()).compact(messages, 1, setOf("sensitive"), force = true)
+            response("已读取过信息。")
+        }, AgentRunController()).compact(messages, 1, force = true)
         assertSame(pending, compacted.getJSONObject(compacted.length() - 1))
         assertFalse(compacted.toString().contains("OPAQUE_SECRET"))
     }
@@ -239,7 +241,7 @@ class AgentContextCompactionTest {
             }
             seen += historyText
             response("之前的工作已完成。")
-        }, AgentRunController()).compact(jsonHistory(), 1, emptySet(), force = true)
+        }, AgentRunController()).compact(jsonHistory(), 1, force = true)
         assertEquals(3, requests)
         for (turn in 1..4) assertTrue(seen.any { it.contains("问题 $turn") })
         assertTrue(result.toString().contains("问题 6"))

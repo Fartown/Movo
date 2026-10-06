@@ -225,7 +225,7 @@ class AgentRoleplayRuntimeTest {
             messages.put(JSONObject().put("role", "assistant").put("content", "剧情内容".repeat(300)))
         }
         val result = AgentContextCompactor(config(), provider, AgentRunController(), roleplay = true)
-            .compact(messages, 1, emptySet(), force = true)
+            .compact(messages, 1, force = true)
         assertTrue(result.toString().contains("剧情：二人在塔下相识"))
     }
 

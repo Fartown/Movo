@@ -12,7 +12,6 @@ internal class AgentContextSession(
     private val operationId: String,
     private val provider: AgentProviderClient,
     private val runController: AgentRunController,
-    private val sensitiveIds: () -> Set<String>,
     private val onEvent: (AgentEvent) -> Unit,
     private val onContextSnapshot: (AgentContextSnapshot) -> Unit,
     private val transcriptSize: () -> Int = { 0 },
@@ -80,7 +79,7 @@ internal class AgentContextSession(
             var attempts = 0
             do {
                 candidate = AgentContextCompactor(config, provider, runController, roleplay = roleplay).compact(
-                    candidate, systemCount, sensitiveIds(), force,
+                    candidate, systemCount, force,
                 )
                 attempts++
                 val tokens = budget.estimate(candidate, roundTools)
@@ -120,6 +119,6 @@ internal class AgentContextSession(
             val message = source.getJSONObject(index)
             if (!message.optBoolean("_movo_observation")) durable.put(message)
         }
-        return AgentConversationCodec.transcript(durable, 0, sensitiveIds())
+        return AgentConversationCodec.transcript(durable, 0)
     }
 }

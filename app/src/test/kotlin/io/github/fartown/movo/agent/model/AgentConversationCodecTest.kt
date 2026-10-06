@@ -5,6 +5,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -109,23 +110,49 @@ class AgentConversationCodecTest {
         assertEquals("继续处理最新任务", decoded.last().content)
     }
 
+    /** 提示缓存方案第 3 版：原始输出项随历史存档，只有同一个服务商和模型才原样回放；含敏感调用的那一步不存。 */
     @Test
-    fun responsesOutputItemsStayInMemoryAndNeverEnterStableTranscript() {
+    fun responsesOutputItemsAreStoredAndReplayedOnlyForTheSameModel() {
+        val origin = "openai_compatible|p1|https://example.invalid/v1|responses|m1"
+        val items = JSONArray().put(JSONObject().put("type", "reasoning").put("encrypted_content", "opaque"))
         val source = JSONObject().put("role", "assistant").put("content", "完成")
-        ResponsesEphemeralState.attachOutputItems(
-            source,
+        ResponsesEphemeralState.attachOutputItems(source, items, origin)
+        val history = AgentConversationCodec.assistantHistoryMessage(source, emptyList())
+        assertEquals(origin, ResponsesEphemeralState.outputOrigin(history))
+
+        val stored = AgentConversationCodec.decodeTranscript(
+            AgentConversationCodec.encodeTranscriptForStorage(listOf(AgentConversationCodec.durableMessage(history))),
+        ).single()
+        assertEquals(items.toString(), stored.responsesOutputJson)
+        assertEquals(origin, stored.responsesOrigin)
+        // 同一个服务商和模型：原样回放。
+        assertEquals(items.toString(), ResponsesEphemeralState.outputItems(AgentConversationCodec.toJsonObject(stored, origin)).toString())
+        // 换了模型、或调用方不关心（压缩、摘要）：不带，按普通助手消息重建。
+        assertNull(ResponsesEphemeralState.outputItems(AgentConversationCodec.toJsonObject(stored, "$origin-other")))
+        assertNull(ResponsesEphemeralState.outputItems(AgentConversationCodec.toJsonObject(stored)))
+    }
+
+    /** 不脱敏（和 Codex、Claude Code 一致）：读文件这类工具的参数、结果和原始输出项都原样存。 */
+    @Test
+    fun toolArgumentsResultsAndOutputItemsAreStoredVerbatim() {
+        val call = JSONObject().put("role", "assistant").put("content", "").put(
+            "tool_calls",
             JSONArray().put(
-                JSONObject()
-                    .put("type", "reasoning")
-                    .put("encrypted_content", "opaque-secret"),
+                JSONObject().put("id", "c1").put("type", "function")
+                    .put("function", JSONObject().put("name", "file_read").put("arguments", "{\"path\":\"/sdcard/note.txt\"}")),
             ),
         )
-        val history = AgentConversationCodec.assistantHistoryMessage(source, emptyList())
-        assertTrue(ResponsesEphemeralState.outputItems(history) != null)
+        ResponsesEphemeralState.attachOutputItems(
+            call,
+            JSONArray().put(JSONObject().put("type", "function_call").put("call_id", "c1").put("arguments", "{\"path\":\"/sdcard/note.txt\"}")),
+            "o",
+        )
+        val result = JSONObject().put("role", "tool").put("tool_call_id", "c1").put("content", "买牛奶")
 
-        val stable = AgentConversationCodec.durableMessage(history)
-        val encoded = AgentConversationCodec.encodeTranscriptForStorage(listOf(stable))
-        assertFalse(encoded.contains("opaque-secret"))
-        assertFalse(encoded.contains("_movo_responses_output_items"))
+        val transcript = AgentConversationCodec.transcript(JSONArray().put(call).put(result), 0)
+        val encoded = AgentConversationCodec.encodeTranscriptForStorage(transcript)
+        assertTrue(encoded.contains("/sdcard/note.txt"))
+        assertEquals("买牛奶", transcript[1].content)
+        assertTrue(transcript[0].responsesOutputJson.contains("note.txt"))
     }
 }

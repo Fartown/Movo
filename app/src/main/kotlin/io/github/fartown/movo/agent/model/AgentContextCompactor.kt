@@ -16,7 +16,6 @@ internal class AgentContextCompactor(
     fun compact(
         messages: JSONArray,
         systemCount: Int,
-        sensitiveIds: Set<String>,
         force: Boolean = false,
     ): JSONArray {
         controller.throwIfCancelled()
@@ -39,7 +38,7 @@ internal class AgentContextCompactor(
         }
         val protectedUser = history.getOrNull(latestUser)?.takeIf { latestUser < end }
         val source = JSONArray(history.take(end).filterNot { it === protectedUser })
-        val durable = AgentConversationCodec.transcript(source, 0, sensitiveIds)
+        val durable = AgentConversationCodec.transcript(source, 0)
         if (durable.isEmpty()) throw failure("CONTEXT_NOT_COMPACTABLE", "没有可压缩的历史内容。")
         val safe = durable.map { message ->
             val content = AgentConversationCodec.toJsonObject(message).opt("content")

@@ -37,6 +37,15 @@ internal object ResponsesRequestBuilder {
     }
 
     private fun buildInput(messages: JSONArray): JSONArray = JSONArray().also { input ->
+        appendConversation(input, messages)
+        // 环境信息（当前时间）放在最末尾：它每分钟都变，排在最后才不打断前面历史与工具结果的提示缓存（提示缓存方案第 3 版）。
+        // 不存历史，下一次请求换成新的、挪到新的末尾。
+        OpenAiRequestMessages.environmentText(messages).takeIf(String::isNotBlank)?.let { text ->
+            input.put(JSONObject().put("type", "message").put("role", "developer").put("content", text))
+        }
+    }
+
+    private fun appendConversation(input: JSONArray, messages: JSONArray) {
         for (index in 0 until messages.length()) {
             val message = messages.optJSONObject(index) ?: continue
             ResponsesEphemeralState.outputItems(message)?.let { items ->

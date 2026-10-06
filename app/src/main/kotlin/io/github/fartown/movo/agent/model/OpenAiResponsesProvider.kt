@@ -124,6 +124,8 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
                     onEvent = onEvent,
                     trace = trace,
                 )
+                // 记下原始输出项出自哪个服务商和模型：存进历史后，只有同一个服务商和模型才原样回放。
+                ResponsesEphemeralState.setOrigin(assistant, ResponsesEphemeralState.origin(config))
                 onEvent(ProviderEvent.Completed(assistant.optString("finish_reason").ifBlank { null }))
                 if (ModelRequestTrace.current() !== trace) trace.success()
                 return ProviderResponse(assistant)
