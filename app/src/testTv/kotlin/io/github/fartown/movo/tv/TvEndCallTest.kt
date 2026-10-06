@@ -14,7 +14,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
-/** 结束语音对话（docs/solutions/tv-voice-app/语音对话退出方案.md §4.2–4.4）。 */
+/** 结束语音对话（docs/solutions/tv-voice-app/语音对话退出方案.md §4）。 */
 @RunWith(RobolectricTestRunner::class)
 class TvEndCallTest {
     private val tool = TvEndCallTool()
@@ -28,17 +28,11 @@ class TvEndCallTest {
     }
 
     @Test
-    fun describesOnlyTheContractAndRequiresTheFarewell() {
+    fun describesOnlyTheContractAndTakesNoArguments() {
         assertTrue(tool.summary.length <= 160)
         assertFalse("描述只写契约，何时调用写在用法分节", "调用" in tool.summary)
-        val schema = tool.schema(voice)
-        assertEquals(TvEndCallTool.REPLY, schema.getJSONArray("required").getString(0))
-        assertEquals(setOf(TvEndCallTool.REPLY), schema.getJSONObject("properties").keys().asSequence().toSet())
-    }
-
-    @Test
-    fun endsTheRunWithTheFarewell() {
-        assertTrue(TvEndCallTool.NAME in FlavorModule.finishingTools)
+        assertEquals(0, tool.schema(voice).getJSONObject("properties").length())
+        assertFalse("不需要告别语，也不靠回答收尾", TvEndCallTool.NAME in FlavorModule.finishingTools)
     }
 
     @Test
