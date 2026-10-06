@@ -1146,6 +1146,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun monitorConversationOf(target: AgentConversationTarget?): String? =
         target?.takeIf { it.source == AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE }?.key
 
+    /** [target] 这个对话还有监听在等：这件事没完，这一轮答完是「监听中」不是 ✓（规范 8.12「任务与状态」）。 */
+    private fun taskMonitored(target: AgentConversationTarget?): Boolean {
+        val conversationId = monitorConversationOf(target) ?: return false
+        return monitors.value.any { it.conversationId == conversationId }
+    }
+
     /** 监听中点「结束任务」：结束所有运行中的监听。 */
     private fun endMonitorTask() {
         beginTaskEnding { true }
@@ -1431,6 +1437,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                     state.value.phase, standby.value, voice.active,
                     stopped = state.value.status == AgentOverlayStatus.Stopped,
                     monitoring = monitors.value.isNotEmpty(),
+                    taskMonitored = taskMonitored(resultConversationTarget),
                 ),
                 onTap = ::onOrbTapped,
                 onLongPress = ::onOrbLongPressed,
@@ -2484,16 +2491,21 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             updateStandbyOrbVisibility()
             return
         }
-        // 这件事还有监听在等（开监听的那一轮、监听叫醒的一轮答完）：任务没完，回到「监听中」，不显示 ✓（规范 8.12「任务与状态」）。
-        // 操作过其他 App、或结果要交回对话浮层的一轮照旧（✓ 点开看过后再回到监听中）。
-        val conversationId = monitorConversationOf(resultConversationTarget)
-        if (finalState.phase == AgentOverlayPhase.FINISHED && conversationId != null &&
-            !hasExecutedForegroundTool && !isResultConversation &&
-            MonitorRegistry.active.value.any { it.conversationId == conversationId }
-        ) {
+        // 这件事还有监听在等（开监听的那一轮、监听叫醒的一轮答完）：任务没完，直接回到「监听中」，不出 ✓（规范 8.12「任务与状态」）。
+        // 操作没操作其他 App、从 App 还是对话浮层发起都一样：结果已存进对话，监听中点开展开卡、键盘 / 语音都打开这个对话。
+        if (finalState.phase == AgentOverlayPhase.FINISHED && taskMonitored(resultConversationTarget)) {
             state.value = finalState
-            ensureMonitoringOrb()
-            retireRunOverlayToStandby()
+            if (FlavorModule.surfaces.isConversationVisible(resultConversationTarget)) {
+                // 对话浮层正在前台（从浮层发起）：结果照常交给它，交付后回到待命（[enterStandby]）。
+                // 这期间悬浮球藏着，外观也已是监听中（[orbMode]）。
+                collapseBubble()
+                retireGlow()
+                mainHandler.removeCallbacksAndMessages(hideToken)
+                openResultConversation()
+            } else {
+                ensureMonitoringOrb()
+                retireRunOverlayToStandby()
+            }
             return
         }
         state.value = finalState

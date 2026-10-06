@@ -20,11 +20,14 @@ internal fun orbMode(
     stopped: Boolean = false,
     /** 还有后台监听在运行（结束后等待撤销的不算）。 */
     monitoring: Boolean = false,
+    /** 这一轮所在的对话还有监听在等：这件事没完（规范 8.12「任务与状态」）。 */
+    taskMonitored: Boolean = false,
 ): OrbMode = when {
     standby -> if (monitoring) OrbMode.MONITORING else OrbMode.STANDBY
     // 用户主动结束不是出错：不挂 Rose 环与「!」，按待命外观显示；点开仍能查看保留的结果。
     phase == AgentOverlayPhase.FAILED && stopped -> if (monitoring) OrbMode.MONITORING else OrbMode.STANDBY
-    phase == AgentOverlayPhase.FINISHED -> OrbMode.FINISHED
+    // 监听还在，这一轮答完任务也没完：直接是监听中，任何时刻都不出 ✓（事件流的「完成」早于终态到达也一样）。
+    phase == AgentOverlayPhase.FINISHED -> if (taskMonitored) OrbMode.MONITORING else OrbMode.FINISHED
     phase == AgentOverlayPhase.FAILED -> OrbMode.FAILED
     listening -> OrbMode.LISTENING
     phase == AgentOverlayPhase.PAUSED -> OrbMode.PAUSED
