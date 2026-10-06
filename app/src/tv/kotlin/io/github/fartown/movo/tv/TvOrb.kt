@@ -27,11 +27,15 @@ internal object TvOrbPainter {
     private const val GREEN = 0xFF178A55.toInt()
 
     /** 在 [cx],[cy] 画直径 [d] 的光球；[ringInset] 是外圈到球的距离，[sweep] 是工作弧线的起始角度。 */
-    fun draw(canvas: Canvas, cx: Float, cy: Float, d: Float, ring: TvOrbRing, ringInset: Float, sweep: Float, density: Float) {
+    fun draw(canvas: Canvas, cx: Float, cy: Float, d: Float, ring: TvOrbRing, ringInset: Float, sweep: Float, density: Float,
+             gradientRotation: Float = 0f) {
         val r = d / 2f
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         paint.color = 0xFFEDE6FF.toInt(); canvas.drawCircle(cx, cy, r, paint)
-        paint.shader = SweepGradient(cx, cy, sweepColors, sweepStops); paint.alpha = 0xE6
+        // 「在想 / 在做」时只转渐变（手机 §9.7：思考转速 ×2），M 不动。
+        paint.shader = SweepGradient(cx, cy, sweepColors, sweepStops).apply {
+            if (gradientRotation != 0f) setLocalMatrix(android.graphics.Matrix().apply { setRotate(gradientRotation, cx, cy) })
+        }; paint.alpha = 0xE6
         canvas.drawCircle(cx, cy, r, paint)
         paint.alpha = 0xFF
         // 柔光：左上白色高光（手机版 38.4/62 的径向渐变）。

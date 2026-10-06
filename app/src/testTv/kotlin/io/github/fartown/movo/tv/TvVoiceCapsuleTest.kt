@@ -56,21 +56,25 @@ class TvVoiceCapsuleTest {
     }
 
     @Test
-    fun longAnswersBecomeSubtitleScreensOfAtMostTwoLines() {
-        val answer = "要带。明天上海小雨，16–22°，下午 3 点后雨会变大，傍晚出门最好带一把长柄伞。后天多云转晴，18–25°，不用带伞。早晚温差有 7 度，出门可以加一件薄外套。"
+    fun longAnswersBecomeSingleLineScreens() {
+        val answer = "要带。明天上海小雨，16–22°，下午 3 点后雨会变大，傍晚出门最好带一把长柄伞。后天多云转晴，18–25°，不用带伞。"
         val screens = TvVoicePanel.screensOf(answer)
         assertTrue(screens.size > 1)
-        assertTrue(screens.all { it.length <= TvVoicePanel.SCREEN_CHARS })
+        assertTrue(screens.all { it.length <= TvVoicePanel.LINE_CHARS })
         assertEquals(answer, screens.joinToString(""))
-        assertTrue("优先在句末断屏", screens.dropLast(1).all { it.last() in "。！？；，" })
+        assertTrue("优先在标点处断屏", screens.dropLast(1).all { it.last() in "。！？；，" })
     }
 
     @Test
-    fun liveTranscriptKeepsOnlyTheTail() {
-        val long = "帮我打开奇异果然后搜索狂飙第二季再从第一集开始播放并且把音量调到二十"
-        val shown = TvVoicePanel.tail(long)
-        assertEquals(TvVoicePanel.SCREEN_CHARS, shown.length)
-        assertTrue(shown.startsWith("…") && long.endsWith(shown.drop(1)))
-        assertEquals("明天要不要带伞", TvVoicePanel.tail(" 明天要不要带伞 "))
+    fun liveTranscriptRotatesToTheNextScreenWhenTheLineIsFull() {
+        assertEquals("明天要不要带伞", TvVoicePanel.transcriptPage(" 明天要不要带伞 "))
+        val full = "帮我打开奇异果然后搜索狂飙第二季再从第一集开始播"   // 25 字
+        val page = TvVoicePanel.transcriptPage(full)
+        assertTrue(page.startsWith("…"))
+        assertEquals(full.substring(TvVoicePanel.LINE_CHARS), page.drop(1))
+        assertTrue(page.length <= TvVoicePanel.LINE_CHARS)
+        // 继续往下说，同一屏只在末尾长字，直到满了再换下一屏
+        val longer = full + "放并且把音量调到二十然后"
+        assertTrue(TvVoicePanel.transcriptPage(longer).length <= TvVoicePanel.LINE_CHARS)
     }
 }
