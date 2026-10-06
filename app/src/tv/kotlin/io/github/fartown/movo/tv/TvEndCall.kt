@@ -75,7 +75,8 @@ internal class TvEndCallToolProvider : ToolProvider {
     override val promptSection = PromptSection("tv_end_call", ToolDomain.META, USAGE)
 
     companion object {
-        const val USAGE = "结束语音对话：用户明确表示要结束对话或不再需要你时，调用 end_call。" +
-            "只是拒绝某个提议、取消某件事、事情办完了，或意图不明确时，不要调用。"
+        // 实测（.docs/tv-voice-exit/eval）：不加“只说再见不会结束”时，模型常只在回答里告别、不调用工具。
+        const val USAGE = "结束语音对话：用户明确表示要结束对话或不再需要你时，调用 end_call，告别语写在它的参数里；" +
+            "只在回答里说再见不会结束对话。只是拒绝某个提议、取消某件事、事情办完了，或意图不明确时，不要调用。"
     }
 }
