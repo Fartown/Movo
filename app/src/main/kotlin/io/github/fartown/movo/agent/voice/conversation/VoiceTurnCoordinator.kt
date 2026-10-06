@@ -1,7 +1,10 @@
 package io.github.fartown.movo.agent.voice.conversation
 
 /** Single-writer conversation policy. ASR segments, Agent execution and playback are independent. */
-internal class VoiceTurnCoordinator {
+internal class VoiceTurnCoordinator(
+    /** 由设备本地处理的口令（例如电视的「看全文」）；命中时不交给 Agent。 */
+    private val localCommands: Set<String> = emptySet(),
+) {
     data class Turn(val id: Long, val text: String)
     sealed interface Action {
         data class Submit(val turn: Turn) : Action
@@ -12,6 +15,7 @@ internal class VoiceTurnCoordinator {
         data object CancelTask : Action
         data object EndSession : Action
         data class Notice(val text: String) : Action
+        data class Local(val command: String) : Action
     }
 
     var active = false; private set
@@ -115,6 +119,7 @@ internal class VoiceTurnCoordinator {
             "做到哪了", "任务进度", "进度怎么样" -> if (running != null)
                 listOf(Action.Notice("任务仍在执行，完成后会告诉你")) else if (deferredAnswer != null) resumeDeferred() else submit(turn)
             "嗯", "好", "好的", "嗯嗯" -> resumeDeferred()
+            in localCommands -> listOf(Action.Local(command))
             else -> submit(turn)
         }
     }

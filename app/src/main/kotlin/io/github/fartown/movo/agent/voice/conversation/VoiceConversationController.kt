@@ -1,5 +1,6 @@
 package io.github.fartown.movo.agent.voice.conversation
 
+import io.github.fartown.movo.flavor.FlavorModule
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
@@ -35,7 +36,7 @@ internal class VoiceConversationController(
     }
 
     private val main = Handler(Looper.getMainLooper())
-    private val turns = VoiceTurnCoordinator()
+    private val turns = VoiceTurnCoordinator(FlavorModule.voiceLocalCommands)
     private val commitGate = VoiceCommitGate()
     private var engine: DoubaoDialogEngine? = null
     private var generation = 0L
@@ -191,6 +192,7 @@ internal class VoiceConversationController(
                 host.cancelTask()
             }
             VoiceTurnCoordinator.Action.EndSession -> {
+                idleEndsAt.value = 0L
                 // Retain partial/pending text before close can synchronously notify onClosed.
                 publish("ended")
                 commit?.let(main::removeCallbacks)
@@ -205,6 +207,8 @@ internal class VoiceConversationController(
                 if (status.isBlank() || status == "听到了，可以继续补充…") status = "语音对话已结束"
             }
             is VoiceTurnCoordinator.Action.Notice -> status = action.text
+            is VoiceTurnCoordinator.Action.Local ->
+                status = FlavorModule.onVoiceLocalCommand(context, action.command) ?: idleStatus()
         } }
     }
 
@@ -219,10 +223,12 @@ internal class VoiceConversationController(
     private fun tick(current: Long) {
         if (current != generation || !active) return
         val now = SystemClock.elapsedRealtime()
+        val timeout = FlavorModule.voiceIdleTimeoutMs
         if (turns.trulyIdle) {
             if (idleSince == 0L) idleSince = now
-            if (now - idleSince >= 45_000) { end("暂时没有听到说话，语音已结束，可再次唤醒"); return }
-        } else idleSince = 0
+            idleEndsAt.value = idleSince + timeout
+            if (now - idleSince >= timeout) { idleEndsAt.value = 0L; end(IDLE_END_MESSAGE); return }
+        } else { idleSince = 0; idleEndsAt.value = 0L }
         if (utteranceSince > 0 && now - utteranceSince > 60_000) {
             end("没有检测到说话结束，已保留文字，请在安静环境中重试")
             return
@@ -241,5 +247,13 @@ internal class VoiceConversationController(
     companion object {
         /** In-process, same-signature instrumentation only; no exported component or network hook. */
         @Keep @JvmStatic var observer: ((String, Long, String, String) -> Unit)? = null
+
+        /** 空闲超时结束时的状态文案。 */
+        const val IDLE_END_MESSAGE = "暂时没有听到说话，语音已结束，可再次唤醒"
+
+        /**
+         * 当前会话空闲到期的时刻（elapsedRealtime，毫秒）；不在空闲时为 0。电视胶囊据此在最后 3 秒变暗。
+         */
+        val idleEndsAt = kotlinx.coroutines.flow.MutableStateFlow(0L)
     }
 }

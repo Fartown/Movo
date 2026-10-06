@@ -22,8 +22,26 @@ internal object TvAppSurfaces : AppSurfaces {
     override val conversationActivity: Class<out Activity> = TvMainActivity::class.java
     override val assistantAction: String = TvMainActivity.ACTION_ASSISTANT
 
-    override fun showAssistant(context: Context, autoListen: Boolean): Boolean =
-        TvConversationOverlay.show(context, autoListen)
+    /**
+     * 语音唤起只出现右下角胶囊（v2：优先语音、不挡节目）；不带语音的唤起（菜单键）才打开可打字的大浮窗。
+     * 无障碍没开时返回 false，由调用方退回 Movo 自己的页面。
+     */
+    override fun showAssistant(context: Context, autoListen: Boolean): Boolean {
+        if (!autoListen) return TvConversationOverlay.show(context, false)
+        if (io.github.fartown.movo.agent.accessibility.AgentAccessibilityService.current() == null) return false
+        if (!io.github.fartown.movo.agent.voice.session.VoiceSessionManager.active) {
+            io.github.fartown.movo.agent.voice.session.VoiceEntry.startInPlace(context)
+        }
+        TvVoicePanel.refresh()
+        return true
+    }
+
+    /** 打开 Movo 的对话页看完整回答（「看全文」）。 */
+    fun openReading(context: Context): Boolean = runCatching {
+        context.startActivity(android.content.Intent(context, TvMainActivity::class.java)
+            .putExtra(TvMainActivity.EXTRA_PAGE, TvMainActivity.PAGE_CONVERSATION)
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP))
+    }.isSuccess
 
     override fun isConversationVisible(target: AgentConversationTarget?): Boolean = visible || TvConversationOverlay.expanded
 

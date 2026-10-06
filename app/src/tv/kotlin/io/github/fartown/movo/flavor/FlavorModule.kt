@@ -55,6 +55,15 @@ internal object FlavorModule : Flavor {
         } else super.startExecutionService(context, intent)
     }
 
+    /** 电视回答完 10 秒没人说话就收起：会话期间节目是暂停的（连续对话规则，见实施方案）。 */
+    override val voiceIdleTimeoutMs: Long = 10_000L
+
+    /** 「看全文」在本地打开阅读页，不交给模型。 */
+    override val voiceLocalCommands: Set<String> = setOf("看全文", "看看全文", "打开全文", "全文", "放大看看", "看完整的")
+
+    override fun onVoiceLocalCommand(context: Context, command: String): String? =
+        if (io.github.fartown.movo.tv.TvAppSurfaces.openReading(context)) "已打开全文" else null
+
     override fun voiceHost(context: Context): VoiceConversationHost = AgentAppSession.get(context)
 
     override fun voiceInput(context: Context, onError: (String) -> Unit) =
@@ -85,6 +94,6 @@ internal object FlavorModule : Flavor {
     override val initializers: List<(MovoApp) -> Unit> = listOf({
         io.github.fartown.movo.tv.TvAssistantPermission.restoreIfEnabled(it)
         io.github.fartown.movo.tv.TvBackHandler.init(it)
-        io.github.fartown.movo.tv.TvVoicePanel.init()
+        io.github.fartown.movo.tv.TvVoicePanel.init(it)
     })
 }

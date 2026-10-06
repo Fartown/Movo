@@ -52,6 +52,18 @@ internal interface Flavor {
     /** 本设备装配的工具 Provider（白名单）；元工具由 AgentToolSubsystem 统一追加在最后。 */
     fun toolProviders(inputs: ToolProviderInputs): List<ToolProvider>
 
+    /**
+     * 语音会话真正空闲（没人说话、没有任务、没在播报）多久后结束。手机 45 秒；电视 10 秒，会话期间节目是暂停的
+     * （连续对话规则与调研依据见 docs/solutions/tv-voice-app/电视端语音App实施方案.md）。
+     */
+    val voiceIdleTimeoutMs: Long get() = 45_000L
+
+    /** 由设备在本地处理、不交给模型的语音口令（例如电视的「看全文」）。 */
+    val voiceLocalCommands: Set<String> get() = emptySet()
+
+    /** 处理 [voiceLocalCommands] 里的口令，返回状态文案；null 表示没有处理。 */
+    fun onVoiceLocalCommand(context: Context, command: String): String? = null
+
     /** 主进程 Application.onCreate 里，在共享初始化之后依次执行。 */
     val initializers: List<(MovoApp) -> Unit>
 }

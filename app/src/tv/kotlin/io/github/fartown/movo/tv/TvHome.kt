@@ -2,6 +2,12 @@ package io.github.fartown.movo.tv
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -28,9 +34,17 @@ import io.github.fartown.movo.ui.model.AgentMessageUi
 import io.github.fartown.movo.ui.model.SystemNoticeMessageUi
 import io.github.fartown.movo.ui.model.UserMessageUi
 
-@Composable internal fun TvHome(app: AgentAppState, notice: String, startVoice: () -> Unit, showNotice: (String) -> Unit) {
+@Composable internal fun TvHome(
+    app: AgentAppState,
+    notice: String,
+    startVoice: () -> Unit,
+    showNotice: (String) -> Unit,
+    requestedPage: String? = null,
+    consumePage: () -> Unit = {},
+) {
     val context = LocalContext.current
     var page by rememberSaveable { mutableStateOf("home") }
+    LaunchedEffect(requestedPage) { requestedPage?.let { page = it; consumePage() } }
     val voice by VoiceSessionManager.state.collectAsState()
     val startFocus = remember { FocusRequester() }
     BackHandler(page != "home" && !voice.active && !app.voiceRuntimeBusy) { page = "home" }
@@ -85,6 +99,10 @@ import io.github.fartown.movo.ui.model.UserMessageUi
         }
         return
     }
+    if (page == "home") {
+        TvStandby(app, voice, notice, startVoice, onOpen = { page = it })
+        return
+    }
     val messages = app.homeState.messages
     val scroll = rememberLazyListState()
     LaunchedEffect(page) { startFocus.requestFocus() }
@@ -122,7 +140,7 @@ import io.github.fartown.movo.ui.model.UserMessageUi
             if (app.voiceRuntimeBusy) TvButton("停止任务") { TvBackHandler.cancel() }
             else TvButton("新对话") { VoiceSessionManager.end(); app.createConversation() }
             TvButton("历史") { page = "history" }
-            TvButton("设置") { page = "settings" }
+            TvButton("首页") { page = "home" }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             TvButton("悬浮助手") {
@@ -140,3 +158,77 @@ import io.github.fartown.movo.ui.model.UserMessageUi
 @Composable internal fun TvBody(text: String, secondary: Boolean = false) = Text(text,
     color = if (secondary) TvTokens.secondary else TvTokens.text, fontSize = 24.sp, lineHeight = 36.sp)
 @Composable internal fun TvHint(text: String) = Text(text, color = TvTokens.secondary, fontSize = 20.sp, lineHeight = 32.sp)
+
+
+private val examples = listOf("明天要不要带伞", "打开奇异果", "音量调到 20")
+
+/**
+ * 首页（Figma「Movo TV」候选 v2 · E1）：电视默认是语音，首页只是「随时可以说」的待机页。
+ * 默认焦点在光球上，按确认开始说话；示例说法按确认直接发出；对话内容在「对话记录」里看。
+ */
+@Composable private fun TvStandby(
+    app: AgentAppState,
+    voice: io.github.fartown.movo.agent.voice.session.VoiceSessionUiState,
+    notice: String,
+    startVoice: () -> Unit,
+    onOpen: (String) -> Unit,
+) {
+    val orbFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { orbFocus.requestFocus() }
+    val answer = app.homeState.messages.lastOrNull { it is AgentMessageUi } as? AgentMessageUi
+    val ring = when (voice.channel) {
+        io.github.fartown.movo.agent.voice.session.VoiceChannel.Off -> TvOrbRing.None
+        io.github.fartown.movo.agent.voice.session.VoiceChannel.Thinking -> TvOrbRing.Working
+        io.github.fartown.movo.agent.voice.session.VoiceChannel.Speaking -> TvOrbRing.Speaking
+        else -> TvOrbRing.Listening
+    }
+    Box(Modifier.fillMaxSize().background(TvTokens.canvas).padding(horizontal = 64.dp, vertical = 36.dp)) {
+        Column(Modifier.align(androidx.compose.ui.Alignment.TopCenter).padding(top = 56.dp),
+            horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(20.dp)) {
+            TvOrbButton(144.dp, ring, Modifier.focusRequester(orbFocus), onClick = startVoice)
+            TvTitle(if (voice.active) voice.statusText.ifBlank { "我在，请说" } else "说「小T小T」，或按确认键开始")
+            val line = when {
+                voice.active && voice.transcript.isNotBlank() -> voice.transcript
+                voice.active -> answer?.content?.lineSequence()?.map { it.trim() }?.firstOrNull { it.isNotEmpty() }
+                    ?: "可以问问题，也可以让我操作电视"
+                else -> "可以问问题，也可以让我操作电视"
+            }
+            TvBody(line, secondary = true)
+            if (!voice.active) Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                examples.forEach { example ->
+                    TvButton("「$example」") { VoiceSessionManager.end(); app.sendCurrentMessage(example); onOpen("conversation") }
+                }
+            }
+            val current = notice.ifBlank { voice.notice.orEmpty() }
+            if (current.isNotBlank()) TvBody(current, secondary = true)
+        }
+        Row(Modifier.align(androidx.compose.ui.Alignment.BottomStart), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            TvButton("对话记录") { onOpen("conversation") }
+            TvButton("设置") { onOpen("settings") }
+        }
+        val connected = io.github.fartown.movo.agent.accessibility.AgentAccessibilityService.isAvailable()
+        Box(Modifier.align(androidx.compose.ui.Alignment.BottomEnd).padding(bottom = 16.dp)) {
+            TvHint(if (connected) "操作其他应用：已开通" else "操作其他应用：未开通，可在设置里开通")
+        }
+    }
+}
+
+/** 可获焦的光球按钮：获焦时靛蓝外圈（与电视按钮的焦点态一致）。 */
+@Composable internal fun TvOrbButton(size: androidx.compose.ui.unit.Dp, ring: TvOrbRing, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val density = androidx.compose.ui.platform.LocalDensity.current.density
+    val sweep = if (ring == TvOrbRing.Working) {
+        androidx.compose.animation.core.rememberInfiniteTransition(label = "orb").animateFloat(
+            0f, 360f, androidx.compose.animation.core.infiniteRepeatable(
+                androidx.compose.animation.core.tween(1200, easing = androidx.compose.animation.core.LinearEasing)), label = "sweep").value
+    } else 0f
+    androidx.compose.foundation.Canvas(modifier.size(size + 24.dp)
+        .onFocusChanged { focused = it.isFocused }
+        .clickable(onClick = onClick)) {
+        drawIntoCanvas { canvas ->
+            TvOrbPainter.draw(canvas.nativeCanvas, center.x, center.y, size.toPx(),
+                if (focused) TvOrbRing.Focused else ring, 6.dp.toPx(), sweep, density)
+        }
+    }
+}

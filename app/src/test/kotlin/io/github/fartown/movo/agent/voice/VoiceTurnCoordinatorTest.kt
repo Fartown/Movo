@@ -163,4 +163,11 @@ class VoiceTurnCoordinatorTest {
         val s = session(); assertTrue(s.say(1,"好的").isEmpty()); assertNull(s.running)
     }
 
+    @Test fun deviceLocalCommandIsHandledLocallyInsteadOfStartingATask() {
+        val s = VoiceTurnCoordinator(localCommands = setOf("看全文")).apply { start() }
+        assertEquals(listOf(Action.Local("看全文")), s.say(1, "看全文。"))
+        assertNull(s.running)
+        // 没有声明为本地口令的设备（手机）照常交给 Agent。
+        assertEquals(listOf(Action.Submit(VoiceTurnCoordinator.Turn(1, "看全文"))), session().say(1, "看全文"))
+    }
 }

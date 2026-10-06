@@ -18,6 +18,7 @@ import io.github.fartown.movo.ui.app.AgentAppSession
 
 class TvMainActivity : ComponentActivity() {
     private var notice by mutableStateOf("")
+    private var requestedPage by mutableStateOf<String?>(null)
     private var autoListen = false
     internal var afterHidden: (() -> Unit)? = null
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -29,8 +30,9 @@ class TvMainActivity : ComponentActivity() {
         TvAppSurfaces.attach(this)
         TvBackHandler.init(this)
         autoListen = intent.getBooleanExtra(MovoAssistantVoiceService.EXTRA_AUTO_LISTEN, false)
+        requestedPage = intent.getStringExtra(EXTRA_PAGE)
         val app = AgentAppSession.get(this)
-        setContent { TvTheme { TvHome(app, notice, ::startVoice, { notice = it }) } }
+        setContent { TvTheme { TvHome(app, notice, ::startVoice, { notice = it }, requestedPage) { requestedPage = null } } }
     }
     override fun onResume() {
         super.onResume()
@@ -54,6 +56,7 @@ class TvMainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        intent.getStringExtra(EXTRA_PAGE)?.let { requestedPage = it }
         if (intent.getBooleanExtra(MovoAssistantVoiceService.EXTRA_AUTO_LISTEN, false)) ensureVoiceStarted()
     }
     private fun requiredPermissions(): Array<String> = if (TclPcmInput.supported(this)) arrayOf(
@@ -73,5 +76,10 @@ class TvMainActivity : ComponentActivity() {
         if (missing.isNotEmpty()) { permissions.launch(missing.toTypedArray()); return }
         VoiceEntry.noticeFor(VoiceEntry.startInPlace(this))?.let { notice = it }
     }
-    companion object { const val ACTION_ASSISTANT = "io.github.fartown.movo.tv.ASSISTANT" }
+    companion object {
+        const val ACTION_ASSISTANT = "io.github.fartown.movo.tv.ASSISTANT"
+        /** 打开时直接进入的页面，例如「看全文」进对话页。 */
+        const val EXTRA_PAGE = "io.github.fartown.movo.tv.PAGE"
+        const val PAGE_CONVERSATION = "conversation"
+    }
 }

@@ -169,7 +169,8 @@ internal object TvConversationOverlay {
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post(::render); return }
         remove()
         val service = AgentAccessibilityService.current() ?: return
-        if (!enabled || suppressed) return
+        // 收起后不常驻小框：状态由右下角语音胶囊显示，菜单键随时重新展开。
+        if (!enabled || suppressed || !expanded) { TvVoicePanel.refresh(); return }
         owner = service
         appContext = service.applicationContext
         val density = service.resources.displayMetrics.density

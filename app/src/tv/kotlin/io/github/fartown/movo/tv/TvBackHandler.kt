@@ -20,6 +20,7 @@ internal object TvBackHandler : KeyInterceptor {
     }
     override fun onKeyEvent(event: KeyEvent): Boolean {
         if (TvConversationOverlay.onKeyEvent(event)) return true
+        if (TvVoicePanel.onKeyEvent(event)) return true
         if (event.keyCode != KeyEvent.KEYCODE_BACK) return false
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) consuming = cancel()
         val handled = consuming
