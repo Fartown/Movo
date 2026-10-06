@@ -105,6 +105,8 @@ internal class MediaControlTool(
         MediaAction.TOGGLE -> "播放 / 暂停"
         MediaAction.NEXT -> "下一首"
         MediaAction.PREVIOUS -> "上一首"
+        MediaAction.FAST_FORWARD -> "快进"
+        MediaAction.REWIND -> "快退"
     }
 
     override fun renderForUi(input: MediaControlInput, output: MediaControlOutput): ToolUiView =

@@ -10,6 +10,8 @@ import io.github.fartown.movo.agent.overlay.AgentOverlayGlow
 import io.github.fartown.movo.agent.overlay.AgentOverlayOrb
 import io.github.fartown.movo.agent.overlay.AgentOverlayRemoveZone
 import io.github.fartown.movo.agent.overlay.AgentOverlayState
+import io.github.fartown.movo.agent.overlay.AgentOverlayUnlockPrompt
+import io.github.fartown.movo.agent.overlay.OverlayUnlockActivity
 import io.github.fartown.movo.agent.overlay.OrbMode
 import io.github.fartown.movo.agent.voice.session.VoiceSessionUiState
 import io.github.fartown.movo.platform.RunSurfaceRenderer
@@ -24,6 +26,14 @@ import top.yukonga.miuix.kmp.theme.lightColorScheme
 
 /** 手机：悬浮球、展开卡、边缘光晕、移除区与跨应用审批卡（miuix 主题）。 */
 internal object PhoneRunSurfaceRenderer : RunSurfaceRenderer {
+    @Composable
+    override fun UnlockPrompt(onCancel: () -> Unit, onUnlock: () -> Unit) =
+        AgentOverlayUnlockPrompt(onCancel, onUnlock)
+
+    override fun requestUnlock(context: Context) {
+        context.startActivity(OverlayUnlockActivity.intent(context))
+    }
+
     @Composable
     override fun Host(context: Context, isNightMode: () -> Boolean, content: @Composable () -> Unit) {
         MiuixTheme(colors = if (isNightMode()) darkColorScheme() else lightColorScheme()) {
@@ -51,7 +61,6 @@ internal object PhoneRunSurfaceRenderer : RunSurfaceRenderer {
         hearing: Boolean,
         longRun: Boolean,
         animateEntrance: Boolean,
-        hideForReveal: Boolean,
     ) {
         AgentOverlayOrb(
             mode = mode,
@@ -65,7 +74,6 @@ internal object PhoneRunSurfaceRenderer : RunSurfaceRenderer {
             hearing = hearing,
             longRun = longRun,
             animateEntrance = animateEntrance,
-            hideForReveal = hideForReveal,
         )
     }
 
@@ -93,6 +101,11 @@ internal object PhoneRunSurfaceRenderer : RunSurfaceRenderer {
         onOpenResult: () -> Unit,
         notice: String?,
         orbCenterOnScreen: () -> Offset?,
+        onOrbTap: () -> Unit,
+        onOrbLongPress: () -> Unit,
+        onOrbDragStart: () -> Unit,
+        onOrbDrag: (dx: Float, dy: Float) -> Unit,
+        onOrbDragEnd: () -> Unit,
     ) {
         AgentOverlayBubble(
             state = state,
@@ -112,6 +125,11 @@ internal object PhoneRunSurfaceRenderer : RunSurfaceRenderer {
             onOpenResult = onOpenResult,
             notice = notice,
             orbCenterOnScreen = orbCenterOnScreen,
+            onOrbTap = onOrbTap,
+            onOrbLongPress = onOrbLongPress,
+            onOrbDragStart = onOrbDragStart,
+            onOrbDrag = onOrbDrag,
+            onOrbDragEnd = onOrbDragEnd,
         )
     }
 
@@ -123,7 +141,7 @@ internal object PhoneRunSurfaceRenderer : RunSurfaceRenderer {
     @Composable
     override fun Interaction(
         model: AgentInteractionUiState,
-        onApprove: (remember: Boolean) -> Unit,
+        onApprove: () -> Unit,
         onDecline: () -> Unit,
         onAnswer: (text: String, optionIndex: Int?) -> Unit,
         onCancel: () -> Unit,

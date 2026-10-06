@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import io.github.fartown.movo.MovoApp
 import io.github.fartown.movo.agent.tools.ToolProviderInputs
-import io.github.fartown.movo.agent.tools.core.ApprovalMode
 import io.github.fartown.movo.agent.tools.core.ToolProvider
 import io.github.fartown.movo.agent.voice.session.VoiceConversationHost
 
@@ -24,9 +23,6 @@ internal interface Flavor {
 
     /** 系统提示里与设备有关的描述。 */
     val prompt: PromptProfile
-
-    /** 需要用户确认的工具调用怎么处理（手机：弹审批卡；电视：免审）。 */
-    val approvalMode: ApprovalMode
 
     /** 能否弹出提问 / 审批卡；不能时不提供 ask_user，运行时也不发起交互请求。 */
     val interactionCards: Boolean

@@ -24,7 +24,7 @@ class TvPromptReviewTest {
             assertFalse(subsystem.pipeline.registryView.tools.any { it.name.startsWith("terminal") })
             val prompt = AgentPromptBuilder.buildSystemMessages(
                 AgentModelClient.loadConfig(), SkillContext.EMPTY, AgentMemoryContext.DISABLED, false,
-                toolPromptSections = subsystem.pipeline.promptSections(),
+                toolGuide = subsystem.pipeline.promptSections().joinToString("\n\n") { it.text },
             ).toString()
             assertFalse("TV prompt requires terminal despite excluding its provider", prompt.contains("必须调用 terminal"))
             assertFalse(prompt.contains("使用 browser_use"))

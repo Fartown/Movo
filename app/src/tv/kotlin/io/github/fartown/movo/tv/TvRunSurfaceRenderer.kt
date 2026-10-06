@@ -39,7 +39,6 @@ internal object TvRunSurfaceRenderer : RunSurfaceRenderer {
         hearing: Boolean,
         longRun: Boolean,
         animateEntrance: Boolean,
-        hideForReveal: Boolean,
     ) = Unit
 
     @Composable
@@ -64,6 +63,11 @@ internal object TvRunSurfaceRenderer : RunSurfaceRenderer {
         onOpenResult: () -> Unit,
         notice: String?,
         orbCenterOnScreen: () -> Offset?,
+        onOrbTap: () -> Unit,
+        onOrbLongPress: () -> Unit,
+        onOrbDragStart: () -> Unit,
+        onOrbDrag: (dx: Float, dy: Float) -> Unit,
+        onOrbDragEnd: () -> Unit,
     ) = Unit
 
     @Composable
@@ -73,7 +77,7 @@ internal object TvRunSurfaceRenderer : RunSurfaceRenderer {
     @Composable
     override fun Interaction(
         model: AgentInteractionUiState,
-        onApprove: (remember: Boolean) -> Unit,
+        onApprove: () -> Unit,
         onDecline: () -> Unit,
         onAnswer: (text: String, optionIndex: Int?) -> Unit,
         onCancel: () -> Unit,

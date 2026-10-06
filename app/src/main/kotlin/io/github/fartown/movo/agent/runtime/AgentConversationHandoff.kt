@@ -57,7 +57,7 @@ internal object AgentConversationHandoff {
 
     /** 从系统通知打开 App 内某个已有对话（后台监听的通知等），不需要结果回传。 */
     fun openConversationIntent(context: Context, conversationId: String): Intent =
-        Intent(context, MainActivity::class.java)
+        Intent(context, FlavorModule.surfaces.mainActivity)
             .setAction(ACTION_OPEN)
             .putExtra(EXTRA_SOURCE, AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE)
             .putExtra(EXTRA_KEY, conversationId)

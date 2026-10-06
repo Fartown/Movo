@@ -159,7 +159,7 @@ class EntrySurfaceGuardTest {
         assertEquals(1, pagesDismissed.get())
         assertTrue(guard.wasTriggered)
         // 首张截图排除 Movo 自己（退场中的页面），之后不再排除。
-        assertEquals(setOf("io.github.fartown.movo"), guard.consumeScreenshotExcludedPackages())
+        assertEquals(setOf(io.github.fartown.movo.BuildConfig.APPLICATION_ID), guard.consumeScreenshotExcludedPackages())
     }
 
     @Test

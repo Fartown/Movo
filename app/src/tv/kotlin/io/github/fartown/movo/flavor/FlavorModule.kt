@@ -3,7 +3,6 @@ package io.github.fartown.movo.flavor
 import android.content.Context
 import io.github.fartown.movo.MovoApp
 import io.github.fartown.movo.agent.tools.ToolProviderInputs
-import io.github.fartown.movo.agent.tools.core.ApprovalMode
 import io.github.fartown.movo.agent.tools.conversation.ConversationToolProvider
 import io.github.fartown.movo.agent.tools.core.ToolProvider
 import io.github.fartown.movo.agent.tools.memory.MemoryToolProvider
@@ -30,17 +29,14 @@ internal object FlavorModule : Flavor {
     override val runSurface: RunSurfaceRenderer = TvRunSurfaceRenderer
     override val prompt: PromptProfile = TvPromptProfile
 
-    /** 免审：需要确认的动作直接执行。 */
-    override val approvalMode: ApprovalMode = ApprovalMode.SKIP
-
     /** 电视不弹提问 / 审批卡：没有 ask_user，模型在回答里直接问，用户下一句接着说。 */
     override val interactionCards: Boolean = false
 
     /** P2 接入：本轮进行中按返回取消（§5.8）。 */
     override val keyInterceptor: KeyInterceptor = io.github.fartown.movo.tv.TvBackHandler
 
-    override val screenCapture: io.github.fartown.movo.platform.DeviceScreenCapture =
-        io.github.fartown.movo.tv.TvAssistantScreenCapture
+    override val screenCapture: io.github.fartown.movo.platform.DeviceScreenCapture
+        get() = io.github.fartown.movo.tv.TvAssistantScreenCapture
 
     override fun startExecutionService(context: Context, intent: android.content.Intent) {
         // TCL Android 9 silently rejects startForegroundService from its bound assistant
@@ -90,7 +86,7 @@ internal object FlavorModule : Flavor {
         return listOf(
             TvDeviceToolProvider(services),
             TvMediaToolProvider(services),
-            UiToolProvider(context, services.logger, rootAvailable, includeTouchscreenTools = false),
+            UiToolProvider(context, services.logger, rootAvailable, includeTouchscreenTools = false, screenshotExcludedPackages = services.screenshotExcludedPackages),
             MemoryToolProvider(context, inputs.characterId),
             ConversationToolProvider(inputs.conversationLoader),
         ).also { providers ->

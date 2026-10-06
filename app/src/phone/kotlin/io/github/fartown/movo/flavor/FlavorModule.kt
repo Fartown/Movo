@@ -2,8 +2,8 @@ package io.github.fartown.movo.flavor
 
 import android.content.Context
 import io.github.fartown.movo.MovoApp
+import io.github.fartown.movo.agent.monitor.MonitorToolProvider
 import io.github.fartown.movo.agent.tools.ToolProviderInputs
-import io.github.fartown.movo.agent.tools.core.ApprovalMode
 import io.github.fartown.movo.agent.tools.browser.BrowserToolProvider
 import io.github.fartown.movo.agent.tools.clockmedia.ClockMediaToolProvider
 import io.github.fartown.movo.agent.tools.conversation.ConversationToolProvider
@@ -36,7 +36,6 @@ internal object FlavorModule : Flavor {
     override val runSurface: RunSurfaceRenderer = PhoneRunSurfaceRenderer
     override val prompt: PromptProfile = PhonePromptProfile
 
-    override val approvalMode: ApprovalMode = ApprovalMode.ASK
     override val interactionCards: Boolean = true
 
     /** 手机的无障碍配置不请求按键过滤。 */
@@ -53,7 +52,7 @@ internal object FlavorModule : Flavor {
         return listOf(
             DeviceToolProvider(context, root, rootAvailable),
             ClockMediaToolProvider(context, logger, root, rootAvailable),
-            UiToolProvider(context, logger, rootAvailable),
+            UiToolProvider(context, logger, rootAvailable, screenshotExcludedPackages = services.screenshotExcludedPackages),
             PersonalToolProvider(context, root, rootAvailable),
             FileToolProvider(context, root, rootAvailable),
             TerminalToolProvider(logger),
@@ -62,6 +61,7 @@ internal object FlavorModule : Flavor {
             SkillToolProvider(context),
             ConversationToolProvider(inputs.conversationLoader),
             McpToolProvider(inputs.mcpCatalog),
+            MonitorToolProvider(context, isRoleplay = { inputs.characterId() != null }),
         )
     }
 

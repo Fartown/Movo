@@ -15,6 +15,11 @@ import io.github.fartown.movo.ui.model.AgentInteractionUiState
 internal interface RunSurfaceRenderer {
     /** False when the flavor owns its own conversation/status window. */
     val usesRuntimeWindows: Boolean get() = true
+
+    @Composable
+    fun UnlockPrompt(onCancel: () -> Unit, onUnlock: () -> Unit) = Unit
+
+    fun requestUnlock(context: Context) = Unit
     /** 每个浮层窗口内容的外层：主题、链接打开方式、减少动画等。 */
     @Composable
     fun Host(context: Context, isNightMode: () -> Boolean, content: @Composable () -> Unit)
@@ -32,7 +37,6 @@ internal interface RunSurfaceRenderer {
         hearing: Boolean,
         longRun: Boolean,
         animateEntrance: Boolean,
-        hideForReveal: Boolean,
     )
 
     @Composable
@@ -57,6 +61,11 @@ internal interface RunSurfaceRenderer {
         onOpenResult: () -> Unit,
         notice: String?,
         orbCenterOnScreen: () -> Offset?,
+        onOrbTap: () -> Unit,
+        onOrbLongPress: () -> Unit,
+        onOrbDragStart: () -> Unit,
+        onOrbDrag: (dx: Float, dy: Float) -> Unit,
+        onOrbDragEnd: () -> Unit,
     )
 
     @Composable
@@ -66,7 +75,7 @@ internal interface RunSurfaceRenderer {
     @Composable
     fun Interaction(
         model: AgentInteractionUiState,
-        onApprove: (remember: Boolean) -> Unit,
+        onApprove: () -> Unit,
         onDecline: () -> Unit,
         onAnswer: (text: String, optionIndex: Int?) -> Unit,
         onCancel: () -> Unit,

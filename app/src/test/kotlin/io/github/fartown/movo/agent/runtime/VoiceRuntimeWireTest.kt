@@ -36,7 +36,7 @@ class VoiceRuntimeWireTest {
             request() to SpokenReply.NONE,
             request(source = AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE) to SpokenReply.NONE,
             request(voice = "voice-a", source = AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE) to SpokenReply.MOVO_VOICE,
-            request(source = io.github.fartown.movo.hook.xiaoai.XiaoAiHandoff.SOURCE) to SpokenReply.XIAOAI,
+            request(source = AgentRuntimeWire.XIAOAI_HANDOFF_SOURCE) to SpokenReply.XIAOAI,
         )
         cases.forEach { (request, expected) ->
             assertEquals(expected, request.spokenReply)
