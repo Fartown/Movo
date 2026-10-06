@@ -50,6 +50,21 @@ class AgentConversationStoreTest {
     }
 
     @Test
+    fun narrationFlagSurvivesSaveAndLoad() = runBlocking {
+        val state = AgentChatHomeUiState(
+            messages = listOf(
+                UserMessageUi(id = "u1", content = "打开设置看看 Wi‑Fi 连的是哪个网络"),
+                AgentMessageUi(id = "assistant-run-1-1", content = "我先查一下网络状态。", isStreaming = false, narration = true),
+                AgentMessageUi(id = "assistant-run-2-1", content = "Wi‑Fi 连的是 Xiaomi_5G。", isStreaming = false),
+            ),
+            input = "", isStreaming = false, thinkingEnabled = false,
+        )
+        AgentConversationStore.save(context, "c1", mapOf("c1" to state), mapOf("c1" to "Wi‑Fi"), mapOf("c1" to 1L))
+        val restored = AgentConversationStore.load(context).conversationsById.getValue("c1").messages
+        assertEquals(listOf(true, false), restored.filterIsInstance<AgentMessageUi>().map { it.narration })
+    }
+
+    @Test
     fun repeatedSavePreservesRoleBindingRevisionsPendingRewriteAndOriginalJournal() = runBlocking {
         val original = AgentModelClient.ConversationMessage(
             role = "assistant", content = "原始回答", messageId = "assistant-role-1",

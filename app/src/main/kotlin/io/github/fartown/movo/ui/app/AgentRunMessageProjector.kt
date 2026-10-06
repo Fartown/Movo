@@ -15,6 +15,8 @@ internal class AgentRunMessageProjector(
     private val nowElapsedRealtime: () -> Long = { SystemClock.elapsedRealtime() },
 ) {
     private val thinkingStartedAt = mutableMapOf<String, Long>()
+    /** 已经调过工具（含不显示的 tool_search）的 run：之后写的正文直接写进执行卡（定稿 21 修订）。 */
+    private val runsWithTools = mutableSetOf<String>()
 
     /** 回放从该 run 的空轨迹重建；仅重排有回放事件的补充输入，旧 handoff 独有的输入必须保留。 */
     fun resetForReplay(
@@ -116,6 +118,8 @@ internal class AgentRunMessageProjector(
             content = delta,
             isStreaming = true,
             renderMarkdown = false,
+            // 执行卡已经出现：先作为说明写在卡里，任务结束时才知道它是不是回答。
+            provisional = hasWorkCard(runId, next),
         )
     }
 
@@ -243,6 +247,7 @@ internal class AgentRunMessageProjector(
         }
     }
 
+    /** 任务结束（完成、失败、停止、中断恢复都经过这里）：还写在卡里的那段在最后一个工具之后，移出卡片成为回答。 */
     fun finalizeText(
         runId: String,
         messages: List<AgentChatMessageUi>,
@@ -253,6 +258,7 @@ internal class AgentRunMessageProjector(
                     content = message.content.trimEnd(),
                     isStreaming = false,
                     renderMarkdown = true,
+                    provisional = false,
                 )
             } else {
                 message
@@ -305,8 +311,11 @@ internal class AgentRunMessageProjector(
         event: AgentEvent.ToolStarted,
         messages: List<AgentChatMessageUi>,
     ): List<AgentChatMessageUi> {
+        // 这一轮已写出的正文是工具前说明；不显示的工具（tool_search）同样算，否则说明会留在卡外把执行卡切开。
+        runsWithTools += runId
+        val marked = markNarration(runId, event.round, messages)
         // tool_search 是模型给自己加载工具，对用户没有意义，不进执行卡（工具可视化方案 C 级）。
-        if (event.name in HIDDEN_TOOLS) return messages
+        if (event.name in HIDDEN_TOOLS) return marked
         // 工具执行发生在对应 assistant 工具块完整返回之后；此时直接追加即可保留
         // 工具前说明、工具活动与下一轮结果的真实时间顺序。
         val message = ToolActivityMessageUi(
@@ -317,8 +326,8 @@ internal class AgentRunMessageProjector(
             command = event.command,
             startedAtMillis = event.atMillis.takeIf { it > 0L },
         )
-        if (messages.any { it.id == message.id }) return messages
-        return messages + message
+        if (marked.any { it.id == message.id }) return marked
+        return marked + message
     }
 
     fun finishTool(
@@ -367,7 +376,10 @@ internal class AgentRunMessageProjector(
             argumentsSummary = "",
             startedAtMillis = event.atMillis.takeIf { it > 0L },
         )
-        return if (messages.any { it.id == message.id }) messages else messages + message
+        // 托管工具（网页搜索）之后同一轮里接着写的正文才是回答，此前写出的是说明。
+        runsWithTools += runId
+        val marked = markNarration(runId, event.round, messages)
+        return if (marked.any { it.id == message.id }) marked else marked + message
     }
 
     fun finishHostedTool(
@@ -419,8 +431,41 @@ internal class AgentRunMessageProjector(
             }
         }
 
+    /**
+     * 又开始调工具：此前写出的正文都在这个工具之前，都是说明（定稿 21）——本轮还写在卡外的那段（第一轮还没有执行卡时）
+     * 收进执行卡，此前先写在卡里的那几段也就此定为说明。
+     */
+    private fun markNarration(
+        runId: String,
+        round: Int,
+        messages: List<AgentChatMessageUi>,
+    ): List<AgentChatMessageUi> = messages.map { message ->
+        val settle = message is AgentMessageUi && message.content.isNotBlank() &&
+            (message.provisional && isAssistantMessageForRun(message.id, runId) ||
+                !message.narration && isAssistantMessageForRound(message.id, runId, round))
+        if (settle && message is AgentMessageUi) {
+            message.copy(
+                content = message.content.trimEnd(),
+                isStreaming = false,
+                renderMarkdown = true,
+                narration = true,
+                provisional = false,
+            )
+        } else {
+            message
+        }
+    }
+
+    /** 执行卡已经出现：这个 run 调过工具，或者已经有说明在卡里。 */
+    private fun hasWorkCard(runId: String, messages: List<AgentChatMessageUi>): Boolean =
+        runId in runsWithTools || messages.any { message ->
+            message is ToolActivityMessageUi && message.id.startsWith("$runId-tool-") ||
+                message is AgentMessageUi && (message.narration || message.provisional) && isAssistantMessageForRun(message.id, runId)
+        }
+
     fun clearRun(runId: String) {
         thinkingStartedAt.keys.removeAll { it.startsWith("$runId-thinking-") }
+        runsWithTools -= runId
     }
 
     private fun ThinkingMessageUi.finished(authoritativeContent: String? = null): ThinkingMessageUi =
@@ -554,7 +599,7 @@ internal class AgentRunMessageProjector(
             }
         }
 
-        /** 终态只能补全最后一次重试之后的回答，不能覆盖已标记失败的半截输出。 */
+        /** 终态只能补全最后一次重试之后的回答，不能覆盖已标记失败的半截输出，也不能覆盖工具前说明。 */
         fun resultTargetIndex(
             runId: String,
             messages: List<AgentChatMessageUi>,
@@ -564,7 +609,7 @@ internal class AgentRunMessageProjector(
             return messages.indices.lastOrNull { index ->
                 val message = messages[index]
                 index > retryIndex &&
-                    (message is AgentMessageUi || includeNotices && message is SystemNoticeMessageUi) &&
+                    (message is AgentMessageUi && !message.narration || includeNotices && message is SystemNoticeMessageUi) &&
                     isAssistantMessageForRun(message.id, runId)
             } ?: -1
         }

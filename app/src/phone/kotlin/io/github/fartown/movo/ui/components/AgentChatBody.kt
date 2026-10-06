@@ -204,7 +204,7 @@ internal fun AgentChatBody(
     val timelineMessages = remember(messages, isStreaming) {
         messages.filterNot { message ->
             message is AgentMessageUi && message.content.isBlank()
-        }.let { AgentFollowUpSuggestions.visible(it, isStreaming) }
+        }.let(::markLegacyNarration).let { AgentFollowUpSuggestions.visible(it, isStreaming) }
     }
     val editHiddenIds = remember(messages, editHiddenTargetId) {
         val kept = AgentConversationRevisionReducer.visibleMessagesForEdit(messages, editHiddenTargetId)
@@ -679,7 +679,8 @@ internal fun AgentConversationMessages(
         }
     }
 
-    val tailMessage = visibleMessages.lastOrNull() as? AgentMessageUi
+    // 写在执行卡里的话（定稿 21）不按回答显现，不参与末尾显现判断。
+    val tailMessage = (visibleMessages.lastOrNull() as? AgentMessageUi)?.takeUnless { it.inWorkCard }
     val isTailRendering = tailMessage?.let { message ->
         streamingMarkdownStates[message.id]?.let { state ->
             state.revealedContent != message.content
@@ -910,13 +911,17 @@ internal fun AgentConversationMessages(
             ),
             overscrollEffect = null,
         ) {
+            val lastEntryKey = timelineEntries.lastOrNull()?.key
             val entryItem: @Composable androidx.compose.foundation.lazy.LazyItemScope.(AgentTimelineEntry) -> Unit = { entry ->
+                // 执行中排在最后的正文随后可能被收进执行卡成为说明（模型接着调工具，定稿 21）：它离场时淡出 120ms，不硬切。
+                val absorbable = isStreaming && entry.key == lastEntryKey &&
+                    (entry as? AgentTimelineEntry.Message)?.message is AgentMessageUi
                 val itemModifier = Modifier.animateItem(
                     fadeInSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
                     placementSpec = null,
                     // 历史轮次被编辑、删除或重新生成时必须立即退出；退出动画会让已从
                     // 状态中裁掉的旧消息继续绘制，并与同位置的新流式消息短暂重叠。
-                    fadeOutSpec = null,
+                    fadeOutSpec = if (absorbable) io.github.fartown.movo.ui.theme.MovoMotion.fastExit() else null,
                 )
                 when (entry) {
                     is AgentTimelineEntry.Message -> {
@@ -960,7 +965,8 @@ internal fun AgentConversationMessages(
 
                     is AgentTimelineEntry.WorkProcess -> {
                         entry.messages.forEach { message ->
-                            if (message is ThinkingMessageUi && message.isStreaming) {
+                            // 卡里正在写的那段（定稿 21）也由列表持有解析会话：任务结束它移出卡片成为回答时，直接用解析好的结果，不先露原文（真机）。
+                            if (message is ThinkingMessageUi && message.isStreaming || message is AgentMessageUi && message.provisional) {
                                 streamingMarkdownStates.getOrPut(message.id) {
                                     StreamingMarkdownState()
                                 }
@@ -1377,7 +1383,7 @@ internal fun arrangeTurnsForTimeline(messages: List<AgentChatMessageUi>): List<A
             dropped += message.id
             RETRY_NOTICE_ID.find(message.id)?.let { match ->
                 val failedRoundText = "assistant-${match.groupValues[1]}-${match.groupValues[2]}-"
-                turn.forEach { if (it is AgentMessageUi && it.id.startsWith(failedRoundText)) dropped += it.id }
+                turn.forEach { if (it is AgentMessageUi && !it.narration && it.id.startsWith(failedRoundText)) dropped += it.id }
             }
         }
         val kept = turn.filterNot { it.id in dropped }
@@ -1404,7 +1410,39 @@ private fun AgentChatMessageUi.isTurnEnding(): Boolean =
     )
 
 private fun AgentChatMessageUi.isWorkProcessMessage(): Boolean =
-    this is ThinkingMessageUi || this is ToolActivityMessageUi || this is ToolSummaryMessageUi
+    this is ThinkingMessageUi || this is ToolActivityMessageUi || this is ToolSummaryMessageUi ||
+        this is AgentMessageUi && inWorkCard
+
+/** 写在执行卡里的话：说明，或执行卡出现后正在写、任务结束前还不知道是不是回答的那段（定稿 21）。 */
+internal val AgentMessageUi.inWorkCard: Boolean get() = narration || provisional
+
+private val ASSISTANT_BLOCK_ID = Regex("^assistant-(.+)-(\\d+)-(\\d+)$")
+private val TOOL_STEP_ID = Regex("^(.+?)-tool-(\\d+)-")
+
+/**
+ * 旧记录没有「工具前说明」标记（定稿 21 之前存的）：同一轮里后面有工具步骤的正文就是说明，按这条补上，
+ * 历史记录与新记录同样分组。新记录在投影时已标好（含不显示的 tool_search 那一轮）。
+ */
+internal fun markLegacyNarration(messages: List<AgentChatMessageUi>): List<AgentChatMessageUi> {
+    if (messages.none { it is AgentMessageUi && !it.narration }) return messages
+    val laterToolRounds = HashSet<String>()
+    var changed = false
+    val result = arrayOfNulls<AgentChatMessageUi>(messages.size)
+    for (index in messages.indices.reversed()) {
+        val message = messages[index]
+        if (message is ToolActivityMessageUi) {
+            TOOL_STEP_ID.find(message.id)?.let { laterToolRounds += "${it.groupValues[1]}#${it.groupValues[2]}" }
+        }
+        result[index] = if (message is AgentMessageUi && !message.narration) {
+            val block = ASSISTANT_BLOCK_ID.find(message.id)
+            if (block != null && "${block.groupValues[1]}#${block.groupValues[2]}" in laterToolRounds) {
+                changed = true
+                message.copy(narration = true)
+            } else message
+        } else message
+    }
+    return if (changed) result.map { it!! } else messages
+}
 
 /**
  * 一轮对话（两条用户消息之间）里最后一条 Agent 正文视为最终结果，其余为中间步骤。
@@ -1427,7 +1465,7 @@ internal fun resolveFinalResultMessageIds(
                 lastAgentMessageId?.let(ids::add)
                 lastAgentMessageId = null
             }
-            is AgentMessageUi -> lastAgentMessageId = message.id
+            is AgentMessageUi -> if (!message.inWorkCard) lastAgentMessageId = message.id
             else -> Unit
         }
     }
