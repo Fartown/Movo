@@ -534,6 +534,16 @@ class AgentRuntimeWireTest {
                 imageCount = 0,
                 imageBytes = 0,
             ),
+            AgentEvent.ToolFinished(
+                round = 3,
+                toolCallId = "call_failed",
+                name = "ui_tap",
+                resultSummary = "没找到",
+                imageCount = 0,
+                imageBytes = 0,
+                success = false,
+                errorCode = "NOT_FOUND",
+            ),
         )
 
         events.forEach { event ->

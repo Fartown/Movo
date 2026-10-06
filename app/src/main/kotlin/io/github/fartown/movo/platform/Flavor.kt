@@ -72,6 +72,12 @@ internal interface Flavor {
     /** 处理 [voiceLocalCommands] 里的口令，返回状态文案；null 表示没有处理。 */
     fun onVoiceLocalCommand(context: Context, command: String): String? = null
 
+    /**
+     * 是否记录完整运行日志（docs/solutions/run-log/运行日志补全实施方案.md）。只有带运行日志页的版本记：
+     * 那里能导出、清空、关掉；没有入口的版本不记。
+     */
+    val fullRunLog: Boolean get() = false
+
     /** 主进程 Application.onCreate 里，在共享初始化之后依次执行。 */
     val initializers: List<(MovoApp) -> Unit>
 }

@@ -333,20 +333,21 @@ internal class AgentLoop(
                 message = validationError,
             )
         }
-        onEvent(
-            AgentEvent.ToolStarted(
-                round = round,
-                toolCallId = toolCall.id,
-                name = toolCall.name,
-                // 工具自己给的标题（动作 + 对象）优先，老工具与元工具用格式化器兜底。
-                argsPreview = runCatching { toolExecutor.stepTitle(toolCall) }.getOrNull()
-                    ?: traceFormatter.summarizeArguments(toolCall),
-                command = traceFormatter.displayCommand(toolCall),
-            ).stamped()
-        )
+        val started = AgentEvent.ToolStarted(
+            round = round,
+            toolCallId = toolCall.id,
+            name = toolCall.name,
+            // 工具自己给的标题（动作 + 对象）优先，老工具与元工具用格式化器兜底。
+            argsPreview = runCatching { toolExecutor.stepTitle(toolCall) }.getOrNull()
+                ?: traceFormatter.summarizeArguments(toolCall),
+            command = traceFormatter.displayCommand(toolCall),
+        ).stamped()
+        val executedCall = withoutFinishReply(toolCall)
+        io.github.fartown.movo.diagnostics.runlog.RunLogRecorder.toolStarted(round, modelToolCall, executedCall, started.argsPreview)
+        onEvent(started)
 
         val result = try {
-            toolExecutor.execute(withoutFinishReply(toolCall))
+            toolExecutor.execute(executedCall)
         } catch (throwable: Exception) {
             runController.throwIfCancelled()
             AgentModelClient.ToolResult(
@@ -375,15 +376,15 @@ internal class AgentLoop(
         code: String,
         message: String,
     ): ToolOutcome {
-        onEvent(
-            AgentEvent.ToolStarted(
-                round = round,
-                toolCallId = toolCall.id,
-                name = toolCall.name,
-                argsPreview = traceFormatter.summarizeArguments(toolCall),
-                command = traceFormatter.displayCommand(toolCall),
-            ).stamped()
-        )
+        val started = AgentEvent.ToolStarted(
+            round = round,
+            toolCallId = toolCall.id,
+            name = toolCall.name,
+            argsPreview = traceFormatter.summarizeArguments(toolCall),
+            command = traceFormatter.displayCommand(toolCall),
+        ).stamped()
+        io.github.fartown.movo.diagnostics.runlog.RunLogRecorder.toolStarted(round, toolCall, toolCall, started.argsPreview)
+        onEvent(started)
         val result = AgentModelClient.ToolResult(
             content = JSONObject()
                 .put("ok", false)
@@ -400,6 +401,7 @@ internal class AgentLoop(
         toolCall: AgentModelClient.ToolCall,
         result: AgentModelClient.ToolResult,
     ) {
+        io.github.fartown.movo.diagnostics.runlog.RunLogRecorder.toolFinished(toolCall, result)
         onEvent(
             AgentEvent.ToolFinished(
                 round = round,
@@ -410,6 +412,7 @@ internal class AgentLoop(
                 imageBytes = result.images.sumOf { it.bytes },
                 success = traceFormatter.isSuccessResult(result),
                 view = result.outcome?.view,
+                errorCode = result.errorCode,
             ).stamped()
         )
     }

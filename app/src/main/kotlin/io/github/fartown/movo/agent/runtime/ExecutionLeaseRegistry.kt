@@ -47,15 +47,21 @@ internal class ExecutionLeaseRegistry {
     }
 
     /** 旧服务销毁时，不能取消在其 stopSelf 之后为下一次启动登记的任务。 */
-    @Synchronized fun drainOwner(owner: Long): List<() -> Unit> {
+    @Synchronized fun drainOwner(owner: Long): List<() -> Unit> = drainOwnerTasks(owner).map { it.second }
+
+    /** 同 [drainOwner]，同时给出每个停止回调所属的任务（运行日志记停止来源用）。 */
+    @Synchronized fun drainOwnerTasks(owner: Long): List<Pair<String, () -> Unit>> {
         if (activeOwner == owner) activeOwner = null
         val owned = leases.filterValues { it.owner == owner }
         owned.keys.forEach(leases::remove)
-        return owned.values.map { it.onStop }
+        return owned.values.map { it.task to it.onStop }
     }
 
-    @Synchronized fun drain(startFailed: Boolean = false): List<() -> Unit> = leases.values
+    @Synchronized fun drain(startFailed: Boolean = false): List<() -> Unit> = drainTasks(startFailed).map { it.second }
+
+    /** 同 [drain]，同时给出每个停止回调所属的任务。 */
+    @Synchronized fun drainTasks(startFailed: Boolean = false): List<Pair<String, () -> Unit>> = leases.values
         .filterNot { startFailed && it.allowBoundFallback }
-        .map { it.onStop }
+        .map { it.task to it.onStop }
         .also { leases.clear() }
 }

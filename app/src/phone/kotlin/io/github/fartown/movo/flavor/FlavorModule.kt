@@ -41,6 +41,9 @@ internal object FlavorModule : Flavor {
     /** 手机的无障碍配置不请求按键过滤。 */
     override val keyInterceptor: KeyInterceptor? = null
 
+    /** 手机有运行日志页：能导出、清空、关掉完整运行日志。 */
+    override val fullRunLog: Boolean = true
+
     override fun voiceHost(context: Context): VoiceConversationHost = AgentAppSession.get(context)
 
     override fun toolProviders(inputs: ToolProviderInputs): List<ToolProvider> {

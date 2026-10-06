@@ -835,6 +835,7 @@ internal object AgentRuntimeWire {
                 putInt("image_bytes", event.imageBytes)
                 event.success?.let { putBoolean("success", it) }
                 event.view?.takeUnless { forArchive && it.transient }?.let { putString("tool_view", it.toJson().toString()) }
+                event.errorCode?.let { putString("error_code", it) }
             }
 
             is AgentEvent.HostedToolStarted -> {
@@ -1012,6 +1013,7 @@ internal object AgentRuntimeWire {
             // 旧版本 Runtime 不发送 success，缺省为 null 由消费端回退判断
             success = if (bundle.containsKey("success")) bundle.getBoolean("success") else null,
             view = io.github.fartown.movo.agent.tools.core.ToolUiView.fromJsonString(bundle.getString("tool_view")),
+            errorCode = bundle.getString("error_code"),
         ).apply { atMillis = bundle.getLong("at_millis") }
 
         "hosted_tool_started" -> AgentEvent.HostedToolStarted(

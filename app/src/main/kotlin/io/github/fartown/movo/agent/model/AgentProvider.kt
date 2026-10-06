@@ -85,6 +85,9 @@ internal enum class AssistantBlockKind {
     TOOL_CALL,
 }
 
+/** 一段思考的原始类型（如 response.reasoning_text.delta、reasoning_content、thinking_delta）和文字。 */
+internal data class ProviderRawPart(val type: String, val text: String)
+
 internal sealed interface ProviderEvent {
     data object RequestStarted : ProviderEvent
 
@@ -103,6 +106,8 @@ internal sealed interface ProviderEvent {
         val kind: AssistantBlockKind,
         val index: Int,
         val delta: String,
+        /** 服务商把思考类型抹平之前的原始类型与文字（运行日志用）；同一片里有几种时拆开。 */
+        val rawParts: List<ProviderRawPart>? = null,
     ) : ProviderEvent
 
     data class BlockEnd(

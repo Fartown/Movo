@@ -44,6 +44,8 @@ internal object Prefs {
         const val AGENT_DEVICE_SENSITIVE_ACTION_TOOLS = "agent_device_sensitive_action_tools"
         const val AGENT_THINKING_ENABLED = "agent_thinking_enabled"
         const val AGENT_RUNTIME_CONFIG_JSON = "agent_runtime_config_json"
+        /** 运行日志页的「记录完整日志」：只存本地，不同步给 Hook。 */
+        const val RUN_LOG_FULL = "run_log_full"
 
         /** 全部布尔开关及其默认值。 */
         val BOOLEAN_DEFAULTS: Map<String, Boolean> = mapOf(
@@ -146,6 +148,13 @@ internal object Prefs {
 
     /** Movo 设置页与 Runtime 使用的本地 Agent 配置，不依赖 LSPosed。 */
     fun localAgentPreferences(): SharedPreferences? = localAgent
+
+    /** 「记录完整日志」，默认开；只读本地配置。 */
+    fun isRunLogEnabled(): Boolean = localAgent?.getBoolean(Keys.RUN_LOG_FULL, true) ?: true
+
+    fun setRunLogEnabled(enabled: Boolean) {
+        localAgent?.edit()?.putBoolean(Keys.RUN_LOG_FULL, enabled)?.apply()
+    }
 
     /**
      * 首次升级优先把已有 RemotePreferences 值迁入本地；之后本地值是事实源，并在框架

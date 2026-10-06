@@ -21,7 +21,13 @@ import io.github.fartown.movo.diagnostics.RunTrace
 import io.github.fartown.movo.diagnostics.SystemEvent
 import io.github.fartown.movo.diagnostics.TimelineItem
 import io.github.fartown.movo.diagnostics.TraceStatus
+import io.github.fartown.movo.config.Prefs
+import io.github.fartown.movo.diagnostics.DiagnosticsEnvironment
+import io.github.fartown.movo.diagnostics.runlog.RunLog
 import io.github.fartown.movo.ui.components.movo.CardFooter
+import io.github.fartown.movo.ui.components.pollWhileStarted
+import io.github.fartown.movo.ui.components.movo.MovoConfirmDialog
+import androidx.compose.runtime.remember
 import io.github.fartown.movo.ui.components.movo.CardTitle
 import io.github.fartown.movo.ui.components.movo.MovoCard
 import io.github.fartown.movo.ui.components.movo.MovoListPage
@@ -132,7 +138,7 @@ internal fun DiagnosticsScreen(
                 }
             }
         }
-        // 最后一张「任务之外」：系统事件入口 + 保存策略页脚。
+        // 「任务之外」：系统事件入口。
         item(key = "system") {
             MovoCard(modifier = movoAnimateItem().revealAlpha(reveal)) {
                 CardTitle("任务之外")
@@ -144,10 +150,87 @@ internal fun DiagnosticsScreen(
                     showDivider = false,
                     onClick = onOpenSystem,
                 )
-                CardFooter(listOf("保存最近 20 个任务，不含对话内容。"))
+            }
+        }
+        // 最后一张「完整日志」（定稿 23-6）：开关 · 清空 · 保存说明。
+        if (RunLog.store() != null) {
+            item(key = "full-log") {
+                FullLogCard(modifier = movoAnimateItem().revealAlpha(reveal))
             }
         }
     }
+}
+
+/**
+ * 「完整日志」卡（定稿 23-6、23-7、23-8、23-9）：开关只存本地配置，下一次任务开始时生效；
+ * 关上后问要不要同时清空已经记下的；「清空运行日志」右侧写现在占用的空间。
+ */
+@Composable
+private fun FullLogCard(modifier: Modifier) {
+    var enabled by remember { mutableStateOf(Prefs.isRunLogEnabled()) }
+    var askClear by remember { mutableStateOf(false) }
+    var askClearAfterOff by remember { mutableStateOf(false) }
+    val bytes = rememberRunLogBytes()
+    MovoCard(modifier = modifier) {
+        CardTitle("完整日志")
+        SettingsRow(
+            title = "记录完整日志",
+            subtitle = if (enabled) "每次任务的对话、思考、截图和工具结果" else "已关闭：之后的任务只记阶段和耗时",
+            trailing = RowTrailing.Switch(enabled) { on ->
+                enabled = on
+                Prefs.setRunLogEnabled(on)
+                if (!on && bytes > 0) askClearAfterOff = true
+            },
+        )
+        SettingsRow(
+            title = "清空运行日志",
+            trailing = RowTrailing.Value(formatLogSize(bytes)),
+            showDivider = false,
+            onClick = { askClear = true },
+        )
+        CardFooter(listOf("保存最近 20 个任务、最多 200 MB，只存在本机。", "原样记录，没有遮挡；删除对话时一起删除。"))
+    }
+    MovoConfirmDialog(
+        show = askClear,
+        title = "清空运行日志？",
+        message = "删除已结束任务的完整日志和运行记录。\n进行中的任务保留，已导出的文件不受影响。",
+        confirmText = "清空",
+        destructive = true,
+        onConfirm = {
+            askClear = false
+            DiagnosticsEnvironment.clearLogs()
+        },
+        onDismissRequest = { askClear = false },
+    )
+    MovoConfirmDialog(
+        show = askClearAfterOff,
+        title = "同时清空已记录的日志？",
+        message = "之后的任务不再记录完整日志。\n已经记下的 ${formatLogSize(bytes)} 可以留着以后导出。",
+        confirmText = "清空",
+        cancelText = "留着",
+        destructive = true,
+        onConfirm = {
+            askClearAfterOff = false
+            DiagnosticsEnvironment.clearLogs()
+        },
+        onDismissRequest = { askClearAfterOff = false },
+    )
+}
+
+/** 完整日志现在占用的空间：页面可见时每秒读一次目录账本（只读内存）。 */
+@Composable
+private fun rememberRunLogBytes(): Long {
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    fun read(): Long = RunLog.store()?.dirInfos()?.sumOf { it.bytes } ?: 0L
+    return androidx.compose.runtime.produceState(read(), lifecycle) {
+        lifecycle.pollWhileStarted(intervalMillis = { 1_000L }) { value = read() }
+    }.value
+}
+
+/** 占用空间：1 MB 以下写整数 KB，以上写一位小数的 MB。 */
+internal fun formatLogSize(bytes: Long): String = when {
+    bytes < 1024L * 1024 -> "${(bytes + 1023) / 1024} KB"
+    else -> String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024))
 }
 
 /** 23 / 24 · 任务详情：结论 → 原因与建议 → 耗时构成 → 时间线。 */
@@ -182,7 +265,7 @@ internal fun DiagnosticsRunScreen(
         onBack = onBack,
         actions = {
             if (run != null) {
-                ExportAction(fileName = "movo-log-${run.id}.md") {
+                RunExportAction(run = run, fileName = "movo-log-${run.id}.md") {
                     format.exportMarkdown(
                         header = exportHeader(),
                         runs = listOf(run),
@@ -256,10 +339,10 @@ internal fun DiagnosticsRunScreen(
                     )
                 }
                 CardFooter(
-                    if (running) {
-                        listOf("进行中的任务每秒刷新。", "结束后这里会写明结果和耗时构成。")
-                    } else {
-                        listOf("只记录请求阶段、工具名和设备状态。", "不含对话内容、工具结果和 API Key。")
+                    when {
+                        running -> listOf("进行中的任务每秒刷新。", "结束后这里会写明结果和耗时构成。")
+                        fullLogOf(run).exportable -> listOf("这里只显示阶段和耗时。", "完整日志在本机原样保存，可从右上角导出。")
+                        else -> listOf("只记录请求阶段、工具名和设备状态。", "不含对话内容、工具结果和 API Key。")
                     },
                 )
             }

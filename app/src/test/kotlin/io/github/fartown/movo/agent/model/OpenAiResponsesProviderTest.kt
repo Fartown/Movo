@@ -98,6 +98,11 @@ class OpenAiResponsesProviderTest {
                 events.filterIsInstance<ProviderEvent.BlockDelta>()
                     .filter { it.kind == AssistantBlockKind.THINKING }.map { it.delta },
             )
+            assertEquals(
+                listOf("response.reasoning_text.delta", "response.reasoning_text.delta"),
+                events.filterIsInstance<ProviderEvent.BlockDelta>()
+                    .filter { it.kind == AssistantBlockKind.THINKING }.map { it.rawParts?.single()?.type },
+            )
             val end = events.filterIsInstance<ProviderEvent.BlockEnd>()
                 .filter { it.kind == AssistantBlockKind.THINKING }.single()
             assertEquals(reasoningText, end.content)

@@ -63,7 +63,13 @@ internal class AgentRuntimeRunExecutor(
     fun execute(
         session: AgentRuntimeSession,
         request: AgentRuntimeWire.RunRequest,
-    ): Outcome = io.github.fartown.movo.diagnostics.MemoryDiagnostics.withRun {
+    ): Outcome = io.github.fartown.movo.diagnostics.MemoryDiagnostics.withRun(
+        onStart = { run ->
+            io.github.fartown.movo.diagnostics.runlog.RunLog.open(
+                run, io.github.fartown.movo.diagnostics.runlog.RunLogRecorder.startFields(request),
+            )
+        },
+    ) {
         executeTracked(session, request)
     }
 
@@ -276,6 +282,7 @@ internal class AgentRuntimeRunExecutor(
                 )
             }
             response = completedResponse
+            io.github.fartown.movo.diagnostics.runlog.RunLog.end("completed")
             AgentRuntimeWire.RunResult(
                 runId = request.runId,
                 ok = true,
@@ -295,6 +302,12 @@ internal class AgentRuntimeRunExecutor(
                     io.github.fartown.movo.diagnostics.MemoryDiagnostics.environmentSnapshot(),
             )
             val modelFailure = throwable as? AgentModelExecutionException
+            io.github.fartown.movo.diagnostics.runlog.RunLog.end(
+                status = if (cancelled) "cancelled" else "failed",
+                code = (modelFailure?.cause as? AgentModelFailure)?.code ?: (throwable as? AgentModelFailure)?.code,
+                exception = io.github.fartown.movo.diagnostics.MemoryDiagnostics.causes(throwable),
+                message = throwable.message,
+            )
             val message = if (cancelled) {
                 "已停止"
             } else {
@@ -398,6 +411,7 @@ internal class AgentRuntimeRunExecutor(
         checkpointRecorder?.accept(event)
         if (!session.emit(event)) return
         archivedEvents += event
+        io.github.fartown.movo.diagnostics.runlog.RunLogRecorder.agentEvent(event)
         recordDiagnosticEvent(event)
         if (event is AgentEvent.ModelRetryScheduled) {
             AndroidAgentLogger.warn("Agent runtime event: ${event.toLogLine()}")

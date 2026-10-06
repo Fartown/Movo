@@ -76,6 +76,8 @@ class AnthropicMessagesProviderTest {
             assertEquals("tool_1", response.assistantMessage.getJSONArray("tool_calls").getJSONObject(0).getString("id"))
             assertEquals(listOf("开始分析，", "需要工具。", "继续分析。"), events.filterIsInstance<ProviderEvent.BlockDelta>()
                 .filter { it.kind == AssistantBlockKind.THINKING }.map { it.delta })
+            assertEquals(listOf("thinking", "thinking_delta", "thinking_delta"), events.filterIsInstance<ProviderEvent.BlockDelta>()
+                .filter { it.kind == AssistantBlockKind.THINKING }.map { it.rawParts?.single()?.type })
         }
     }
 

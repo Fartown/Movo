@@ -57,7 +57,7 @@ internal class AgentExecutionService : Service() {
                 fields = mapOf("causes" to io.github.fartown.movo.diagnostics.MemoryDiagnostics.causes(failure)))
             startRejected = true
             AndroidAgentLogger.warn("Execution service foreground failed: type=${failure.safeLogType()}")
-            stopTasks(startFailed = true, includeMonitors = true)
+            stopTasks(startFailed = true, includeMonitors = true, source = "execution_service.start_failed")
         }
     }
 
@@ -66,7 +66,7 @@ internal class AgentExecutionService : Service() {
             // 「结束任务」：任务马上停，后台监听一起结束（5 秒内可撤销）。
             ACTION_END -> {
                 AndroidAgentLogger.info("Execution notification: end task")
-                stopTasks(includeMonitors = false)
+                stopTasks(includeMonitors = false, source = "notification.end")
                 io.github.fartown.movo.agent.monitor.MonitorRegistry.endLater { true }
             }
             ACTION_UNDO -> {
@@ -89,16 +89,27 @@ internal class AgentExecutionService : Service() {
         io.github.fartown.movo.diagnostics.MemoryDiagnostics.record("lifecycle", "execution_service.destroyed")
         if (instance === this) instance = null
         // 销毁时同样收回本服务拥有的任务。回收在独立有界工作线程上完成，不阻塞 Main。
-        stopQueue.close(leases.drainOwner(owner) + monitorLeases.drainOwner(owner))
+        val tasks = leases.drainOwnerTasks(owner)
+        recordStops(tasks, "execution_service.destroyed")
+        stopQueue.close(tasks.map { it.second } + monitorLeases.drainOwner(owner))
         super.onDestroy()
     }
 
-    private fun stopTasks(startFailed: Boolean = false, includeMonitors: Boolean) {
+    private fun stopTasks(startFailed: Boolean = false, includeMonitors: Boolean, source: String) {
         io.github.fartown.movo.diagnostics.MemoryDiagnostics.record("lifecycle", "execution_service.stop_requested",
             fields = mapOf("start_failed" to startFailed, "include_monitors" to includeMonitors))
-        val callbacks = leases.drain(startFailed) + if (includeMonitors) monitorLeases.drain(startFailed) else emptyList()
+        val tasks = leases.drainTasks(startFailed)
+        recordStops(tasks, source)
+        val callbacks = tasks.map { it.second } + if (includeMonitors) monitorLeases.drain(startFailed) else emptyList()
         stopQueue.submit(callbacks) {
             mainHandler.post { if (instance === this) refreshNotification() }
+        }
+    }
+
+    /** 运行日志：每个被停的用户任务记一条停止和来源（任务键就是界面任务号）。 */
+    private fun recordStops(tasks: List<Pair<String, () -> Unit>>, source: String) {
+        tasks.map { it.first }.distinct().forEach { task ->
+            runCatching { io.github.fartown.movo.diagnostics.runlog.RunLog.stop(task, source) }
         }
     }
 

@@ -32,6 +32,29 @@ internal object OrbGeometry {
     fun bubbleX(onEnd: Boolean, displayWidth: Int, orbFromRight: Int, window: Int): Int =
         if (onEnd) orbFromRight else displayWidth - orbFromRight - window
 
+    /** 浮窗在屏幕上占的范围（px，右、下不含）。 */
+    data class Bounds(val left: Int, val top: Int, val right: Int, val bottom: Int) {
+        fun contains(x: Float, y: Float): Boolean = x >= left && x < right && y >= top && y < bottom
+    }
+
+    /**
+     * 浮窗（球、展开卡）在屏幕上占的范围：按窗口参数（[gravity] 已转成绝对方向；x、y 按 gravity 是离右边 / 离底的距离）
+     * 和量好的大小算。用来判断 Agent 要按的点是否被浮窗挡住（规范 8.1）。
+     */
+    fun windowBounds(displayWidth: Int, displayHeight: Int, gravity: Int, x: Int, y: Int, width: Int, height: Int): Bounds {
+        val left = if (gravity and android.view.Gravity.HORIZONTAL_GRAVITY_MASK == android.view.Gravity.RIGHT) {
+            displayWidth - x - width
+        } else {
+            x
+        }
+        val top = if (gravity and android.view.Gravity.VERTICAL_GRAVITY_MASK == android.view.Gravity.BOTTOM) {
+            displayHeight - y - height
+        } else {
+            y
+        }
+        return Bounds(left, top, left + width, top + height)
+    }
+
     /**
      * 展开卡窗口的 y（距屏幕底）：卡片底边与玻璃圆底边对齐，卡片下方留 [shadow] 的阴影余量。
      * 可以为负（球贴近屏幕底时阴影余量伸出屏幕外，浮窗不限制在屏幕内）；夹到 0 会让卡片相对球错位。

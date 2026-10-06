@@ -19,6 +19,20 @@ internal object DiagnosticsEnvironment {
     @Volatile private var foreground = false
     @Volatile var executionService = false
     private var initialized = false
+    @Volatile private var store: DiagnosticStore? = null
+
+    /**
+     * 运行日志页的「清空运行日志」：删除已结束任务的运行记录和完整日志；进行中的任务、任务之外的系统事件保留
+     * （与确认框写的一致）。[done] 在两边都处理完后调用（后台线程）。
+     */
+    fun clearLogs(done: () -> Unit = {}) {
+        val keep = MemoryDiagnostics.activeRuns()
+        MemoryDiagnostics.buffer.retain { it.context.run.isBlank() || it.context.run in keep }
+        val pending = java.util.concurrent.atomic.AtomicInteger(2)
+        val finish = { if (pending.decrementAndGet() == 0) runCatching(done) }
+        store?.clear(keep, { MemoryDiagnostics.buffer.snapshot().entries }) { finish() } ?: finish()
+        io.github.fartown.movo.diagnostics.runlog.RunLog.store()?.clear { finish() } ?: finish()
+    }
 
     fun initialize(app: Application) {
         if (initialized) return
@@ -26,6 +40,7 @@ internal object DiagnosticsEnvironment {
         MemoryDiagnostics.elapsedClock = SystemClock::elapsedRealtime
         // 先恢复上次保存的记录并接上编号，再记录本次进程的第一条事件。
         val store = DiagnosticStore(java.io.File(app.filesDir, "diagnostics/events.log"))
+        this.store = store
         val saved = store.load(System.currentTimeMillis())
         MemoryDiagnostics.buffer.restore(saved)
         MemoryDiagnostics.continueNumbering(
@@ -33,6 +48,12 @@ internal object DiagnosticsEnvironment {
             DiagnosticRetention.lastNumber(saved, 'Q') { it.context.request },
         )
         MemoryDiagnostics.sink = { entry -> store.append(entry) { MemoryDiagnostics.buffer.snapshot().entries } }
+        // 完整运行日志：只在有运行日志页的版本记；启动时写线程先删掉上次被杀的任务目录。
+        if (io.github.fartown.movo.flavor.FlavorModule.fullRunLog) {
+            io.github.fartown.movo.diagnostics.runlog.RunLog.configure(
+                java.io.File(app.filesDir, "run-log"), BuildConfig.VERSION_NAME,
+            ) { io.github.fartown.movo.config.Prefs.isRunLogEnabled() }
+        }
         val connectivity = app.getSystemService(ConnectivityManager::class.java)
         val power = app.getSystemService(PowerManager::class.java)
         MemoryDiagnostics.environment = {

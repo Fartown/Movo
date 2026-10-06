@@ -43,16 +43,15 @@ internal object AnthropicMessagesProvider : AgentProviderClient {
                 ProviderRequestHeaders.mergeInto(this, config.baseUrl, config.customHeaders, request.sessionId)
             }
             .build()
+        val requestText = buildRequestJson(config, request.messages, request.effectiveTools).toString()
+        // 完整运行日志：最终发出去的请求体原样记一份。
+        io.github.fartown.movo.diagnostics.runlog.RunLogRecorder.requestBody(requestText)
         val trace = ModelRequestTrace.forRequest(request, id)
         val httpRequest = Request.Builder()
             .tag(ModelRequestTrace::class.java, trace)
             .url(ProviderUrls.anthropicMessagesUrl(config.baseUrl))
             .headers(headers)
-            .post(
-                buildRequestJson(config, request.messages, request.effectiveTools)
-                    .toString()
-                    .toRequestBody(JSON_MEDIA_TYPE)
-            )
+            .post(requestText.toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
         val call = AgentHttpClient.modelClient.newCall(httpRequest)
@@ -288,7 +287,7 @@ internal object AnthropicMessagesProvider : AgentProviderClient {
         val type = json.optString("type").ifBlank { event }
         trace.sseType(type)
 
-        fun appendVisibleDelta(block: AnthropicBlock, text: String) {
+        fun appendVisibleDelta(block: AnthropicBlock, text: String, rawType: String) {
             if (text.isEmpty()) return
             val kind = when (block.type) {
                 "text" -> {
@@ -303,7 +302,8 @@ internal object AnthropicMessagesProvider : AgentProviderClient {
                 }
                 else -> return
             }
-            onEvent(ProviderEvent.BlockDelta(kind, block.index, text))
+            val rawParts = if (kind == AssistantBlockKind.THINKING) listOf(ProviderRawPart(rawType, text)) else null
+            onEvent(ProviderEvent.BlockDelta(kind, block.index, text, rawParts))
         }
 
         return when (type) {
@@ -337,11 +337,11 @@ internal object AnthropicMessagesProvider : AgentProviderClient {
                 when (item.type) {
                     "text" -> {
                         onEvent(ProviderEvent.BlockStart(AssistantBlockKind.TEXT, index))
-                        appendVisibleDelta(item, (block.opt("text") as? String).orEmpty())
+                        appendVisibleDelta(item, (block.opt("text") as? String).orEmpty(), "text")
                     }
                     "thinking" -> {
                         onEvent(ProviderEvent.BlockStart(AssistantBlockKind.THINKING, index))
-                        appendVisibleDelta(item, (block.opt("thinking") as? String).orEmpty())
+                        appendVisibleDelta(item, (block.opt("thinking") as? String).orEmpty(), "thinking")
                     }
                     "tool_use" -> onEvent(
                         ProviderEvent.BlockStart(
@@ -360,11 +360,11 @@ internal object AnthropicMessagesProvider : AgentProviderClient {
                 when (delta.optString("type")) {
                     "text_delta" -> {
                         val block = blocks.getOrPut(index) { AnthropicBlock(index = index, type = "text") }
-                        appendVisibleDelta(block, (delta.opt("text") as? String).orEmpty())
+                        appendVisibleDelta(block, (delta.opt("text") as? String).orEmpty(), "text_delta")
                     }
                     "thinking_delta" -> {
                         val block = blocks.getOrPut(index) { AnthropicBlock(index = index, type = "thinking") }
-                        appendVisibleDelta(block, (delta.opt("thinking") as? String).orEmpty())
+                        appendVisibleDelta(block, (delta.opt("thinking") as? String).orEmpty(), "thinking_delta")
                     }
                     "input_json_delta" -> {
                         val partial = delta.optString("partial_json")

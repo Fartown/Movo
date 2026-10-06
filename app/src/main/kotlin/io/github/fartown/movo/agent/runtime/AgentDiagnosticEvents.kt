@@ -9,7 +9,13 @@ internal fun recordDiagnosticEvent(event: AgentEvent) {
         is AgentEvent.RunStarted -> "run.ready" to mapOf("tools" to event.toolCount, "images" to event.initialImages)
         is AgentEvent.RoundStarted -> "round.started" to mapOf("round" to event.round, "messages" to event.messageCount)
         is AgentEvent.ToolStarted -> "tool.started" to mapOf("round" to event.round, "tool" to MemoryDiagnostics.token(event.name))
-        is AgentEvent.ToolFinished -> "tool.finished" to mapOf("round" to event.round, "tool" to MemoryDiagnostics.token(event.name), "success" to event.success)
+        is AgentEvent.ToolFinished -> "tool.finished" to buildMap<String, Any?> {
+            put("round", event.round)
+            put("tool", MemoryDiagnostics.token(event.name))
+            put("success", event.success)
+            put("call", MemoryDiagnostics.token(event.toolCallId))
+            event.errorCode?.let { put("code", MemoryDiagnostics.token(it)) }
+        }
         is AgentEvent.HostedToolStarted -> "hosted_tool.started" to mapOf("round" to event.round, "tool" to MemoryDiagnostics.token(event.name))
         is AgentEvent.HostedToolFinished -> "hosted_tool.finished" to mapOf("round" to event.round, "tool" to MemoryDiagnostics.token(event.name), "success" to event.success)
         is AgentEvent.ContextCompaction -> "context.compaction" to mapOf(
@@ -23,7 +29,8 @@ internal fun recordDiagnosticEvent(event: AgentEvent) {
             )
             "model.usage" to mapOf(
                 "round" to event.round, "input_tokens" to event.usage.inputTokens, "output_tokens" to event.usage.outputTokens,
-                "context_tokens" to event.usage.contextTokens, "cached_tokens" to event.usage.cachedTokens,
+                "context_tokens" to event.usage.contextTokens, "reasoning_tokens" to event.usage.reasoningTokens,
+                "cached_tokens" to event.usage.cachedTokens,
             )
         }
         is AgentEvent.RunFinished -> "run.completed" to mapOf("round" to event.round)

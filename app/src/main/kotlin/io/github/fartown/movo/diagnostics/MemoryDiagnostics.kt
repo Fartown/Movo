@@ -86,6 +86,13 @@ internal class DiagnosticBuffer(
 
     @Synchronized fun snapshot(): Snapshot = Snapshot(entries.map { it.entry }, bytes, dropped)
     @Synchronized fun clear() { entries.clear(); bytes = 0; dropped = 0 }
+
+    /** 只留下 [keep] 为真的记录（清空运行日志时保留进行中的任务）；序号不变。 */
+    @Synchronized fun retain(keep: (DiagnosticEntry) -> Boolean) {
+        entries.removeAll { !keep(it.entry) }
+        bytes = entries.sumOf { it.bytes }
+        dropped = 0
+    }
 }
 
 /** Truncate at a Unicode code point boundary, with an actual UTF-8 byte budget. */
@@ -129,13 +136,20 @@ internal object MemoryDiagnostics {
         val run = context().run.takeIf { it.isNotBlank() } ?: return
         boundRuns[wireRunId] = run
         record("runtime", "run.bound", fields = mapOf("wire_run" to wireRunId.take(96), "conversation" to conversationId?.take(96)))
+        runCatching { io.github.fartown.movo.diagnostics.runlog.RunLog.bind(run, wireRunId, conversationId) }
     }
 
     fun boundRuns(): Map<String, String> = HashMap(boundRuns)
 
+    /** 界面任务号对应的诊断任务号；本进程里没有这次任务时为 null。 */
+    fun boundRun(wireRunId: String): String? = boundRuns[wireRunId]
+
     /** 进行中任务最近一次有进展（收到模型数据、工具开始或结束）的时刻，按诊断任务号记。 */
     private val progress = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val openTools = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    /** 本进程里正在进行的任务（已开始、还没结束）。 */
+    fun activeRuns(): Set<String> = progress.keys.toSet()
 
     fun markProgress(run: String) {
         if (run.isNotBlank() && progress.containsKey(run)) progress[run] = elapsedClock()
@@ -168,13 +182,26 @@ internal object MemoryDiagnostics {
     fun nextRequest(): String = "Q${requestSequence.incrementAndGet()}"
     fun environmentSnapshot(): Map<String, Any?> = runCatching { environment() }.getOrDefault(emptyMap())
 
-    fun <T> withRun(block: () -> T): T {
+    /**
+     * [onStart] 在写 run.started 之前调用（完整运行日志在这里建目录、写 run_start），返回的目录名写进 run.started。
+     * 收尾时在 run.ended 之后写完整运行日志的 run_end。
+     */
+    fun <T> withRun(onStart: ((String) -> String?)? = null, block: () -> T): T {
         val previous = localContext.get()
-        localContext.set(DiagnosticContext(run = "R${runSequence.incrementAndGet()}"))
+        val run = "R${runSequence.incrementAndGet()}"
+        localContext.set(DiagnosticContext(run = run))
         val started = elapsedClock()
-        record("runtime", "run.started", fields = environmentSnapshot())
-        try { return block() } finally {
+        val runLog = onStart?.let { runCatching { it(run) }.getOrNull() }
+        record("runtime", "run.started", fields = environmentSnapshot() + listOfNotNull(runLog?.let { "run_log" to it }))
+        var thrown: Throwable? = null
+        try {
+            return block()
+        } catch (failure: Throwable) {
+            thrown = failure
+            throw failure
+        } finally {
             record("runtime", "run.ended", fields = mapOf("duration_ms" to elapsedClock() - started))
+            runCatching { io.github.fartown.movo.diagnostics.runlog.RunLog.close(run, thrown) }
             if (previous == null) localContext.remove() else localContext.set(previous)
         }
     }
@@ -188,12 +215,19 @@ internal object MemoryDiagnostics {
         context: DiagnosticContext = context(),
         fields: Map<String, Any?> = emptyMap(),
     ) {
-        val details = fields.entries.asSequence().take(48).joinToString("\n") { (key, value) ->
-            "${key.take(48)}=${value?.toString()?.replace('\n', ' ')?.replace('\r', ' ')?.take(256) ?: "unknown"}"
-        }
+        val formatted = fields.entries.asSequence().take(48).map { (key, value) ->
+            key.take(48) to (value?.toString()?.replace('\n', ' ')?.replace('\r', ' ')?.take(256) ?: "unknown")
+        }.toList()
+        val details = formatted.joinToString("\n") { (key, value) -> "$key=$value" }
         val entry = buffer.append(System.currentTimeMillis(), elapsedClock(), level, category, event, context, details)
         trackProgress(context.run, event)
         sink?.let { runCatching { it(entry) } }
+        // 完整运行日志同步一份（同样的字段）。
+        runCatching {
+            io.github.fartown.movo.diagnostics.runlog.RunLog.mirror(
+                entry.category, entry.event, level, entry.context, formatted, entry.timeMillis, entry.elapsedMillis,
+            )
+        }
     }
 
     fun causes(failure: Throwable): String {

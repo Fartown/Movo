@@ -24,6 +24,19 @@ class ExecutionLeaseRegistryTest {
     }
 
     @Test
+    fun drainingReportsWhichTaskEachStopBelongsTo() {
+        val registry = ExecutionLeaseRegistry()
+        registry.acquire("prepare:run-1", task = "run-1") {}
+        registry.acquire("run:run-1", task = "run-1") {}
+        registry.acquire("terminal") {}
+        assertEquals(listOf("run-1", "run-1", "terminal"), registry.drainTasks().map { it.first })
+        assertEquals(0, registry.count())
+        registry.attachOwner(5)
+        registry.acquire("run:run-2", task = "run-2") {}
+        assertEquals(listOf("run-2"), registry.drainOwnerTasks(5).map { it.first })
+    }
+
+    @Test
     fun foregroundStartFailurePreservesRootBoundRunsButAnExplicitStopStillCancelsThem() {
         val registry = ExecutionLeaseRegistry()
         val stopped = mutableListOf<String>()

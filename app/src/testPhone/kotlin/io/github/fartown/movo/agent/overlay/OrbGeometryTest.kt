@@ -3,6 +3,8 @@ package io.github.fartown.movo.agent.overlay
 import androidx.compose.ui.geometry.Size
 import io.github.fartown.movo.agent.runtime.AgentRuntimeService
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -64,5 +66,20 @@ class OrbGeometryTest {
         val y = OrbGeometry.bubbleY(displayHeight, top, window, disc, shadow)
         // 窗口底边距屏幕底 y，卡片底边再往上一个阴影余量。
         assertEquals(d.bottom, displayHeight - y - shadow)
+    }
+
+    @Test
+    fun windowBoundsFollowGravity() {
+        // 球窗口：右上对齐，离右 24、离顶 2268，边长 132。
+        val orb = OrbGeometry.windowBounds(1440, 3200, android.view.Gravity.RIGHT or android.view.Gravity.TOP, 24, 2268, 132, 132)
+        assertEquals(OrbGeometry.Bounds(1284, 2268, 1416, 2400), orb)
+        assertTrue(orb.contains(1328f, 2300f))
+        assertFalse(orb.contains(1416f, 2300f))
+        // 展开卡窗口：右下对齐（球在右边），离右 24、离底 -20（阴影余量伸出屏幕外）。
+        val panel = OrbGeometry.windowBounds(1440, 3200, android.view.Gravity.RIGHT or android.view.Gravity.BOTTOM, 24, -20, 1000, 560)
+        assertEquals(OrbGeometry.Bounds(416, 2660, 1416, 3220), panel)
+        // 球在左边：左下对齐。
+        val leftPanel = OrbGeometry.windowBounds(1440, 3200, android.view.Gravity.LEFT or android.view.Gravity.BOTTOM, 24, 100, 1000, 560)
+        assertEquals(OrbGeometry.Bounds(24, 2540, 1024, 3100), leftPanel)
     }
 }

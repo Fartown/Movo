@@ -48,6 +48,17 @@ internal class DiagnosticStore(
         }
     }
 
+    /**
+     * 清空：删除已结束任务的记录，只留下 [keepRuns]（进行中的任务）和任务之外的系统事件。
+     * 在写线程上执行，排在此前的追加之后。
+     */
+    fun clear(keepRuns: Set<String>, snapshot: () -> List<DiagnosticEntry>, done: () -> Unit = {}) {
+        executor.execute {
+            runCatching { rewrite(snapshot().filter { it.context.run.isBlank() || it.context.run in keepRuns }) }
+            runCatching(done)
+        }
+    }
+
     private fun open(): Writer {
         file.parentFile?.mkdirs()
         return OutputStreamWriter(FileOutputStream(file, true), Charsets.UTF_8).buffered()
