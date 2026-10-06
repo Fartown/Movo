@@ -78,8 +78,12 @@ internal abstract class MovoDatabase : RoomDatabase() {
                     .also { instance = it }
             }
 
+        /** 测试关库前要先做完的事（例如等对话写入排空，免得上一个用例的写落进下一个用例的新库）。 */
+        internal val beforeCloseForTests = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
+
         @VisibleForTesting
         internal fun closeForTests() {
+            beforeCloseForTests.forEach { it() }
             synchronized(this) {
                 instance?.close()
                 instance = null

@@ -10,7 +10,6 @@ import io.github.fartown.movo.agent.voice.session.VoiceEntry
 import io.github.fartown.movo.config.Prefs
 import io.github.fartown.movo.diagnostics.MemoryDiagnostics
 import io.github.fartown.movo.ui.app.AgentAppSession
-import io.github.fartown.movo.ui.app.AgentConversationStore
 import io.github.fartown.movo.ui.model.PendingImageUi
 import org.json.JSONArray
 import org.json.JSONObject
@@ -82,8 +81,9 @@ internal object VoiceInstrumentationAccess {
         if (conversationId != null) state.selectConversation(conversationId) else state.createConversation()
     }
 
-    fun selectionSaved(context: Context, conversationId: String): Boolean =
-        AgentConversationStore.load(context).selectedConversationId == conversationId
+    fun selectionSaved(context: Context, conversationId: String): Boolean = kotlinx.coroutines.runBlocking {
+        io.github.fartown.movo.ui.app.ConversationRepository.get(context).selectedConversationId() == conversationId
+    }
 
     fun terminalToolsEnabled(): Boolean = Prefs.isEnabled(Prefs.Keys.AGENT_TERMINAL_TOOLS)
 

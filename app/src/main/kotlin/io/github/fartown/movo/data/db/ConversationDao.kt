@@ -158,18 +158,20 @@ internal interface ConversationDao : ChunkedTextDao {
 
     // —— 按对话、按行读写（v24 起，docs/solutions/conversation-storage）——
 
-    @Query("SELECT * FROM conversations WHERE id = :conversationId")
-    suspend fun conversationEntityRow(conversationId: String): ConversationEntity?
+    /** 一个对话的目录行（不读已废弃、可能很大的 history_json 列）。 */
+    @Query(
+        "SELECT id, title, thinking_enabled, reasoning_effort, " +
+            "applied_runtime_run_ids_json, roleplay_json, revisions_json, created_at, updated_at " +
+            "FROM conversations WHERE id = :conversationId"
+    )
+    suspend fun conversationMetadataRow(conversationId: String): ConversationMetadata?
 
     @Transaction
-    suspend fun conversationEntity(conversationId: String): ConversationEntity? =
-        conversationEntityRow(conversationId)?.let { row ->
-            row.copy(
-                appliedRuntimeRunIdsJson = restoreText("conversations", row.id, "runs", row.appliedRuntimeRunIdsJson),
-                roleplayJson = restoreText("conversations", row.id, "roleplay", row.roleplayJson),
-                revisionsJson = restoreText("conversations", row.id, "revisions", row.revisionsJson),
-            )
-        }
+    suspend fun conversationMetadata(conversationId: String): ConversationMetadata? =
+        conversationMetadataRow(conversationId)?.let { restoreMetadata(it) }
+
+    @Query("SELECT created_at FROM conversations WHERE id = :conversationId")
+    suspend fun createdAt(conversationId: String): Long?
 
     @Query("SELECT EXISTS(SELECT 1 FROM conversations WHERE id = :conversationId)")
     suspend fun conversationExists(conversationId: String): Boolean
@@ -214,6 +216,31 @@ internal interface ConversationDao : ChunkedTextDao {
             "WHERE t.owner_table = 'conversation_messages' AND t.field = 'content' AND t.content LIKE :pattern ESCAPE '\\'"
     )
     suspend fun searchConversationIds(pattern: String): List<String>
+
+    /** 搜索命中的消息行（正文含分块的长正文、工具名与摘要），给侧栏搜索算命中片段。 */
+    @Query(
+        "SELECT * FROM conversation_messages WHERE content LIKE :pattern ESCAPE '\\' " +
+            "OR tool_name LIKE :pattern ESCAPE '\\' OR arguments_summary LIKE :pattern ESCAPE '\\' " +
+            "OR result_summary LIKE :pattern ESCAPE '\\' " +
+            "OR id IN (SELECT owner_id FROM agent_text_chunks WHERE owner_table = 'conversation_messages' " +
+            "AND field = 'content' AND content LIKE :pattern ESCAPE '\\') " +
+            "ORDER BY conversation_id, sort_index LIMIT :limit"
+    )
+    suspend fun searchMessageRows(pattern: String, limit: Int): List<ConversationMessageEntity>
+
+    @Transaction
+    suspend fun searchMessages(pattern: String, limit: Int): List<ConversationMessageEntity> =
+        searchMessageRows(pattern, limit).map { restoreMessage(it) }
+
+    @Query("UPDATE conversations SET title = :title, updated_at = :updatedAt WHERE id = :conversationId")
+    suspend fun updateTitle(conversationId: String, title: String, updatedAt: Long)
+
+    /** 角色对话里还挂着“重新生成”的（启动恢复要核对它们的运行是否还在）；分块存的保守算进来。 */
+    @Query(
+        "SELECT id FROM conversations WHERE revisions_json LIKE '%\"pendingRewrites\":{\"%' " +
+            "OR revisions_json LIKE '@movo:chunks:%'"
+    )
+    suspend fun pendingRewriteConversationIds(): List<String>
 
     @Insert
     suspend fun insertModelMessageRow(row: ConversationModelMessageEntity): Long

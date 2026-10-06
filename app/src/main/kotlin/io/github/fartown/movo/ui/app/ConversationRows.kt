@@ -18,7 +18,7 @@ import io.github.fartown.movo.ui.model.UserMessageUi
 import org.json.JSONArray
 
 /*
- * 界面消息与 conversation_messages 一行之间的映射（从 AgentConversationStore 抽出，行为不变）。
+ * 界面消息与 conversation_messages 一行之间的映射（原 AgentConversationStore 的映射，行为不变）。
  * 不落库的类型（RunTraceMessageUi、正文为空的流式回答）映射为 null。
  */
 

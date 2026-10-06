@@ -13,7 +13,7 @@ import io.github.fartown.movo.agent.model.AgentContextSnapshot
 import io.github.fartown.movo.agent.model.AgentConversationCodec
 import io.github.fartown.movo.agent.model.AgentModelClient
 import io.github.fartown.movo.data.db.MovoDatabase
-import io.github.fartown.movo.ui.app.AgentConversationStore
+import io.github.fartown.movo.ui.app.ConversationStoreTestDriver
 import io.github.fartown.movo.ui.model.AgentChatUiState
 import io.github.fartown.movo.ui.model.UserMessageUi
 import kotlinx.coroutines.runBlocking
@@ -54,22 +54,22 @@ class AgentHistoryRetentionTest {
         val summary = AgentModelClient.ConversationMessage("assistant", "摘要", contextSummary = true, compactedUserTurns = 1)
         val state = AgentChatUiState(messages = listOf(UserMessageUi("u", text)), history = listOf(summary),
             journal = journal, input = "", isStreaming = false, thinkingEnabled = false, appliedRuntimeRunIds = listOf("run"))
-        runBlocking { AgentConversationStore.save(context, "c", mapOf("c" to state), mapOf("c" to "历史"), mapOf("c" to 1L)) }
+        runBlocking { ConversationStoreTestDriver.save(context, "c", mapOf("c" to state), mapOf("c" to "历史"), mapOf("c" to 1L)) }
         val db = MovoDatabase.get(context).openHelper.readableDatabase
         db.query("SELECT MAX(length(content)) FROM agent_text_chunks").use {
             assertTrue(it.moveToFirst())
             assertTrue(it.getInt(0) <= 16_384)
         }
         MovoDatabase.closeForTests()
-        val restored = AgentConversationStore.load(context).conversationsById.getValue("c")
+        val restored = ConversationStoreTestDriver.load(context).conversationsById.getValue("c")
         assertEquals(journal, restored.journal)
         assertEquals(listOf(summary), restored.history)
         assertEquals(text, (restored.messages.single() as UserMessageUi).content)
         assertEquals(listOf("run"), restored.appliedRuntimeRunIds)
         // 重复保存、缩短正文、删除会话都清理对应分块。
-        runBlocking { AgentConversationStore.save(context, "c", mapOf("c" to restored), mapOf("c" to "历史"), mapOf("c" to 2L)) }
-        assertEquals(journal, AgentConversationStore.load(context).conversationsById.getValue("c").journal)
-        runBlocking { AgentConversationStore.save(context, null, emptyMap(), emptyMap(), emptyMap()) }
+        runBlocking { ConversationStoreTestDriver.save(context, "c", mapOf("c" to restored), mapOf("c" to "历史"), mapOf("c" to 2L)) }
+        assertEquals(journal, ConversationStoreTestDriver.load(context).conversationsById.getValue("c").journal)
+        runBlocking { ConversationStoreTestDriver.save(context, null, emptyMap(), emptyMap(), emptyMap()) }
         MovoDatabase.get(context).openHelper.readableDatabase.query("SELECT COUNT(*) FROM agent_text_chunks").use {
             assertTrue(it.moveToFirst()); assertEquals(0, it.getInt(0))
         }

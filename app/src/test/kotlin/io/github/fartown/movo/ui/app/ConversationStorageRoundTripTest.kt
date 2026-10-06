@@ -39,7 +39,8 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], qualifiers = "en-rUS")
-class AgentConversationStoreTest {
+/** 对话存进去再读出来不走样（原 AgentConversationStoreTest，改为经 ConversationRepository）。 */
+class ConversationStorageRoundTripTest {
     private lateinit var context: Context
 
     @Before
@@ -85,13 +86,13 @@ class AgentConversationStoreTest {
         )
         var role = RoleplayConversationReducer.edit(state, original.messageId, "用户修订的回答")!!
         repeat(2) {
-            AgentConversationStore.save(
+            ConversationStoreTestDriver.save(
                 context, "role", mapOf("role" to role, "ordinary" to AgentChatHomeUiState(
                     messages = listOf(UserMessageUi(id = "ordinary-user", content = "查看电量")),
                     input = "", isStreaming = false, thinkingEnabled = false,
                 )), mapOf("role" to "旅人", "ordinary" to "查看电量"), mapOf("role" to 1L, "ordinary" to 2L),
             )
-            val restored = AgentConversationStore.load(context)
+            val restored = ConversationStoreTestDriver.load(context)
             role = restored.conversationsById.getValue("role")
             assertEquals(binding, role.roleplay)
             assertEquals(listOf(original), role.journal)
@@ -174,7 +175,7 @@ class AgentConversationStoreTest {
         )
 
         runBlocking {
-            AgentConversationStore.save(
+            ConversationStoreTestDriver.save(
                 context = context,
                 selectedConversationId = "conv-1",
                 conversationsById = mapOf("conv-1" to conversation),
@@ -183,7 +184,7 @@ class AgentConversationStoreTest {
             )
         }
 
-        val snapshot = AgentConversationStore.load(context)
+        val snapshot = ConversationStoreTestDriver.load(context)
 
         assertEquals("conv-1", snapshot.selectedConversationId)
         assertEquals("屏幕分析", snapshot.titles.getValue("conv-1"))
@@ -205,7 +206,7 @@ class AgentConversationStoreTest {
             detail = "upstream timeout",
         )
         runBlocking {
-            AgentConversationStore.save(
+            ConversationStoreTestDriver.save(
                 context = context,
                 selectedConversationId = "conv-notice",
                 conversationsById = mapOf(
@@ -221,7 +222,7 @@ class AgentConversationStoreTest {
             )
         }
 
-        val snapshot = AgentConversationStore.load(context)
+        val snapshot = ConversationStoreTestDriver.load(context)
         assertEquals("", snapshot.titles.getValue("conv-notice"))
         assertEquals(
             notice,
@@ -237,7 +238,7 @@ class AgentConversationStoreTest {
             SuggestionChipsMessageUi(id = "suggestions-assistant-run-1-1", prompts = listOf("设置取件提醒", "把取件码发给我自己")),
         )
         runBlocking {
-            AgentConversationStore.save(
+            ConversationStoreTestDriver.save(
                 context = context,
                 selectedConversationId = "conv-follow-up",
                 conversationsById = mapOf(
@@ -253,7 +254,7 @@ class AgentConversationStoreTest {
             )
         }
 
-        val restored = AgentConversationStore.load(context).conversationsById.getValue("conv-follow-up").messages
+        val restored = ConversationStoreTestDriver.load(context).conversationsById.getValue("conv-follow-up").messages
         assertEquals(messages.last(), restored.last())
         assertEquals(3, restored.size)
     }
@@ -270,7 +271,7 @@ class AgentConversationStoreTest {
             AgentMessageUi(id = "assistant-run-2-1", content = "电量 82%", isStreaming = false),
         )
         runBlocking {
-            AgentConversationStore.save(
+            ConversationStoreTestDriver.save(
                 context = context,
                 selectedConversationId = "conv-turn-span",
                 conversationsById = mapOf(
@@ -286,7 +287,7 @@ class AgentConversationStoreTest {
             )
         }
 
-        val restored = AgentConversationStore.load(context).conversationsById.getValue("conv-turn-span").messages
+        val restored = ConversationStoreTestDriver.load(context).conversationsById.getValue("conv-turn-span").messages
         assertEquals(messages.first(), restored.first())
     }
 
@@ -309,7 +310,7 @@ class AgentConversationStoreTest {
             )
         }
 
-        val restored = AgentConversationStore.load(context)
+        val restored = ConversationStoreTestDriver.load(context)
             .conversationsById
             .getValue("conv-unknown")
 
@@ -359,7 +360,7 @@ class AgentConversationStoreTest {
         val updatedAt = conversations.keys.associateWith { id -> id.removePrefix("conv-").toLong() }
 
         runBlocking {
-            AgentConversationStore.save(
+            ConversationStoreTestDriver.save(
                 context = context,
                 selectedConversationId = "conv-0",
                 conversationsById = conversations,
@@ -368,7 +369,7 @@ class AgentConversationStoreTest {
             )
         }
 
-        val snapshot = AgentConversationStore.load(context)
+        val snapshot = ConversationStoreTestDriver.load(context)
 
         assertEquals(60, snapshot.conversationsById.size)
         val restored = snapshot.conversationsById.getValue("conv-0")
@@ -393,7 +394,7 @@ class AgentConversationStoreTest {
         }
 
         runBlocking {
-            AgentConversationStore.save(
+            ConversationStoreTestDriver.save(
                 context = context,
                 selectedConversationId = "conv-large",
                 conversationsById = mapOf(
@@ -412,16 +413,16 @@ class AgentConversationStoreTest {
             )
         }
 
-        val checkpoint = runBlocking {
-            MovoDatabase.get(context)
-                .conversationDao()
-                .contextCheckpoint("conv-large")!!
+        // 模型历史一条一行（v24 起不再写检查点表），大的那几条分块存。
+        val storedRows = runBlocking {
+            MovoDatabase.get(context).conversationDao()
+                .modelMessageCount("conv-large", io.github.fartown.movo.data.db.ConversationModelMessageEntity.LOG_HISTORY)
         }
-        val restored = AgentConversationStore.load(context)
+        val restored = ConversationStoreTestDriver.load(context)
             .conversationsById
             .getValue("conv-large")
 
-        assertTrue(checkpoint.historyJson.length > 96_000)
+        assertEquals(history.size, storedRows)
         assertEquals(history, restored.history)
         assertEquals(history, restored.journal)
         assertEquals(displayedContent, (restored.messages.single() as UserMessageUi).content)
@@ -457,7 +458,7 @@ class AgentConversationStoreTest {
             )
         }
 
-        val restored = AgentConversationStore.load(context)
+        val restored = ConversationStoreTestDriver.load(context)
             .conversationsById
             .getValue("conv-legacy-large")
 
@@ -467,7 +468,7 @@ class AgentConversationStoreTest {
 
     @Test
     fun loadKeepsDatabaseEmptyUntilFirstMessageIsSent() {
-        val snapshot = AgentConversationStore.load(context)
+        val snapshot = ConversationStoreTestDriver.load(context)
 
         assertTrue(snapshot.conversationsById.isEmpty())
         assertEquals(null, snapshot.selectedConversationId)
@@ -521,37 +522,6 @@ class AgentConversationStoreTest {
     }
 
     @Test
-    fun savingEmptySnapshotClearsPreviouslyPersistedConversations() {
-        runBlocking {
-            AgentConversationStore.save(
-                context = context,
-                selectedConversationId = "conv-1",
-                conversationsById = mapOf(
-                    "conv-1" to AgentChatHomeUiState(
-                        messages = listOf(UserMessageUi(id = "user-1", content = "hello")),
-                        input = "",
-                        isStreaming = false,
-                        thinkingEnabled = false,
-                    )
-                ),
-                titles = mapOf("conv-1" to "hello"),
-                updatedAt = mapOf("conv-1" to 1L),
-            )
-            AgentConversationStore.save(
-                context = context,
-                selectedConversationId = null,
-                conversationsById = emptyMap(),
-                titles = emptyMap(),
-                updatedAt = emptyMap(),
-            )
-        }
-
-        val snapshot = AgentConversationStore.load(context)
-        assertTrue(snapshot.conversationsById.isEmpty())
-        assertEquals(null, snapshot.selectedConversationId)
-    }
-
-    @Test
     fun monitorRowsKeepExitCodeLimitAndTailAndLegacyRowsAreNormalized() = runBlocking {
         val rows = listOf(
             io.github.fartown.movo.ui.model.MonitorEventMessageUi(
@@ -567,12 +537,12 @@ class AgentConversationStoreTest {
                 seq = 4, atMillis = 30L, text = "", reason = "TIMEOUT", limitMs = 7_200_000L, startsTurn = true, historyAnchor = true,
             ),
         )
-        AgentConversationStore.save(
+        ConversationStoreTestDriver.save(
             context, "conv-monitor",
             mapOf("conv-monitor" to AgentChatHomeUiState(messages = rows, input = "", isStreaming = false, thinkingEnabled = false)),
             mapOf("conv-monitor" to "监听"), mapOf("conv-monitor" to 1L),
         )
-        assertEquals(rows, AgentConversationStore.load(context).conversationsById.getValue("conv-monitor").messages)
+        assertEquals(rows, ConversationStoreTestDriver.load(context).conversationsById.getValue("conv-monitor").messages)
 
         // 旧版本：到期行的时长存在正文里；「已停止」「已中断」也被记成了一轮的起点。
         MovoDatabase.get(context).conversationDao().replaceAll(
@@ -591,30 +561,12 @@ class AgentConversationStoreTest {
             ),
             state = ConversationStateEntity(selectedConversationId = "conv-legacy"),
         )
-        val legacy = AgentConversationStore.load(context).conversationsById.getValue("conv-legacy").messages
+        val legacy = ConversationStoreTestDriver.load(context).conversationsById.getValue("conv-legacy").messages
             .filterIsInstance<io.github.fartown.movo.ui.model.MonitorEventMessageUi>()
         assertEquals(1_800_000L, legacy[0].limitMs)
         assertEquals("", legacy[0].text)
         assertTrue(legacy[0].startsTurn)
         assertFalse(legacy[1].startsTurn)
-    }
-
-    @Test
-    fun queuedSavesAreCoalescedIntoTheLatestState() = runBlocking {
-        fun state(text: String) = mapOf(
-            "conv-c" to AgentChatHomeUiState(
-                messages = listOf(UserMessageUi(id = "u", content = text)), input = "", isStreaming = false, thinkingEnabled = false,
-            ),
-        )
-        val older = AgentConversationStore.request("conv-c", state("旧"), mapOf("conv-c" to "c"), mapOf("conv-c" to 1L))
-        val newer = AgentConversationStore.request("conv-c", state("新"), mapOf("conv-c" to "c"), mapOf("conv-c" to 2L))
-
-        // 先排队的那次提交直接写最新登记的状态；后面那次已经被它覆盖，不再整库重写。
-        AgentConversationStore.commit(context, older)
-        assertEquals("新", (AgentConversationStore.load(context).conversationsById.getValue("conv-c").messages.single() as UserMessageUi).content)
-        MovoDatabase.get(context).conversationDao().replaceAll(conversations = emptyList(), messages = emptyList(), state = null)
-        AgentConversationStore.commit(context, newer)
-        assertTrue(AgentConversationStore.load(context).conversationsById.isEmpty())
     }
 
     @Test
@@ -634,7 +586,7 @@ class AgentConversationStoreTest {
             thinkingEnabled = false,
         )
         runBlocking {
-            AgentConversationStore.save(
+            ConversationStoreTestDriver.save(
                 context = context,
                 selectedConversationId = "conv-v",
                 conversationsById = mapOf("conv-v" to conversation),
@@ -642,7 +594,7 @@ class AgentConversationStoreTest {
                 updatedAt = mapOf("conv-v" to 1L),
             )
         }
-        val restored = AgentConversationStore.load(context).conversationsById.getValue("conv-v").messages
+        val restored = ConversationStoreTestDriver.load(context).conversationsById.getValue("conv-v").messages
             .filterIsInstance<ToolActivityMessageUi>()
         assertEquals(kept, restored.first { it.id == "tool-1" }.view)
         // 个人数据、截图等临时视图只在本次运行中显示：重启后只剩摘要。

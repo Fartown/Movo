@@ -46,7 +46,7 @@ class ConversationRepositoryTest {
         context.deleteDatabase("movo.db")
         dao = MovoDatabase.get(context).conversationDao()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        repository = ConversationRepository(dao, scope)
+        repository = ConversationRepository({ dao }, scope)
     }
 
     @After
@@ -200,7 +200,7 @@ class ConversationRepositoryTest {
         repository.saveConversation("c1", state(emptyList(), effort = ReasoningEffort.HIGH), "第二版", updatedAt = 9).await()
         repository.select("c1").await()
 
-        val row = dao.conversationEntity("c1")!!
+        val row = dao.conversationMetadata("c1")!!
         assertEquals(5, row.createdAt)
         assertEquals(9, row.updatedAt)
         assertEquals("第二版", row.title)

@@ -32,10 +32,12 @@ import kotlinx.serialization.json.Json
  * - 读：用到什么读什么。列表只读对话目录和每个对话的最后一行，打开一个对话才读它的全部内容。
  */
 internal class ConversationRepository(
-    private val dao: ConversationDao,
+    /** 每次用时取当前数据库的 DAO（测试会关库重建）。 */
+    private val daoProvider: () -> ConversationDao,
     scope: CoroutineScope,
-    private val now: () -> Long = System::currentTimeMillis,
 ) {
+    private val dao: ConversationDao get() = daoProvider()
+
     data class Summary(
         val id: String,
         val title: String,
@@ -51,20 +53,34 @@ internal class ConversationRepository(
         val state: AgentChatHomeUiState,
     )
 
+    /** 启动时要的：全部对话的目录（含最后一行），以及选中的那一个的完整内容。 */
+    data class Startup(
+        val summaries: List<Summary>,
+        val selectedConversationId: String?,
+        val selected: Loaded?,
+    )
+
     private class Write(val block: suspend () -> Unit) {
         val done = CompletableDeferred<Unit>()
     }
 
     private val writes = Channel<Write>(Channel.UNLIMITED)
 
-    // 以下缓存只在写线程上读写：每个对话已落库的排序键、每段模型消息已落库的条数。写失败就清掉，下次从库里重读。
+    // 以下缓存只在写线程上读写：每个对话已落库的排序键、每段模型消息已落库的条数。写失败或换了数据库就清掉，下次从库里重读。
     private val sortKeys = HashMap<String, MutableMap<String, Long>>()
     private val modelCounts = HashMap<String, Int>()
+    private var cachedFor: ConversationDao? = null
 
     init {
         scope.launch(Dispatchers.IO) {
             for (write in writes) {
                 try {
+                    val current = dao
+                    if (current !== cachedFor) {
+                        sortKeys.clear()
+                        modelCounts.clear()
+                        cachedFor = current
+                    }
                     write.block()
                     write.done.complete(Unit)
                 } catch (cancelled: CancellationException) {
@@ -85,7 +101,16 @@ internal class ConversationRepository(
     /** 等前面排着的写全部完成。 */
     suspend fun flush() = enqueue {}.await()
 
-    // —— 读 ——
+    // —— 读（都先等排着的写完成，读到的总是自己刚写的）——
+
+    /** 选中的对话已不在、或没记过选中时，打开最近的那个（与旧存储一致）。 */
+    suspend fun startup(): Startup {
+        flush()
+        val summaries = summaries(Int.MAX_VALUE)
+        val stored = selectedConversationId()?.takeIf { id -> summaries.any { it.id == id } }
+        val selected = stored ?: summaries.firstOrNull()?.id
+        return Startup(summaries, selected, selected?.let { load(it) })
+    }
 
     suspend fun summaries(limit: Int, offset: Int = 0): List<Summary> {
         val rows = dao.conversationsPage(limit, offset)
@@ -109,7 +134,8 @@ internal class ConversationRepository(
 
     /** 一个对话的全部内容。模型历史还没拆成行的旧数据（v24 迁移前、或迁移时解析失败）退回旧检查点，再退回按显示内容重建。 */
     suspend fun load(conversationId: String): Loaded? {
-        val entity = dao.conversationEntity(conversationId) ?: return null
+        flush()
+        val entity = dao.conversationMetadata(conversationId) ?: return null
         val rows = dao.messagesOf(conversationId)
         val storedHistory = modelLog(conversationId, ConversationModelMessageEntity.LOG_HISTORY)
         val storedJournal = modelLog(conversationId, ConversationModelMessageEntity.LOG_JOURNAL)
@@ -149,10 +175,29 @@ internal class ConversationRepository(
 
     /** 标题、正文、工具名与摘要里出现 [query] 的对话 id。 */
     suspend fun search(query: String): Set<String> {
+        val pattern = likePattern(query) ?: return emptySet()
+        flush()
+        return dao.searchConversationIds(pattern).toSet()
+    }
+
+    /** 正文、工具名与摘要里出现 [query] 的消息，按对话分组（侧栏搜索据此判断命中并取命中片段）。 */
+    suspend fun searchMessages(query: String, limit: Int = 500): Map<String, List<AgentChatMessageUi>> {
+        val pattern = likePattern(query) ?: return emptyMap()
+        flush()
+        return dao.searchMessages(pattern, limit)
+            .mapNotNull { row -> row.toChatMessage()?.let { row.conversationId to it } }
+            .groupBy({ it.first }, { it.second })
+    }
+
+    suspend fun conversationIdsWithPendingRewrites(): List<String> {
+        flush()
+        return dao.pendingRewriteConversationIds()
+    }
+
+    private fun likePattern(query: String): String? {
         val trimmed = query.trim()
-        if (trimmed.isEmpty()) return emptySet()
-        val escaped = trimmed.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        return dao.searchConversationIds("%$escaped%").toSet()
+        if (trimmed.isEmpty()) return null
+        return "%" + trimmed.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
     }
 
     // —— 写 ——
@@ -171,7 +216,7 @@ internal class ConversationRepository(
             updatedAt = updatedAt,
         )
         return enqueue {
-            val createdAt = dao.conversationEntityRow(conversationId)?.createdAt ?: row.createdAt
+            val createdAt = dao.createdAt(conversationId) ?: row.createdAt
             dao.insertConversations(listOf(row.copy(createdAt = createdAt)))
         }
     }
@@ -237,6 +282,17 @@ internal class ConversationRepository(
         modelCounts[cacheKey] = after.size
     }
 
+    /** 只改标题（对话不在内存里时从侧栏改名）。 */
+    fun renameConversation(conversationId: String, title: String, updatedAt: Long): Deferred<Unit> = enqueue {
+        dao.updateTitle(conversationId, title, updatedAt)
+    }
+
+    /** 库被整体换掉之后（导入备份）：清掉写线程上记着的排序键与条数。 */
+    fun invalidateCaches(): Deferred<Unit> = enqueue {
+        sortKeys.clear()
+        modelCounts.clear()
+    }
+
     /** 删掉这个对话：消息、模型消息、分块随外键与触发器一起删。 */
     fun deleteConversation(conversationId: String): Deferred<Unit> = enqueue {
         dao.deleteConversationRow(conversationId)
@@ -254,13 +310,21 @@ internal class ConversationRepository(
             encodeDefaults = true
         }
 
-        @Volatile private var instance: ConversationRepository? = null
+        /** 按 Application 区分（Robolectric 每个用例一个新的 Application、各自的数据目录；正式运行只有一个）。 */
+        @Volatile private var instance: Pair<Context, ConversationRepository>? = null
 
-        fun get(context: Context): ConversationRepository = instance ?: synchronized(this) {
-            instance ?: ConversationRepository(
-                MovoDatabase.get(context.applicationContext).conversationDao(),
-                CoroutineScope(SupervisorJob() + Dispatchers.IO),
-            ).also { instance = it }
+        fun get(context: Context): ConversationRepository {
+            val appContext = context.applicationContext
+            instance?.let { (owner, repository) -> if (owner === appContext) return repository }
+            return synchronized(this) {
+                instance?.takeIf { it.first === appContext }?.second ?: ConversationRepository(
+                    { MovoDatabase.get(appContext).conversationDao() },
+                    CoroutineScope(SupervisorJob() + Dispatchers.IO),
+                ).also { repository ->
+                    instance = appContext to repository
+                    MovoDatabase.beforeCloseForTests += { kotlinx.coroutines.runBlocking { runCatching { repository.flush() } } }
+                }
+            }
         }
     }
 }

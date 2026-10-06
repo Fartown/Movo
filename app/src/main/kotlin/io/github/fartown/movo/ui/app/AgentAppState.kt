@@ -61,6 +61,7 @@ import io.github.fartown.movo.config.Prefs
 import io.github.fartown.movo.core.AndroidAgentLogger
 import io.github.fartown.movo.core.safeLogType
 import io.github.fartown.movo.data.model.ModelReasoningCapabilities
+import io.github.fartown.movo.data.db.ConversationModelMessageEntity
 import io.github.fartown.movo.data.model.ReasoningEffort
 import io.github.fartown.movo.data.repository.AgentMemoryRepository
 import io.github.fartown.movo.data.repository.MovoBackupRepository
@@ -129,6 +130,7 @@ import io.github.fartown.movo.ui.model.MonitorEventMessageUi
 import io.github.fartown.movo.ui.model.isTurnStart
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -175,12 +177,13 @@ internal class AgentAppState(
     var queuedTextSubmission by mutableStateOf<QueuedTextSubmission?>(null)
         private set
 
-    private val persistenceLock = Any()
-    private var persistenceJob: Job? = null
+    /** 对话存储（docs/solutions/conversation-storage）：数据库是唯一的真身，内存里只放用得到的对话。 */
+    private val conversationRepository = ConversationRepository.get(appContext)
     private val runtimeRecoveryInProgress = AtomicBoolean(false)
     private val runtimeRecoveryMutex = Mutex()
     private val defaultThinkingEnabled = agentBooleanForUi(Prefs.Keys.AGENT_THINKING_ENABLED)
-    private val initialConversations = AgentConversationStore.load(appContext)
+    // 启动只读对话目录（每个对话一行加最后一条）和选中的那一个的完整内容，不再把全部对话读进内存。
+    private val initialConversations = runBlocking(Dispatchers.IO) { conversationRepository.startup() }
     private var skillNoticeSequence = 0L
     private var pendingSkillZipUri: Uri? = null
     private var pendingSkillZipSha256: String? = null
@@ -225,9 +228,31 @@ internal class AgentAppState(
         appContext.getString(R.string.movo_notice_queued_title),
         appContext.getString(R.string.movo_notice_queued_desc),
     )
-    private var conversationsById: Map<String, AgentChatHomeUiState> by mutableStateOf(initialConversations.conversationsById)
-    private var conversationTitles: Map<String, String> = initialConversations.titles
-    private var conversationUpdatedAt: Map<String, Long> = initialConversations.updatedAt
+    /** 已读进内存的对话：选中的、正在执行的、排着队的、语音在用的；其余只在库里，用到时再读（[ensureLoaded]）。 */
+    private var conversationsById: Map<String, AgentChatHomeUiState> by mutableStateOf(
+        initialConversations.selected?.let { mapOf(it.id to it.state) }.orEmpty()
+    )
+    /** 全部对话（含没读进内存的）的标题与更新时间，侧栏用。 */
+    private var conversationTitles: Map<String, String> = initialConversations.summaries.associate { it.id to it.title }
+    private var conversationUpdatedAt: Map<String, Long> = initialConversations.summaries.associate { it.id to it.updatedAt }
+    /** 已存进库的对话；没读进内存的那些，侧栏预览与角色名用 [storedPreviews]。 */
+    private var storedConversationIds: Set<String> = initialConversations.summaries.mapTo(LinkedHashSet()) { it.id }
+    private var storedPreviews: Map<String, ConversationRepository.Summary> = initialConversations.summaries.associateBy { it.id }
+    /** 每个已加载对话上次交给存储的样子：保存时只写跟它相比变了的部分。 */
+    private val persistedStates = HashMap<String, AgentChatHomeUiState>().apply {
+        initialConversations.selected?.let { put(it.id, it.state) }
+    }
+    private val persistedMeta = HashMap<String, Pair<String, Long>>().apply {
+        initialConversations.selected?.let { put(it.id, it.title to it.updatedAt) }
+    }
+    private var persistedSelection: String? = initialConversations.selectedConversationId
+
+    /** 测试用：现在读进内存的对话。 */
+    @androidx.annotation.VisibleForTesting
+    internal val loadedConversationIdsForTests: Set<String> get() = conversationsById.keys
+
+    private fun isKnownConversation(conversationId: String) =
+        conversationId in conversationsById || conversationId in storedConversationIds
 
     var homeState by mutableStateOf(
         selectedConversationId?.let(conversationsById::get) ?: emptyChatState(defaultThinkingEnabled)
@@ -559,23 +584,28 @@ internal class AgentAppState(
             }
         }
 
-        val pendingPersistence = synchronized(persistenceLock) { persistenceJob }
-        pendingPersistence?.join()
+        conversationRepository.flush()
         val summary = MovoBackupRepository.import(appContext, input)
         reloadConversationsAfterBackup()
         return summary
     }
 
     private suspend fun reloadConversationsAfterBackup() {
-        val snapshot = withContext(Dispatchers.IO) {
-            AgentConversationStore.load(appContext)
-        }
+        conversationRepository.invalidateCaches().await()
+        val snapshot = withContext(Dispatchers.IO) { conversationRepository.startup() }
         withContext(Dispatchers.Main.immediate) {
             io.github.fartown.movo.ui.components.AgentConversationDraftStore.shared.clear()
             selectedConversationId = snapshot.selectedConversationId
-            conversationsById = snapshot.conversationsById
-            conversationTitles = snapshot.titles
-            conversationUpdatedAt = snapshot.updatedAt
+            conversationsById = snapshot.selected?.let { mapOf(it.id to it.state) }.orEmpty()
+            conversationTitles = snapshot.summaries.associate { it.id to it.title }
+            conversationUpdatedAt = snapshot.summaries.associate { it.id to it.updatedAt }
+            storedConversationIds = snapshot.summaries.mapTo(LinkedHashSet()) { it.id }
+            storedPreviews = snapshot.summaries.associateBy { it.id }
+            persistedStates.clear()
+            persistedMeta.clear()
+            snapshot.selected?.let { persistedStates[it.id] = it.state; persistedMeta[it.id] = it.title to it.updatedAt }
+            persistedSelection = snapshot.selectedConversationId
+            contentMatchCache.clear()
             fileAttachmentOwnerVersion += 1
             homeState = selectedConversationId
                 ?.let(conversationsById::get)
@@ -587,9 +617,9 @@ internal class AgentAppState(
             )
             refreshConversationSummaries()
             // 导入后不存在的对话：它们的后台监听没人管了，停掉；排着的事件一起丢掉。
-            MonitorRegistry.stopOrphans(conversationsById.keys)
-            monitorQueue.retainConversations(conversationsById.keys)
-            deferredMonitorRows.keys.retainAll(conversationsById.keys)
+            MonitorRegistry.stopOrphans(storedConversationIds)
+            monitorQueue.retainConversations(storedConversationIds)
+            deferredMonitorRows.keys.retainAll(storedConversationIds)
         }
     }
 
@@ -644,6 +674,13 @@ internal class AgentAppState(
             activeRunId = activeRunId,
             locallyObservedRunId = locallyObservedRunId,
         )
+        // 恢复要改的对话可能不在内存里：先读进来。
+        ensureLoaded(buildList {
+            plan.completed.forEach { add(AgentUiHandoffPayload.from(it.result.handoff.payload).conversationId) }
+            plan.interrupted.forEach { add(AgentUiHandoffPayload.from(it.handoff.payload).conversationId) }
+            plan.reattach?.let { add(AgentUiHandoffPayload.from(it.handoff.payload).conversationId) }
+            if (activeStateKnown && terminalStateKnown) addAll(conversationRepository.conversationIdsWithPendingRewrites())
+        })
         val orphanRewrites = if (activeStateKnown && terminalStateKnown) withContext(Dispatchers.Main) {
             val observed = checkpoints.mapTo(mutableSetOf()) { it.runId }.apply {
                 addAll(completedRuns.map { it.result.runId })
@@ -860,6 +897,11 @@ internal class AgentAppState(
                 .filter { AgentExternalArchivePayload.from(it.handoff.payload) != null }
         }
         if (archivedRuns.isEmpty()) return
+        ensureLoaded(archivedRuns.mapNotNull { archivedRun ->
+            AgentExternalArchivePayload.from(archivedRun.handoff.payload)?.let { payload ->
+                archiveConversationId(source = archivedRun.handoff.source, conversationKey = payload.conversationKey)
+            }
+        })
 
         withContext(Dispatchers.Main) {
             val importedRunIds = archivedRuns.mapNotNull { archivedRun ->
@@ -879,9 +921,10 @@ internal class AgentAppState(
         // Resume and focus recovery can already be in flight. Await it, then include the latest
         // terminal result before selecting the existing chat; never fall back to a new conversation.
         withContext(Dispatchers.IO) { recoverRuntimeState() }
+        val conversationId = if (target.source == AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE) target.key
+            else archiveConversationId(source = target.source, conversationKey = target.key)
+        ensureLoaded(listOf(conversationId))
         return withContext(Dispatchers.Main.immediate) {
-            val conversationId = if (target.source == AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE) target.key
-                else archiveConversationId(source = target.source, conversationKey = target.key)
             val state = conversationsById[conversationId]
             if (state == null || (requiredRunId != null && !AgentRuntimeHistoryReducer.wasApplied(state, requiredRunId))) {
                 false
@@ -998,6 +1041,14 @@ internal class AgentAppState(
     }
 
     fun selectConversation(conversationId: String) {
+        if (conversationId !in conversationsById) {
+            // 只在库里：读进来再选（几毫秒到几十毫秒），期间界面停在原来的对话。
+            if (conversationId in storedConversationIds) scope.launch {
+                ensureLoaded(listOf(conversationId))
+                if (conversationId in conversationsById) selectConversation(conversationId)
+            }
+            return
+        }
         io.github.fartown.movo.ui.share.ShareIntake.clear()
         if (homeState.messageEdit != null) cancelMessageEdit()
         val state = conversationsById[conversationId] ?: return
@@ -1015,6 +1066,7 @@ internal class AgentAppState(
         homeState = resolvedState
         conversationPaneState = conversationPaneState.copy(selectedConversationId = conversationId)
         persistConversations()
+        unloadIdleConversations()
     }
 
     fun createConversation() {
@@ -1093,10 +1145,13 @@ internal class AgentAppState(
         conversationsById = conversationsById - conversationId
         conversationTitles = conversationTitles - conversationId
         conversationUpdatedAt = conversationUpdatedAt - conversationId
+        forgetStoredConversation(conversationId)
+        // 删掉选中的对话后打开最近的那个；它不在内存里就先显示空白，读进来后再选上。
+        val nextId = if (!wasSelected) null else (conversationsById.keys + storedConversationIds)
+            .maxByOrNull { conversationUpdatedAt[it] ?: 0L }
         if (wasSelected) {
             fileAttachmentOwnerVersion += 1
-            val nextId = conversationsById.keys.firstOrNull()
-            if (nextId != null) {
+            if (nextId != null && nextId in conversationsById) {
                 selectedConversationId = nextId
                 homeState = conversationsById.getValue(nextId).withCurrentReasoningCapabilities()
                 conversationsById = conversationsById + (nextId to homeState)
@@ -1108,19 +1163,23 @@ internal class AgentAppState(
         conversationPaneState = conversationPaneState.copy(selectedConversationId = selectedConversationId)
         refreshConversationSummaries()
         persistConversations()
+        if (nextId != null && nextId !in conversationsById) selectConversation(nextId)
     }
 
     fun renameConversation(conversationId: String, title: String) {
         val trimmed = title.trim()
         if (trimmed.isBlank()) return
+        val now = System.currentTimeMillis()
         conversationTitles = conversationTitles + (conversationId to trimmed)
-        conversationUpdatedAt = conversationUpdatedAt + (conversationId to System.currentTimeMillis())
+        conversationUpdatedAt = conversationUpdatedAt + (conversationId to now)
         refreshConversationSummaries()
-        persistConversations()
+        if (conversationId in conversationsById) persistConversations()
+        else if (conversationId in storedConversationIds) conversationRepository.renameConversation(conversationId, trimmed, now)
     }
 
-    fun exportConversationMarkdown(conversationId: String): String? {
-        val state = conversationsById[conversationId] ?: return null
+    suspend fun exportConversationMarkdown(conversationId: String): String? {
+        ensureLoaded(listOf(conversationId))
+        val state = withContext(Dispatchers.Main.immediate) { conversationsById[conversationId] } ?: return null
         val title = conversationTitles[conversationId]?.takeIf { it.isNotBlank() }
             ?: appContext.getString(R.string.conversation_unnamed)
         return ConversationMarkdownExporter.export(
@@ -1548,6 +1607,7 @@ internal class AgentAppState(
             conversationsById = conversationsById - conversationId
             conversationTitles = conversationTitles - conversationId
             conversationUpdatedAt = conversationUpdatedAt - conversationId
+            forgetStoredConversation(conversationId)
             fileAttachmentOwnerVersion += 1
             selectedConversationId = null
             homeState = emptyChatState(defaultThinkingEnabled).withCurrentReasoningCapabilities()
@@ -2894,10 +2954,18 @@ internal class AgentAppState(
      */
     private fun onMonitorNotice(notice: MonitorNotice) {
         val conversationId = notice.conversationId
-        if (conversationsById[conversationId] == null) {
+        if (!isKnownConversation(conversationId)) {
             // 对话已经不在了（删除、删光轮次、导入备份）：这个监听没人管了，停掉。
             MonitorRegistry.stop(notice.taskId, MonitorEndReason.SESSION_END)
             monitorQueue.dropConversation(conversationId)
+            return
+        }
+        if (conversationId !in conversationsById) {
+            // 对话只在库里：读进来再处理这条通知。
+            scope.launch {
+                ensureLoaded(listOf(conversationId))
+                if (conversationId in conversationsById) onMonitorNotice(notice)
+            }
             return
         }
         AndroidAgentLogger.info(
@@ -3248,10 +3316,11 @@ internal class AgentAppState(
     /** 对话不在了、或是角色对话（不提供监听）：停掉它的监听，丢掉排着的事件。 */
     private fun dropMonitorsWithoutConversation() {
         monitorQueue.conversations().forEach { conversationId ->
-            val state = conversationsById[conversationId]
-            if (state == null || state.roleplay != null) forgetMonitorsOf(conversationId)
+            val roleplay = conversationsById[conversationId]?.let { it.roleplay != null }
+                ?: storedPreviews[conversationId]?.characterName?.let { true }
+            if (!isKnownConversation(conversationId) || roleplay == true) forgetMonitorsOf(conversationId)
         }
-        deferredMonitorRows.keys.retainAll(conversationsById.keys)
+        deferredMonitorRows.keys.retainAll { isKnownConversation(it) }
     }
 
     /** 对话被删除 / 移除：停掉它的后台监听（结束进程在注册表自己的线程池里，不卡主线程），丢掉排着的事件。 */
@@ -3280,6 +3349,7 @@ internal class AgentAppState(
         if (interrupted.isEmpty()) return
         // 会话在构造时已从数据库载入；推到 init 之后再补行。
         scope.launch {
+            ensureLoaded(interrupted.map { it.conversationId })
             interrupted.filter { it.conversationId in conversationsById }.groupBy { it.conversationId }.forEach { (conversationId, items) ->
                 appendMonitorRows(conversationId, items.map { item ->
                     MonitorEventMessageUi(
@@ -3517,12 +3587,14 @@ internal class AgentAppState(
     }
 
     private fun refreshConversationSummaries() {
-        val summaries = conversationsById.entries
-            .sortedByDescending { (id, _) ->
+        val summaries = (conversationsById.keys + storedConversationIds)
+            .sortedByDescending { id ->
                 conversationUpdatedAt[id] ?: 0L
             }
-            .map { (id, state) ->
-                val lastMessage = state.messages.lastOrNull()
+            .map { id ->
+                // 没读进内存的对话用库里存的最后一行。
+                val state = conversationsById[id]
+                val lastMessage = if (state != null) state.messages.lastOrNull() else storedPreviews[id]?.lastMessage
                 ConversationSummaryUi(
                     id = id,
                     title = conversationTitles[id].orEmpty().ifBlank {
@@ -3550,7 +3622,7 @@ internal class AgentAppState(
                         is MonitorEventMessageUi -> MonitorRowLabels.label(appContext, lastMessage)
                         else -> appContext.getString(R.string.conversation_preview_empty)
                     }.take(MAX_PREVIEW_CHARS),
-                    timeLabel = if (state.isStreaming) {
+                    timeLabel = if (state?.isStreaming == true) {
                         appContext.getString(R.string.time_now)
                     } else {
                         conversationUpdatedAt[id]?.let { timestamp ->
@@ -3565,17 +3637,19 @@ internal class AgentAppState(
                     },
                     updatedAtMillis = conversationUpdatedAt[id] ?: 0L,
                     mode = ConversationModeUi.Chat,
-                    characterName = state.roleplay?.characterName,
-                    isActiveRun = state.isStreaming,
+                    characterName = if (state != null) state.roleplay?.characterName else storedPreviews[id]?.characterName,
+                    isActiveRun = state?.isStreaming == true,
                 )
             }
         val query = conversationPaneState.searchQuery.trim()
+        if (query.isBlank()) storedSearch = null
         conversationPaneState = conversationPaneState.copy(
             selectedConversationId = selectedConversationId,
             conversations = if (query.isBlank()) {
                 summaries
             } else {
                 contentMatchCache.keys.retainAll(conversationsById.keys)
+                requestStoredSearch(query)
                 summaries.mapNotNull { summary ->
                     val titleHit = summary.title.contains(query, ignoreCase = true)
                     val previewHit = summary.preview.contains(query, ignoreCase = true)
@@ -3594,9 +3668,32 @@ internal class AgentAppState(
     // 内容匹配按（查询词, 会话状态引用）缓存：刷新摘要时未变化的会话不重复全文扫描。
     private val contentMatchCache = mutableMapOf<String, ContentMatchCacheEntry>()
 
+    /** 没读进内存的对话的搜索命中：在库里查到的消息（查询词 → 对话 → 命中的消息）。 */
+    private var storedSearch: Pair<String, Map<String, List<AgentChatMessageUi>>>? = null
+    private var storedSearchJob: Job? = null
+
+    private fun requestStoredSearch(query: String) {
+        if (storedSearch?.first == query || storedSearchJob?.isActive == true && pendingStoredSearch == query) return
+        pendingStoredSearch = query
+        storedSearchJob?.cancel()
+        storedSearchJob = scope.launch {
+            val matches = withContext(Dispatchers.IO) { conversationRepository.searchMessages(query) }
+            storedSearch = query to matches
+            if (conversationPaneState.searchQuery.trim() == query) refreshConversationSummaries()
+        }
+    }
+    private var pendingStoredSearch: String? = null
+
     private fun conversationContentMatch(conversationId: String, query: String): ContentMatchCacheEntry {
-        val state = conversationsById[conversationId]
-            ?: return ContentMatchCacheEntry(query, null, matches = false, snippet = null)
+        val state = conversationsById[conversationId] ?: run {
+            // 只在库里的对话：用库里查到的那几条消息判断命中、取片段（口径与内存里的一致）。
+            val found = storedSearch?.takeIf { it.first == query }?.second?.get(conversationId)
+                ?: return ContentMatchCacheEntry(query, null, matches = false, snippet = null)
+            val partial = emptyChatState(defaultThinkingEnabled).copy(messages = found)
+            val matches = partial.contentMatches(query) { code -> noticeText(code) }
+            return ContentMatchCacheEntry(query, null, matches,
+                if (matches) partial.contentMatchSnippet(query) { code -> noticeText(code) } else null)
+        }
         val cached = contentMatchCache[conversationId]
         if (cached != null && cached.query == query && cached.state === state) {
             return cached
@@ -3606,32 +3703,120 @@ internal class AgentAppState(
         return ContentMatchCacheEntry(query, state, matches, snippet).also { contentMatchCache[conversationId] = it }
     }
 
+    /**
+     * 把已加载对话跟上次交给存储时相比变了的部分交给 [ConversationRepository]：对话信息、消息行、模型历史各写各的，
+     * 没变的对话和没读进内存的对话都不碰。写入按调用顺序排队；要“先落库再继续”的调用方 await 返回值。
+     */
     private fun persistConversations(onSaved: (() -> Unit)? = null): Deferred<Boolean> {
-        // 按调用先后登记这一刻的状态；排着队的几次保存只写最新登记的那份（合并写入，见 AgentConversationStore.commit）。
-        val request = AgentConversationStore.request(
-            selectedConversationId = selectedConversationId,
-            conversationsById = conversationsById,
-            titles = conversationTitles,
-            updatedAt = conversationUpdatedAt,
-        )
-        return synchronized(persistenceLock) {
-            val previous = persistenceJob
-            scope.async(Dispatchers.IO) {
-                try {
-                    previous?.join()
-                    AgentConversationStore.commit(appContext, request)
-                    onSaved?.invoke()
-                    true
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (throwable: Throwable) {
-                    AndroidAgentLogger.error(
-                        "Agent conversation persistence failed: type=${throwable.safeLogType()}"
-                    )
-                    false
-                }
-            }.also { persistenceJob = it }
+        val writes = mutableListOf<Deferred<Unit>>()
+        val now = System.currentTimeMillis()
+        conversationsById.forEach { (id, state) ->
+            val previous = persistedStates[id]
+            val meta = conversationTitles[id].orEmpty() to (conversationUpdatedAt[id] ?: now)
+            if (previous === state && persistedMeta[id] == meta) return@forEach
+            if (previous == null || persistedMeta[id] != meta || previous.storedMetaDiffers(state)) {
+                writes += conversationRepository.saveConversation(id, state, meta.first, meta.second)
+            }
+            if (previous?.messages !== state.messages) {
+                writes += conversationRepository.syncMessages(id, previous?.messages.orEmpty(), state.messages)
+            }
+            if (previous?.history !== state.history) {
+                writes += conversationRepository.syncModelLog(id, ConversationModelMessageEntity.LOG_HISTORY,
+                    previous?.history.orEmpty(), state.history)
+            }
+            val journal = state.journal.ifEmpty { state.history }
+            val previousJournal = previous?.let { it.journal.ifEmpty { it.history } }
+            if (previousJournal !== journal) {
+                writes += conversationRepository.syncModelLog(id, ConversationModelMessageEntity.LOG_JOURNAL,
+                    previousJournal.orEmpty(), journal)
+            }
+            persistedStates[id] = state
+            persistedMeta[id] = meta
+            storedConversationIds = storedConversationIds + id
         }
+        val selection = selectedConversationId?.takeIf { it in storedConversationIds }
+        if (selection != persistedSelection) {
+            writes += conversationRepository.select(selection)
+            persistedSelection = selection
+        }
+        return scope.async(Dispatchers.IO) {
+            try {
+                writes.forEach { it.await() }
+                onSaved?.invoke()
+                true
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (throwable: Throwable) {
+                AndroidAgentLogger.error("Agent conversation persistence failed: type=${throwable.safeLogType()}")
+                false
+            }
+        }
+    }
+
+    /** 对话目录这一行存的字段（标题、时间另算）是否变了。 */
+    private fun AgentChatHomeUiState.storedMetaDiffers(next: AgentChatHomeUiState): Boolean =
+        reasoningEffort != next.reasoningEffort || appliedRuntimeRunIds != next.appliedRuntimeRunIds ||
+            roleplay != next.roleplay || roleplayMessages != next.roleplayMessages
+
+    /** 把还没读进内存的对话从库里读进来（切换对话、监听事件、运行恢复、导出等用到别的对话时）。 */
+    private suspend fun ensureLoaded(conversationIds: Collection<String>) {
+        val missing = withContext(Dispatchers.Main.immediate) {
+            conversationIds.filter { it !in conversationsById && it in storedConversationIds }.distinct()
+        }
+        if (missing.isEmpty()) return
+        val loaded = withContext(Dispatchers.IO) { missing.mapNotNull { conversationRepository.load(it) } }
+        withContext(Dispatchers.Main.immediate) {
+            loaded.filter { it.id !in conversationsById }.forEach { conversation ->
+                conversationsById = conversationsById + (conversation.id to conversation.state)
+                persistedStates[conversation.id] = conversation.state
+                persistedMeta[conversation.id] = conversation.title to conversation.updatedAt
+            }
+        }
+    }
+
+    /**
+     * 切走之后闲着的对话从内存里卸掉（库里已经是它最新的样子）：不是选中的、没在执行、没排队、没在等推荐追问、
+     * 没有挂着的监听行，且上次交给存储的就是现在这份。
+     */
+    private fun unloadIdleConversations() {
+        val keep = buildSet {
+            selectedConversationId?.let(::add)
+            addAll(runConversationIds.values)
+            queuedTextSubmission?.conversationId?.let(::add)
+            addAll(followUpJobs.keys)
+            addAll(deferredMonitorRows.keys)
+            addAll(monitorQueue.conversations())
+        }
+        val idle = conversationsById.filter { (id, state) ->
+            id !in keep && !voiceSession.ownsConversation(id) && !state.isStreaming && !state.isCompacting &&
+                state.messageEdit == null && persistedStates[id] === state && id in storedConversationIds
+        }
+        if (idle.isEmpty()) return
+        storedPreviews = storedPreviews + idle.map { (id, state) ->
+            id to ConversationRepository.Summary(
+                id = id,
+                title = conversationTitles[id].orEmpty(),
+                updatedAt = conversationUpdatedAt[id] ?: 0L,
+                characterName = state.roleplay?.characterName,
+                lastMessage = state.messages.lastOrNull(),
+            )
+        }
+        idle.keys.forEach { id ->
+            persistedStates.remove(id)
+            persistedMeta.remove(id)
+            contentMatchCache.remove(id)
+        }
+        conversationsById = conversationsById - idle.keys
+    }
+
+    /** 从库里和内存里一起删掉这个对话。 */
+    private fun forgetStoredConversation(conversationId: String) {
+        if (conversationId in storedConversationIds) conversationRepository.deleteConversation(conversationId)
+        storedConversationIds = storedConversationIds - conversationId
+        storedPreviews = storedPreviews - conversationId
+        persistedStates.remove(conversationId)
+        persistedMeta.remove(conversationId)
+        if (persistedSelection == conversationId) persistedSelection = null
     }
 
     private companion object {

@@ -103,7 +103,6 @@ internal object FlavorModule : Flavor {
         io.github.fartown.movo.tv.TclWakeService.restoreIfEnabled(it)
         io.github.fartown.movo.agent.accessibility.AgentAccessibilityService.addInstanceListener {
             io.github.fartown.movo.tv.TclWakeService.restoreIfEnabled(it)
-            io.github.fartown.movo.tv.TvWarmup.start(it)
         }
     })
 }
