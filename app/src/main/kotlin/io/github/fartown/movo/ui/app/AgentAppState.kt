@@ -1637,29 +1637,18 @@ internal class AgentAppState(
             )
         )
         refreshConversationSummaries()
+        // 这一轮用的是内存里的对话（history 随请求交给 Runtime），写盘在后台进行，不挡开跑：
+        // 电视上整库重写一次 1.5–5.6 s，排队时等过 53 s。写失败只记录，下一次保存会带上最新的完整状态重写。
+        val persistStartedAt = android.os.SystemClock.elapsedRealtime()
         val initialPersistence = persistConversations()
-
-        val preparationJob = scope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
-            // write-ahead：用户消息未提交前不把可能产生副作用的 run 交给 Runtime。
-            val persistStartedAt = android.os.SystemClock.elapsedRealtime()
+        scope.launch(Dispatchers.IO) {
             val persisted = initialPersistence.await()
             io.github.fartown.movo.diagnostics.MemoryDiagnostics.record("app", "run.persisted", fields = mapOf(
                 "duration_ms" to android.os.SystemClock.elapsedRealtime() - persistStartedAt,
-                "messages" to state.messages.size, "ok" to persisted))
-            if (!persisted) {
-                withContext(Dispatchers.Main) {
-                    applyRunResult(
-                        runId,
-                        AgentRuntimeWire.RunResult(
-                            runId = runId,
-                            ok = false,
-                            content = "",
-                            error = appContext.getString(R.string.conversation_persistence_failed),
-                        )
-                    )
-                }
-                return@launch
-            }
+                "messages" to state.messages.size, "ok" to persisted, "blocking" to false))
+        }
+
+        val preparationJob = scope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
             state.roleplay?.let { binding ->
                 try {
                     CharacterRepository.initialize(appContext)
@@ -1983,7 +1972,7 @@ internal class AgentAppState(
 
     override fun cancelVoiceRun(runId: String) {
         if (currentRunId == runId && voiceRunListeners.containsKey(runId)) {
-            stopCurrentRun() // Also records cancellation while write-ahead / role preparation is pending.
+            stopCurrentRun() // Also records cancellation while role preparation is pending.
         } else {
             scope.launch(Dispatchers.IO) { AgentRuntimeClient(appContext, AndroidAgentLogger).cancelRun(runId) }
         }
