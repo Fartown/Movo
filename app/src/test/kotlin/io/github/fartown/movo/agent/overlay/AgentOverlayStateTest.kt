@@ -53,5 +53,27 @@ class AgentOverlayStateTest {
         assertEquals(OrbMode.PAUSED, orbMode(AgentOverlayPhase.PAUSED, standby = false, listening = false, monitoring = true))
         // 失败要人看：优先于监听中。
         assertEquals(OrbMode.FAILED, orbMode(AgentOverlayPhase.FAILED, standby = false, listening = false, monitoring = true))
+        assertEquals(
+            OrbMode.FAILED,
+            orbMode(AgentOverlayPhase.FAILED, standby = false, listening = false, monitoring = true, taskMonitored = true),
+        )
+    }
+
+    @Test
+    fun aFinishedRoundWhoseTaskStillMonitorsIsNeverDone() {
+        // 规范 8.12「任务与状态」：开监听的一轮、叫醒的一轮答完，执行中直接变监听中，不出 ✓。
+        assertEquals(
+            OrbMode.MONITORING,
+            orbMode(AgentOverlayPhase.FINISHED, standby = false, listening = false, monitoring = true, taskMonitored = true),
+        )
+        assertEquals(
+            OrbMode.MONITORING,
+            orbMode(AgentOverlayPhase.FINISHED, standby = false, listening = true, monitoring = true, taskMonitored = true),
+        )
+        // 别的对话里的监听不算这件事：这一轮照常 ✓ 待查看。
+        assertEquals(
+            OrbMode.FINISHED,
+            orbMode(AgentOverlayPhase.FINISHED, standby = false, listening = false, monitoring = true, taskMonitored = false),
+        )
     }
 }

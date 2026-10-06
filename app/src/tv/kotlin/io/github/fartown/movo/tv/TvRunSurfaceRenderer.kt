@@ -64,6 +64,7 @@ internal object TvRunSurfaceRenderer : RunSurfaceRenderer {
         onOpenResult: () -> Unit,
         notice: String?,
         orbCenterOnScreen: () -> Offset?,
+        orbLiftPx: () -> Float,
         onOrbTap: () -> Unit,
         onOrbLongPress: () -> Unit,
         onOrbDragStart: () -> Unit,

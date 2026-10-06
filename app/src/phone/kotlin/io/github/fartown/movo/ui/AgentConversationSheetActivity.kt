@@ -278,6 +278,24 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                                             }
                                         },
                                 )
+                                // 球 ↔ 浮层的揭开按整个窗口裁切、铺底色：起点（球）可能在浮层上方，不能只在浮层范围里画。
+                                Box(
+                                    Modifier.fillMaxSize()
+                                        .graphicsLayer {
+                                            alpha = sheetAlpha
+                                            val start = orbMorphStart
+                                            if (start != null) {
+                                                val sheetTop = size.height - windowHeight.coerceIn(0, size.height.toInt())
+                                                val sheet = androidx.compose.ui.geometry.Rect(0f, sheetTop, size.width, size.height)
+                                                shape = orbMorphShape(start, orbMorphProgress, sheet, 28.dp.toPx())
+                                                clip = true
+                                            } else {
+                                                clip = false
+                                            }
+                                        }
+                                        // 揭开期间容器本身不透明（内容另有透明度）：裁切区里先铺一层浮层底色。
+                                        .drawBehind { if (orbMorphStart != null) drawRect(sheetSurface) },
+                                ) {
                                 Box(
                                     Modifier.align(Alignment.BottomCenter)
                                         .fillMaxWidth()
@@ -287,19 +305,7 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                                             val placeable = measurable.measure(constraints.copy(minHeight = height, maxHeight = height))
                                             layout(placeable.width, height) { placeable.place(0, 0) }
                                         }
-                                        .graphicsLayer {
-                                            translationY = sheetOffset
-                                            alpha = sheetAlpha
-                                            val start = orbMorphStart
-                                            if (start != null) {
-                                                shape = orbMorphShape(start, orbMorphProgress, this.size, 28.dp.toPx())
-                                                clip = true
-                                            } else {
-                                                clip = false
-                                            }
-                                        }
-                                        // 揭开期间容器本身不透明（内容另有透明度）：裁切区里先铺一层浮层底色。
-                                        .drawBehind { if (orbMorphStart != null) drawRect(sheetSurface) }
+                                        .graphicsLayer { translationY = sheetOffset }
                                         // 浮层本身拦下触摸，空白处不落到下面的遮罩上（遮罩点一下会关闭浮层）。
                                         .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(requireUnconsumed = false) } },
                                 ) {
@@ -324,6 +330,7 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                                             SheetBody()
                                         }
                                     }
+                                }
                                 }
                             }
                         }
@@ -469,12 +476,16 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
             openedFromOrb = true
             setScrim(0f)
             sheetAlpha = 0f
-            pendingEntrance = { morphWithOrb(orb, expand = true) {} }
+            // 起点取开始长出来那一刻球的位置：点开时球可能还在吸附途中，之后又移到了边上。
+            pendingEntrance = {
+                morphWithOrb(io.github.fartown.movo.agent.runtime.AgentRuntimeService.orbDiscRect ?: orb, expand = true) {}
+            }
             return
         }
         if (isReducedMotion(this)) {
             // 减少动画：浮层与遮罩一起淡入 `fast`（遮罩现在画在窗口里，随窗口透明度一起淡入）。
             entranceStarted = true
+            io.github.fartown.movo.agent.runtime.AgentRuntimeService.onSheetCoversOrb()
             decor.alpha = 0f
             decor.animate().alpha(1f).setDuration(MovoMotion.FAST.toLong()).start()
             setScrim(1f)
@@ -502,6 +513,8 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         pendingEntrance = null
         entranceStarted = true
         if (!closing) entrance()
+        // 从球里长出来的第一帧画上屏幕之后球再让位：先藏球会空一帧（10-07 真机 120Hz 逐帧：每次空 1 帧）。
+        afterNextFrame { io.github.fartown.movo.agent.runtime.AgentRuntimeService.onSheetCoversOrb() }
     }
 
     /**
@@ -527,7 +540,14 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         if (openedFromOrb && dismissOffset == 0f) {
             val orb = io.github.fartown.movo.agent.runtime.AgentRuntimeService.orbDiscRect
             if (orb != null) {
-                morphWithOrb(orb, expand = false) { finish() }
+                morphWithOrb(orb, expand = false) {
+                    // 缩成球大小的最后一帧画上屏幕之后，球立刻接上、再结束页面：动画结束当下就关页面，最后几帧来不及画，
+                    // 看起来是一块圆角矩形直接跳成球（10-07 真机逐帧）；等页面暂停后再显示球，中间又会空几帧。
+                    afterNextFrame {
+                        io.github.fartown.movo.agent.runtime.AgentRuntimeService.onSheetReturnedToOrb()
+                        finish()
+                    }
+                }
                 return
             }
         }
@@ -568,12 +588,10 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
      */
     private fun morphWithOrb(orb: android.graphics.Rect, expand: Boolean, onEnd: () -> Unit) {
         sheetAnimator?.cancel()
-        // 屏幕坐标 → 浮层自身坐标：减去窗口在屏幕上的位置和浮层顶边在窗口里的位置。
+        // 屏幕坐标 → 窗口坐标（揭开按整个窗口画，见 [orbMorphShape]）。窗口铺满屏幕、进场前已排好，不在移动。
         val windowOnScreen = IntArray(2).also(window.decorView::getLocationOnScreen)
-        val windowSize = rootHeight.takeIf { it > 0 } ?: screenHeight()
-        val sheetTop = (windowSize - windowHeight).coerceAtLeast(0)
         orbMorphStart = android.graphics.RectF(orb).apply {
-            offset(-windowOnScreen[0].toFloat(), -(windowOnScreen[1] + sheetTop).toFloat())
+            offset(-windowOnScreen[0].toFloat(), -windowOnScreen[1].toFloat())
         }
         sheetOffset = 0f
         // 裁切起点已就位：浮层可以露出（之前为了不闪出整块浮层一直隐藏）。
@@ -610,6 +628,24 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * [action] 在当前内容画成一帧、提交上屏之后执行（主线程，只执行一次）。球与浮层交接用：
+     * 浮层这一帧先画出来再换球，两边之间不空帧。窗口不再出帧时（例如已退到后台）由兜底超时执行。
+     */
+    private fun afterNextFrame(action: () -> Unit) {
+        val decor = window.decorView
+        var done = false
+        val run = Runnable {
+            if (done) return@Runnable
+            done = true
+            action()
+        }
+        // 提交回调不在主线程上调用。
+        decor.viewTreeObserver.registerFrameCommitCallback { decor.post(run) }
+        decor.invalidate()
+        decor.postDelayed(run, FRAME_COMMIT_FALLBACK_MS)
+    }
+
     private fun resetOrbMorph() {
         orbMorphStart = null
         orbMorphProgress = 1f
@@ -627,7 +663,12 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
             return
         }
         resizeAnimator?.cancel()
-        morphWithOrb(io.github.fartown.movo.agent.runtime.AgentRuntimeService.orbDiscRectOrDefault(this), expand = false, onEnd = onCollapsed)
+        morphWithOrb(io.github.fartown.movo.agent.runtime.AgentRuntimeService.orbDiscRectOrDefault(this), expand = false) {
+            afterNextFrame {
+                io.github.fartown.movo.agent.runtime.AgentRuntimeService.onSheetReturnedToOrb()
+                onCollapsed()
+            }
+        }
     }
 
     /** 浮层下移 [offset]：遮罩按露出比例同步变淡。 */
@@ -852,6 +893,8 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         }
         /** 从球揭开时内容的起始透明度（A5b：内容从 20% 淡入，一开始就能看出是对话）。 */
         private const val ORB_CONTENT_START_ALPHA = 0.2f
+        /** 等一帧提交上屏的兜底时长。 */
+        private const val FRAME_COMMIT_FALLBACK_MS = 100L
         /** 进场最多等会话打开这么久；更慢时先露出「正在打开对话…」。 */
         private const val ENTRANCE_CONTENT_WAIT_MS = 400L
         /** 收回球里时内容淡出的起点与收尾（相对收起开始 / 结束）。 */
@@ -907,16 +950,22 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
 }
 
 /**
- * Q4 球 ↔ 浮层的裁切轮廓（浮层自身坐标）：从悬浮球玻璃圆 [start]（圆角 = 半高）插值到整块浮层（顶部圆角 [sheetRadius]）；
+ * Q4 球 ↔ 浮层的裁切轮廓（整个窗口的坐标）：从悬浮球玻璃圆 [start]（圆角 = 半高）插值到浮层 [sheet]（顶部圆角 [sheetRadius]）；
  * 底边随展开伸出浮层外，最终底部圆角落在屏幕外（浮层贴底，底部圆角 0）。
+ * 按整个窗口画：球在浮层上方时（球拖到了靠上的位置）起点在浮层外，只在浮层范围里画会被浮层顶边裁掉。
  */
-internal fun orbMorphShape(start: android.graphics.RectF, progress: Float, size: Size, sheetRadius: Float): Shape {
+internal fun orbMorphShape(
+    start: android.graphics.RectF,
+    progress: Float,
+    sheet: androidx.compose.ui.geometry.Rect,
+    sheetRadius: Float,
+): Shape {
     val p = progress
     val radius = start.height() / 2f + (sheetRadius - start.height() / 2f) * p
-    val left = start.left + (0f - start.left) * p
-    val top = start.top + (0f - start.top) * p
-    val right = start.right + (size.width - start.right) * p
-    val bottom = start.bottom + (size.height + radius - start.bottom) * p
+    val left = start.left + (sheet.left - start.left) * p
+    val top = start.top + (sheet.top - start.top) * p
+    val right = start.right + (sheet.right - start.right) * p
+    val bottom = start.bottom + (sheet.bottom + radius - start.bottom) * p
     return OrbMorphShape(RoundRect(left, top, right, bottom, CornerRadius(radius)))
 }
 

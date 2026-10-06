@@ -84,11 +84,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -696,11 +693,13 @@ internal fun AgentOverlayBubble(
     onOpenResult: () -> Unit = {},
     /** 展开卡状态说明（规范 8.1 / 8.11：悬浮窗的失败提示写进展开卡，不用 Toast），例如缺麦克风权限、打不开对话。 */
     notice: String? = null,
-    /**
-     * 悬浮球在屏幕上的中心（px），揭开动画从这一点径向长成卡片。
-     * `null` 时按“球贴在卡片外沿正外侧”的默认几何近似。
-     */
+    /** 悬浮球在屏幕上的中心（px）：只用来判断球侧通道上的手势是不是落在球上。 */
     orbCenterOnScreen: () -> Offset? = { null },
+    /**
+     * 展开卡窗口为避让键盘比原位抬高了多少（px）。揭开 / 收回的圆心按卡片与球的固定相对位置算
+     * （[orbCenterInCard]），抬高时球相对卡片下移这么多。
+     */
+    orbLiftPx: () -> Float = { 0f },
     /**
      * 展开卡的球侧通道盖住了（此时隐形的）真球：落在球上的点按、长按、拖动转给悬浮球的处理逻辑，
      * 与没展开时点球一致（例如失败态点球打开结果、长按开始语音、拖动挪球）。
@@ -802,18 +801,8 @@ internal fun AgentOverlayBubble(
             // 展开卡窗口在球那一侧多留一条与球重叠的通道（PANEL_ORB_LANE，AgentRuntimeService.bubbleLayoutParams）：
             // 容器从球心开始长，起点必须落在本窗口里，否则前几帧被窗口边缘裁掉，看起来是从边缘冒出来。
             // 通道盖住了悬浮球，落在球上的手势转给悬浮球（见下方通道）。
-            // 追踪卡片在窗口坐标系里的位置：把 orbCenterOnScreen 换算到卡片自身坐标，作为揭开起点。
-            var cardOriginInWindow by remember { mutableStateOf<Offset?>(null) }
-            val hostView = LocalView.current
-            val orbCenterInCard: () -> Offset? = orbCenterInCard@{
-                val onScreen = orbCenterOnScreen() ?: return@orbCenterInCard null
-                val origin = cardOriginInWindow ?: return@orbCenterInCard null
-                val loc = IntArray(2).also(hostView::getLocationOnScreen)
-                Offset(
-                    onScreen.x - loc[0] - origin.x,
-                    onScreen.y - loc[1] - origin.y,
-                )
-            }
+            // 揭开起点 = 球心在卡片自身坐标里的位置。窗口就是按球摆的（AgentRuntimeService.bubbleLayoutParams / OrbGeometry），
+            // 卡片与球的相对位置是固定的，直接算，不读窗口在屏幕上的位置（刚加上的窗口读到的值还没就绪）。
             Box {
                 Column(
                     modifier = Modifier
@@ -826,13 +815,12 @@ internal fun AgentOverlayBubble(
                         // 224dp is the visual baseline. Let the card grow for large system fonts so
                         // the compact voice control and the two task actions never clip or collide.
                         .widthIn(min = 224.dp, max = 280.dp)
-                        .onGloballyPositioned { cardOriginInWindow = it.positionInWindow() }
                         // 容器的裁切、阴影、玻璃底与描边都按当前揭开矩形画，只在绘制阶段读进度，不重组。
                         // 阴影用硬件阴影（RenderNode 按轮廓实时算），跟随揭开形状，过渡中不丢阴影、不出方角（审查 A10）。
                         .orbReveal(
                             progress = { reveal.value },
                             anchorEnd = anchorEnd,
-                            orbCenter = orbCenterInCard,
+                            orbLift = orbLiftPx,
                         )
                         .padding(4.dp)
                         .graphicsLayer {
@@ -1608,12 +1596,12 @@ private const val PANEL_CONTENT_EXIT_END = 0.35f
 /**
  * 揭开容器：最终圆角卡在原位绘制，用“以球心为圆心的圆”和最终卡片做交集裁剪。
  * 圆形半径在整个时长内线性增长；球心位于卡片角附近时，这比先快后慢的曲线更不容易一两帧就盖住整块卡片。
- * 起点几何优先用 [orbCenter] 提供的球心（卡片自身坐标，px）；为 null 时按当前停靠几何近似。
+ * 圆心是球心在卡片自身坐标里的位置（[orbCenterInCard]）；[orbLift] = 卡片窗口为避让键盘抬高的距离（px）。
  */
 private fun Modifier.orbReveal(
     progress: () -> Float,
     anchorEnd: Boolean,
-    orbCenter: () -> Offset? = { null },
+    orbLift: () -> Float = { 0f },
 ): Modifier = this
     .graphicsLayer {
         val p = progress()
@@ -1638,7 +1626,7 @@ private fun Modifier.orbReveal(
                         androidx.compose.ui.geometry.Rect(0f, 0f, 0f, 0f),
                     )
                 }
-                val center = orbRevealCenter(size, density.density, anchorEnd, orbCenter())
+                val center = orbCenterInCard(size, density.density, anchorEnd, orbLift())
                 val radius = orbRevealRadius(size, center, p, density.density)
                 val cardPath = androidx.compose.ui.graphics.Path().apply {
                     addRoundRect(
@@ -1692,7 +1680,7 @@ private fun Modifier.orbReveal(
             style = androidx.compose.ui.graphics.drawscope.Stroke(stroke),
         )
         if (p in 0f..1f) {
-            val center = orbRevealCenter(size, density, anchorEnd, orbCenter())
+            val center = orbCenterInCard(size, density, anchorEnd, orbLift())
             val radius = orbRevealRadius(size, center, p, density)
             drawCircle(
                 MovoColors.borderHairline,
@@ -1703,17 +1691,22 @@ private fun Modifier.orbReveal(
         }
     }
 
-/** 揭开圆的中心：优先使用实时球心，否则按卡片与球的默认间距计算。 */
-private fun orbRevealCenter(
+/**
+ * 球心在卡片自身坐标里的位置（px）。展开卡窗口按球摆放（OrbGeometry.bubbleX / bubbleY）：
+ * 窗口球侧外边缘与球窗口外边缘对齐，卡片离窗口球侧边缘 [PANEL_ORB_LANE]，所以球心在卡片球侧边外
+ * `PANEL_ORB_LANE - 球窗口 / 2`；卡片底边与玻璃圆底边对齐，所以球心在卡片底边上方 `玻璃圆 / 2`。
+ * 窗口为避让键盘抬高 [liftPx] 时，球相对卡片下移同样的距离。
+ */
+internal fun orbCenterInCard(
     size: androidx.compose.ui.geometry.Size,
     density: Float,
     anchorEnd: Boolean,
-    orbCenter: Offset?,
+    liftPx: Float,
 ): Offset {
-    val sideGap = (8 + 22) * density
-    val fallbackCx = if (anchorEnd) size.width + sideGap else -sideGap
-    val fallbackCy = size.height - (22 - 6) * density
-    return orbCenter ?: Offset(fallbackCx, fallbackCy)
+    val outside = PANEL_ORB_LANE.value * density - io.github.fartown.movo.agent.runtime.AgentRuntimeService.ORB_WINDOW_DP * density / 2f
+    val cx = if (anchorEnd) size.width + outside else -outside
+    val cy = size.height - io.github.fartown.movo.agent.runtime.AgentRuntimeService.ORB_DISC_DP * density / 2f + liftPx
+    return Offset(cx, cy)
 }
 
 /** 揭开圆半径：从 32dp 玻璃圆线性增加到足以覆盖整块卡片。 */

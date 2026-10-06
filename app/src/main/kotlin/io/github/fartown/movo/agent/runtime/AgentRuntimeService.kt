@@ -61,6 +61,7 @@ import io.github.fartown.movo.agent.overlay.markResumed
 import io.github.fartown.movo.agent.overlay.AgentOverlayStatus
 import io.github.fartown.movo.agent.overlay.AgentOverlayVisibilityPolicy
 import io.github.fartown.movo.agent.overlay.InteractionCardCoordinator
+import io.github.fartown.movo.agent.overlay.OrbGeometry
 import io.github.fartown.movo.agent.overlay.OverlayLifecyclePolicy
 import io.github.fartown.movo.agent.overlay.OverlayMonitor
 import io.github.fartown.movo.agent.overlay.OverlayTaskPanel
@@ -260,7 +261,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private val appActivityCallbacks = object : android.app.Application.ActivityLifecycleCallbacks {
         override fun onActivityResumed(activity: android.app.Activity) {
             mainHandler.removeCallbacksAndMessages(appLeaveToken)
-            mainHandler.post(::updateStandbyOrbVisibility)
+            mainHandler.post {
+                // 又回到 Movo 的页面：收回球里那次交接作废，按页面在前台藏球。
+                if (sheetHandoff == SheetHandoff.RETURNED) setSheetHandoff(SheetHandoff.NONE) else updateStandbyOrbVisibility()
+            }
         }
         override fun onActivityPaused(activity: android.app.Activity) {
             // 离开 Movo 的页面稍等再判断：Movo 页面之间切换（例如对话浮层「展开到 App」）时，旧页暂停到新页恢复之间有一段空档，
@@ -1146,6 +1150,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun monitorConversationOf(target: AgentConversationTarget?): String? =
         target?.takeIf { it.source == AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE }?.key
 
+    /** [target] 这个对话还有监听在等：这件事没完，这一轮答完是「监听中」不是 ✓（规范 8.12「任务与状态」）。 */
+    private fun taskMonitored(target: AgentConversationTarget?): Boolean {
+        val conversationId = monitorConversationOf(target) ?: return false
+        return monitors.value.any { it.conversationId == conversationId }
+    }
+
     /** 监听中点「结束任务」：结束所有运行中的监听。 */
     private fun endMonitorTask() {
         beginTaskEnding { true }
@@ -1431,6 +1441,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                     state.value.phase, standby.value, voice.active,
                     stopped = state.value.status == AgentOverlayStatus.Stopped,
                     monitoring = monitors.value.isNotEmpty(),
+                    taskMonitored = taskMonitored(resultConversationTarget),
                 ),
                 onTap = ::onOrbTapped,
                 onLongPress = ::onOrbLongPressed,
@@ -1792,6 +1803,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 onOpenResult = ::onOrbTapped,
                 notice = panelNotice.value,
                 orbCenterOnScreen = { orbCenterOnScreen.value },
+                orbLiftPx = { ((bubbleParams?.y ?: bubbleBaseY) - bubbleBaseY).toFloat() },
                 // 展开卡的球侧通道盖住了隐形的真球：落在球上的点按、长按、拖动按悬浮球处理。
                 onOrbTap = ::onOrbTapped,
                 onOrbLongPress = ::onOrbLongPressed,
@@ -1851,9 +1863,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private var bubbleYAnimator: android.animation.ValueAnimator? = null
     private var bubbleTargetY = 0
 
-    private fun screenRealHeight(): Int = runCatching {
-        android.graphics.Point().also { @Suppress("DEPRECATION") windowManager?.defaultDisplay?.getRealSize(it) }.y
-    }.getOrDefault(0).takeIf { it > 0 } ?: resources.displayMetrics.heightPixels
+    private fun screenRealHeight(): Int = displaySize().y
+
+    /** 整块屏幕的尺寸（含状态栏、导航栏）：浮窗都按它摆放（[OrbGeometry]）。 */
+    private fun displaySize(): android.graphics.Point =
+        displaySize(windowManager ?: getSystemService(Context.WINDOW_SERVICE) as WindowManager)
 
     /** 展开卡底边放在距屏幕底 [imeHeight] 的键盘上方 8（窗口按底部对齐，卡片四周有阴影余量）。 */
     private fun bubbleYAbove(imeHeight: Int): Int =
@@ -2141,17 +2155,17 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         val lp = orbParams ?: return
         val wm = windowManager ?: return
         val view = orbView ?: return
-        val metrics = resources.displayMetrics
+        val display = displaySize()
         val orbSize = dpToPx(ORB_WINDOW_DP)
-        fingerX = (fingerX - dx).coerceIn(0f, (metrics.widthPixels - orbSize).toFloat())
-        fingerY = (fingerY + dy).coerceIn(0f, (metrics.heightPixels - orbSize).toFloat())
+        fingerX = (fingerX - dx).coerceIn(0f, (display.x - orbSize).toFloat())
+        fingerY = (fingerY + dy).coerceIn(0f, (display.y - orbSize).toFloat())
         val engaged = removeZoneView != null && isOverRemoveZone(fingerX, fingerY)
         if (engaged != removeEngaged.value) {
             removeEngaged.value = engaged
             if (engaged) AgentHapticFeedback.perform(this, AgentHapticFeedback.Type.TAP)
         }
         if (engaged) {
-            lp.x = metrics.widthPixels / 2 - orbSize / 2
+            lp.x = display.x / 2 - orbSize / 2
             lp.y = removeZoneCenterY() - orbSize / 2
         } else {
             lp.x = fingerX.toInt()
@@ -2188,14 +2202,14 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
 
     private fun removeZoneCenterY(): Int =
-        resources.displayMetrics.heightPixels - dpToPx(REMOVE_ZONE_BOTTOM_DP) - dpToPx(REMOVE_ZONE_DP) / 2
+        displaySize().y - dpToPx(REMOVE_ZONE_BOTTOM_DP) - dpToPx(REMOVE_ZONE_DP) / 2
 
     private fun isOverRemoveZone(x: Float, y: Float): Boolean {
-        val metrics = resources.displayMetrics
+        val width = displaySize().x
         val half = dpToPx(ORB_WINDOW_DP) / 2f
-        val cx = metrics.widthPixels - x - half
+        val cx = width - x - half
         val cy = y + half
-        return kotlin.math.hypot(cx - metrics.widthPixels / 2f, cy - removeZoneCenterY()) < dpToPx(REMOVE_ZONE_DP)
+        return kotlin.math.hypot(cx - width / 2f, cy - removeZoneCenterY()) < dpToPx(REMOVE_ZONE_DP)
     }
 
     private fun showRemoveZone() {
@@ -2216,9 +2230,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = (resources.displayMetrics.widthPixels - window) / 2
+            x = (displaySize().x - window) / 2
             y = removeZoneCenterY() - window / 2
             windowAnimations = 0
+            inDisplayCoordinates()
         }
         val view = createOverlayComposeView {
             FlavorModule.runSurface.RemoveZone(visible = removeZoneVisible.value)
@@ -2245,7 +2260,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         val lp = orbParams ?: return
         val wm = windowManager ?: return
         val view = orbView ?: return
-        val width = resources.displayMetrics.widthPixels
+        val width = displaySize().x
         val orbWidth = dpToPx(ORB_WINDOW_DP)
         val edge = dpToPx(ORB_EDGE_DP)
         val centerFromRight = lp.x + orbWidth / 2
@@ -2260,12 +2275,26 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 lp.x = animator.animatedValue as Int
                 runCatching { wm.updateViewLayout(view, lp) }
                 publishOrbRect()
+                // 吸附途中点开的展开卡跟着球走，到边时仍贴着球（不然停在点开那一刻的位置，和球错开）。
+                followOrbWithBubble()
             }
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: android.animation.Animator) = publishOrbRect()
             })
             start()
         }
+    }
+
+    /** 展开卡窗口横向跟到悬浮球当前的位置（键盘避让的纵向抬高不动）。 */
+    private fun followOrbWithBubble() {
+        val wm = windowManager ?: return
+        val bubble = bubbleView ?: return
+        val lp = bubbleParams ?: return
+        val placed = bubbleLayoutParams()
+        if (lp.gravity == placed.gravity && lp.x == placed.x) return
+        lp.gravity = placed.gravity
+        lp.x = placed.x
+        runCatching { wm.updateViewLayout(bubble, lp) }
     }
 
     private fun orbLayoutParams(): WindowManager.LayoutParams =
@@ -2279,11 +2308,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
-            // 右侧中下，贴近右边缘
+            // 右侧中下，贴近右边缘。x 是窗口右边到屏幕右边的距离，y 是窗口上边到屏幕顶的距离，都按整块屏幕算（[OrbGeometry]）。
             gravity = Gravity.END or Gravity.TOP
             // 默认停靠右边缘（距边 8），球心距屏幕底部约 1/4 屏高，处在单手拇指可及区（规范 8.1）。
             x = dpToPx(ORB_EDGE_DP)
-            y = (resources.displayMetrics.heightPixels * 0.75f).toInt() - dpToPx(ORB_WINDOW_DP) / 2
+            y = OrbGeometry.defaultTop(displaySize().y, dpToPx(ORB_WINDOW_DP))
+            inDisplayCoordinates()
         }
 
     private fun bubbleLayoutParams(): WindowManager.LayoutParams =
@@ -2301,19 +2331,16 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             // 卡片在球朝屏幕中心的一侧、距球 8，底边与球对齐（卡片四周留 12 的阴影余量）。
             // 窗口在球那一侧一直延伸到球窗口的外边缘（卡片内容里留出 PANEL_ORB_LANE 通道）：
             // 展开卡从球心长出来，起点要在本窗口内才画得出来（规范 9.5「悬浮球 → 展开卡」）。
-            val orb = orbParams
-            val orbX = orb?.x ?: dpToPx(ORB_EDGE_DP)
-            // 按悬浮球在屏幕上的实际位置对齐，窗口也不按系统栏留位：两个窗口原来一个从顶、一个按
-            // displayMetrics 从底推算，有导航栏时基准不同，卡片和球错开一截（真机三键导航：卡片高出球约 50dp）。
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) setFitInsetsTypes(0)
-            val orbBottom = orbView?.takeIf { it.isAttachedToWindow && it.height > 0 }
-                ?.let { view -> IntArray(2).also(view::getLocationOnScreen)[1] + view.height }
-                ?: ((orb?.y ?: 0) + dpToPx(ORB_WINDOW_DP))
+            // 位置只由悬浮球的窗口参数推出来，和球在同一套整块屏幕坐标里（[OrbGeometry]），不读球窗口的实际位置。
+            val display = displaySize()
+            val window = dpToPx(ORB_WINDOW_DP)
+            val orbFromRight = orbParams?.x ?: dpToPx(ORB_EDGE_DP)
+            val orbTop = orbParams?.y ?: OrbGeometry.defaultTop(display.y, window)
             gravity = (if (orbOnEnd.value) Gravity.END else Gravity.START) or Gravity.BOTTOM
-            val width = resources.displayMetrics.widthPixels
-            x = if (orbOnEnd.value) orbX else width - orbX - dpToPx(ORB_WINDOW_DP)
-            y = (screenRealHeight() - orbBottom - dpToPx(PANEL_SHADOW_DP) + dpToPx(6)).coerceAtLeast(0)
+            x = OrbGeometry.bubbleX(orbOnEnd.value, display.x, orbFromRight, window)
+            y = OrbGeometry.bubbleY(display.y, orbTop, window, dpToPx(ORB_DISC_DP), dpToPx(PANEL_SHADOW_DP))
             windowAnimations = 0
+            inDisplayCoordinates()
         }
 
     private fun overlayType(): Int =
@@ -2484,16 +2511,21 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             updateStandbyOrbVisibility()
             return
         }
-        // 这件事还有监听在等（开监听的那一轮、监听叫醒的一轮答完）：任务没完，回到「监听中」，不显示 ✓（规范 8.12「任务与状态」）。
-        // 操作过其他 App、或结果要交回对话浮层的一轮照旧（✓ 点开看过后再回到监听中）。
-        val conversationId = monitorConversationOf(resultConversationTarget)
-        if (finalState.phase == AgentOverlayPhase.FINISHED && conversationId != null &&
-            !hasExecutedForegroundTool && !isResultConversation &&
-            MonitorRegistry.active.value.any { it.conversationId == conversationId }
-        ) {
+        // 这件事还有监听在等（开监听的那一轮、监听叫醒的一轮答完）：任务没完，直接回到「监听中」，不出 ✓（规范 8.12「任务与状态」）。
+        // 操作没操作其他 App、从 App 还是对话浮层发起都一样：结果已存进对话，监听中点开展开卡、键盘 / 语音都打开这个对话。
+        if (finalState.phase == AgentOverlayPhase.FINISHED && taskMonitored(resultConversationTarget)) {
             state.value = finalState
-            ensureMonitoringOrb()
-            retireRunOverlayToStandby()
+            if (FlavorModule.surfaces.isConversationVisible(resultConversationTarget)) {
+                // 对话浮层正在前台（从浮层发起）：结果照常交给它，交付后回到待命（[enterStandby]）。
+                // 这期间悬浮球藏着，外观也已是监听中（[orbMode]）。
+                collapseBubble()
+                retireGlow()
+                mainHandler.removeCallbacksAndMessages(hideToken)
+                openResultConversation()
+            } else {
+                ensureMonitoringOrb()
+                retireRunOverlayToStandby()
+            }
             return
         }
         state.value = finalState
@@ -2603,11 +2635,18 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
      */
     private fun updateStandbyOrbVisibility() {
         val view = orbView ?: return
+        // 浮层收回球里之后页面已经离开：交接结束，之后照常判断。
+        if (sheetHandoff == SheetHandoff.RETURNED && !VoiceSurfaceTracker.appVisible) {
+            mainHandler.removeCallbacksAndMessages(sheetHandoffToken)
+            sheetHandoff = SheetHandoff.NONE
+        }
+        // Movo 自己的页面挡在前面：对话浮层与球交接的两段除外（[SheetHandoff]）。
+        val movoInFront = VoiceSurfaceTracker.appVisible && sheetHandoff == SheetHandoff.NONE
         // 结束后会话引用要等结果被查看才清掉，是否「执行中」按阶段判断（真机：只看 activeSession 时 ✓ 一直不淡出）。
         val phase = state.value.phase
         val running = !standby.value && activeSession != null &&
             (phase == AgentOverlayPhase.RUNNING || phase == AgentOverlayPhase.PAUSED)
-        val show = if (VoiceSurfaceTracker.appVisible) {
+        val show = if (movoInFront) {
             // Movo 自己的界面在前台时一律藏起（含执行中 / 暂停）：App 里已有执行卡、暂停提示条与主按钮，
             // 悬浮球和展开卡只会重复并压住这些控件（2026-09-27 定）。离开后按当时的状态出现。
             false
@@ -2616,16 +2655,16 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             true
         } else {
             val holdingResult = !running && !standby.value &&
-                android.os.SystemClock.uptimeMillis() < resultOrbVisibleUntil && !VoiceSurfaceTracker.appVisible
+                android.os.SystemClock.uptimeMillis() < resultOrbVisibleUntil
             // 监听中任务没完：常驻关也显示（规范 8.1）；刚结束可撤销、或监听刚自己结束（等唤醒的一轮）时也留着。
             val monitoring = monitorsKeepOrb()
             running || holdingResult || monitoring ||
-                (!running && !standby.value && !collapsed.value && !VoiceSurfaceTracker.appVisible)
+                (!running && !standby.value && !collapsed.value)
         }
         // 注意：这里不能取消 [orbFadeToken] 上的回调——那是 3 秒后的这次复查本身（原来在这里取消，✓ 永远不淡出）。
         AndroidAgentLogger.info(
             "Agent orb visibility: show=$show running=$running phase=$phase standby=${standby.value} monitors=${monitors.value.size} " +
-                "appVisible=${VoiceSurfaceTracker.appVisible} collapsed=${collapsed.value}",
+                "appVisible=${VoiceSurfaceTracker.appVisible} handoff=$sheetHandoff collapsed=${collapsed.value}",
         )
         if (show) {
             view.animate().cancel()
@@ -2640,7 +2679,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             stopIfOverlayUnneeded()
             return
         }
-        if (VoiceSurfaceTracker.appVisible || io.github.fartown.movo.ui.theme.isReducedMotion(this)) {
+        if (movoInFront || io.github.fartown.movo.ui.theme.isReducedMotion(this)) {
             view.visibility = View.GONE
             stopIfOverlayUnneeded()
             return
@@ -2873,27 +2912,41 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             orbCenterOnScreen.value = null
             return
         }
-        val window = dpToPx(ORB_WINDOW_DP)
-        val inset = (window - dpToPx(ORB_DISC_DP)) / 2
-        // 优先读球窗口在屏幕上的实际位置：窗口会按系统栏留位，按参数推算会比真实位置偏高一个状态栏，
-        // 展开卡和对话浮层就不是从球里长出来的。拖动中（窗口刚更新、还没排版）退回按参数推算。
-        val onScreen = orbView?.takeIf { it.isAttachedToWindow && it.height > 0 && !orbDragging }
-            ?.let { view -> IntArray(2).also(view::getLocationOnScreen) }
-        val left = (onScreen?.get(0) ?: (resources.displayMetrics.widthPixels - lp.x - window)) + inset
-        val top = (onScreen?.get(1) ?: lp.y) + inset
-        val disc = dpToPx(ORB_DISC_DP)
-        orbDiscRect = android.graphics.Rect(left, top, left + disc, top + disc)
-        // 展开卡揭开动画的起点：球心在屏幕上的实时位置（px）。
-        orbCenterOnScreen.value = androidx.compose.ui.geometry.Offset(
-            left + disc / 2f,
-            top + disc / 2f,
-        )
+        // 只按球自己的窗口参数算（球窗口不被系统栏推开，参数就是它在屏幕上的位置）；
+        // 不读窗口的实际位置：吸附动画、拖动中刚 updateViewLayout 时读到的是上一帧。
+        val disc = OrbGeometry.disc(displaySize().x, lp.x, lp.y, dpToPx(ORB_WINDOW_DP), dpToPx(ORB_DISC_DP))
+        orbDiscRect = android.graphics.Rect(disc.left, disc.top, disc.right, disc.bottom)
+        orbCenterOnScreen.value = androidx.compose.ui.geometry.Offset(disc.centerX, disc.centerY)
     }
 
-    /** 从悬浮球打开对话浮层前登记起点：浮层从球的位置长出来（Q4）。 */
+    /** 从悬浮球打开对话浮层前登记起点：浮层从球的位置长出来（Q4）。浮层真正开始长出来之前球留着（[SheetHandoff.OPENING]）。 */
     private fun markSheetFromOrb() {
         publishOrbRect()
-        orbDiscRect?.let { FlavorModule.surfaces.expandConversationFromOrb(it) }
+        val rect = orbDiscRect ?: return
+        FlavorModule.surfaces.expandConversationFromOrb(rect)
+        setSheetHandoff(SheetHandoff.OPENING)
+    }
+
+    /**
+     * 对话浮层与悬浮球的交接（Q4，规范 9.5「从球里长出、收回球里」）：
+     * - [OPENING]：点了球、浮层还在准备内容，还没开始从球里长出来——球留着，不能先没了（原来浮层页面一恢复球就藏，
+     *   中间空一段才见浮层长出来）；
+     * - [RETURNED]：浮层已经收回球里——球立刻接上，不等页面暂停后再判断（原来中间空约 8 帧，看起来是球先消失）。
+     * 其余时候按 Movo 页面是否在前台（[VoiceSurfaceTracker.appVisible]）。
+     */
+    private enum class SheetHandoff { NONE, OPENING, RETURNED }
+
+    private var sheetHandoff = SheetHandoff.NONE
+    private val sheetHandoffToken = Any()
+
+    private fun setSheetHandoff(value: SheetHandoff) {
+        mainHandler.removeCallbacksAndMessages(sheetHandoffToken)
+        sheetHandoff = value
+        // 浮层没打开、没回报（打开失败、被系统拦下）时不能让球一直无视 Movo 页面在前台。
+        if (value != SheetHandoff.NONE) {
+            mainHandler.postDelayed({ setSheetHandoff(SheetHandoff.NONE) }, sheetHandoffToken, SHEET_HANDOFF_TIMEOUT_MS)
+        }
+        updateStandbyOrbVisibility()
     }
 
     internal companion object {
@@ -2938,15 +2991,50 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         var orbDiscRect: android.graphics.Rect? = null
             private set
 
+        /** 对话浮层开始从球里长出来（或不带动画直接出现）：球此刻让位。主线程调用。 */
+        fun onSheetCoversOrb() {
+            liveInstance?.takeIf { it.sheetHandoff == SheetHandoff.OPENING }?.setSheetHandoff(SheetHandoff.NONE)
+        }
+
+        /** 对话浮层收回到球里了：球立刻接上（页面随后才暂停）。主线程调用。 */
+        fun onSheetReturnedToOrb() {
+            liveInstance?.setSheetHandoff(SheetHandoff.RETURNED)
+        }
+
         /** 当前悬浮球位置；没有悬浮球时取默认停靠位置（右边缘距边 8、球心在 75% 屏高）。 */
         fun orbDiscRectOrDefault(context: Context): android.graphics.Rect {
             orbDiscRect?.let { return it }
-            val metrics = context.resources.displayMetrics
-            val disc = (ORB_DISC_DP * metrics.density).toInt()
-            val edge = ((ORB_EDGE_DP + (ORB_WINDOW_DP - ORB_DISC_DP) / 2f) * metrics.density).toInt()
-            val centerY = (metrics.heightPixels * 0.75f).toInt()
-            val right = metrics.widthPixels - edge
-            return android.graphics.Rect(right - disc, centerY - disc / 2, right, centerY + disc / 2)
+            // 与 [orbLayoutParams] 的默认停靠同一个算法、同一块屏幕尺寸：之后建出来的球就在这里。
+            val density = context.resources.displayMetrics.density
+            val px = { dp: Int -> (dp * density).toInt() }
+            val display = displaySize(context.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
+            val window = px(ORB_WINDOW_DP)
+            val disc = OrbGeometry.disc(display.x, px(ORB_EDGE_DP), OrbGeometry.defaultTop(display.y, window), window, px(ORB_DISC_DP))
+            return android.graphics.Rect(disc.left, disc.top, disc.right, disc.bottom)
+        }
+
+        /** 整块屏幕的尺寸（含状态栏、导航栏、刘海区）。 */
+        fun displaySize(wm: WindowManager): android.graphics.Point =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                wm.maximumWindowMetrics.bounds.let { android.graphics.Point(it.width(), it.height()) }
+            } else {
+                android.graphics.Point().also { @Suppress("DEPRECATION") wm.defaultDisplay.getRealSize(it) }
+            }
+
+        /**
+         * 浮窗按整块屏幕的绝对坐标摆放：不被状态栏、导航栏、刘海推开（悬浮球、展开卡、移除区共用，见 [OrbGeometry]）；
+         * 位置变化不让系统补动画：开着系统动画（手机默认）时，窗口左上角一变——展开卡按内容长大、悬浮球拖动 / 吸附——
+         * 系统会把整块窗口从旧位置平移到新位置，展开卡就从屏幕角落滑进来，不是从球里长出（10-07 小米真机逐帧实测；
+         * 云真机默认关了系统动画，之前一直没测到）。位置都由我们逐帧给出，不需要它。
+         */
+        private fun WindowManager.LayoutParams.inDisplayCoordinates() {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) setCanPlayMoveAnimation(false)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                setFitInsetsTypes(0)
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
         }
 
         const val ORB_DISC_DP = 32
@@ -2968,6 +3056,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
         /** Movo 页面暂停后多久再判断悬浮球显隐（跳过页面之间切换的空档）。 */
         const val APP_LEAVE_SETTLE_MS = 300L
+        /** 交接等对话浮层回报的上限（浮层进场最多等内容 400ms + 两帧，留足余量）。 */
+        const val SHEET_HANDOFF_TIMEOUT_MS = 1_500L
         const val PANEL_AUTO_COLLAPSE_MS = 4_000L
         /** 从展开卡发起语音后，语音服务报告「没能开始」时转述到展开卡的时间窗。 */
         const val PANEL_VOICE_NOTICE_WINDOW_MS = 3_000L
