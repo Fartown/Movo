@@ -7,20 +7,23 @@ import io.github.fartown.movo.agent.runtime.AgentEvent
 internal enum class AgentOverlayPhase { RUNNING, PAUSED, FINISHED, FAILED }
 
 /**
- * 悬浮球的外观（规范 8.1 `Overlay/Orb`）：待命 = 只有玻璃圆 + 光球；执行中 / 暂停 / 聆听 / 失败 / 完成各有状态环与角标。
+ * 悬浮球的外观（规范 8.1 `Overlay/Orb`）：待命 = 只有玻璃圆 + 光球；执行中 / 暂停 / 聆听 / 监听中 / 失败 / 完成各有状态环或角标。
  * 完成与失败优先（结果待查看），其次语音对话中的聆听，再其次暂停。
+ * 监听中（规范 8.12「任务与状态」）：没有在跑的一轮、但还有后台监听在等下一次事件——任务还没完，不是待命也不是完成。
  */
-internal enum class OrbMode { STANDBY, RUNNING, PAUSED, LISTENING, FINISHED, FAILED }
+internal enum class OrbMode { STANDBY, RUNNING, PAUSED, LISTENING, MONITORING, FINISHED, FAILED }
 
 internal fun orbMode(
     phase: AgentOverlayPhase,
     standby: Boolean,
     listening: Boolean,
     stopped: Boolean = false,
+    /** 还有后台监听在运行（结束后等待撤销的不算）。 */
+    monitoring: Boolean = false,
 ): OrbMode = when {
-    standby -> OrbMode.STANDBY
+    standby -> if (monitoring) OrbMode.MONITORING else OrbMode.STANDBY
     // 用户主动结束不是出错：不挂 Rose 环与「!」，按待命外观显示；点开仍能查看保留的结果。
-    phase == AgentOverlayPhase.FAILED && stopped -> OrbMode.STANDBY
+    phase == AgentOverlayPhase.FAILED && stopped -> if (monitoring) OrbMode.MONITORING else OrbMode.STANDBY
     phase == AgentOverlayPhase.FINISHED -> OrbMode.FINISHED
     phase == AgentOverlayPhase.FAILED -> OrbMode.FAILED
     listening -> OrbMode.LISTENING
@@ -55,6 +58,19 @@ internal data class AgentOverlayState(
         val Initial = AgentOverlayState(status = AgentOverlayStatus.Received)
     }
 }
+
+/**
+ * 展开卡在没有在跑的一轮时显示的任务外层（规范 8.1 `Overlay/Panel` mode=Monitoring / Ended）。
+ * [Monitoring]：还有后台监听在等；[Ended]：刚结束了任务和它的监听，5 秒内可以撤销。
+ */
+@Immutable
+internal sealed interface OverlayTaskPanel {
+    data class Monitoring(val monitors: List<OverlayMonitor>) : OverlayTaskPanel
+    data class Ended(val endingId: String, val names: List<String>) : OverlayTaskPanel
+}
+
+@Immutable
+internal data class OverlayMonitor(val name: String, val eventCount: Int, val deadlineAtMillis: Long)
 
 /** 展开卡里的一步。 */
 @Immutable

@@ -3,7 +3,6 @@
     <string name="execution_channel">Running tasks</string>
     <string name="execution_title">Movo is running</string>
     <string name="execution_summary">%1$d tasks running. Return to Movo to see progress</string>
-    <string name="execution_stop">Stop running tasks</string>
     <string name="execution_label_chatgpt_login">Waiting for ChatGPT sign-in to finish</string>
     <string name="execution_label_background_command">Background command is running</string>
     <string name="execution_label_terminal">Terminal session is running</string>

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.res.Configuration
 import androidx.compose.ui.unit.dp
 import io.github.fartown.movo.R
+import io.github.fartown.movo.agent.monitor.MonitorEndReason
 import io.github.fartown.movo.agent.monitor.MonitorTime
 import io.github.fartown.movo.agent.runtime.ExecutionNotificationContent
 import io.github.fartown.movo.ui.model.MonitorEventKindUi
@@ -81,19 +82,26 @@ class MonitorRowsTest {
     }
 
     @Test
-    fun ongoingNotificationKeepsMonitorsWhenStoppingTasks() {
-        val tasksOnly = ExecutionNotificationContent.of(taskCount = 1, monitorCount = 0)
-        assertEquals(ExecutionNotificationContent.Mode.TASKS_ONLY, tasksOnly.mode)
-        assertTrue(tasksOnly.showStopTasks)
-        assertFalse(tasksOnly.showStopAll)
-        val monitorsOnly = ExecutionNotificationContent.of(taskCount = 0, monitorCount = 2)
-        assertEquals(ExecutionNotificationContent.Mode.MONITORS_ONLY, monitorsOnly.mode)
-        assertFalse(monitorsOnly.showStopTasks)
-        assertTrue(monitorsOnly.showStopAll)
-        val mixed = ExecutionNotificationContent.of(taskCount = 1, monitorCount = 2)
-        assertEquals(ExecutionNotificationContent.Mode.MIXED, mixed.mode)
-        assertTrue(mixed.showStopTasks && mixed.showStopAll)
-        assertEquals("任务 1 项·后台监听 2 个", localized("zh-CN").getString(R.string.monitor_execution_mixed, 1, 2))
+    fun endingTheTaskReadsTheSameEverywhere() {
+        // 规范 8.12「22」：结束行、展开卡、常驻通知同一个说法；按钮只有「结束任务」，结束后「撤销」。
+        val zh = localized("zh-CN")
+        val ended = row("e", MonitorEventKindUi.Ended, MonitorEndReason.ENDED_WITH_TASK.name).copy(name = "喝水提醒、电量播报")
+        assertTrue(MonitorRowLabels.label(zh, ended).startsWith("已结束任务·喝水提醒、电量播报·"))
+        assertEquals("监听中·喝水提醒", zh.getString(R.string.monitor_overlay_title, "喝水提醒"))
+        assertEquals("监听中·2 个", zh.getString(R.string.monitor_overlay_title_count, 2))
+        assertEquals("已触发 3 次", zh.resources.getQuantityString(R.plurals.monitor_overlay_fired, 3, 3))
+        assertEquals("已结束，喝水提醒也停了", zh.getString(R.string.monitor_overlay_ended, "喝水提醒"))
+        assertEquals("结束任务", zh.getString(R.string.monitor_execution_end_task))
+        assertEquals("撤销", zh.getString(R.string.monitor_undo))
+        assertEquals(
+            "喝水提醒、电量播报·17:00 自动结束",
+            zh.getString(R.string.monitor_execution_names_until, "喝水提醒、电量播报", "17:00"),
+        )
+        assertEquals("任务 1 项·后台监听 2 个", zh.getString(R.string.monitor_execution_mixed, 1, 2))
+        assertEquals(
+            ExecutionNotificationContent.Action.UNDO,
+            ExecutionNotificationContent.of(taskCount = 0, monitorCount = 0, endingCount = 1).action,
+        )
     }
 
     @Suppress("DEPRECATION")

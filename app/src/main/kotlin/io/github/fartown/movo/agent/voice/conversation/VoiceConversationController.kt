@@ -33,10 +33,12 @@ internal class VoiceConversationController(
         fun submit(turn: VoiceTurnCoordinator.Turn, sessionId: String)
         fun cancelTask()
         fun onClosed()
+        /** 这次语音所在的对话还有后台监听在跑（「结束任务」要连它们一起结束）。 */
+        fun hasBackgroundTask(): Boolean = false
     }
 
     private val main = Handler(Looper.getMainLooper())
-    private val turns = VoiceTurnCoordinator(FlavorModule.voiceLocalCommands)
+    private val turns = VoiceTurnCoordinator(FlavorModule.voiceLocalCommands, hasBackgroundTask = { host.hasBackgroundTask() })
     private val commitGate = VoiceCommitGate()
     private var engine: DoubaoDialogEngine? = null
     private var generation = 0L

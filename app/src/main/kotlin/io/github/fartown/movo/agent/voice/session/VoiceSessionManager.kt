@@ -40,6 +40,9 @@ internal interface VoiceConversationHost {
     fun cancelVoiceRun(runId: String)
     fun stopCurrentRun()
 
+    /** 语音「结束任务」：这个对话的后台监听一起结束（5 秒内可撤销，规范 8.12「结束」）。返回是否结束了监听。 */
+    fun endVoiceTaskMonitors(conversationId: String): Boolean = false
+
     /**
      * 执行中说的话作为补充交给当前任务（规范 8.5「执行任务中的语音交互」），结果在主线程回调；
      * 不支持或未被接收时回调 false，由语音会话按原来的方式记下、等任务结束再发。
@@ -195,6 +198,14 @@ internal open class VoiceSessionOwner(
         if (waiting != null) controller?.result(waiting.id, "", failure = "已取消待发送消息")
         activeRunId?.let(conversations::cancelVoiceRun)
             ?: if (conversationId == conversations.voiceSelectedConversationId) conversations.stopCurrentRun() else Unit
+        // 结束任务 = 这一轮和这个对话里的监听一起结束。
+        conversationId?.let(conversations::endVoiceTaskMonitors)
+    }
+
+    /** 这次语音所在的对话还有后台监听在跑：没有在跑的一轮时「结束任务」也有东西可结束。 */
+    fun hasBackgroundTask(): Boolean {
+        val id = conversationId ?: return false
+        return io.github.fartown.movo.agent.monitor.MonitorRegistry.active.value.any { it.conversationId == id }
     }
     fun ownsConversation(id: String?): Boolean = active && id != null && id == conversationId
 
@@ -334,6 +345,7 @@ internal open class VoiceSessionOwner(
         }
         override fun submit(turn: VoiceTurnCoordinator.Turn, sessionId: String) = dispatch(turn, sessionId, generation)
         override fun cancelTask() { if (valid(generation)) this@VoiceSessionOwner.cancelTask() }
+        override fun hasBackgroundTask(): Boolean = generation == epoch && this@VoiceSessionOwner.hasBackgroundTask()
         override fun onClosed() {
             if (generation != epoch) return
             freezeInput()

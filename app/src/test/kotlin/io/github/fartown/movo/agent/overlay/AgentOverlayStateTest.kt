@@ -39,4 +39,19 @@ class AgentOverlayStateTest {
         assertEquals(OrbMode.RUNNING, orbMode(AgentOverlayPhase.RUNNING, standby = false, listening = false))
         assertEquals(OrbMode.STANDBY, orbMode(AgentOverlayPhase.RUNNING, standby = true, listening = true))
     }
+
+    @Test
+    fun anIdleTaskWithMonitorsIsMonitoringNotStandbyOrDone() {
+        // 规范 8.12「22」：没有在跑的一轮、还有监听在等 = 监听中；叫醒的一轮在跑时照常是执行中。
+        assertEquals(OrbMode.MONITORING, orbMode(AgentOverlayPhase.RUNNING, standby = true, listening = false, monitoring = true))
+        // 用户停掉了这一轮，别的监听还在：监听中，不是待命。
+        assertEquals(
+            OrbMode.MONITORING,
+            orbMode(AgentOverlayPhase.FAILED, standby = false, listening = false, stopped = true, monitoring = true),
+        )
+        assertEquals(OrbMode.RUNNING, orbMode(AgentOverlayPhase.RUNNING, standby = false, listening = false, monitoring = true))
+        assertEquals(OrbMode.PAUSED, orbMode(AgentOverlayPhase.PAUSED, standby = false, listening = false, monitoring = true))
+        // 失败要人看：优先于监听中。
+        assertEquals(OrbMode.FAILED, orbMode(AgentOverlayPhase.FAILED, standby = false, listening = false, monitoring = true))
+    }
 }

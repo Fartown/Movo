@@ -89,6 +89,12 @@ class OverlayLifecyclePolicyTest {
         assertFalse(OverlayLifecyclePolicy.overlayUnneeded(false, runActive = false, preparingRun = true, openingResult = false, resultViewable = false))
         assertFalse(OverlayLifecyclePolicy.overlayUnneeded(false, runActive = false, preparingRun = false, openingResult = true, resultViewable = false))
         assertFalse(OverlayLifecyclePolicy.overlayUnneeded(false, runActive = false, preparingRun = false, openingResult = false, resultViewable = true))
+        // 常驻关、没有在跑的一轮，但还有后台监听：任务没完，悬浮球留着（规范 8.1）。
+        assertFalse(
+            OverlayLifecyclePolicy.overlayUnneeded(
+                false, runActive = false, preparingRun = false, openingResult = false, resultViewable = false, monitoring = true,
+            ),
+        )
     }
 
     /**

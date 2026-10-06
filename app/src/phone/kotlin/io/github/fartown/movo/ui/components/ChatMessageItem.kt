@@ -763,11 +763,15 @@ internal fun AgentWorkProcess(
                 .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // 这张卡里开的后台监听还在跑：这件事没完，卡头写「监听中·名称」+「HH:mm 结束」（规范 8.12「执行卡头」）。
+            val cardMonitors = rememberCardMonitors(tools)
+            val monitoring = !running && !paused && cardMonitors.isNotEmpty()
             // 规范 9.4「执行卡 · 完成 → 摘要条」：小光球 → ✓ 等图标交叉淡化 + 缩放 0.72 ↔ 1（`fast`）。
             WorkStatusIcon(
                 kind = when {
                     paused -> WorkStatusIconKind.Paused
                     running -> WorkStatusIconKind.Running
+                    monitoring -> WorkStatusIconKind.Monitoring
                     // 用户主动停止不是出错：次要色停止方块。
                     runStopped -> WorkStatusIconKind.Stopped
                     failedIndex >= 0 || runUnfinished -> WorkStatusIconKind.Failed
@@ -800,12 +804,19 @@ internal fun AgentWorkProcess(
             val elapsed = firstStart?.let { start ->
                 if (ticking) now - start else (turnSpan?.finishedAt ?: endedAt.takeIf { it > 0L } ?: lastFinish)?.let { it - start }
             }
-            val timerText = elapsed?.let { if (running) formatClock(it) else formatElapsed(it) }
+            val monitorUntil = cardMonitors.maxOfOrNull { it.deadlineAtMillis }?.let { deadline ->
+                stringResource(
+                    R.string.monitor_overlay_until,
+                    io.github.fartown.movo.agent.monitor.MonitorTime.clock(androidx.compose.ui.platform.LocalContext.current, deadline),
+                )
+            }
+            val timerText = if (monitoring) monitorUntil else elapsed?.let { if (running) formatClock(it) else formatElapsed(it) }
             // 放不下完整计时时退成「1:06」，状态文字不让位（规范：摘要条状态优先完整显示）。
-            val compactTimer = elapsed?.takeIf { !running }?.let(::formatCompactElapsed)
+            val compactTimer = if (monitoring) monitorUntil else elapsed?.takeIf { !running }?.let(::formatCompactElapsed)
             val phase = when {
                 paused -> WorkPhase.Paused
                 running -> WorkPhase.Running
+                monitoring -> WorkPhase.Monitoring
                 runStopped -> WorkPhase.Stopped
                 failedIndex >= 0 -> WorkPhase.Failed
                 runUnfinished -> WorkPhase.Unfinished
@@ -816,6 +827,11 @@ internal fun AgentWorkProcess(
                 when (shownPhase) {
                     WorkPhase.Paused -> if (toolCount > 0) stringResource(R.string.movo_work_paused_step, stepOffset + toolCount) else stringResource(R.string.movo_work_paused)
                     WorkPhase.Running -> if (toolCount > 0) stringResource(R.string.movo_work_running_step, stepOffset + toolCount) else stringResource(R.string.movo_work_analyzing)
+                    WorkPhase.Monitoring -> if (cardMonitors.size == 1) {
+                        stringResource(R.string.monitor_overlay_title, cardMonitors.single().name)
+                    } else {
+                        stringResource(R.string.monitor_overlay_title_count, cardMonitors.size.coerceAtLeast(1))
+                    }
                     WorkPhase.Stopped -> stringResource(R.string.movo_work_stopped_steps, turnSteps)
                     WorkPhase.Failed -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
                     WorkPhase.Unfinished -> stringResource(R.string.movo_work_unfinished_steps, turnSteps)
@@ -1304,11 +1320,11 @@ private fun ThinkingOnlyRow(
     }
 }
 
-/** 执行卡 / 执行条 / 执行详情概要卡的状态图标（规范 8.1、8.8）。 */
-internal enum class WorkStatusIconKind { Running, Paused, Stopped, Failed, Done }
+/** 执行卡 / 执行条 / 执行详情概要卡的状态图标（规范 8.1、8.8；监听中见 8.12「执行卡头」）。 */
+internal enum class WorkStatusIconKind { Running, Paused, Monitoring, Stopped, Failed, Done }
 
 /**
- * 状态图标槽 16：执行中 = 小光球（Q6）/ 暂停 = 次要色 ‖ / 停止 = 次要色方块 / 失败 = Rose ✕ / 完成 = Green ✓。
+ * 状态图标槽 16：执行中 = 小光球（Q6）/ 暂停 = 次要色 ‖ / 监听中 = Amber 时钟 / 停止 = 次要色方块 / 失败 = Rose ✕ / 完成 = Green ✓。
  * 切换时交叉淡化 + 缩放 0.72 ↔ 1，`fast`（规范 9.2「交叉淡化」、9.4「执行卡 · 完成 → 摘要条」）；减少动画时只淡入淡出。
  */
 @Composable
@@ -1326,6 +1342,9 @@ internal fun WorkStatusIcon(kind: WorkStatusIconKind, modifier: Modifier = Modif
                 WorkStatusIconKind.Running -> io.github.fartown.movo.ui.components.movo.MovoOrb(size = 16.dp)
                 WorkStatusIconKind.Paused -> io.github.fartown.movo.ui.theme.MovoIcon(
                     io.github.fartown.movo.ui.theme.MovoIcons.Pause, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                )
+                WorkStatusIconKind.Monitoring -> io.github.fartown.movo.ui.theme.MovoIcon(
+                    io.github.fartown.movo.ui.theme.MovoIcons.Clock, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.amberFg,
                 )
                 WorkStatusIconKind.Stopped -> io.github.fartown.movo.ui.theme.MovoIcon(
                     io.github.fartown.movo.ui.theme.MovoIcons.Square, null, size = 16.dp, tint = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
@@ -1357,7 +1376,32 @@ internal fun <S> androidx.compose.animation.AnimatedContentTransitionScope<S>.mo
 }
 
 /** 执行卡标题行的状态（不含「第 N 步」这类计数：计数变化直接换数字）。 */
-internal enum class WorkPhase { Running, Paused, Stopped, Failed, Unfinished, Done }
+internal enum class WorkPhase { Running, Paused, Monitoring, Stopped, Failed, Unfinished, Done }
+
+/**
+ * 这张执行卡里开的、还在跑的后台监听（规范 8.12「执行卡头」）：卡里有 monitor_start 步骤，且本对话有监听在这一步执行期间启动。
+ * 卡里没有开监听的步骤时不订阅注册表。
+ */
+@Composable
+private fun rememberCardMonitors(tools: List<ToolActivityMessageUi>): List<io.github.fartown.movo.agent.monitor.MonitorInfo> {
+    val starts = remember(tools) { tools.filter { it.toolName == MONITOR_START_TOOL && it.startedAtMillis != null } }
+    if (starts.isEmpty()) return emptyList()
+    val conversationId = LocalMonitorConversationId.current ?: return emptyList()
+    val active by io.github.fartown.movo.agent.monitor.MonitorRegistry.active.collectAsState()
+    return remember(active, starts, conversationId) {
+        active.filter { info ->
+            info.conversationId == conversationId && starts.any { tool ->
+                val from = tool.startedAtMillis!! - MONITOR_START_SLACK_MS
+                val to = (tool.finishedAtMillis ?: Long.MAX_VALUE - MONITOR_START_SLACK_MS) + MONITOR_START_SLACK_MS
+                info.startedAtMillis in from..to
+            }
+        }
+    }
+}
+
+private const val MONITOR_START_TOOL = "monitor_start"
+/** 步骤时刻与监听登记时刻取自同一时钟，前后各放 1 秒余量。 */
+private const val MONITOR_START_SLACK_MS = 1_000L
 
 /**
  * 状态文字交叉淡化（规范 9.3「值变化」、9.4）：新状态淡入 `fast`、旧状态淡出 120ms，宽度变化 `standard`。

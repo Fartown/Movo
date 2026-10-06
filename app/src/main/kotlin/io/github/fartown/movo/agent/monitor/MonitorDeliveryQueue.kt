@@ -90,6 +90,16 @@ internal class MonitorDeliveryQueue(private val perTaskLimit: Int = DEFAULT_PER_
         pending.entries.removeAll { it.value.isEmpty() }
     }
 
+    /**
+     * 结束任务连带结束了这个监听（等待撤销期满）：丢掉它已经排着、还没交给 Movo 的事件，不再叫醒 Movo。
+     * 与 [dropTask] 不同，不记成永久丢弃：撤销后新来的事件照常排队。
+     */
+    fun discardPending(taskId: String) {
+        omitted.remove(taskId)
+        pending.values.forEach { queue -> queue.removeAll { it.taskId == taskId } }
+        pending.entries.removeAll { it.value.isEmpty() }
+    }
+
     /** 对话没了：排队、在途、事件轮记录一起清掉。 */
     fun dropConversation(conversationId: String) {
         pending.remove(conversationId)?.forEach { omitted.remove(it.taskId) }

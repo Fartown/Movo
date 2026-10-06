@@ -111,6 +111,16 @@ class VoiceTurnCoordinatorTest {
         s.say(3, "乙"); assertEquals(3L, s.pending?.id)
         assertTrue(s.runtimeFinished(1, "已停止").single() is Action.Submit)
     }
+    @Test fun endTaskAlsoEndsBackgroundMonitorsWhenNothingIsRunning() {
+        var monitoring = true
+        val s = VoiceTurnCoordinator(hasBackgroundTask = { monitoring }).apply { start() }
+        // 没有在跑的一轮，但还有后台监听：「结束任务」照样交给宿主去结束（连监听一起，规范 8.12「结束」）。
+        assertTrue(s.say(1, "结束任务。").contains(Action.CancelTask))
+        monitoring = false
+        val idle = s.say(2, "结束任务")
+        assertFalse(idle.contains(Action.CancelTask))
+        assertTrue(idle.any { it is Action.Notice })
+    }
     @Test fun negationOrQuestionIsNotACommand() {
         listOf("不要取消", "取消按钮在哪里", "请告诉我结束对话是什么意思").forEach { text ->
             val s = session(); assertTrue(s.say(1, text).single() is Action.Submit)

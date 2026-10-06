@@ -8,6 +8,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.geometry.Offset
 import io.github.fartown.movo.agent.overlay.AgentOverlayState
 import io.github.fartown.movo.agent.overlay.OrbMode
+import io.github.fartown.movo.agent.overlay.OverlayTaskPanel
 import io.github.fartown.movo.agent.voice.session.VoiceSessionUiState
 import io.github.fartown.movo.platform.RunSurfaceRenderer
 import io.github.fartown.movo.ui.model.AgentInteractionUiState
@@ -68,6 +69,10 @@ internal object TvRunSurfaceRenderer : RunSurfaceRenderer {
         onOrbDragStart: () -> Unit,
         onOrbDrag: (dx: Float, dy: Float) -> Unit,
         onOrbDragEnd: () -> Unit,
+        taskPanel: OverlayTaskPanel?,
+        onEndMonitors: () -> Unit,
+        onUndoEnd: () -> Unit,
+        onOpenMonitorConversation: (autoListen: Boolean) -> Unit,
     ) = Unit
 
     @Composable

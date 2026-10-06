@@ -56,7 +56,8 @@ class MonitorRegistryTest {
         runShell: (Boolean, String) -> Unit = ::runMonitorShell,
         heartbeatMs: Long = 60_000L,
         host: FakeHost = this.host,
-    ): MonitorRegistryCore = MonitorRegistryCore(clock = clock, runShell = runShell, heartbeatMs = heartbeatMs).also {
+        endUndoMs: Long = MonitorRegistryCore.END_UNDO_MS,
+    ): MonitorRegistryCore = MonitorRegistryCore(clock = clock, runShell = runShell, heartbeatMs = heartbeatMs, endUndoMs = endUndoMs).also {
         it.bind(host)
         it.sink = MonitorNoticeSink(notices::put)
         cores += it
@@ -260,6 +261,66 @@ class MonitorRegistryTest {
         val core = core()
         val started = core.startOk("cat; echo after-cat; exec sleep 30")
         assertEquals("after-cat", await<MonitorNotice.Event>(timeoutMs = 4_000) { it.taskId == started.info.id }.text)
+    }
+
+    @Test
+    fun endingWithTheTaskStopsAfterTheUndoWindowAndDropsHeldEvents() {
+        val core = core(endUndoMs = 800)
+        val started = core.startOk("while true; do echo tick; sleep 0.15; done", name = "喝水提醒")
+        val other = core.startOk("exec sleep 30", name = "别的对话", conversationId = "c2")
+        await<MonitorNotice.Event> { it.taskId == started.info.id }
+
+        val ending = checkNotNull(core.endLater { it.conversationId == "c1" })
+        notices.clear()
+        assertEquals(listOf("喝水提醒"), ending.names)
+        // 结束中立刻不算运行中（悬浮球、「监听」入口、常驻通知都按已结束显示），别的对话不受影响。
+        assertEquals(listOf(other.info.id), core.active.value.map { it.id })
+        assertEquals(listOf(ending.id), core.endings.value.map { it.id })
+        // 同一个监听不会进第二次结束。
+        assertNull(core.endLater { it.conversationId == "c1" })
+
+        val ended = await<MonitorNotice.Ended>(timeoutMs = 4_000) { it.taskId == started.info.id }
+        assertEquals(MonitorEndReason.ENDED_WITH_TASK, ended.reason)
+        assertFalse(ended.reason.wakesAgent)
+        // 扣着的事件随期满丢弃，没有交出去。
+        assertTrue(notices.none { it is MonitorNotice.Event && it.taskId == started.info.id })
+        assertTrue(core.endings.value.isEmpty())
+        assertFalse(core.undoEnding(ending.id))
+        core.awaitKills(5_000)
+        assertEquals(setOf("monitor:${other.info.id}"), host.leases.keys)
+    }
+
+    @Test
+    fun undoKeepsTheMonitorRunningAndReleasesHeldEventsInOrder() {
+        val core = core(endUndoMs = 5_000)
+        val started = core.startOk("sleep 0.3; echo a; sleep 0.4; echo b; exec sleep 30", name = "喝水提醒")
+        val ending = checkNotNull(core.endLater { true })
+        Thread.sleep(1_200)
+        assertTrue(notices.none { it is MonitorNotice.Event })
+
+        assertTrue(core.undoEnding(ending.id))
+        assertEquals(listOf(started.info.id), core.active.value.map { it.id })
+        assertTrue(core.endings.value.isEmpty())
+        val first = await<MonitorNotice.Event> { it.taskId == started.info.id }
+        val second = await<MonitorNotice.Event> { it.taskId == started.info.id }
+        assertEquals("a" to 1, first.text to first.seq)
+        assertEquals("b" to 2, second.text to second.seq)
+        // 撤销过的结束不会再到期。
+        Thread.sleep(300)
+        assertTrue(notices.none { it is MonitorNotice.Ended })
+        assertFalse(core.undoEnding(ending.id))
+    }
+
+    @Test
+    fun aDeadlineDuringTheUndoWindowEndsWithTheTaskInsteadOfWakingMovo() {
+        val core = core(endUndoMs = 5_000)
+        val started = core.startOk("exec sleep 30", timeoutMs = 1_200)
+        val ending = checkNotNull(core.endLater { true })
+        val ended = await<MonitorNotice.Ended>(timeoutMs = 4_000) { it.taskId == started.info.id }
+        assertEquals(MonitorEndReason.ENDED_WITH_TASK, ended.reason)
+        // 已经停了：撤销只是收掉这次结束，不会把它变回运行中。
+        assertTrue(core.undoEnding(ending.id))
+        assertTrue(core.active.value.isEmpty())
     }
 
     private class FakeHost(

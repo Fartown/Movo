@@ -32,6 +32,8 @@ internal enum class MonitorEndReason {
     RATE_LIMIT,
     /** 所属对话已不存在（删除、删光所有轮次、导入备份）：没有地方插行，也不唤醒。 */
     SESSION_END,
+    /** 用户结束了整个任务（[MonitorRegistryCore.endLater] 到期）：对话里已有「已结束任务」那一行，不另插行、不唤醒。 */
+    ENDED_WITH_TASK,
     ;
 
     /** 自动结束要唤醒 Movo 说明一次。 */
@@ -81,6 +83,18 @@ internal sealed interface MonitorNotice {
         val timeoutMs: Long,
         val suppressed: Int,
     ) : MonitorNotice
+}
+
+/**
+ * 一次「结束任务」连带的监听（规范 8.12「结束」「撤销」）：这些监听晚 [MonitorRegistryCore.END_UNDO_MS] 才真正停，
+ * 期间不再算运行中（悬浮球、「监听」入口、常驻通知都按已结束显示），事件先扣着；撤销就照常继续，扣着的事件补发。
+ */
+internal data class MonitorEnding(
+    val id: String,
+    val monitors: List<MonitorInfo>,
+    val atMillis: Long,
+) {
+    val names: List<String> get() = monitors.map { it.name }
 }
 
 internal fun interface MonitorNoticeSink {
@@ -148,17 +162,18 @@ internal object MonitorRegistry {
 
     fun stopConversation(conversationId: String, reason: MonitorEndReason) = core.stopConversation(conversationId, reason)
 
+    /** 结束任务时连带的监听：5 秒后才真正停，期间可撤销（[MonitorEnding]）。没有匹配的监听时返回 null。 */
+    fun endLater(predicate: (MonitorInfo) -> Boolean): MonitorEnding? = core.endLater(predicate)
+
+    /** 撤销一次结束：还没到期的监听照常继续。返回是否撤销成功（已到期、已撤销过时为 false）。 */
+    fun undoEnding(id: String): Boolean = core.undoEnding(id)
+
+    /** 等待撤销期满的结束（按发起顺序）。 */
+    val endings: StateFlow<List<MonitorEnding>> get() = core.endings
+
     /** 停掉所属对话不在 [conversationIds] 里的监听（对话被移除、导入备份后留下的监听）。 */
     fun stopOrphans(conversationIds: Set<String>): Int =
         core.stopWhere(MonitorEndReason.SESSION_END) { it.conversationId !in conversationIds }
-
-    /** 常驻通知正文：「后台监听 2 个·喝水提醒、电量播报，17:00 自动结束」。没有监听时为 null。 */
-    fun executionSummary(context: Context): String? {
-        val running = core.active.value.takeIf { it.isNotEmpty() } ?: return null
-        val names = running.joinToString("、") { it.name }
-        val end = MonitorTime.clock(context, running.maxOf { it.deadlineAtMillis })
-        return context.resources.getQuantityString(R.plurals.monitor_execution_summary, running.size, running.size, names, end)
-    }
 
     data class Interrupted(
         val taskId: String,
@@ -193,6 +208,7 @@ internal class MonitorRegistryCore(
     private val runShell: (root: Boolean, script: String) -> Unit = ::runMonitorShell,
     private val heartbeatMs: Long = HEARTBEAT_MS,
     private val lateKillCheckMs: Long = LATE_KILL_CHECK_MS,
+    private val endUndoMs: Long = END_UNDO_MS,
 ) {
     sealed interface StartResult {
         /** [requestedTimeoutMs] 为模型请求的期限（没填为 null），[maxTimeoutMs] 为用户设置的上限：超出时按上限生效。 */
@@ -216,8 +232,14 @@ internal class MonitorRegistryCore(
     private val kills = CopyOnWriteArrayList<Future<*>>()
     private var heartbeat: ScheduledFuture<*>? = null
     private val _active = MutableStateFlow<List<MonitorInfo>>(emptyList())
+    /** 等待撤销期满的结束：id → 到期时真正停掉的计时。 */
+    private val pendingEndings = LinkedHashMap<String, ScheduledFuture<*>>()
+    private val _endings = MutableStateFlow<List<MonitorEnding>>(emptyList())
 
+    /** 运行中的监听；结束任务后等待撤销的不算（[endings]）。 */
     val active: StateFlow<List<MonitorInfo>> = _active.asStateFlow()
+
+    val endings: StateFlow<List<MonitorEnding>> = _endings.asStateFlow()
 
     fun bind(host: MonitorHost) {
         if (this.host == null) synchronized(lock) { if (this.host == null) this.host = host }
@@ -318,6 +340,60 @@ internal class MonitorRegistryCore(
         return matched.size
     }
 
+    /**
+     * 结束任务连带的监听：匹配到的（运行中、不在另一次结束里的）先标记为结束中，[endUndoMs] 后才真正停（[commitEnding]），
+     * 期间 [undoEnding] 可以撤销。标记后立刻不算运行中；进程照跑，事件先扣着。
+     */
+    fun endLater(predicate: (MonitorInfo) -> Boolean): MonitorEnding? {
+        val ending = synchronized(lock) {
+            val matched = tasks.values.filter { !it.ended && it.endingId == null && predicate(it.info()) }
+            if (matched.isEmpty()) {
+                AndroidAgentLogger.info(
+                    "Monitor ending: nothing to end (running=${tasks.values.count { !it.ended }}, " +
+                        "ending=${tasks.values.count { !it.ended && it.endingId != null }})",
+                )
+                return null
+            }
+            val id = "e" + UUID.randomUUID().toString().replace("-", "").take(8)
+            matched.forEach { it.endingId = id }
+            pendingEndings[id] = timers.schedule({ commitEnding(id) }, endUndoMs, TimeUnit.MILLISECONDS)
+            MonitorEnding(id, matched.map { it.info() }, clock()).also { ending ->
+                _endings.value = _endings.value + ending
+                publishLocked()
+            }
+        }
+        host?.leasesChanged()
+        AndroidAgentLogger.info("Monitor ending scheduled: count=${ending.monitors.size}")
+        return ending
+    }
+
+    fun undoEnding(id: String): Boolean {
+        val restored = synchronized(lock) {
+            val timer = pendingEndings.remove(id) ?: return false
+            timer.cancel(false)
+            tasks.values.filter { it.endingId == id && !it.ended }
+        }
+        // 每个监听在自己的锁里清标记并补发扣着的事件：之后到的事件排在它们后面，顺序不乱。
+        restored.forEach { it.resume() }
+        synchronized(lock) {
+            _endings.value = _endings.value.filterNot { it.id == id }
+            publishLocked()
+        }
+        host?.leasesChanged()
+        AndroidAgentLogger.info("Monitor ending undone: count=${restored.size}")
+        return true
+    }
+
+    private fun commitEnding(id: String) {
+        val targets = synchronized(lock) {
+            pendingEndings.remove(id) ?: return
+            tasks.values.filter { it.endingId == id && !it.ended }
+        }
+        targets.forEach { it.terminate(MonitorEndReason.ENDED_WITH_TASK, exitCode = null) }
+        synchronized(lock) { _endings.value = _endings.value.filterNot { it.id == id } }
+        host?.leasesChanged()
+    }
+
     fun takeInterrupted(): List<MonitorRegistry.Interrupted> {
         val host = host ?: return emptyList()
         return synchronized(lock) {
@@ -354,7 +430,7 @@ internal class MonitorRegistryCore(
     }
 
     private fun publishLocked() {
-        _active.value = tasks.values.filter { !it.ended }.sortedBy { it.startedAtMillis }.map { it.info() }
+        _active.value = tasks.values.filter { !it.ended && it.endingId == null }.sortedBy { it.startedAtMillis }.map { it.info() }
     }
 
     /** 记下运行中的监听与心跳时刻；进程被系统杀掉后，下次启动时据此在对话里补「监听已中断」。 */
@@ -424,6 +500,10 @@ internal class MonitorRegistryCore(
         private var suppressedTotal = 0
         @Volatile var ended = false
             private set
+        /** 所在的一次「结束任务」（等待撤销期满）；null = 运行中。 */
+        @Volatile var endingId: String? = null
+        /** 结束中到达的事件：撤销时按原顺序补发，期满时丢弃。 */
+        private val held = mutableListOf<MonitorNotice.Event>()
         /** 读到 stdout 末尾：所有持有输出管道的进程都已退出或关掉了它。 */
         @Volatile private var stdoutClosed = false
 
@@ -503,7 +583,8 @@ internal class MonitorRegistryCore(
                     is MonitorRateLimiter.Decision.Deliver -> {
                         seq++
                         delivered = true
-                        post(MonitorNotice.Event(id, conversationId, name, now, seq, text, decision.suppressedBefore))
+                        val event = MonitorNotice.Event(id, conversationId, name, now, seq, text, decision.suppressedBefore)
+                        if (endingId != null) held += event else post(event)
                     }
                     MonitorRateLimiter.Decision.Suppress -> suppressedTotal++
                     is MonitorRateLimiter.Decision.Stop -> {
@@ -519,13 +600,26 @@ internal class MonitorRegistryCore(
             }
         }
 
-        fun terminate(reason: MonitorEndReason, exitCode: Int?) {
+        /** 撤销结束：回到运行中，扣着的事件按原顺序补发。 */
+        fun resume() {
+            synchronized(taskLock) {
+                if (ended) return
+                endingId = null
+                held.forEach(::post)
+                held.clear()
+            }
+        }
+
+        fun terminate(requestedReason: MonitorEndReason, exitCode: Int?) {
             val tail: String?
             val events: Int
             val suppressed: Int
+            // 用户已经结束了这个任务：等待撤销期间到期、自己退出或超速，都按「随任务结束」处理，不再唤醒 Movo。
+            val reason = if (endingId != null && requestedReason.wakesAgent) MonitorEndReason.ENDED_WITH_TASK else requestedReason
             synchronized(taskLock) {
                 if (ended) return
                 ended = true
+                held.clear()
                 deadlineFuture?.cancel(false)
                 flushFuture?.cancel(false)
                 val pending = batcher.flush(clock(), force = true)
@@ -610,6 +704,8 @@ internal class MonitorRegistryCore(
         private const val STDERR_CAP = 256L * 1024
         private const val HEARTBEAT_MS = 60_000L
         private const val LATE_KILL_CHECK_MS = 30_000L
+        /** 结束任务后可以撤销的时长（规范 8.12「撤销」）。 */
+        const val END_UNDO_MS = 5_000L
 
         /** 结束整个进程组：TERM，最多等 1.5 秒，还在就 KILL。 */
         fun groupKillScript(pgid: Int): String =

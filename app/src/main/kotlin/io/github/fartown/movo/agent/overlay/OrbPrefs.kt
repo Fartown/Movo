@@ -49,6 +49,9 @@ internal object OrbPrefs {
         removedByUser = true
     }
 
+    /** 用户本次亲手移除过悬浮球（打开 Movo 前不自动请回来，监听中也一样）。 */
+    val isRemovedByUser: Boolean get() = removedByUser
+
     private fun startStandbyOrb(context: Context) {
         if (!keepOrbAfterExit(context)) return
         runCatching {

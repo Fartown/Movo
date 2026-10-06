@@ -5,6 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.geometry.Offset
 import io.github.fartown.movo.agent.overlay.AgentOverlayState
 import io.github.fartown.movo.agent.overlay.OrbMode
+import io.github.fartown.movo.agent.overlay.OverlayTaskPanel
 import io.github.fartown.movo.agent.voice.session.VoiceSessionUiState
 import io.github.fartown.movo.ui.model.AgentInteractionUiState
 
@@ -66,6 +67,13 @@ internal interface RunSurfaceRenderer {
         onOrbDragStart: () -> Unit,
         onOrbDrag: (dx: Float, dy: Float) -> Unit,
         onOrbDragEnd: () -> Unit,
+        /** 没有在跑的一轮时卡片显示的任务外层（监听中 / 已结束·撤销）；null 时按 [state] 显示这一轮。 */
+        taskPanel: OverlayTaskPanel?,
+        /** 监听中点「结束任务」：结束所有监听（5 秒内可撤销）。 */
+        onEndMonitors: () -> Unit,
+        onUndoEnd: () -> Unit,
+        /** 监听中点键盘 / 语音：打开监听所在的对话（[autoListen] = 直接进语音）。 */
+        onOpenMonitorConversation: (autoListen: Boolean) -> Unit,
     )
 
     @Composable

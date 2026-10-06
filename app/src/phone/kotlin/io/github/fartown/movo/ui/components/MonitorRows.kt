@@ -76,6 +76,7 @@ internal fun monitorRowSpacings(entries: List<AgentTimelineEntry>): Map<String, 
  * 后台监听在对话里的一行（规范 8.12，Figma「18」）：与「已思考」行内一行同一写法，左对齐 20、高 32、无底色。
  * 事件行：琥珀 clock 14 +「监听事件·名称·时间」`Label/Medium` 次要色 + 6 + ⌄，点开显示这次事件的原文（左竖线 + 三级色）。
  * 结束行：clock 改三级色（已停止 / 结束 / 中断）；命令自己结束时写退出码，最后的输出可展开。
+ * 「已结束任务」行在撤销期内后面跟「撤销」（Indigo `Label/Medium`），期满消失、这行留下（规范 8.12「撤销」）。
  */
 @Composable
 internal fun MonitorEventRow(
@@ -108,6 +109,26 @@ internal fun MonitorEventRow(
             )
             Spacer(Modifier.width(6.dp))
             Text(text = label, style = MovoTypography.labelMedium, color = MovoColors.textSecondary)
+            if (message.reason == MonitorEndReason.ENDED_WITH_TASK.name) {
+                val endings by MonitorRegistry.endings.collectAsState()
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = endings.any { it.id == message.taskId },
+                    enter = androidx.compose.animation.fadeIn(MovoMotion.fast()),
+                    exit = androidx.compose.animation.fadeOut(MovoMotion.fastExit()),
+                ) {
+                    Text(
+                        text = stringResource(R.string.monitor_undo),
+                        style = MovoTypography.labelMedium,
+                        color = MovoColors.indigoFg,
+                        modifier = Modifier
+                            .padding(start = 6.dp)
+                            .movoClickable(PressKind.Link) {
+                                io.github.fartown.movo.core.AndroidAgentLogger.info("Monitor ending undo: source=conversation_row")
+                                MonitorRegistry.undoEnding(message.taskId)
+                            },
+                    )
+                }
+            }
             if (expandable) {
                 Spacer(Modifier.width(6.dp))
                 val rotation = androidx.compose.animation.core.animateFloatAsState(

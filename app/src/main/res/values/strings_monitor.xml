@@ -1,10 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="monitor_execution_label">Background monitors</string>
-    <plurals name="monitor_execution_summary">
-        <item quantity="one">%1$d background monitor · %2$s, ends at %3$s</item>
-        <item quantity="other">%1$d background monitors · %2$s, ends at %3$s</item>
-    </plurals>
     <string name="monitor_execution_mixed">Tasks: %1$d · Background monitors: %2$d</string>
     <string name="monitor_stop_all">Stop all</string>
     <string name="monitor_notify_channel">Movo notifications</string>
@@ -37,4 +33,26 @@
     <string name="tool_monitor_stop">Stop monitor</string>
     <string name="tool_monitor_list">View monitors</string>
     <string name="tool_notify_user">Send notification</string>
+    <!-- Monitor task state and ending (design spec 8.12, Figma "22") -->
+    <string name="monitor_overlay_title">Monitoring·%1$s</string>
+    <string name="monitor_overlay_title_count">Monitoring·%1$d</string>
+    <string name="monitor_overlay_until">Ends %1$s</string>
+    <plurals name="monitor_overlay_fired">
+        <item quantity="one">Fired %1$d time</item>
+        <item quantity="other">Fired %1$d times</item>
+    </plurals>
+    <plurals name="monitor_overlay_fired_named">
+        <item quantity="one">%2$s·fired %1$d time</item>
+        <item quantity="other">%2$s·fired %1$d times</item>
+    </plurals>
+    <string name="monitor_overlay_ended">Ended. %1$s stopped too</string>
+    <string name="monitor_undo">Undo</string>
+    <string name="monitor_names_separator">, </string>
+    <string name="monitor_row_ended_with_task">Task ended·%1$s·%2$s</string>
+    <string name="monitor_execution_names_until">%1$s·ends at %2$s</string>
+    <string name="monitor_execution_ended_title">Task ended</string>
+    <string name="monitor_execution_ended_text">%1$s stopped too</string>
+    <string name="monitor_execution_end_task">End task</string>
+    <string name="monitor_voice_ended">Ended. Monitors stopped too</string>
+    <string name="monitor_execution_until">Ends at %1$s</string>
 </resources>
