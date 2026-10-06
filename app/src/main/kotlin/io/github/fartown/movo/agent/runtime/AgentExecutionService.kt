@@ -21,8 +21,8 @@ import java.util.concurrent.atomic.AtomicLong
 /**
  * 只在用户任务存活期间持有前台执行生命周期；进程被系统停止后不重放任务。
  *
- * 后台监听的租约单独登记（[monitorLeases]）：常驻通知上「停止运行任务」只停普通任务，不会连监听一起停；
- * 同时有任务和监听时另给「全部停止」（规范 8.12）。
+ * 后台监听的租约单独登记（[monitorLeases]）。常驻通知只有一个按钮「结束任务」（规范 8.12「22」）：
+ * 任务马上停，后台监听一起结束、5 秒内可撤销（通知原位变成「已结束任务·撤销」）。
  */
 internal class AgentExecutionService : Service() {
     private val stopQueue = ExecutionStopQueue { failure ->
@@ -63,10 +63,17 @@ internal class AgentExecutionService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            // 「停止运行任务」：只停普通任务，后台监听继续。
-            ACTION_STOP -> stopTasks(includeMonitors = false)
-            // 「全部停止」：任务与后台监听一起停。
-            ACTION_STOP_ALL -> stopTasks(includeMonitors = true)
+            // 「结束任务」：任务马上停，后台监听一起结束（5 秒内可撤销）。
+            ACTION_END -> {
+                AndroidAgentLogger.info("Execution notification: end task")
+                stopTasks(includeMonitors = false)
+                io.github.fartown.movo.agent.monitor.MonitorRegistry.endLater { true }
+            }
+            ACTION_UNDO -> {
+                AndroidAgentLogger.info("Monitor ending undo: source=notification")
+                io.github.fartown.movo.agent.monitor.MonitorRegistry.endings.value
+                    .forEach { io.github.fartown.movo.agent.monitor.MonitorRegistry.undoEnding(it.id) }
+            }
             else -> {
                 ensureForeground()
                 refreshNotification()
@@ -111,49 +118,68 @@ internal class AgentExecutionService : Service() {
             this, 0, Intent(this, FlavorModule.surfaces.mainActivity),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val stopTasks = PendingIntent.getService(
-            this, 1, Intent(this, AgentExecutionService::class.java).setAction(ACTION_STOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        val registry = io.github.fartown.movo.agent.monitor.MonitorRegistry
+        val monitors = registry.active.value
+        val endings = registry.endings.value
+        val content = ExecutionNotificationContent.of(
+            taskCount = leases.taskCount(), monitorCount = monitors.size, endingCount = endings.size,
         )
-        val stopAll = PendingIntent.getService(
-            this, 2, Intent(this, AgentExecutionService::class.java).setAction(ACTION_STOP_ALL),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        val content = ExecutionNotificationContent.of(taskCount = leases.taskCount(), monitorCount = monitorLeases.count())
-        val text = when (content.mode) {
-            // 只剩后台监听：写明监听名称与结束时间，按钮是「全部停止」（规范 8.12）。
-            ExecutionNotificationContent.Mode.MONITORS_ONLY ->
-                io.github.fartown.movo.agent.monitor.MonitorRegistry.executionSummary(this)
-                    ?: getString(R.string.monitor_execution_label)
+        val separator = getString(R.string.monitor_names_separator)
+        val title: String
+        val text: String
+        when (content.mode) {
+            // 刚结束、还能撤销：「已结束任务 / 喝水提醒也停了」+「撤销」。
+            ExecutionNotificationContent.Mode.ENDED -> {
+                title = getString(R.string.monitor_execution_ended_title)
+                text = getString(R.string.monitor_execution_ended_text, endings.flatMap { it.names }.joinToString(separator))
+            }
+            // 只剩后台监听：「监听中·喝水提醒 / 17:00 自动结束」，两个及以上「监听中·2 个 / 喝水提醒、电量播报·17:00 自动结束」。
+            ExecutionNotificationContent.Mode.MONITORS_ONLY -> {
+                val end = io.github.fartown.movo.agent.monitor.MonitorTime.clock(this, monitors.maxOf { it.deadlineAtMillis })
+                if (monitors.size == 1) {
+                    title = getString(R.string.monitor_overlay_title, monitors.single().name)
+                    text = getString(R.string.monitor_execution_until, end)
+                } else {
+                    title = getString(R.string.monitor_overlay_title_count, monitors.size)
+                    text = getString(R.string.monitor_execution_names_until, monitors.joinToString(separator) { it.name }, end)
+                }
+            }
             // 任务与监听同时存在：「任务 1 项·后台监听 2 个」。
-            ExecutionNotificationContent.Mode.MIXED ->
-                getString(R.string.monitor_execution_mixed, content.taskCount, content.monitorCount)
-            ExecutionNotificationContent.Mode.TASKS_ONLY ->
-                leases.sharedLabel()?.let(::getString) ?: getString(R.string.execution_summary, content.taskCount)
+            ExecutionNotificationContent.Mode.MIXED -> {
+                title = getString(R.string.execution_title)
+                text = getString(R.string.monitor_execution_mixed, content.taskCount, content.monitorCount)
+            }
+            ExecutionNotificationContent.Mode.TASKS_ONLY -> {
+                title = getString(R.string.execution_title)
+                text = leases.sharedLabel()?.let(::getString) ?: getString(R.string.execution_summary, content.taskCount)
+            }
         }
-        val builder = Notification.Builder(this, CHANNEL)
+        val action = when (content.action) {
+            ExecutionNotificationContent.Action.UNDO -> ACTION_UNDO to R.string.monitor_undo
+            ExecutionNotificationContent.Action.END_TASK -> ACTION_END to R.string.monitor_execution_end_task
+        }
+        val button = PendingIntent.getService(
+            this, 1, Intent(this, AgentExecutionService::class.java).setAction(action.first),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(getString(R.string.execution_title))
+            .setContentTitle(title)
             .setContentText(text)
             .setContentIntent(open)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-        if (content.showStopTasks) {
-            builder.addAction(Notification.Action.Builder(null, getString(R.string.execution_stop), stopTasks).build())
-        }
-        if (content.showStopAll) {
-            builder.addAction(Notification.Action.Builder(null, getString(R.string.monitor_stop_all), stopAll).build())
-        }
-        return builder.build()
+            .addAction(Notification.Action.Builder(null, getString(action.second), button).build())
+            .build()
     }
 
     companion object {
         private const val CHANNEL = "movo_execution"
         private const val NOTIFICATION_ID = 1107
-        private const val ACTION_STOP = "io.github.fartown.movo.action.STOP_USER_EXECUTION"
-        private const val ACTION_STOP_ALL = "io.github.fartown.movo.action.STOP_ALL_EXECUTION"
+        private const val ACTION_END = "io.github.fartown.movo.action.END_EXECUTION"
+        private const val ACTION_UNDO = "io.github.fartown.movo.action.UNDO_END_EXECUTION"
         private val leases = ExecutionLeaseRegistry()
-        /** 后台监听的租约（label = 监听）：单独登记，「停止运行任务」不动它们。 */
+        /** 后台监听的租约（label = 监听）：单独登记，「结束任务」不直接收回它们（监听晚 5 秒才停，可撤销）。 */
         private val monitorLeases = ExecutionLeaseRegistry()
         private val ownerSequence = AtomicLong()
         private val mainHandler = Handler(Looper.getMainLooper())
@@ -217,17 +243,19 @@ internal data class ExecutionNotificationContent(
     val taskCount: Int,
     val monitorCount: Int,
 ) {
-    enum class Mode { TASKS_ONLY, MONITORS_ONLY, MIXED }
+    /** [ENDED]：任务和监听都结束了，监听还在等待撤销期满。 */
+    enum class Mode { TASKS_ONLY, MONITORS_ONLY, MIXED, ENDED }
 
-    /** 「停止运行任务」：有普通任务时才有，只停普通任务。 */
-    val showStopTasks: Boolean get() = mode != Mode.MONITORS_ONLY
+    enum class Action { END_TASK, UNDO }
 
-    /** 「全部停止」：有后台监听时才有。 */
-    val showStopAll: Boolean get() = mode != Mode.TASKS_ONLY
+    /** 只有一个按钮（规范 8.12「22」）：结束中是「撤销」，其余都是「结束任务」（任务与监听一起结束）。 */
+    val action: Action get() = if (mode == Mode.ENDED) Action.UNDO else Action.END_TASK
 
     companion object {
-        fun of(taskCount: Int, monitorCount: Int): ExecutionNotificationContent = ExecutionNotificationContent(
+        /** [monitorCount] 只算运行中的监听；[endingCount] 是等待撤销期满的结束次数。 */
+        fun of(taskCount: Int, monitorCount: Int, endingCount: Int = 0): ExecutionNotificationContent = ExecutionNotificationContent(
             mode = when {
+                taskCount == 0 && monitorCount == 0 && endingCount > 0 -> Mode.ENDED
                 monitorCount > 0 && taskCount == 0 -> Mode.MONITORS_ONLY
                 monitorCount > 0 -> Mode.MIXED
                 else -> Mode.TASKS_ONLY

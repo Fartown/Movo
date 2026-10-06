@@ -13,6 +13,7 @@ import io.github.fartown.movo.agent.overlay.AgentOverlayState
 import io.github.fartown.movo.agent.overlay.AgentOverlayUnlockPrompt
 import io.github.fartown.movo.agent.overlay.OverlayUnlockActivity
 import io.github.fartown.movo.agent.overlay.OrbMode
+import io.github.fartown.movo.agent.overlay.OverlayTaskPanel
 import io.github.fartown.movo.agent.voice.session.VoiceSessionUiState
 import io.github.fartown.movo.platform.RunSurfaceRenderer
 import io.github.fartown.movo.ui.components.movo.AgentInteractionOverlayContent
@@ -106,6 +107,10 @@ internal object PhoneRunSurfaceRenderer : RunSurfaceRenderer {
         onOrbDragStart: () -> Unit,
         onOrbDrag: (dx: Float, dy: Float) -> Unit,
         onOrbDragEnd: () -> Unit,
+        taskPanel: OverlayTaskPanel?,
+        onEndMonitors: () -> Unit,
+        onUndoEnd: () -> Unit,
+        onOpenMonitorConversation: (autoListen: Boolean) -> Unit,
     ) {
         AgentOverlayBubble(
             state = state,
@@ -130,6 +135,10 @@ internal object PhoneRunSurfaceRenderer : RunSurfaceRenderer {
             onOrbDragStart = onOrbDragStart,
             onOrbDrag = onOrbDrag,
             onOrbDragEnd = onOrbDragEnd,
+            taskPanel = taskPanel,
+            onEndMonitors = onEndMonitors,
+            onUndoEnd = onUndoEnd,
+            onOpenMonitorConversation = onOpenMonitorConversation,
         )
     }
 

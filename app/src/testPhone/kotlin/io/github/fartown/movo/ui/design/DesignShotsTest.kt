@@ -262,6 +262,39 @@ class DesignShotsTest {
         }
     }
 
+    /** 定稿 22 · 监听任务：悬浮球监听中 / 暂停只留角标，展开卡监听中（一个、两个）与已结束·撤销。 */
+    @Test
+    fun overlayMonitoring() = shot("22-overlay-monitoring") {
+        val deadline = java.util.Calendar.getInstance().apply { set(java.util.Calendar.HOUR_OF_DAY, 17); set(java.util.Calendar.MINUTE, 0) }.timeInMillis
+        val water = io.github.fartown.movo.agent.overlay.OverlayMonitor("喝水提醒", eventCount = 3, deadlineAtMillis = deadline)
+        val battery = io.github.fartown.movo.agent.overlay.OverlayMonitor("电量播报", eventCount = 1, deadlineAtMillis = deadline)
+        Column(
+            Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color(0xFFE9E4DC)).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                listOf(
+                    io.github.fartown.movo.agent.overlay.OrbMode.RUNNING,
+                    io.github.fartown.movo.agent.overlay.OrbMode.PAUSED,
+                    io.github.fartown.movo.agent.overlay.OrbMode.MONITORING,
+                    io.github.fartown.movo.agent.overlay.OrbMode.FINISHED,
+                    io.github.fartown.movo.agent.overlay.OrbMode.STANDBY,
+                ).forEach { mode -> io.github.fartown.movo.agent.overlay.AgentOverlayOrb(mode = mode, onTap = {}) }
+            }
+            listOf(
+                io.github.fartown.movo.agent.overlay.OverlayTaskPanel.Monitoring(listOf(water)),
+                io.github.fartown.movo.agent.overlay.OverlayTaskPanel.Monitoring(listOf(water, battery)),
+                io.github.fartown.movo.agent.overlay.OverlayTaskPanel.Ended("e1", listOf("喝水提醒")),
+            ).forEach { panel ->
+                io.github.fartown.movo.agent.overlay.AgentOverlayBubble(
+                    state = io.github.fartown.movo.agent.overlay.AgentOverlayState.Initial,
+                    onCollapse = {}, onPause = {}, onResume = {}, onStop = {}, onSupplementModeChange = {}, onSupplement = {},
+                    taskPanel = panel,
+                )
+            }
+        }
+    }
+
     // ---- 定稿 20 · 工具步骤可视化：默认折叠，点一步原地展开 ----
 
     private fun capture(name: String) {

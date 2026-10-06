@@ -261,8 +261,9 @@ private class GlowCache {
 
 /**
  * 悬浮球 `Overlay/Orb`（规范 8.1 / 9.5）：32 半透明圆（热区 44）内含 22 光球，外圈 1.5 状态环 + 右上 14 角标：
- * 执行中 = Indigo 弧线旋转（1200ms 一圈）；暂停 = 灰环 + 光球去饱和 + ‖ 角标；聆听 = Indigo 整环 + 波纹 + 声波角标；
- * 失败 = Rose 整环 + ! 角标 + 左右抖动 2 两次；完成 = Green 整环 + ✓ 角标（一直保留到用户点开）；待命 = 只有玻璃圆 + 光球。
+ * 执行中 = Indigo 弧线旋转（1200ms 一圈）；暂停 = 只有 ‖ 角标（2026-10-06 去掉灰环与去饱和）；聆听 = Indigo 整环 + 波纹 + 声波角标；
+ * 监听中 = Amber 整环（不转）+ 时钟角标；失败 = Rose 整环 + ! 角标 + 左右抖动 2 两次；
+ * 完成 = Green 整环 + ✓ 角标（一直保留到用户点开）；待命 = 只有玻璃圆 + 光球。
  * 手势：点击 [onTap]；按住 300ms [onLongPress]（长按触感）；按住后移动超过 8 进入拖动（不再触发长按）。
  * 拖动用屏幕坐标，窗口跟手移动时手指相对窗口的位置不变，不能用窗口内坐标算位移。
  * [shown] 变为 false 时缩小到 0.5 并淡出 170ms + `exit`（移除悬浮球时由调用方等退场播完再移除窗口）。
@@ -289,6 +290,7 @@ internal fun AgentOverlayOrb(
     hideForReveal: Boolean = false,
 ) {
     val reduced = LocalReducedMotion.current
+    LaunchedEffect(mode) { io.github.fartown.movo.core.AndroidAgentLogger.info("Agent orb mode: ${mode.name}") }
     // Q8：看着它从执行中变为完成、且任务用时 ≥ 10 秒时，光球亮度 1 → 1.3 → 1（600ms），只播一次。
     var sawActive by remember { mutableStateOf(false) }
     if (mode == OrbMode.RUNNING || mode == OrbMode.PAUSED || mode == OrbMode.LISTENING) sawActive = true
@@ -382,14 +384,8 @@ internal fun AgentOverlayOrb(
                     .border(0.5.dp, MovoColors.borderHairline, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
-                val desaturate = mode == OrbMode.PAUSED
-                val saturation = animateFloatAsState(if (desaturate) 0f else 1f, MovoMotion.fast(), label = "orbSaturation")
                 Box(
                     modifier = Modifier
-                        .graphicsLayer {
-                            val value = saturation.value
-                            alpha = if (value < 1f) 0.7f + 0.3f * value else 1f
-                        }
                         .drawWithContent {
                             drawContent()
                             val b = brighten.value
@@ -573,10 +569,11 @@ private fun OrbStatusRing(mode: OrbMode) {
     val color = animateColorAsState(
         when (mode) {
             OrbMode.RUNNING, OrbMode.LISTENING -> MovoColors.indigoFg
-            OrbMode.PAUSED -> MovoColors.textTertiary
+            OrbMode.MONITORING -> MovoColors.amberFg
             OrbMode.FINISHED -> MovoColors.greenFg
             OrbMode.FAILED -> MovoColors.roseFg
-            OrbMode.STANDBY -> MovoColors.indigoFg.copy(alpha = 0f)
+            // 暂停只留角标（2026-10-06 定，灰环不好看）。
+            OrbMode.PAUSED, OrbMode.STANDBY -> MovoColors.indigoFg.copy(alpha = 0f)
         },
         MovoMotion.fast(),
         label = "orbRing",
@@ -609,13 +606,14 @@ private fun OrbStatusRing(mode: OrbMode) {
     }
 }
 
-/** 右上 14 角标：暂停 ‖（bg/inverse）、聆听 声波（Indigo）、失败 !（Rose）、完成 ✓（Green）；执行中与待命不显示。 */
+/** 右上 14 角标：暂停 ‖（bg/inverse）、聆听 声波（Indigo）、监听中 时钟（Amber）、失败 !（Rose）、完成 ✓（Green）；执行中与待命不显示。 */
 @Composable
 private fun OrbBadge(mode: OrbMode, modifier: Modifier = Modifier) {
     Crossfade(targetState = mode, animationSpec = MovoMotion.fast(), modifier = modifier, label = "orbBadge") { current ->
         val (bg, icon) = when (current) {
             OrbMode.PAUSED -> MovoColors.bgInverse to MovoIcons.Pause
             OrbMode.LISTENING -> MovoColors.indigoFg to MovoIcons.AudioLines
+            OrbMode.MONITORING -> MovoColors.amberFg to MovoIcons.Clock
             OrbMode.FAILED -> MovoColors.roseFg to null
             OrbMode.FINISHED -> MovoColors.greenFg to MovoIcons.Check
             OrbMode.RUNNING, OrbMode.STANDBY -> return@Crossfade
@@ -712,6 +710,11 @@ internal fun AgentOverlayBubble(
     onOrbDragStart: () -> Unit = {},
     onOrbDrag: (dx: Float, dy: Float) -> Unit = { _, _ -> },
     onOrbDragEnd: () -> Unit = {},
+    /** 没有在跑的一轮时显示的任务外层（规范 8.1 `Overlay/Panel` mode=Monitoring / Ended）；null = 按 [state] 显示这一轮。 */
+    taskPanel: OverlayTaskPanel? = null,
+    onEndMonitors: () -> Unit = {},
+    onUndoEnd: () -> Unit = {},
+    onOpenMonitorConversation: (autoListen: Boolean) -> Unit = {},
 ) {
     val reduced = LocalReducedMotion.current
     var entered by remember { mutableStateOf(false) }
@@ -844,6 +847,24 @@ internal fun AgentOverlayBubble(
                             }
                         },
                 ) {
+                    // 任务外层（监听中 ↔ 已结束·撤销 ↔ 这一轮）原位交叉淡化，高度同步 `standard`（规范 9.5「展开卡 · 结束与撤销」）。
+                    AnimatedContent(
+                        targetState = taskPanel,
+                        contentKey = { it?.javaClass },
+                        transitionSpec = {
+                            (fadeIn(MovoMotion.fast()) togetherWith fadeOut(MovoMotion.fastExit()))
+                                .using(androidx.compose.animation.SizeTransform(clip = false) { _, _ -> MovoMotion.standard() })
+                        },
+                        label = "panelTask",
+                    ) { panel ->
+                    if (panel != null) {
+                        TaskPanelBody(
+                            panel = panel,
+                            onOpenConversation = { autoListen -> onInteraction(); onOpenMonitorConversation(autoListen) },
+                            onEndMonitors = { onInteraction(); onEndMonitors() },
+                            onUndo = { onInteraction(); onUndoEnd() },
+                        )
+                    } else Column {
                     val voiceMode = voice.active && !supplementMode
                     Crossfade(
                         targetState = voiceMode,
@@ -901,6 +922,8 @@ internal fun AgentOverlayBubble(
                             )
                         }
                     }
+                    }
+                    }
                 }
             }
         }
@@ -933,6 +956,106 @@ internal fun AgentOverlayBubble(
         )
     }
 }
+
+/**
+ * 展开卡的任务外层（规范 8.1 / 8.12「22」）。
+ * 监听中：「监听中·名称」+ 右侧「HH:mm 结束」→ 每个监听一行（琥珀时钟 12 +「已触发 N 次」）→ 键盘、语音（打开监听所在的对话）+「结束任务」。
+ * 已结束：一行「✓ 已结束，名称也停了」+「撤销」，5 秒后由服务收起。
+ */
+@Composable
+private fun TaskPanelBody(
+    panel: OverlayTaskPanel,
+    onOpenConversation: (autoListen: Boolean) -> Unit,
+    onEndMonitors: () -> Unit,
+    onUndo: () -> Unit,
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val separator = stringResource(R.string.monitor_names_separator)
+    when (panel) {
+        is OverlayTaskPanel.Monitoring -> Column(Modifier.fillMaxWidth()) {
+            val monitors = panel.monitors
+            Row(
+                modifier = Modifier.fillMaxWidth().height(32.dp).padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = if (monitors.size == 1) {
+                        stringResource(R.string.monitor_overlay_title, monitors.single().name)
+                    } else {
+                        stringResource(R.string.monitor_overlay_title_count, monitors.size)
+                    },
+                    style = MovoTypography.labelMedium,
+                    color = MovoColors.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                monitors.maxOfOrNull { it.deadlineAtMillis }?.let { deadline ->
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        stringResource(R.string.monitor_overlay_until, io.github.fartown.movo.agent.monitor.MonitorTime.clock(context, deadline)),
+                        style = MovoTypography.labelMedium,
+                        color = MovoColors.textSecondary,
+                        maxLines = 1,
+                    )
+                }
+            }
+            Column(
+                modifier = Modifier.padding(start = 10.dp, end = 10.dp, bottom = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                monitors.take(MAX_PANEL_MONITOR_ROWS).forEach { monitor ->
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.heightIn(min = 16.dp)) {
+                        MovoIcon(MovoIcons.Clock, null, size = 12.dp, tint = MovoColors.amberFg)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = if (monitors.size == 1) {
+                                androidx.compose.ui.res.pluralStringResource(R.plurals.monitor_overlay_fired, monitor.eventCount, monitor.eventCount)
+                            } else {
+                                androidx.compose.ui.res.pluralStringResource(
+                                    R.plurals.monitor_overlay_fired_named, monitor.eventCount, monitor.eventCount, monitor.name,
+                                )
+                            },
+                            style = MovoTypography.microMedium,
+                            color = MovoColors.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CompactCircle(MovoIcons.Keyboard, stringResource(R.string.movo_overlay_type)) { onOpenConversation(false) }
+                CompactCircle(MovoIcons.AudioLines, stringResource(R.string.movo_voice_conversation)) { onOpenConversation(true) }
+                Spacer(Modifier.weight(1f))
+                CompactPill(null, stringResource(R.string.movo_work_end_task), primary = false, onClick = onEndMonitors)
+            }
+        }
+        is OverlayTaskPanel.Ended -> Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MovoIcon(MovoIcons.Check, null, size = 12.dp, tint = MovoColors.greenFg)
+            Spacer(Modifier.width(6.dp))
+            Text(
+                stringResource(R.string.monitor_overlay_ended, panel.names.joinToString(separator)),
+                style = MovoTypography.microMedium,
+                color = MovoColors.textPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite },
+            )
+            Spacer(Modifier.width(4.dp))
+            CompactPill(null, stringResource(R.string.monitor_undo), primary = true, onClick = onUndo)
+        }
+    }
+}
+
+/** 监听中的卡最多列 3 行（一个对话最多 8 个监听，卡片不能长成一屏）。 */
+private const val MAX_PANEL_MONITOR_ROWS = 3
 
 @Composable
 private fun PanelHeader(state: AgentOverlayState) {

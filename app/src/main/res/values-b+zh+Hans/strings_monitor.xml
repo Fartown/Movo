@@ -1,9 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="monitor_execution_label">后台监听</string>
-    <plurals name="monitor_execution_summary">
-        <item quantity="other">后台监听 %1$d 个·%2$s，%3$s 自动结束</item>
-    </plurals>
     <string name="monitor_execution_mixed">任务 %1$d 项·后台监听 %2$d 个</string>
     <string name="monitor_stop_all">全部停止</string>
     <string name="monitor_notify_channel">Movo 通知</string>
@@ -35,4 +32,24 @@
     <string name="tool_monitor_stop">停止监听</string>
     <string name="tool_monitor_list">查看后台监听</string>
     <string name="tool_notify_user">发送通知</string>
+    <!-- 监听任务的状态与结束（规范 8.12「22」） -->
+    <string name="monitor_overlay_title">监听中·%1$s</string>
+    <string name="monitor_overlay_title_count">监听中·%1$d 个</string>
+    <string name="monitor_overlay_until">%1$s 结束</string>
+    <plurals name="monitor_overlay_fired">
+        <item quantity="other">已触发 %1$d 次</item>
+    </plurals>
+    <plurals name="monitor_overlay_fired_named">
+        <item quantity="other">%2$s·已触发 %1$d 次</item>
+    </plurals>
+    <string name="monitor_overlay_ended">已结束，%1$s也停了</string>
+    <string name="monitor_undo">撤销</string>
+    <string name="monitor_names_separator">、</string>
+    <string name="monitor_row_ended_with_task">已结束任务·%1$s·%2$s</string>
+    <string name="monitor_execution_names_until">%1$s·%2$s 自动结束</string>
+    <string name="monitor_execution_ended_title">已结束任务</string>
+    <string name="monitor_execution_ended_text">%1$s也停了</string>
+    <string name="monitor_execution_end_task">结束任务</string>
+    <string name="monitor_voice_ended">已结束，监听也停了</string>
+    <string name="monitor_execution_until">%1$s 自动结束</string>
 </resources>

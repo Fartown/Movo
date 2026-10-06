@@ -37,6 +37,20 @@ class MonitorDeliveryQueueTest {
     }
 
     @Test
+    fun endingTheTaskDiscardsQueuedEventsButLaterOnesStillQueueAfterUndo() {
+        val queue = MonitorDeliveryQueue()
+        queue.enqueue(event(1))
+        queue.enqueue(event(1, task = "m2"))
+        // 结束任务：m1 已排着的事件不再叫醒 Movo，别的监听不受影响。
+        queue.discardPending("m1")
+        assertEquals(listOf("m2"), queue.take("c1").map { it.taskId })
+        assertFalse(queue.hasPending("c1"))
+        // 撤销后新来的事件照常排队（不是永久丢弃）。
+        queue.enqueue(event(2))
+        assertEquals(listOf(2), queue.take("c1").filterIsInstance<MonitorNotice.Event>().map { it.seq })
+    }
+
+    @Test
     fun consumedGroupsAreConfirmedAndTheRestGoesBackToTheFrontInOrder() {
         val queue = MonitorDeliveryQueue()
         queue.enqueue(event(1))

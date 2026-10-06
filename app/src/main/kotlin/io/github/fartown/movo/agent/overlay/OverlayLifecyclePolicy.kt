@@ -63,12 +63,16 @@ internal object OverlayLifecyclePolicy {
         (phase == AgentOverlayPhase.FINISHED || phase == AgentOverlayPhase.FAILED) &&
         (nowUptimeMillis < resultVisibleUntilUptimeMillis || panelOpen)
 
-    /** 「常驻悬浮球」关、没有任务（含准备中）、没在打开结果、也没有可查看的结果：藏着的悬浮球与服务都该撤掉。 */
+    /**
+     * 「常驻悬浮球」关、没有任务（含准备中）、没在打开结果、也没有可查看的结果：藏着的悬浮球与服务都该撤掉。
+     * 还有后台监听（[monitoring]，含刚结束、还能撤销的）时任务没完，悬浮球要留着（规范 8.1：常驻关时监听中也显示）。
+     */
     fun overlayUnneeded(
         keepOrbAfterExit: Boolean,
         runActive: Boolean,
         preparingRun: Boolean,
         openingResult: Boolean,
         resultViewable: Boolean,
-    ): Boolean = !keepOrbAfterExit && !runActive && !preparingRun && !openingResult && !resultViewable
+        monitoring: Boolean = false,
+    ): Boolean = !keepOrbAfterExit && !runActive && !preparingRun && !openingResult && !resultViewable && !monitoring
 }

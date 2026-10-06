@@ -19,6 +19,8 @@ internal object MonitorRowLabels {
             MonitorEndReason.TIMEOUT.name ->
                 resources.getString(R.string.monitor_row_timeout, row.name, durationLabel(resources, row.limitMs ?: 0L))
             MonitorEndReason.RATE_LIMIT.name -> resources.getString(R.string.monitor_row_rate_limit, row.name)
+            // 结束任务连带结束的监听（一次结束一行，名字已按界面语言连好）。
+            MonitorEndReason.ENDED_WITH_TASK.name -> resources.getString(R.string.monitor_row_ended_with_task, row.name, time)
             INTERRUPTED -> resources.getString(R.string.monitor_row_interrupted, row.name)
             // 正常退出（0）不写退出码，用户看不懂也不需要；异常退出才写。
             else -> row.exitCode?.takeIf { it != 0 }?.let { resources.getString(R.string.monitor_row_exit_code, row.name, it, time) }

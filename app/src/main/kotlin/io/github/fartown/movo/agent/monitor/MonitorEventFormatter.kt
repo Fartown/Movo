@@ -67,6 +67,7 @@ internal object MonitorEventFormatter {
         MonitorEndReason.STOPPED_BY_USER -> "用户停止了这个监听。"
         MonitorEndReason.STOPPED_BY_AGENT -> "监听已按你的要求停止。"
         MonitorEndReason.SESSION_END -> "所属对话已被删除，监听已停止。"
+        MonitorEndReason.ENDED_WITH_TASK -> "用户结束了这个任务，监听随之停止。"
     }
 
     /** 「45 秒」「30 分钟」「2 小时」「1 小时 30 分钟」；不足 1 分钟按秒写，不会写成「0 分钟」。 */

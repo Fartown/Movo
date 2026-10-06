@@ -62,6 +62,12 @@ import io.github.fartown.movo.agent.overlay.AgentOverlayStatus
 import io.github.fartown.movo.agent.overlay.AgentOverlayVisibilityPolicy
 import io.github.fartown.movo.agent.overlay.InteractionCardCoordinator
 import io.github.fartown.movo.agent.overlay.OverlayLifecyclePolicy
+import io.github.fartown.movo.agent.overlay.OverlayMonitor
+import io.github.fartown.movo.agent.overlay.OverlayTaskPanel
+import io.github.fartown.movo.agent.monitor.MonitorEnding
+import io.github.fartown.movo.agent.monitor.MonitorInfo
+import io.github.fartown.movo.agent.monitor.MonitorRegistry
+import io.github.fartown.movo.agent.monitor.MonitorRegistryCore
 import io.github.fartown.movo.agent.overlay.applyEvent
 import io.github.fartown.movo.config.Prefs
 import io.github.fartown.movo.agent.tools.interaction.AgentInteractionRegistry
@@ -207,6 +213,20 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private val standby = mutableStateOf(false)
     /** 任务结束后 ✓ / ! 保留到这个时刻（uptime），之后没有执行中任务就淡出悬浮球。 */
     private var resultOrbVisibleUntil = 0L
+    /**
+     * 运行中的后台监听（结束后等待撤销的不算）：没有在跑的一轮时有它们就是「监听中」（规范 8.12「22」）——任务还没完，
+     * 悬浮球显示琥珀整环 + 时钟，「常驻悬浮球」关着也显示。
+     */
+    private val monitors = mutableStateOf<List<MonitorInfo>>(emptyList())
+    /** 刚结束了任务和它的监听、还能撤销：展开卡原位显示「已结束·撤销」，到期收起。 */
+    private val endedTask = mutableStateOf<OverlayTaskPanel.Ended?>(null)
+    private val endedTaskToken = Any()
+    /**
+     * 监听自己结束（到时限、命令退出）后悬浮球再留一会儿（uptime）：自然结束会唤醒 Movo 说明一次，那一轮要接着用这颗球显示执行中、
+     * 结束留 ✓（规范 8.12：到时限自然结束留 ✓）。「常驻悬浮球」关时才用得上。
+     */
+    private var monitorsEndedHoldUntil = 0L
+    private val monitorsIdleToken = Any()
     private val orbFadeToken = Any()
     private val appLeaveToken = Any()
     private val orbPrefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -292,6 +312,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         lifecycleScope.launch { InteractionCardCoordinator.pending.collect { syncInteractionOverlay() } }
         lifecycleScope.launch { InteractionCardCoordinator.activeHost.collect { syncInteractionOverlay() } }
         lifecycleScope.launch { InteractionCardCoordinator.unlockInProgress.collect { syncInteractionOverlay() } }
+        // 后台监听增减：悬浮球在「监听中」与待命 / 完成之间切换（规范 8.12「22」）。
+        lifecycleScope.launch { MonitorRegistry.active.collect(::onMonitorsChanged) }
+        // 在别处撤销（App 里的结束行、常驻通知）或期满：展开卡上的「已结束·撤销」随之收掉。
+        lifecycleScope.launch { MonitorRegistry.endings.collect(::onEndingsChanged) }
         runCatching {
             androidx.core.content.ContextCompat.registerReceiver(
                 this,
@@ -327,8 +351,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
      * 「常驻悬浮球」开（默认，[io.github.fartown.movo.agent.overlay.OrbPrefs]）时，没有任务也保留一个待命悬浮球：
      * 只有光球、没有光晕与状态环；Movo 自己在前台时藏起（[updateStandbyOrbVisibility]）。返回是否有悬浮球。
      */
-    private fun ensureStandbyOrb(): Boolean {
-        if (!io.github.fartown.movo.agent.overlay.OrbPrefs.keepOrbAfterExit(this)) return false
+    private fun ensureStandbyOrb(evenIfNotKept: Boolean = false): Boolean {
+        if (!evenIfNotKept && !io.github.fartown.movo.agent.overlay.OrbPrefs.keepOrbAfterExit(this)) return false
         // 上次重建失败留下的浮层（可能带着待查看的结果）优先按原状态恢复，不被待命外观覆盖。
         if (orbView == null && pendingOverlayRestore != null) restorePendingOverlay()
         if (orbView != null) return true
@@ -1101,13 +1125,146 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         backgroundRun = null
     }
 
+    /**
+     * 展开卡「结束任务」：这一轮和这个对话里的后台监听一起结束（规范 8.12「结束」），不确认，5 秒内可撤销；
+     * 没有在跑的一轮、只有监听时结束所有监听。
+     */
     private fun requestStop() {
         val session = activeSession
         if (session == null) {
-            dismissAndStop()
+            if (monitors.value.isNotEmpty()) endMonitorTask() else dismissAndStop()
             return
         }
         cancelRun(session.runId)
+        val conversationId = monitorConversationOf(
+            backgroundRun?.takeIf { it.session === session }?.conversationTarget ?: resultConversationTarget,
+        ) ?: return
+        beginTaskEnding { it.conversationId == conversationId }
+    }
+
+    /** App 对话的 id（后台监听按它归属）；外部入口的会话没有监听。 */
+    private fun monitorConversationOf(target: AgentConversationTarget?): String? =
+        target?.takeIf { it.source == AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE }?.key
+
+    /** 监听中点「结束任务」：结束所有运行中的监听。 */
+    private fun endMonitorTask() {
+        beginTaskEnding { true }
+    }
+
+    private fun beginTaskEnding(predicate: (MonitorInfo) -> Boolean) {
+        val ending = MonitorRegistry.endLater(predicate) ?: return
+        showEndedPanel(ending)
+    }
+
+    /** 展开卡原位换成「已结束·撤销」，[MonitorRegistryCore.END_UNDO_MS] 后收起（规范 8.12「撤销」）。 */
+    private fun showEndedPanel(ending: MonitorEnding) {
+        endedTask.value = OverlayTaskPanel.Ended(ending.id, ending.names)
+        mainHandler.removeCallbacksAndMessages(endedTaskToken)
+        mainHandler.postDelayed({ finishEndedPanel(ending.id) }, endedTaskToken, MonitorRegistryCore.END_UNDO_MS)
+        if (orbView != null && collapsed.value) expandBubble()
+    }
+
+    private fun onEndingsChanged(endings: List<MonitorEnding>) {
+        val ended = endedTask.value ?: return
+        if (endings.any { it.id == ended.endingId }) return
+        mainHandler.removeCallbacksAndMessages(endedTaskToken)
+        endedTask.value = null
+        if (activeSession != null) return
+        // 撤销了（监听还在）：卡片回到「监听中」，稍后自动收起；期满：收起。
+        if (MonitorRegistry.active.value.isNotEmpty()) {
+            scheduleBubbleAutoCollapse()
+        } else {
+            collapseBubble()
+            updateStandbyOrbVisibility()
+            stopIfOverlayUnneeded()
+        }
+    }
+
+    private fun finishEndedPanel(endingId: String) {
+        if (endedTask.value?.endingId != endingId) return
+        endedTask.value = null
+        if (activeSession == null) collapseBubble()
+        updateStandbyOrbVisibility()
+        stopIfOverlayUnneeded()
+    }
+
+    /** 撤销：监听照常继续（已经停下的那一轮不恢复），卡片回到「监听中」，稍后自动收起。 */
+    private fun undoTaskEnding() {
+        val ended = endedTask.value ?: return
+        mainHandler.removeCallbacksAndMessages(endedTaskToken)
+        endedTask.value = null
+        AndroidAgentLogger.info("Monitor ending undo: source=overlay")
+        MonitorRegistry.undoEnding(ended.endingId)
+        scheduleBubbleAutoCollapse()
+    }
+
+    /** 展开卡在没有在跑的一轮时显示什么：刚结束（可撤销）优先，其次监听中；有一轮在跑时按这一轮显示（null）。 */
+    private fun taskPanel(): OverlayTaskPanel? {
+        endedTask.value?.let { return it }
+        val running = monitors.value
+        if (running.isEmpty() || !standby.value) return null
+        return OverlayTaskPanel.Monitoring(running.map { OverlayMonitor(it.name, it.eventCount, it.deadlineAtMillis) })
+    }
+
+    /**
+     * 后台监听增减。有了：没有悬浮球就建一颗（「常驻悬浮球」关着也要，任务还没完；用户本次亲手移除过除外）。
+     * 都没了：卡片若正显示监听中就收起；自己结束的（到时限、命令退出）悬浮球再留一会儿，等唤醒的那一轮接着用。
+     */
+    private fun onMonitorsChanged(list: List<MonitorInfo>) {
+        val had = monitors.value.isNotEmpty()
+        monitors.value = list
+        mainHandler.removeCallbacksAndMessages(monitorsIdleToken)
+        AndroidAgentLogger.info("Agent orb monitors: count=${list.size}, had=$had, orb=${orbView != null}, run=${activeSession != null}")
+        if (list.isNotEmpty()) {
+            ensureMonitoringOrb()
+            updateStandbyOrbVisibility()
+            return
+        }
+        if (!had) return
+        if (endedTask.value == null && MonitorRegistry.endings.value.isEmpty()) {
+            monitorsEndedHoldUntil = android.os.SystemClock.uptimeMillis() + MONITORS_ENDED_HOLD_MS
+            mainHandler.postAtTime({
+                updateStandbyOrbVisibility()
+                stopIfOverlayUnneeded()
+            }, monitorsIdleToken, monitorsEndedHoldUntil + 1)
+        }
+        if (endedTask.value == null && activeSession == null && standby.value && !collapsed.value) collapseBubble()
+        updateStandbyOrbVisibility()
+    }
+
+    /**
+     * 还有监听在跑、又没有悬浮球（「常驻悬浮球」关、这一轮没建过球）：建一颗显示监听中——任务还没完，常驻关也显示（规范 8.1）。
+     * 有一轮在跑时等它结束再说；用户本次亲手移除过除外。返回是否有悬浮球。
+     */
+    private fun ensureMonitoringOrb(): Boolean {
+        if (orbView != null) return true
+        if (activeSession != null || pendingStartRequest != null) return false
+        if (MonitorRegistry.active.value.isEmpty() || io.github.fartown.movo.agent.overlay.OrbPrefs.isRemovedByUser) return false
+        return ensureStandbyOrb(evenIfNotKept = true)
+    }
+
+    /** 监听中点键盘 / 语音：打开最近开始的那个监听所在的对话（[autoListen] = 直接进语音）。 */
+    private fun openMonitorConversation(autoListen: Boolean) {
+        val conversationId = monitors.value.maxByOrNull { it.startedAtMillis }?.conversationId ?: return
+        if (resultConversationOpening.value) return
+        collapseBubble()
+        markSheetFromOrb()
+        val token = Any()
+        resultHandoffToken = token
+        resultConversationOpening.value = true
+        val receiver = object : ResultReceiver(mainHandler) {
+            override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                if (resultHandoffToken !== token) return
+                if (resultCode == AgentConversationHandoff.RESULT_READY) clearResultHandoff() else failResultHandoff(token, notify = false)
+            }
+        }
+        sendConversationIntent(
+            AgentConversationTarget(AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE, conversationId),
+            runId = null,
+            receiver = receiver,
+            autoListen = autoListen,
+            token = token,
+        )
     }
 
     private fun cancelRun(runId: String) {
@@ -1273,6 +1430,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 mode = orbMode(
                     state.value.phase, standby.value, voice.active,
                     stopped = state.value.status == AgentOverlayStatus.Stopped,
+                    monitoring = monitors.value.isNotEmpty(),
                 ),
                 onTap = ::onOrbTapped,
                 onLongPress = ::onOrbLongPressed,
@@ -1450,6 +1608,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
      */
     private fun onOrbTapped() {
         if (standby.value) {
+            // 监听中（或刚结束、还能撤销）：展开卡显示监听，与执行中点球一致（规范 8.12「22」）。
+            if (monitors.value.isNotEmpty() || endedTask.value != null) {
+                toggleCollapse()
+                return
+            }
             markSheetFromOrb()
             MovoAssistantVoiceService.showAssistant(this, autoListen = false)
             return
@@ -1597,7 +1760,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         mainHandler.postDelayed({
             val lp = bubbleParams
             val typing = lp != null && lp.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE == 0
-            if (!collapsed.value && state.value.phase == AgentOverlayPhase.RUNNING && !typing && !VoiceSessionManager.active) collapseBubble()
+            if (!collapsed.value && state.value.phase == AgentOverlayPhase.RUNNING && !typing && !VoiceSessionManager.active &&
+                endedTask.value == null
+            ) {
+                collapseBubble()
+            }
         }, panelIdleToken, PANEL_AUTO_COLLAPSE_MS)
     }
 
@@ -1631,6 +1798,10 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 onOrbDragStart = ::onOrbDragStart,
                 onOrbDrag = ::handleDrag,
                 onOrbDragEnd = ::onOrbDragEnd,
+                taskPanel = taskPanel(),
+                onEndMonitors = ::endMonitorTask,
+                onUndoEnd = ::undoTaskEnding,
+                onOpenMonitorConversation = ::openMonitorConversation,
             )
         }
         val lp = bubbleLayoutParams()
@@ -2237,6 +2408,19 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 }
             }
         }
+        sendConversationIntent(target, runId, receiver, autoListen, token)
+    }
+
+    /**
+     * 拉起对话浮层打开 [target]（[runId] 为 null = 只打开这个对话，不交付某一轮的结果）；10 秒没回音按没打开处理。
+     */
+    private fun sendConversationIntent(
+        target: AgentConversationTarget,
+        runId: String?,
+        receiver: ResultReceiver,
+        autoListen: Boolean,
+        token: Any,
+    ) {
         runCatching {
             val creatorOptions = ActivityOptions.makeBasic().apply {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
@@ -2292,6 +2476,26 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     private fun enterFinalState(finalState: AgentOverlayState, keepVisible: Boolean = false) {
         pausedForTyping = false
+        // 「结束任务」连带结束了监听：卡片原位显示「已结束·撤销」，这一轮不再另显示停止态（规范 8.12「撤销」）。
+        if (endedTask.value != null && finalState.status == AgentOverlayStatus.Stopped) {
+            retireGlow()
+            state.value = AgentOverlayState.Initial
+            standby.value = true
+            updateStandbyOrbVisibility()
+            return
+        }
+        // 这件事还有监听在等（开监听的那一轮、监听叫醒的一轮答完）：任务没完，回到「监听中」，不显示 ✓（规范 8.12「任务与状态」）。
+        // 操作过其他 App、或结果要交回对话浮层的一轮照旧（✓ 点开看过后再回到监听中）。
+        val conversationId = monitorConversationOf(resultConversationTarget)
+        if (finalState.phase == AgentOverlayPhase.FINISHED && conversationId != null &&
+            !hasExecutedForegroundTool && !isResultConversation &&
+            MonitorRegistry.active.value.any { it.conversationId == conversationId }
+        ) {
+            state.value = finalState
+            ensureMonitoringOrb()
+            retireRunOverlayToStandby()
+            return
+        }
         state.value = finalState
 
         val finish = OverlayLifecyclePolicy.finish(
@@ -2299,7 +2503,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             resultConversation = isResultConversation,
             standbyOrbPresent = standby.value && orbView != null,
             resultAwaitedOnOrb = runShownOnOrb && orbView != null && !VoiceSurfaceTracker.appVisible,
-            keepStandbyOrb = { activeSession == null && ensureStandbyOrb() },
+            keepStandbyOrb = { activeSession == null && (ensureStandbyOrb() || ensureMonitoringOrb()) },
         )
         if (finish == OverlayLifecyclePolicy.Finish.SHOW_RESULT) {
             // 规范 8.1 / 9.5：悬浮球不退场，完成保持 ✓（失败保持 !），用户点开才打开对话浮层查看结果；
@@ -2350,7 +2554,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         clearResultHandoff()
         if (orbView == null) {
             // 后台监听的一轮还在跑（结果是在它没接管悬浮层时点开的）：不停服务。
-            if (activeSession == null) dismissAndStop()
+            if (activeSession != null) return
+            // 看完结果、任务还有监听在等（常驻关时这一轮没建过球）：建一颗显示监听中，不停服务。
+            if (!ensureMonitoringOrb()) dismissAndStop()
             return
         }
         collapseBubble()
@@ -2374,6 +2580,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             runActive = activeSession != null,
             preparingRun = pendingStartRequest != null,
             openingResult = resultConversationOpening.value,
+            monitoring = monitorsKeepOrb(),
             resultViewable = policy.resultViewable(
                 orbPresent = orbView != null,
                 standby = standby.value,
@@ -2410,11 +2617,14 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         } else {
             val holdingResult = !running && !standby.value &&
                 android.os.SystemClock.uptimeMillis() < resultOrbVisibleUntil && !VoiceSurfaceTracker.appVisible
-            running || holdingResult || (!running && !standby.value && !collapsed.value && !VoiceSurfaceTracker.appVisible)
+            // 监听中任务没完：常驻关也显示（规范 8.1）；刚结束可撤销、或监听刚自己结束（等唤醒的一轮）时也留着。
+            val monitoring = monitorsKeepOrb()
+            running || holdingResult || monitoring ||
+                (!running && !standby.value && !collapsed.value && !VoiceSurfaceTracker.appVisible)
         }
         // 注意：这里不能取消 [orbFadeToken] 上的回调——那是 3 秒后的这次复查本身（原来在这里取消，✓ 永远不淡出）。
         AndroidAgentLogger.info(
-            "Agent orb visibility: show=$show running=$running phase=$phase standby=${standby.value} " +
+            "Agent orb visibility: show=$show running=$running phase=$phase standby=${standby.value} monitors=${monitors.value.size} " +
                 "appVisible=${VoiceSurfaceTracker.appVisible} collapsed=${collapsed.value}",
         )
         if (show) {
@@ -2442,6 +2652,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             if (orbView === view) stopIfOverlayUnneeded()
         }.start()
     }
+
+    /** 后台监听让悬浮球留着：监听中、刚结束还能撤销、或监听刚自己结束（[monitorsEndedHoldUntil]）。 */
+    private fun monitorsKeepOrb(): Boolean =
+        monitors.value.isNotEmpty() || endedTask.value != null ||
+            android.os.SystemClock.uptimeMillis() < monitorsEndedHoldUntil
 
     /** 任务结束后在 [RESULT_ORB_HOLD_MS] 到期时重新判断悬浮球显隐（展开卡开着时，收起后再判断）。 */
     private fun scheduleResultOrbHide() {
@@ -2747,6 +2962,9 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
         /** 任务在其他 App 里结束后，悬浮球保留 ✓ / ! 的时长。 */
         const val RESULT_ORB_HOLD_MS = 3_000L
+
+        /** 监听自己结束后悬浮球再留的时长：等唤醒说明的那一轮开始（常驻关时）。 */
+        const val MONITORS_ENDED_HOLD_MS = 4_000L
 
         /** Movo 页面暂停后多久再判断悬浮球显隐（跳过页面之间切换的空档）。 */
         const val APP_LEAVE_SETTLE_MS = 300L

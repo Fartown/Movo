@@ -4,6 +4,8 @@ package io.github.fartown.movo.agent.voice.conversation
 internal class VoiceTurnCoordinator(
     /** 由设备本地处理的口令（例如电视的「看全文」）；命中时不交给 Agent。 */
     private val localCommands: Set<String> = emptySet(),
+    /** 这个对话还有后台监听在跑：没有在跑的一轮时「结束任务」也要结束它们（规范 8.12「结束」）。 */
+    private val hasBackgroundTask: () -> Boolean = { false },
 ) {
     data class Turn(val id: Long, val text: String)
     sealed interface Action {
@@ -103,12 +105,12 @@ internal class VoiceTurnCoordinator(
                 deferredAnswer = null
                 listOf(Action.DiscardSpeech, Action.Notice("已停止播报，你可以继续说"))
             }
-            "取消任务", "取消这个任务", "停止任务", "停止当前任务", "不要做了" -> {
+            "取消任务", "取消这个任务", "停止任务", "停止当前任务", "不要做了", "结束任务", "结束这个任务" -> {
                 speaking = null
                 responseOwner = null
                 deferredAnswer = null
                 pending = null
-                listOf(Action.DiscardSpeech) + if (running != null) listOf(Action.CancelTask)
+                listOf(Action.DiscardSpeech) + if (running != null || hasBackgroundTask()) listOf(Action.CancelTask)
                 else listOf(Action.Notice("当前没有正在执行的任务"))
             }
             "等一下", "稍等", "等等", "停", "停一下" -> {

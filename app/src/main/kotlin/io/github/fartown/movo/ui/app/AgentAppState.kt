@@ -282,6 +282,10 @@ internal class AgentAppState(
     private var monitorPersistJob: Job? = null
 
     private data class MonitorTurnLaunch(val rowIds: Set<String>, val preLaunchMessages: List<AgentChatMessageUi>)
+    /** 已在对话里插了「已结束任务」那一行、还在等待撤销期满的结束（[MonitorRegistry.endings]）。 */
+    private val shownEndings = mutableMapOf<String, io.github.fartown.movo.agent.monitor.MonitorEnding>()
+    /** 每一轮发起的时刻：这一轮里开了监听才算「这个监听任务的一轮」（■ 按归属结束）。 */
+    private val runLaunchedAtMillis = mutableMapOf<String, Long>()
 
     init {
         refreshConversationSummaries()
@@ -312,6 +316,7 @@ internal class AgentAppState(
         }
         MonitorRegistry.sink = MonitorNoticeSink { notice -> onMonitorNotice(notice) }
         recordInterruptedMonitors()
+        scope.launch { MonitorRegistry.endings.collect(::onMonitorEndings) }
         scope.launch {
             RootAccess.state.collectLatest { refreshPermissionHealth() }
         }
@@ -1627,6 +1632,7 @@ internal class AgentAppState(
         origin: String = "",
     ) {
         runConversationIds[runId] = conversationId
+        runLaunchedAtMillis[runId] = System.currentTimeMillis()
         currentRunId = runId
         // 新一轮开始：上一轮的推荐追问连同还在路上的请求一起作废。
         followUpJobs.remove(conversationId)?.cancel()
@@ -1989,6 +1995,7 @@ internal class AgentAppState(
     override fun stopCurrentRun() {
         val runId = currentRunId ?: return
         if (!stopRequestedRunIds.add(runId)) return
+        endMonitorsOwnedBy(runId)
         scope.launch(Dispatchers.IO) {
             AgentRuntimeClient(appContext, AndroidAgentLogger).cancelRun(runId)
         }
@@ -3052,6 +3059,7 @@ internal class AgentAppState(
         flushPendingRunDelta(runId)
         val conversationId = conversationIdForRun(runId)
         val launch = monitorTurnLaunches.remove(runId)
+        runLaunchedAtMillis.remove(runId)
         // 起点那一批（与理论上不会有的在途事件）一起放回队首。
         monitorQueue.settle(runId, consumedGroups = null)
         val requeued = monitorQueue.rollbackEventTurn(runId)
@@ -3102,6 +3110,7 @@ internal class AgentAppState(
         }
         monitorQueue.finishEventTurn(runId)
         monitorTurnLaunches.remove(runId)
+        runLaunchedAtMillis.remove(runId)
         startedRunIds.remove(runId)
         runsWithModelOutput.remove(runId)
         preemptedMonitorRuns.remove(runId)
@@ -3143,6 +3152,84 @@ internal class AgentAppState(
             appendMonitorRows(conversationId, rows)
         }
     }
+
+    /**
+     * ■ 按归属结束（规范 8.12「结束」）：正在跑的是这个监听任务的一轮——监听叫醒的一轮，或这一轮里开了监听——
+     * 就连这个对话的监听一起结束（5 秒内可撤销）；同一对话里另问的事只停那个回答，监听不动。
+     */
+    private fun endMonitorsOwnedBy(runId: String) {
+        val conversationId = runConversationIds[runId]
+        val launchedAt = runLaunchedAtMillis[runId]
+        val eventTurn = monitorQueue.isEventTurn(runId)
+        val running = MonitorRegistry.active.value.filter { it.conversationId == conversationId }
+        val startedInRun = launchedAt != null && running.any { it.startedAtMillis >= launchedAt }
+        val ending = if (conversationId != null && (eventTurn || startedInRun)) {
+            MonitorRegistry.endLater { it.conversationId == conversationId }
+        } else {
+            null
+        }
+        AndroidAgentLogger.info(
+            "Run stop: conversation=${conversationId != null}, eventTurn=$eventTurn, startedInRun=$startedInRun, " +
+                "monitors=${running.size}, ended=${ending?.monitors?.size ?: 0}",
+        )
+    }
+
+    /** 语音「结束任务」：这一轮（由语音会话另行取消）和这个对话的监听一起结束（5 秒内可撤销）。返回是否结束了监听。 */
+    override fun endVoiceTaskMonitors(conversationId: String): Boolean =
+        MonitorRegistry.endLater { it.conversationId == conversationId } != null
+
+    /**
+     * 「结束任务」连带结束的监听（等待撤销期满，可能来自悬浮球、常驻通知、语音或 ■）：每次结束在所属对话最后插一行
+     * 「已结束任务·名称·时间」，撤销期内这行带「撤销」；撤销了就撤掉这行，期满就留下（规范 8.12「撤销」）。
+     */
+    private fun onMonitorEndings(endings: List<io.github.fartown.movo.agent.monitor.MonitorEnding>) {
+        val current = endings.associateBy { it.id }
+        val separator = appContext.getString(R.string.monitor_names_separator)
+        for ((id, ending) in current) {
+            if (id in shownEndings) continue
+            shownEndings[id] = ending
+            AndroidAgentLogger.info("Monitor task ended row: monitors=${ending.monitors.size}")
+            // 已经排着的事件不再叫醒 Movo（你已经结束了这件事）；撤销后新来的照常处理。
+            ending.monitors.forEach { monitorQueue.discardPending(it.id) }
+            ending.monitors.groupBy { it.conversationId }.forEach { (conversationId, items) ->
+                val row = MonitorEventMessageUi(
+                    id = taskEndedRowId(id, conversationId),
+                    taskId = id,
+                    name = items.joinToString(separator) { it.name },
+                    kind = MonitorEventKindUi.Ended,
+                    seq = 0,
+                    atMillis = ending.atMillis,
+                    text = "",
+                    reason = MonitorEndReason.ENDED_WITH_TASK.name,
+                    startsTurn = false,
+                )
+                // 这一轮还在停的过程中：等它结束再补，不把正在执行的一轮切开。
+                if (conversationsById[conversationId]?.isStreaming == true) {
+                    deferredMonitorRows.getOrPut(conversationId) { mutableListOf() } += row
+                } else {
+                    appendMonitorRows(conversationId, listOf(row))
+                }
+            }
+        }
+        for (id in shownEndings.keys - current.keys) {
+            val ending = shownEndings.remove(id) ?: continue
+            // 撤销了（还有监听在跑）：撤掉这行；期满（都停了）：这行留下，「撤销」随之消失。
+            val undone = ending.monitors.any { MonitorRegistry.find(it.id) != null }
+            AndroidAgentLogger.info("Monitor task ending settled: undone=$undone")
+            if (!undone) continue
+            ending.monitors.map { it.conversationId }.distinct().forEach { conversationId ->
+                val rowId = taskEndedRowId(id, conversationId)
+                deferredMonitorRows[conversationId]?.removeAll { it.id == rowId }
+                val state = conversationsById[conversationId] ?: return@forEach
+                if (state.messages.none { it.id == rowId }) return@forEach
+                updateConversation(conversationId, state.copy(messages = state.messages.filterNot { it.id == rowId }), updateTimestamp = false)
+                refreshConversationSummaries()
+                persistMonitorRowsSoon()
+            }
+        }
+    }
+
+    private fun taskEndedRowId(endingId: String, conversationId: String) = "monitor-task-ended-$endingId-$conversationId"
 
     /** 对话不在了、或是角色对话（不提供监听）：停掉它的监听，丢掉排着的事件。 */
     private fun dropMonitorsWithoutConversation() {
