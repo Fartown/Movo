@@ -7,6 +7,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -223,9 +224,12 @@ private val examples = listOf("明天要不要带伞", "打开奇异果", "音�
             0f, 360f, androidx.compose.animation.core.infiniteRepeatable(
                 androidx.compose.animation.core.tween(1200, easing = androidx.compose.animation.core.LinearEasing)), label = "sweep").value
     } else 0f
+    // 焦点只用光球自己的靛蓝外圈表示；默认点击效果会在整块方形区域上盖一层底色，和圆形光球不搭。
     androidx.compose.foundation.Canvas(modifier.size(size + 24.dp)
         .onFocusChanged { focused = it.isFocused }
-        .clickable(onClick = onClick)) {
+        .clip(androidx.compose.foundation.shape.CircleShape)
+        .clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+            indication = null, onClick = onClick)) {
         drawIntoCanvas { canvas ->
             TvOrbPainter.draw(canvas.nativeCanvas, center.x, center.y, size.toPx(),
                 if (focused) TvOrbRing.Focused else ring, 6.dp.toPx(), sweep, density)
