@@ -2,7 +2,7 @@
 title: Movo 电视端适配实施方案
 status: draft
 owner: zhangchao.zc
-updated: 2026-10-05
+updated: 2026-10-06
 feishu_doc_url:
 source_docs:
   - docs/research/tv-voice-app/电视端语音App改造调研.md
@@ -11,7 +11,7 @@ source_docs:
 
 # Movo 电视端适配实施方案
 
-> 最后更新：2026-10-05
+> 最后更新：2026-10-06。下方「当前交付与验证」记录实际结果，其余分期和调研段落保留设计时的上下文；不能把历史待验证项当成当前状态。
 > 依据：[调研文档](../../research/tv-voice-app/电视端语音App改造调研.md)、issue #11 的 Android 9 真机验证、main `d00a249` 的代码。
 > 路径缩写：`K/` = `app/src/main/kotlin/io/github/fartown/movo/`，行号以 `d00a249` 为准。
 
@@ -33,13 +33,46 @@ source_docs:
 
 | 项目 | 结论 |
 | --- | --- |
-| 当前状态 | P1 工程骨架已在分支 `feat/tv-flavor` 实现（未提交），单测与构建验证见 §5.4「P1 实施结果」；真机冒烟未做；P2 起未开始 |
+| 当前状态 | P1 工程分离、TCL 采音适配、Android 9 系统助理截图、原生无障碍对话浮窗与常用电视工具已纳入 MR #12；正常使用链路已在 TCL 真机以文字、静音方式验收，见下节 |
 | 需求目标 | Android 9 电视上：遥控器操作 + 语音问答 + 正规接口控制电视 |
 | 推荐方案 | `phone` / `tv` flavor；共享代码按能力判断，差异经 `FlavorModule` 装配；P1 先拆依赖、再搬手机代码、最后降 minSdk 28；分 P1–P4 交付 |
 | 关键依据 | 调研文档：API 28 依赖不用降级、147 处 NewApi（50 处手机专属）；issue #11：豆包语音库在 armeabi-v7a 可加载、无障碍读节点和手势可行、tv-material 焦点列表性能数据；代码核对：`ui/` 之外 10 个文件直接引用手机界面，运行时绑定和自我识别写死包名（§3.1） |
-| 关键风险 | 无障碍在 API 28 发不了方向键，电视 GUI Agent 靠点节点 + 移焦点（视频 App 里是否生效待验证）；返回键取消靠无障碍按键过滤（待验证）；低端电视焦点列表帧耗时偏高；电视拾音待验证；P1 搬目录与在途分支冲突 |
+| 关键风险 | API 28 使用节点点击与焦点导航，无法承诺操作所有自绘界面；该 TCL 固件缺少标准授权页，需要首次准备权限；视频画面可能为黑色，换集元数据可能滞后；OEM 采音与唤醒适配依赖固件内部接口 |
 | 文档入口 | 调研：`docs/research/tv-voice-app/电视端语音App改造调研.md`；真机验证：issue #11 |
 | 飞书归档 | 未创建 |
+
+## 当前交付与验证（2026-10-06）
+
+[MR #12](https://github.com/Fartown/Movo/pull/12) 包含 phone/tv 工程分离、TCL 适配、截图、浮窗和播放器控制。测试设备为 TCL 55F295C / ak30a5、Android 9 API 28、armeabi-v7a。完整操作记录见 [issue 正常使用报告](https://github.com/Fartown/Movo/issues/11#issuecomment-6007628653)。
+
+- 浮窗直接复用会话，支持文字输入、发送、停止、收起和关闭；打开时不启动 Activity，保持底层播放器。截图前隐藏自身浮窗，避免误识别。
+- 常用链路已经实测：找应用、打开奇异果、搜索《西游记》并播放、暂停/继续、快进/快退、上下集、静音、焦点/点击/滚动/输入、主页、截图、剪贴板与记忆/会话读取。18 个 TV 工具均有真机执行记录；root、终端等未纳入 TV 工具表。
+- 连续回归 R51：暂停在 209150ms；快进 60 秒目标 269150ms，真实回调 268781ms；快退 30 秒目标 238781ms，真实回调 235600ms；两次跳转均保留暂停。发送后断开电脑 ADB 约 30 秒，暂停与快进在断开期间完成。日常控制和截图不依赖 ADB 或 root。
+- 换集 2→3、3→2 用新截图确认；此播放器的 media_id 不及时刷新，所以工具返回未确认时不能仅凭 API 认定成功。广告 actions=0 时返回不支持。跳转报告真实落点与偏差；Gala 最大 10 秒容差属于 Movo 的判定阈值。
+- 修复 TCL 后台服务启动 ANR、等待操作取消迟滞、纯浮窗状态不刷新和最终回答被追问条目遮掉。R54 点击真实停止按钮后结束运行且未执行后续 HOME；R57 通过搜狗键盘发送文字并在浮窗看到完整回复。
+
+无障碍需开启并放行 TCL 自启动。这台 ROM 的标准录屏/媒体会话授权页面缺失，首次安装需一次性准备：
+
+```sh
+adb shell pm grant io.github.fartown.movo.tv android.permission.WRITE_SECURE_SETTINGS
+adb shell cmd notification allow_listener io.github.fartown.movo.tv/io.github.fartown.movo.tv.TvMediaAccessService
+```
+
+随后在 Movo「屏幕读取权限」启用系统助理截图，在「播放控制权限」检查媒体会话授权。系统助理实际返回 1920×1080 截图；部分视频像素可能为黑色，应结合标题、控件和媒体状态判断。通知监听服务仅用于访问媒体会话，不读取或保存通知内容。
+
+本轮验收使用文字且保持静音，没有重跑录音、播报、重启、深度待机或远场开机。此前人声录音、唤醒原型和 32 位 JNI 的结果属于 [P0 历史记录](../../research/tv-voice-app/P0真机验证-TCL-ak30a5.md)，不能扩展成最新产品包完整语音链路或全部机型通过。当前包的 TV 构建、Phone Kotlin 编译、TV lint 及修改涉及的已有等待工具用例已验证；具体合并后检查见 MR。
+
+![电视上的原生对话浮窗](../../research/tv-voice-app/screenshots/tv-floating-assistant.png)
+
+issue 提及文件的处理：
+
+| 文件 | 处理及用途 |
+| --- | --- |
+| P0 报告、evidence-summary.json | 提交脱敏历史证据，明确日期、已淘汰路线和当前实现入口 |
+| tools/tv-compose-probe、tools/tv-voice-probe | 保留独立性能与 32 位语音库实验源码，附构建及结果边界 |
+| tools/tv-probe | 淘汰本机 ADB、自定义 shell 按键和一次性录音/唤醒原型；可用能力已迁入 app/src/tv |
+| docs/solutions/tv-voice-app.md | 删除旧的 ADB 主路线草案，统一使用本文 |
+| APK、dex、缓存、私有日志/数据库、原始录音和厂商文件 | 不进入仓库；重复构建产物删除，原始验证证据仅本地保留 |
 
 ## 2. 需求调研
 

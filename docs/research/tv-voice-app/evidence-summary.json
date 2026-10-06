@@ -1,0 +1,648 @@
+{
+  "date": "2026-10-05",
+  "issue": "https://github.com/Fartown/Movo/issues/11",
+  "baseline": "1435a2e",
+  "scope": "P0 probes and awake normal-use wake/recording validation; product not integrated; voice power-on excluded by user",
+  "environment": {
+    "sdk": 28,
+    "brand": "TCL",
+    "model": "ak30a5",
+    "abi": [
+      "armeabi-v7a",
+      "armeabi"
+    ],
+    "leanback": false,
+    "microphone_feature": false,
+    "retail_model": "55F295C",
+    "tv_builtin_microphone_user_confirmed": true,
+    "remote_voice_key_user_confirmed": false,
+    "system_assistant_builtin_mic_works_user_confirmed": true
+  },
+  "volume": {
+    "fixed": false,
+    "before": 24,
+    "after_adjust": 25,
+    "restored": 24,
+    "max": 100
+  },
+  "recordings_without_controlled_speech": [
+    {
+      "source": 1,
+      "duration_ms": 2000,
+      "state": 1,
+      "recording_state": 3,
+      "samples": 16384,
+      "nonzero": 14973,
+      "rms": 15.915224552565816,
+      "peak": 107,
+      "route_type": 15,
+      "route_name": "ak30a5"
+    },
+    {
+      "source": 6,
+      "duration_ms": 2000,
+      "state": 1,
+      "recording_state": 3,
+      "samples": 16384,
+      "nonzero": 13786,
+      "rms": 6.242544381224895,
+      "peak": 69,
+      "route_type": 15,
+      "route_name": "ak30a5"
+    }
+  ],
+  "permission_routes": [
+    {
+      "action": "android.settings.SETTINGS",
+      "component": null
+    },
+    {
+      "action": "android.settings.ACCESSIBILITY_SETTINGS",
+      "component": null
+    },
+    {
+      "action": "android.settings.action.MANAGE_OVERLAY_PERMISSION",
+      "component": null
+    },
+    {
+      "action": "android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS",
+      "component": null
+    }
+  ],
+  "media_projection": "ActivityNotFoundException: com.android.systemui.media.MediaProjectionPermissionActivity",
+  "tcl_accessibility_requirement": "APP_AUTO_START=allow in addition to enabled_accessibility_services",
+  "local_adb": {
+    "remote_uid": 2000,
+    "reconnect_ms": [
+      105,
+      100,
+      90
+    ],
+    "reconnect_authenticated": [
+      true,
+      true,
+      true
+    ],
+    "png_decode_verification": {
+      "connect_ms": 130,
+      "screenshot_bytes": 60685,
+      "screenshot_width": 1920,
+      "screenshot_height": 1080
+    }
+  },
+  "native_keys": {
+    "count": 100,
+    "successful": 100,
+    "inject_p50_ms": 30.081625,
+    "inject_p95_ms": 56.372959,
+    "inject_max_ms": 68.524125
+  },
+  "native_keys_received": {
+    "down": 100,
+    "up": 100
+  },
+  "node_quality": [
+    {
+      "page": "home",
+      "packages": [
+        "com.tcl.cyberui"
+      ],
+      "nodes": 24,
+      "clickable": 12,
+      "focusable": 16,
+      "focused": 1,
+      "labelled": 7
+    },
+    {
+      "page": "settings",
+      "packages": [
+        "com.tcl.settings"
+      ],
+      "nodes": 43,
+      "clickable": 13,
+      "focusable": 14,
+      "focused": 1,
+      "labelled": 17
+    },
+    {
+      "page": "iqiyi",
+      "packages": [
+        "com.tcl.qiyiguo"
+      ],
+      "nodes": 94,
+      "clickable": 40,
+      "focusable": 64,
+      "focused": 1,
+      "labelled": 60
+    },
+    {
+      "page": "tencent",
+      "packages": [
+        "com.ktcp.csvideo"
+      ],
+      "nodes": 1,
+      "clickable": 0,
+      "focusable": 0,
+      "focused": 0,
+      "labelled": 0
+    }
+  ],
+  "compose_frames": [
+    {
+      "reason": "40_seconds",
+      "frames": 1084,
+      "p50_ms": 14.511458,
+      "p95_ms": 94.781177,
+      "max_ms": 603.561847,
+      "over_16_67ms": 453,
+      "focus_changes": 101,
+      "dropped_metric_reports": 0,
+      "elapsed_ms": 40055,
+      "release": true,
+      "over_16_67ms_percent": 41.79
+    },
+    {
+      "reason": "40_seconds",
+      "frames": 1047,
+      "p50_ms": 12.928338,
+      "p95_ms": 95.14903,
+      "max_ms": 596.517601,
+      "over_16_67ms": 346,
+      "focus_changes": 99,
+      "dropped_metric_reports": 0,
+      "elapsed_ms": 40052,
+      "release": true,
+      "over_16_67ms_percent": 33.05
+    },
+    {
+      "reason": "40_seconds",
+      "frames": 1111,
+      "p50_ms": 12.957201,
+      "p95_ms": 76.775439,
+      "max_ms": 273.748378,
+      "over_16_67ms": 393,
+      "focus_changes": 101,
+      "dropped_metric_reports": 0,
+      "elapsed_ms": 40040,
+      "release": true,
+      "over_16_67ms_percent": 35.37
+    }
+  ],
+  "compose_warmup_keys": {
+    "warmup_seconds": 3.0,
+    "count": 100,
+    "successful": 100,
+    "inject_p50_ms": 71.365458,
+    "inject_p95_ms": 212.95825,
+    "inject_max_ms": 369.203917
+  },
+  "hdmi": "TV_INPUT menu + DOWN + OK reached com.tcl.tv, labels HDMI1 and 无信号; no external video verified",
+  "pending": [
+    "Future product integration of verified OEM capture: streaming ASR latency and captures beyond the prototype 15-second limit",
+    "Authenticated ASR/TTS and full product integration",
+    "Actual Xiaomi device validation if Xiaomi remains target",
+    "Whole-product performance and external HDMI audio/video acceptance"
+  ],
+  "reboot_recovery": {
+    "command_executed": true,
+    "observation_seconds": 244.95,
+    "connection_checks": 41,
+    "network_ping_success": true,
+    "adb_tcp_5555": "connection_refused",
+    "mdns_adb_services": 0,
+    "automatic_control_recovery": "not_passed",
+    "post_boot_id_read": true,
+    "rsa_authorization_persistence": "retained; app own RSA key reauthenticated without new approval",
+    "boot_id_changed": true,
+    "root_cause": "/init.usb.rc on boot sets persist.sys.service.adbd.enable=0",
+    "ordinary_app_enable_attempt": "permission denied",
+    "shell_enable_property_write": "allowed while ADB is already running",
+    "recovery_after_user_enabled_adb": {
+      "connect_ms": 107,
+      "remote_uid": 2000,
+      "key_server_ready": true,
+      "boot_job_received": true
+    }
+  },
+  "additional_probe_builds": {
+    "lightweight_compose": "built_signed_installed_and_run",
+    "armeabi_v7a_voice_libraries": "built_signed_installed_and_run",
+    "user_recording_page": "built_signed_installed_and_user_tested"
+  },
+  "standby": {
+    "sleep_command_timed_out": true,
+    "network_during_sleep": "unreachable",
+    "adb_wake_command": "device_offline",
+    "wol_sent": true,
+    "wol_recovery_observed_before_manual_wake": false,
+    "wakeup": "physical_remote_user_confirmed",
+    "same_boot_id": true,
+    "adb_switch_after": "1",
+    "adbd_after": "running",
+    "power_after": "Awake"
+  },
+  "voice_native_runtime": {
+    "speechengine": {
+      "native_created": true,
+      "init_result_without_credentials": -1,
+      "elapsed_ms": 117,
+      "pss_kb": 22807,
+      "cloud_session_started": false
+    },
+    "sherpa": {
+      "model_initialized": true,
+      "init_ms": 4659,
+      "test_input": "five_seconds_digital_silence",
+      "decode_steps": 15,
+      "inference_wall_ms": 2062,
+      "inference_thread_cpu_ms": 2058,
+      "empty_result_on_silence": true,
+      "pss_kb": 64549
+    }
+  },
+  "compose_followup": [
+    {
+      "reason": "40_seconds",
+      "variant": "default",
+      "frames": 1074,
+      "p50_ms": 12.460644,
+      "p95_ms": 80.723576,
+      "max_ms": 263.702516,
+      "over_16_67ms": 334,
+      "focus_changes": 101,
+      "dropped_metric_reports": 0,
+      "elapsed_ms": 40066,
+      "release": true,
+      "over_16_67ms_percent": 31.1
+    },
+    {
+      "reason": "40_seconds",
+      "variant": "lightweight",
+      "frames": 949,
+      "p50_ms": 9.403205,
+      "p95_ms": 47.812917,
+      "max_ms": 219.704489,
+      "over_16_67ms": 196,
+      "focus_changes": 101,
+      "dropped_metric_reports": 0,
+      "elapsed_ms": 40042,
+      "release": true,
+      "over_16_67ms_percent": 20.65
+    }
+  ],
+  "user_microphone_tests": [
+    {
+      "route": "default",
+      "samples": 0,
+      "nonzero": 0,
+      "peak": 0,
+      "user_stopped": true,
+      "microphone_muted_at_start": false
+    },
+    {
+      "route": "back",
+      "samples": 104448,
+      "nonzero": 0,
+      "peak": 0,
+      "user_stopped": true,
+      "microphone_muted_at_start": false
+    },
+    {
+      "route": "back",
+      "samples": 181248,
+      "nonzero": 0,
+      "peak": 0,
+      "user_stopped": true,
+      "microphone_muted_at_start": false
+    }
+  ],
+  "microphone_result": "failed to capture user speech: default no frames; back all-zero PCM. Does not establish missing hardware or final cause.",
+  "oem_mic_test": "TCL MicTestActivity ran playback, but original mic dump empty and reference PCM absent; cannot use as microphone hardware verdict",
+  "farfield_access": {
+    "app_socket_probe": [
+      {
+        "endpoint": "SOCKET_AUDIO_V2",
+        "uid": 10059,
+        "error": "java.io.IOException: Permission denied",
+        "bytes": 0,
+        "nonzero_bytes": 0,
+        "header_ascii": "",
+        "elapsed_ms": 16
+      },
+      {
+        "endpoint": "/sdcard/.farfield_raw_data",
+        "uid": 10059,
+        "error": "java.io.IOException: Permission denied",
+        "bytes": 0,
+        "nonzero_bytes": 0,
+        "header_ascii": "",
+        "elapsed_ms": 1
+      }
+    ],
+    "shell_socket_probe": [
+      {
+        "endpoint": "SOCKET_AUDIO_V2",
+        "uid": 2000,
+        "error": "java.io.IOException: Permission denied",
+        "bytes": 0,
+        "nonzero_bytes": 0,
+        "header_ascii": "",
+        "elapsed_ms": 1
+      },
+      {
+        "endpoint": "/sdcard/.farfield_raw_data",
+        "uid": 2000,
+        "error": "java.io.IOException: Permission denied",
+        "bytes": 0,
+        "nonzero_bytes": 0,
+        "header_ascii": "",
+        "elapsed_ms": 0
+      }
+    ],
+    "oem_binder_probe": {
+      "bind_accepted": true,
+      "uid": 10059,
+      "descriptor": "com.tcl.walleve.thirdapi.IThirdApiV3",
+      "calls": [
+        {
+          "action": "checkProtocol",
+          "handled": true,
+          "response": "2"
+        },
+        {
+          "action": "sendXiriAudio",
+          "handled": true,
+          "response": ""
+        }
+      ]
+    },
+    "oem_audio_api_log": "ApiV3 permission denied: io.github.fartown.movo.tvprobe, sendXiriAudio",
+    "socket_denial": "SELinux connectto denied to system_app for both untrusted_app and shell",
+    "scope": "Read-only socket probes and audio API permission check; no persistent audio subscription or system policy changes"
+  },
+  "tcl_demo_audio_experiment": {
+    "bound": true,
+    "package": "com.tcl.walleve.sdk.demo",
+    "permission_mask": 0,
+    "audio_request": "",
+    "start_request": "",
+    "received_audio_end": false,
+    "callbacks": [
+      {
+        "action": "notifyCirSupport",
+        "length": 5
+      },
+      {
+        "action": "aiAudio",
+        "length": 4,
+        "value": "true"
+      },
+      {
+        "action": "aiAudio",
+        "length": 5,
+        "value": "false"
+      }
+    ],
+    "samples_assuming_pcm16": 0,
+    "nonzero": 0,
+    "peak": 0,
+    "temporary_package_uninstalled": true,
+    "valid_audio_verified": false,
+    "system_policy_modified": false,
+    "production_solution": false
+  },
+  "oem_local_recording": {
+    "passed": true,
+    "uid": 10059,
+    "root_required": false,
+    "assistant_replaced": false,
+    "system_policy_modified": false,
+    "user_heard_own_voice_on_playback": true,
+    "transport": "App broadcast -> installed TCL assistant local recorder -> shared WAV -> private recording archive",
+    "format": {
+      "sample_rate": 16000,
+      "channels": 6,
+      "bits": 32
+    },
+    "app_limit_seconds": 15,
+    "oem_limit_seconds": 20,
+    "automatic_frames": 243200,
+    "human_sessions": [
+      {
+        "frames": 72533,
+        "peak_pcm16_channel0": 408,
+        "rms_pcm16_channel0": 41.78115877092136
+      },
+      {
+        "frames": 81920,
+        "peak_pcm16_channel0": 444,
+        "rms_pcm16_channel0": 54.694942350732944
+      }
+    ],
+    "scope": "User-operated short recording/playback verified; continuous streaming ASR and concurrent assistant wakeup not yet integrated"
+  },
+  "wake_takeover": {
+    "implementation": "TclWakeService + TclWakeActivity",
+    "package": "io.github.fartown.movo.tvprobe",
+    "uid": 10059,
+    "root_required": false,
+    "oem_app_replaced": false,
+    "permission_mask": 0,
+    "global_signal": "sys.tcl.voice.active_uptime",
+    "poll_interval_ms": 100,
+    "cancel_action": "cancelFarFieldAsr",
+    "foreground_cancel_to_session_end_verified": true,
+    "foreground_start_to_end_ms": 153,
+    "automatic_background_passed": true,
+    "control_activity_closed_passed": true,
+    "foreground_service_verified": true,
+    "stop_cleanup_verified": true,
+    "automatic_recording_frames": [
+      244053,
+      244053,
+      244906
+    ],
+    "foreground_service_detection_lag_ms": [
+      49,
+      10
+    ],
+    "full_movo_conversation_integrated": false,
+    "new_service_reboot_tested": false,
+    "app_auto_start": "allow",
+    "enabled_at_handoff": true,
+    "temporary_mpc_package": "backed_up_and_uninstalled",
+    "runtime_adb_required": false,
+    "real_acoustic_wake_verified": true,
+    "acoustic_source": "External Mac built-in speaker, actual sound to TV builtin microphone; no startFarFieldAsr in these rounds",
+    "movo_spoken_response": "我在。",
+    "native_feedback_and_answer_absent_in_playback_log": true,
+    "dnd_original": {
+      "enabled": true,
+      "start": "23:00",
+      "end": "07:00"
+    },
+    "dnd_current": {
+      "enabled": true,
+      "start": "00:00",
+      "end": "00:00"
+    },
+    "acoustic_rounds": [
+      {
+        "wake_spoken": true,
+        "checks": {
+          "wake_property_changed": true,
+          "movo_takeover": true,
+          "movo_spoken_response": true,
+          "recording_saved": true,
+          "no_native_response_track": true
+        }
+      },
+      {
+        "wake_spoken": false,
+        "checks": {
+          "wake_property_changed": false,
+          "movo_takeover": false,
+          "movo_spoken_response": false,
+          "recording_saved": false,
+          "no_native_response_track": true
+        }
+      },
+      {
+        "wake_spoken": true,
+        "checks": {
+          "wake_property_changed": true,
+          "movo_takeover": true,
+          "movo_spoken_response": true,
+          "recording_saved": true,
+          "no_native_response_track": true
+        }
+      }
+    ],
+    "recording_frames": [
+      244053,
+      242346
+    ],
+    "source_and_both_recordings_asr_equal": true,
+    "asr_validation_location": "offline host, not TV product integration",
+    "process_kill_recovery_seconds": 2.5449,
+    "process_kill_watch_recovered": true,
+    "standby_wake_alarm_downgraded_by_rom": true,
+    "standby_acoustic_test_passed": false,
+    "standby_network_recovery_observed": false,
+    "device_connection_at_latest_check": "online_awake_adb_enabled",
+    "native_reminder_rtc_wakeup_registered_but_no_network_recovery": true,
+    "normal_use_scope": "Awake TV; user excluded far-field voice power-on, deep standby and reboot",
+    "farfield_voice_power_on_enabled": false,
+    "service_auto_restored_after_power_wake": true,
+    "post_standby_acoustic_rounds_passed": true,
+    "post_standby_recording_transcripts_equal_source": true,
+    "normal_use_checks": {
+      "duplicate-wake": {
+        "one_takeover": true,
+        "duplicate_suppressed": true,
+        "one_start": true,
+        "one_end": true,
+        "no_error": true
+      },
+      "manual": {
+        "manual_stop": true,
+        "manual_under_15_seconds": true,
+        "playback_start": true,
+        "playback_completed": true,
+        "playback_ui_completed": true,
+        "no_capture_error": true
+      },
+      "exit-recording": {
+        "home_stops_capture": true,
+        "saved_nonempty": true,
+        "source_stopped_growing": true,
+        "no_capture_error": true
+      },
+      "stop-and-restore": {
+        "service_stopped": true,
+        "preference_disabled": true,
+        "native_answer_played": true,
+        "no_movo_capture": true,
+        "no_takeover": true
+      }
+    },
+    "manual_recording_frames": 130560,
+    "manual_recording_transcript_equal_source": true,
+    "final_installed_build_acoustic_rounds": [
+      {
+        "round": 1,
+        "passed": true,
+        "checks": {
+          "takeover": true,
+          "movo_response": true,
+          "recording_saved": true,
+          "native_player_mapping_available": true,
+          "native_playback_absent": true,
+          "no_capture_error": true
+        }
+      },
+      {
+        "round": 2,
+        "passed": true,
+        "checks": {
+          "takeover": false,
+          "movo_response": false,
+          "recording_saved": false,
+          "native_player_mapping_available": true,
+          "native_playback_absent": true,
+          "no_capture_error": true
+        }
+      },
+      {
+        "round": 3,
+        "passed": true,
+        "checks": {
+          "takeover": true,
+          "movo_response": true,
+          "recording_saved": true,
+          "native_player_mapping_available": true,
+          "native_playback_absent": true,
+          "no_capture_error": true
+        }
+      }
+    ],
+    "final_transcripts_exact_match": false,
+    "final_transcripts_note": "Offline Vosk misrecognitions; normalized audio recognizes sentence beginning in both; do not claim exact ASR match",
+    "final_content_envelope": [
+      {
+        "file": "normal-use/final/round-1.wav",
+        "reference": "post-standby/round-3.wav",
+        "compared_seconds": 4.7,
+        "best_start_seconds": 1.48,
+        "envelope_correlation": 0.8986412818216915
+      },
+      {
+        "file": "normal-use/final/round-3.wav",
+        "reference": "post-standby/round-3.wav",
+        "compared_seconds": 4.7,
+        "best_start_seconds": 1.86,
+        "envelope_correlation": 0.8741236863450507
+      }
+    ]
+  },
+  "adb_recovery_candidates": {
+    "settings_motion_adb_handler": "inherits_noop_base_implementation",
+    "tcl_sdk_adb_enable": "exists_but_vendor_certificate_permission_gate_not_runtime_verified",
+    "standby_ssdp_media_responses": 0,
+    "current_transport": "Online after POWER wake, ADB enabled"
+  },
+  "pending_scope": "Future product acceptance, not unfinished normal-use prototype tests",
+  "record_kind": "historical_p0_snapshot",
+  "superseded_by": "../../solutions/tv-voice-app/电视端语音App实施方案.md",
+  "source_disposition": {
+    "retained": [
+      "tools/tv-compose-probe",
+      "tools/tv-voice-probe"
+    ],
+    "discarded": [
+      "tools/tv-probe",
+      "docs/solutions/tv-voice-app.md"
+    ],
+    "reason": "Product code supersedes the one-off ADB, recording and wake prototypes; raw private evidence remains excluded from Git."
+  }
+}
