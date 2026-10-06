@@ -15,6 +15,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -34,6 +35,8 @@ class PackagedModelDefaultsTest {
         context.deleteDatabase("movo.db")
         SettingsDataStore.init(context)
         ProviderRepository.init(context)
+        // 读运行配置时也会对齐预置服务商：默认用本测试的包，不受本机 .env 影响。
+        ProviderRepository.packagedProvider = { preset() }
         runBlocking {
             // Repository singletons can retain a prior Robolectric application Context.
             // Open the current test database explicitly before accessing those repositories.
@@ -44,8 +47,14 @@ class PackagedModelDefaultsTest {
         }
     }
 
+    @After
+    fun tearDown() {
+        ProviderRepository.packagedProvider = PackagedModelDefaults::provider
+    }
+
     @Test
     fun incompletePackagedConfigKeepsNormalProviderSetup() = runBlocking {
+        ProviderRepository.packagedProvider = { null }
         assertNull(PackagedModelDefaults.createProvider("Test", "", "key", "model"))
         assertNull(PackagedModelDefaults.createProvider("Test", "https://example.com/v1", " ", "model"))
         assertNull(PackagedModelDefaults.createProvider("Test", "https://example.com/v1", "key", ""))
@@ -84,34 +93,90 @@ class PackagedModelDefaultsTest {
     }
 
     @Test
-    fun editedKeyUrlAndModelSurviveRestartAndNewPackagedDefaults() = runBlocking {
-        val preset = preset()
-        ProviderRepository.ensureBuiltInsMerged(preset)
-        ProviderRepository.updateProvider(
-            preset.copy(baseUrl = "https://edited.example/v1", apiKey = "edited-key")
-        )
-        ModelRepository.saveModel(
-            preset.id,
-            preset.models.single().copy(modelId = "edited-model", displayName = "Edited"),
-        )
+    fun presetFollowsANewPackageAfterUpgrade() = runBlocking {
+        // 2026-10-07 定：预置的跟着包走。旧包写入的预置（旧地址 / Key / 模型）在装了新包后换成新包的值，选择不变。
+        val old = preset()
+        ProviderRepository.ensureBuiltInsMerged(old)
+        ProviderRepository.updateProvider(old.copy(baseUrl = "https://edited.example/v1", apiKey = "edited-key"))
         MovoDatabase.closeForTests()
         MovoDatabase.get(context)
 
-        ProviderRepository.ensureBuiltInsMerged(preset.copy(apiKey = "new-build-key"))
+        val next = requireNotNull(
+            PackagedModelDefaults.createProvider(
+                name = "Ark Plan",
+                baseUrl = "https://ark.example/api/plan/v3",
+                apiKey = "plan-key",
+                modelId = "plan-model",
+                contextWindow = 1_048_576,
+                hostedWebSearchEnabled = true,
+            )
+        )
+        ProviderRepository.packagedProvider = { next }
+        ProviderRepository.ensureBuiltInsMerged(next)
 
         val config = RuntimeConfigRepository.currentRuntimeConfig()!!
-        assertEquals("https://edited.example/v1", config.baseUrl)
-        assertEquals("edited-key", config.apiKey)
-        assertEquals("edited-model", config.model)
+        assertEquals("https://ark.example/api/plan/v3", config.baseUrl)
+        assertEquals("plan-key", config.apiKey)
+        assertEquals("plan-model", config.model)
+        assertEquals("Ark Plan", ProviderRepository.providerById(old.id)!!.name)
+        assertEquals(old.id, SettingsDataStore.settings().selectedProviderId)
+        assertEquals(old.models.single().id, SettingsDataStore.settings().selectedModelId)
     }
 
     @Test
-    fun deletedPresetAndClearedKeyAreNotRestoredOnStartup() = runBlocking {
+    fun followingThePackageKeepsPersonalSettingsAndIsIdempotent() = runBlocking {
+        val preset = preset()
+        ProviderRepository.ensureBuiltInsMerged(preset)
+        val stored = ProviderRepository.providerById(preset.id) as io.github.fartown.movo.data.model.OpenAiCompatibleProviderSetting
+        ProviderRepository.updateProvider(stored.copy(sortOrder = 7, apiKey = "edited-key"))
+        ModelRepository.saveModel(preset.id, stored.models.single().copy(reasoningOverride = false, contextWindowOverride = 65_536))
+
+        ProviderRepository.ensureBuiltInsMerged(preset)
+
+        val synced = ProviderRepository.providerById(preset.id)!!
+        assertEquals("test-key", synced.apiKey)
+        assertEquals(7, synced.sortOrder)
+        assertEquals(false, synced.models.single().reasoningOverride)
+        assertEquals(65_536, synced.models.single().contextWindowOverride)
+        // 已经一致：不再写库。
+        assertNull(PackagedModelDefaults.followPackage(synced, preset))
+    }
+
+    @Test
+    fun modelsAddedToThePresetSurviveFollowingThePackage() = runBlocking {
+        val preset = preset()
+        ProviderRepository.ensureBuiltInsMerged(preset)
+        val extra = io.github.fartown.movo.data.model.Model(id = "ark-plan-kimi-k3", modelId = "kimi-k3", displayName = "Kimi K3")
+        ModelRepository.saveModel(preset.id, extra)
+
+        ProviderRepository.ensureBuiltInsMerged(preset.copy(apiKey = "new-key"))
+
+        val synced = ProviderRepository.providerById(preset.id)!!
+        assertEquals("new-key", synced.apiKey)
+        assertEquals(listOf("test-model", "kimi-k3"), synced.models.map { it.modelId })
+    }
+
+    @Test
+    fun aPackageWithoutDefaultsLeavesTheStoredPresetAlone() = runBlocking {
+        // CI 包不带 .env：没有包里的值可对齐，已存的预置保持原样。
+        val preset = preset()
+        ProviderRepository.ensureBuiltInsMerged(preset)
+
+        ProviderRepository.packagedProvider = { null }
+        ProviderRepository.updateProvider(preset.copy(apiKey = "kept-key"))
+        ProviderRepository.ensureBuiltInsMerged()
+
+        assertEquals("kept-key", ProviderRepository.providerById(preset.id)?.apiKey)
+        assertEquals("https://example.com/v3", RuntimeConfigRepository.currentRuntimeConfig()!!.baseUrl)
+    }
+
+    @Test
+    fun clearedKeyComesBackFromThePackageButADeletedPresetStaysDeleted() = runBlocking {
         val preset = preset()
         ProviderRepository.ensureBuiltInsMerged(preset)
         ProviderRepository.updateProvider(preset.copy(apiKey = ""))
         ProviderRepository.ensureBuiltInsMerged(preset)
-        assertEquals("", ProviderRepository.providerById(preset.id)?.apiKey)
+        assertEquals("test-key", ProviderRepository.providerById(preset.id)?.apiKey)
 
         ProviderRepository.deleteProvider(preset.id)
         ProviderRepository.ensureBuiltInsMerged(preset)

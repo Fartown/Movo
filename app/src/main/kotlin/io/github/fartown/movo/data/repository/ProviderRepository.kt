@@ -37,6 +37,10 @@ internal object ProviderRepository {
 
     private val defaultsMutex = Mutex()
 
+    /** 包里的默认模型（.env 打包）。单测替换它，结果不随本机 .env 变化。 */
+    @Volatile
+    internal var packagedProvider: () -> ProviderSetting? = PackagedModelDefaults::provider
+
     @Volatile
     private lateinit var applicationContext: Context
 
@@ -150,10 +154,10 @@ internal object ProviderRepository {
      * 启动 / 打开设置时补齐默认数据：
      * - 首次安装（库为空）：只写入 .env 打包的服务商并选中它；内置预设是模板，不落库；
      * - 升级：数据版本落后时清一次没填 Key 的预设占位（[ProviderCatalog.isPresetPlaceholder]）；
-     * - 每次：确保 ChatGPT 记录存在（承载登录后的模型），再修复当前选择。
+     * - 每次：预置服务商对齐到包里的值（[syncPackagedProvider]），确保 ChatGPT 记录存在（承载登录后的模型），再修复当前选择。
      */
     suspend fun ensureBuiltInsMerged(
-        initialProvider: ProviderSetting? = PackagedModelDefaults.provider(),
+        initialProvider: ProviderSetting? = packagedProvider(),
     ): Unit = defaultsMutex.withLock {
         val current = allProviders()
         if (current.isEmpty()) {
@@ -162,12 +166,26 @@ internal object ProviderRepository {
                 SettingsDataStore.setSelection(initialProvider.id, initialProvider.models.firstOrNull()?.id)
             }
             SettingsDataStore.setProviderDataVersion(PROVIDER_DATA_VERSION)
-        } else if (SettingsDataStore.providerDataVersion() < PROVIDER_DATA_VERSION) {
-            prunePlaceholders(current)
-            SettingsDataStore.setProviderDataVersion(PROVIDER_DATA_VERSION)
+        } else {
+            if (SettingsDataStore.providerDataVersion() < PROVIDER_DATA_VERSION) {
+                prunePlaceholders(current)
+                SettingsDataStore.setProviderDataVersion(PROVIDER_DATA_VERSION)
+            }
+            syncPackagedProvider(initialProvider)
         }
         ensureChatGptRecord()
         repairSelection()
+    }
+
+    /**
+     * 预置服务商跟着安装包走（2026-10-07 定）：覆盖安装了换过 Key / 地址 / 模型的新包，预置那条随之更新
+     * （原来只在首次安装写一次，之后包里的变化到不了已装的设备）。
+     * 设备上没有预置那条（用户删过，或首次安装时已有别的服务商）不补；包里没有默认模型（CI 包不带 .env）时不动已存的。
+     */
+    private suspend fun syncPackagedProvider(packaged: ProviderSetting?) {
+        if (packaged !is OpenAiCompatibleProviderSetting || packaged.id != PackagedModelDefaults.PROVIDER_ID) return
+        val stored = providerById(packaged.id) ?: return
+        PackagedModelDefaults.followPackage(stored, packaged)?.let { replaceProvider(it) }
     }
 
     /** 备份恢复后调用：旧备份里带着全部内置预设，同样清掉没填 Key 的占位（幂等）。 */

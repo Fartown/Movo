@@ -434,4 +434,21 @@ class RemoteModelFetcherTest {
         assertEquals(ReasoningEffort.LOW, luna.reasoningCapabilities?.defaultEffort)
         assertEquals(false, luna.reasoningCapabilities?.canDisable)
     }
+
+    @Test
+    fun arkAgentPlanUsesThePlanModelListWithoutCallingModelsEndpoint() = kotlinx.coroutines.runBlocking {
+        // Agent Plan 的 /models 是 404：拉取模型直接给出套餐清单（不发请求，离线也能拿到）。
+        val provider = OpenAiCompatibleProviderSetting(
+            id = "plan",
+            name = "Ark Plan",
+            baseUrl = "https://ark.cn-beijing.volces.com/api/plan/v3",
+            apiKey = "plan-key",
+        )
+        val models = RemoteModelFetcher.fetch(provider).getOrThrow()
+        assertTrue(models.any { it.modelId == "deepseek-v4-1-flash-260910" })
+        assertTrue(models.any { it.modelId == "kimi-k3" })
+        assertTrue(models.all { it.toolCall == true })
+        assertEquals(models.map { it.modelId }.distinct(), models.map { it.modelId })
+        assertFalse(io.github.fartown.movo.data.provider.ArkAgentPlanModels.matches("https://ark.cn-beijing.volces.com/api/v3"))
+    }
 }
