@@ -92,11 +92,17 @@ internal class AgentRuntimeRunExecutor(
         var toolsBinding: AgentRunController.ResourceBinding? = null
         var response: AgentModelClient.ModelResponse.Text? = null
         var cancelled = false
-        var checkpointRecorder: AgentRunCheckpointRecorder? = null
+        // App 发起的一轮：这一轮产生的模型消息按条追加到对话的进行中记录（交给对话存储的写线程，不挡执行）。
+        var runLogConversation: String? = null
+        var publishedTranscript = emptyList<AgentModelClient.ConversationMessage>()
         val timing = AgentRunTiming(AndroidAgentLogger)
 
         val result = try {
-            checkpointRecorder = AgentRunCheckpointRecorder.create(appContext, request)
+            // 登记“这一轮在跑”（一行）：进程被杀后据此按中断处理。
+            if (AgentRunCheckpointStore.start(appContext, request)) {
+                runLogConversation = request.handoff?.let { runCatching { AgentUiHandoffPayload.from(it.payload).conversationId }.getOrNull() }
+                    ?.takeIf { it.isNotBlank() }
+            }
             entrySurfaceGuard = EntrySurfaceGuard.from(
                 handoff = request.handoff,
                 logger = AndroidAgentLogger,
@@ -147,7 +153,7 @@ internal class AgentRuntimeRunExecutor(
             val interactionBroker = AgentInteractionBroker()
             val dispatchInteractionEvent: (AgentEvent) -> Unit = { ev ->
                 runCatching {
-                    acceptEvent(session, ev, archivedEvents, entrySurfaceGuard, checkpointRecorder)
+                    acceptEvent(session, ev, archivedEvents, entrySurfaceGuard)
                 }
             }
             AgentInteractionRegistry.register(request.runId, interactionBroker)
@@ -250,11 +256,19 @@ internal class AgentRuntimeRunExecutor(
                 compactOnly = request.operation == AgentRuntimeWire.OP_COMPACT,
                 onContextSnapshot = { snapshot ->
                     val committed = snapshot.copy(operationId = request.runId)
-                    AgentRunCheckpointStore.saveContext(appContext, request.runId, committed)
+                    runLogConversation?.let { conversationId ->
+                        io.github.fartown.movo.ui.app.ConversationRepository.get(appContext)
+                            .saveRunSnapshot(conversationId, request.runId, committed.encode())
+                    }
                     session.updateContext(committed)
                 },
                 onTranscript = { transcript ->
-                    AgentRunCheckpointStore.saveTranscript(appContext, request.runId, transcript)
+                    runLogConversation?.let { conversationId ->
+                        val current = transcript.toList()
+                        io.github.fartown.movo.ui.app.ConversationRepository.get(appContext)
+                            .syncRunTranscript(conversationId, request.runId, publishedTranscript, current)
+                        publishedTranscript = current
+                    }
                     session.updateTranscript(transcript)
                 },
                 capabilitiesProvider = { AgentToolCapabilities.capture(appContext) },
@@ -278,7 +292,6 @@ internal class AgentRuntimeRunExecutor(
                     event,
                     archivedEvents,
                     entrySurfaceGuard,
-                    checkpointRecorder,
                 )
             }
             response = completedResponse
@@ -329,7 +342,6 @@ internal class AgentRuntimeRunExecutor(
                         event,
                         archivedEvents,
                         entrySurfaceGuard,
-                        checkpointRecorder,
                     )
                 }.onFailure { checkpointFailure ->
                     AndroidAgentLogger.error(
@@ -379,12 +391,6 @@ internal class AgentRuntimeRunExecutor(
                 request
             }
         val committed = session.complete(result) {
-            runCatching { checkpointRecorder?.seal() }
-                .onFailure { throwable ->
-                    AndroidAgentLogger.error(
-                        "Agent runtime checkpoint seal failed: type=${throwable.safeLogType()}"
-                    )
-                }
             runCatching { persistArtifacts(completedRequest, result, archivedEvents) }
                 .onFailure { throwable ->
                     AndroidAgentLogger.error(
@@ -406,9 +412,7 @@ internal class AgentRuntimeRunExecutor(
         event: AgentEvent,
         archivedEvents: MutableList<AgentEvent>,
         entrySurfaceGuard: EntrySurfaceGuard?,
-        checkpointRecorder: AgentRunCheckpointRecorder?,
     ) {
-        checkpointRecorder?.accept(event)
         if (!session.emit(event)) return
         archivedEvents += event
         io.github.fartown.movo.diagnostics.runlog.RunLogRecorder.agentEvent(event)

@@ -1713,18 +1713,22 @@ internal class AgentAppState(
             )
         )
         refreshConversationSummaries()
-        // 这一轮用的是内存里的对话（history 随请求交给 Runtime），写盘在后台进行，不挡开跑：
-        // 电视上整库重写一次 1.5–5.6 s，排队时等过 53 s。写失败只记录，下一次保存会带上最新的完整状态重写。
         val persistStartedAt = android.os.SystemClock.elapsedRealtime()
         val initialPersistence = persistConversations()
-        scope.launch(Dispatchers.IO) {
+
+        val preparationJob = scope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+            // 先把用户这句话落库再开跑（write-ahead）：只写这一轮新增的几行，几毫秒；进程被杀也不丢已发出的请求。
             val persisted = initialPersistence.await()
             io.github.fartown.movo.diagnostics.MemoryDiagnostics.record("app", "run.persisted", fields = mapOf(
                 "duration_ms" to android.os.SystemClock.elapsedRealtime() - persistStartedAt,
-                "messages" to state.messages.size, "ok" to persisted, "blocking" to false))
-        }
-
-        val preparationJob = scope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+                "messages" to state.messages.size, "ok" to persisted))
+            if (!persisted) {
+                withContext(Dispatchers.Main) {
+                    applyRunResult(runId, AgentRuntimeWire.RunResult(runId = runId, ok = false, content = "",
+                        error = appContext.getString(R.string.conversation_persistence_failed)))
+                }
+                return@launch
+            }
             state.roleplay?.let { binding ->
                 try {
                     CharacterRepository.initialize(appContext)
@@ -2703,6 +2707,22 @@ internal class AgentAppState(
             is AgentEvent.ToolImagesAttached,
             is AgentEvent.RoundStarted,
             -> Unit
+        }
+        if (event !is AgentEvent.AssistantBlockDelta && event !is AgentEvent.UsageReceived) persistRunProgressSoon()
+    }
+
+    private var runProgressPersistJob: Job? = null
+
+    /**
+     * 执行中把界面行写进对话（合并保存，只写变了的行）：进程被杀后已经发生的步骤都在库里，
+     * Runtime 不再另存一份事件日志。
+     */
+    private fun persistRunProgressSoon() {
+        if (runProgressPersistJob?.isActive == true) return
+        runProgressPersistJob = scope.launch {
+            delay(RUN_PROGRESS_PERSIST_DEBOUNCE_MS)
+            runProgressPersistJob = null
+            persistConversations()
         }
     }
 
@@ -3826,6 +3846,8 @@ internal class AgentAppState(
         const val MONITOR_RETRY_MAX_MS = 30_000L
         /** 监听行（事件行、结束行）合并保存：这段时间里的多次变化只写一次。 */
         const val MONITOR_PERSIST_DEBOUNCE_MS = 800L
+        /** 执行中的界面行合并保存：这段时间里的多次变化只写一次。 */
+        const val RUN_PROGRESS_PERSIST_DEBOUNCE_MS = 300L
         const val MAX_PREVIEW_CHARS = 48
         const val LEGACY_STOPPED_ERROR = "已停止"
         const val SYNTHETIC_STATUS_STOPPED = "movo_status:stopped"

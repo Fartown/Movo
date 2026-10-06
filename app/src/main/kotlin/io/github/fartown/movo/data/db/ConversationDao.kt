@@ -254,6 +254,13 @@ internal interface ConversationDao : ChunkedTextDao {
     @Query("DELETE FROM conversation_model_messages WHERE conversation_id = :conversationId AND log = :log")
     suspend fun deleteModelLog(conversationId: String, log: String)
 
+    /** 一轮执行的进行中记录（不管属于哪个对话）。 */
+    @Query("DELETE FROM conversation_model_messages WHERE log IN (:logs)")
+    suspend fun deleteLogs(logs: List<String>)
+
+    @Query("SELECT DISTINCT conversation_id FROM conversation_model_messages WHERE log = :log")
+    suspend fun conversationsWithLog(log: String): List<String>
+
     /** 一段模型消息（[ConversationModelMessageEntity.LOG_HISTORY] 或 LOG_JOURNAL），按顺序还原成单条 JSON。 */
     @Transaction
     suspend fun modelLog(conversationId: String, log: String): List<String> =

@@ -42,15 +42,20 @@ class AgentContextPersistenceTest {
             contextSummary = true, compactedUserTurns = 2, summaryThroughUserTurn = 2)
         val snapshot = AgentContextSnapshot(operationId = request.runId, messages = listOf(summary),
             coveredUserTurns = 2, consumedUserTurns = 2)
+        val repository = io.github.fartown.movo.ui.app.ConversationRepository.get(context)
+        kotlinx.coroutines.runBlocking {
+            repository.saveConversation("conversation", io.github.fartown.movo.ui.model.AgentChatHomeUiState(
+                messages = emptyList(), input = "", isStreaming = false, thinkingEnabled = false), "", 1).await()
+        }
         assertTrue(AgentRunCheckpointStore.start(context, request))
-        AgentRunCheckpointStore.saveContext(context, request.runId, snapshot)
+        // 压缩出的快照存在对话的进行中记录里（第 2 步）；界面事件不再另存。
+        repository.saveRunSnapshot("conversation", request.runId, snapshot.encode())
         val event = AgentEvent.ContextCompaction("op", "completed", 30_000, 2_000)
-        AgentRunCheckpointStore.append(context, request.runId, 0, event)
         MovoDatabase.closeForTests()
         val checkpoint = AgentRunCheckpointStore.list(context).single()
         assertEquals(snapshot, checkpoint.contextSnapshot)
         assertEquals(AgentRuntimeWire.OP_COMPACT, checkpoint.operation)
-        assertEquals(listOf(event), checkpoint.events)
+        assertTrue(checkpoint.events.isEmpty())
         val result = AgentRuntimeWire.RunResult(request.runId, true, "", contextSnapshot = snapshot,
             operation = AgentRuntimeWire.OP_COMPACT)
         val completed = AgentRuntimeWire.CompletedRun(request.handoff!!, result, System.currentTimeMillis())
@@ -62,6 +67,8 @@ class AgentContextPersistenceTest {
         AgentRuntimeResultStore.remove(context, request.runId)
         assertTrue(AgentRuntimeResultStore.list(context).isEmpty())
         assertTrue(AgentRunCheckpointStore.list(context).isEmpty())
+        // 确认结果时，这一轮的进行中记录一起删掉。
+        assertEquals(null, kotlinx.coroutines.runBlocking { repository.runSnapshot("conversation", request.runId) })
         assertFalse(AgentRuntimeResultStore.add(context, completed))
     }
 }

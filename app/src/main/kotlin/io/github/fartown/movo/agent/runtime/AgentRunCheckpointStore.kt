@@ -6,14 +6,15 @@ import io.github.fartown.movo.agent.model.AgentConversationCodec
 import io.github.fartown.movo.agent.model.AgentModelClient
 import io.github.fartown.movo.agent.model.AgentToolBatchRecovery
 import io.github.fartown.movo.data.db.MovoDatabase
-import io.github.fartown.movo.data.db.RuntimeInFlightEventEntity
 import io.github.fartown.movo.data.db.RuntimeInFlightRunEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 
 /**
- * 在途 run 的 UI 事件、完整脱敏 transcript 与模型上下文快照。
- * 三者用途独立；配置和密钥不落盘，敏感工具原始数据由会话 codec 过滤。
+ * App 发起的、还没确认完成的 run 的登记（一轮一行）。进程被杀后据此按中断处理。
+ * 这一轮产生的模型消息与上下文快照在对话的进行中记录里（ConversationRepository.runTranscript / runSnapshot），
+ * 界面行在执行中已经写进对话（docs/solutions/conversation-storage 第 2 步）；
+ * [Checkpoint.events] 只剩升级前留下的旧日志。
  */
 internal object AgentRunCheckpointStore {
     data class Checkpoint(
@@ -57,40 +58,30 @@ internal object AgentRunCheckpointStore {
         return true
     }
 
-    fun append(
-        context: Context,
-        runId: String,
-        sortIndex: Int,
-        event: AgentEvent,
-        now: Long = System.currentTimeMillis(),
-    ) {
-        runBlocking(Dispatchers.IO) {
-            MovoDatabase.get(context.applicationContext).runtimeRunDao().appendInFlightEvent(
-                event = RuntimeInFlightEventEntity(
-                    runId = runId,
-                    sortIndex = sortIndex,
-                    eventJson = AgentEventJsonCodec.encode(event),
-                ),
-                updatedAt = now,
-            )
-        }
-    }
-
     /** 返回所有未确认 run；是否 active 或已完成由恢复协调器结合 Runtime 状态判断。 */
     fun list(context: Context): List<Checkpoint> =
         runBlocking(Dispatchers.IO) {
             MovoDatabase.get(context.applicationContext)
                 .runtimeRunDao()
                 .inFlightRuns()
-                .asSequence()
                 .map { stored ->
+                    val conversationId = runCatching { AgentUiHandoffPayload.from(stored.run.handoffPayload).conversationId }
+                        .getOrNull().orEmpty()
+                    val repository = io.github.fartown.movo.ui.app.ConversationRepository.get(context)
+                    // 新的在对话的进行中记录里；升级前在途的还在旧列里。
+                    val transcript = conversationId.takeIf(String::isNotBlank)
+                        ?.let { repository.runTranscript(it, stored.run.runId) }.orEmpty()
+                        .ifEmpty { AgentConversationCodec.decodeTranscript(stored.run.transcriptJson) }
+                    val snapshot = conversationId.takeIf(String::isNotBlank)
+                        ?.let { repository.runSnapshot(it, stored.run.runId) }
+                        ?: stored.run.contextSnapshotJson
                     Checkpoint(
                         runId = stored.run.runId,
                         ownerInstanceId = stored.run.ownerInstanceId,
-                        contextSnapshot = AgentContextSnapshot.decode(stored.run.contextSnapshotJson),
+                        contextSnapshot = AgentContextSnapshot.decode(snapshot),
                         operation = stored.run.operation,
                         rewriteTargetMessageId = stored.run.rewriteTargetMessageId,
-                        transcript = AgentToolBatchRecovery.completeInterrupted(AgentConversationCodec.decodeTranscript(stored.run.transcriptJson)),
+                        transcript = AgentToolBatchRecovery.completeInterrupted(transcript),
                         handoff = AgentRuntimeWire.EntryHandoff(
                             id = stored.run.handoffId,
                             source = stored.run.handoffSource,
@@ -108,21 +99,10 @@ internal object AgentRunCheckpointStore {
                 .toList()
         }
 
-    fun saveTranscript(context: Context, runId: String, transcript: List<AgentModelClient.ConversationMessage>) {
-        runBlocking(Dispatchers.IO) {
-            MovoDatabase.get(context.applicationContext).runtimeRunDao()
-                .updateTranscript(runId, AgentConversationCodec.encodeTranscriptForStorage(transcript))
-        }
-    }
-
-    fun saveContext(context: Context, runId: String, snapshot: AgentContextSnapshot) {
-        runBlocking(Dispatchers.IO) {
-            MovoDatabase.get(context.applicationContext).runtimeRunDao().updateContextSnapshot(runId, snapshot.encode())
-        }
-    }
-
+    /** 这一轮已经处理完（结果已并进对话，或已按中断处理）：删登记和它的进行中记录。 */
     fun remove(context: Context, runId: String) {
         if (runId.isBlank()) return
+        io.github.fartown.movo.ui.app.ConversationRepository.get(context).clearRunLogs(runId)
         runBlocking(Dispatchers.IO) {
             MovoDatabase.get(context.applicationContext)
                 .runtimeRunDao()

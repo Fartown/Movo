@@ -293,6 +293,39 @@ internal class ConversationRepository(
         modelCounts.clear()
     }
 
+    // —— 一轮执行的进行中记录（Runtime 写，不挡执行线程）——
+
+    /** 这一轮到目前为止产生的模型消息：能接上就只追加。 */
+    fun syncRunTranscript(
+        conversationId: String,
+        runId: String,
+        before: List<AgentModelClient.ConversationMessage>,
+        after: List<AgentModelClient.ConversationMessage>,
+    ): Deferred<Unit> = syncModelLog(conversationId, ConversationModelMessageEntity.runLog(runId), before, after, runId)
+
+    /** 这一轮压缩出的上下文快照（已编码），整行替换。 */
+    fun saveRunSnapshot(conversationId: String, runId: String, encoded: String): Deferred<Unit> = enqueue {
+        dao.replaceModelLog(conversationId, ConversationModelMessageEntity.runSnapshotLog(runId), listOf(encoded))
+    }
+
+    suspend fun runTranscript(conversationId: String, runId: String): List<AgentModelClient.ConversationMessage> {
+        flush()
+        return dao.modelLog(conversationId, ConversationModelMessageEntity.runLog(runId))
+            .mapNotNull { runCatching { AgentConversationCodec.decodeStoredMessage(it) }.getOrNull() }
+    }
+
+    suspend fun runSnapshot(conversationId: String, runId: String): String? {
+        flush()
+        return dao.modelLog(conversationId, ConversationModelMessageEntity.runSnapshotLog(runId)).firstOrNull()
+    }
+
+    /** 这一轮的结果已并进 history / journal（或已按中断处理）：删掉它的进行中记录。 */
+    fun clearRunLogs(runId: String): Deferred<Unit> = enqueue {
+        val logs = listOf(ConversationModelMessageEntity.runLog(runId), ConversationModelMessageEntity.runSnapshotLog(runId))
+        dao.deleteLogs(logs)
+        modelCounts.keys.removeAll { key -> logs.any { key.endsWith("/$it") } }
+    }
+
     /** 删掉这个对话：消息、模型消息、分块随外键与触发器一起删。 */
     fun deleteConversation(conversationId: String): Deferred<Unit> = enqueue {
         dao.deleteConversationRow(conversationId)

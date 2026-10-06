@@ -70,6 +70,8 @@ internal object AgentRuntimeResultStore {
             }
             rememberAcknowledgement(runId, System.currentTimeMillis())
         }
+        // 结果已并进对话：这一轮的进行中记录不再需要。
+        io.github.fartown.movo.ui.app.ConversationRepository.get(appContext).clearRunLogs(runId)
     }
 
     private fun rememberAcknowledgement(runId: String, now: Long) {

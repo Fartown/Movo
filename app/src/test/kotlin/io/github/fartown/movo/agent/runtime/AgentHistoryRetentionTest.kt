@@ -16,6 +16,7 @@ import io.github.fartown.movo.data.db.MovoDatabase
 import io.github.fartown.movo.ui.app.ConversationStoreTestDriver
 import io.github.fartown.movo.ui.model.AgentChatUiState
 import io.github.fartown.movo.ui.model.UserMessageUi
+import io.github.fartown.movo.ui.model.AgentChatHomeUiState
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
@@ -80,9 +81,15 @@ class AgentHistoryRetentionTest {
         val snapshot = AgentContextSnapshot(operationId = "large-run", messages = transcript)
         val request = AgentRuntimeWire.RunRequest("large-run", "请求", config, emptyList(),
             handoff = AgentRuntimeWire.EntryHandoff("large-run", AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE, "c"))
+        val repository = io.github.fartown.movo.ui.app.ConversationRepository.get(context)
+        runBlocking {
+            repository.saveConversation("c", AgentChatHomeUiState(messages = emptyList(), input = "", isStreaming = false,
+                thinkingEnabled = false), "", 1).await()
+        }
         AgentRunCheckpointStore.start(context, request)
-        AgentRunCheckpointStore.saveTranscript(context, request.runId, transcript)
-        AgentRunCheckpointStore.saveContext(context, request.runId, snapshot)
+        // 这一轮的记录与快照存在对话的进行中记录里（第 2 步）。
+        repository.syncRunTranscript("c", request.runId, emptyList(), transcript)
+        repository.saveRunSnapshot("c", request.runId, snapshot.encode())
         val result = AgentRuntimeWire.RunResult(request.runId, true, "完成", transcript = transcript, contextSnapshot = snapshot)
         val completed = AgentRuntimeWire.CompletedRun(request.handoff!!, result, 1L)
         AgentRuntimeResultStore.add(context, completed)
@@ -100,6 +107,7 @@ class AgentHistoryRetentionTest {
         assertTrue(AgentRunCheckpointStore.list(context).isEmpty())
         assertEquals(result, AgentRunArchiveStore.list(context).single().result)
         AgentRunArchiveStore.remove(context, request.runId)
+        runBlocking { repository.flush() }
         MovoDatabase.get(context).openHelper.readableDatabase.query("SELECT COUNT(*) FROM agent_text_chunks").use {
             assertTrue(it.moveToFirst()); assertEquals(0, it.getInt(0))
         }

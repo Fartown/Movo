@@ -153,17 +153,7 @@ class AgentRuntimeResultStoreTest {
                 payload = "conversation-1",
             ),
         )
-        val recorder = AgentRunCheckpointRecorder.create(context, request)!!
-        recorder.accept(
-            AgentEvent.ToolStarted(
-                round = 1,
-                toolCallId = "call-1",
-                name = "run_command",
-                argsPreview = "执行命令 · Android · root",
-                command = "uptime",
-            )
-        )
-        recorder.seal()
+        assertTrue(AgentRunCheckpointStore.start(context, request))
         assertTrue(
             AgentRuntimeResultStore.add(
                 context,
@@ -230,7 +220,7 @@ class AgentRuntimeResultStoreTest {
     }
 
     private fun createCheckpoint(runId: String) {
-        val recorder = AgentRunCheckpointRecorder.create(
+        AgentRunCheckpointStore.start(
             context,
             AgentRuntimeWire.RunRequest(
                 runId = runId,
@@ -248,9 +238,7 @@ class AgentRuntimeResultStoreTest {
                     payload = "conversation-1",
                 ),
             ),
-        )!!
-        recorder.accept(AgentEvent.RunStarted(0, 0, 1, false))
-        recorder.seal()
+        )
     }
 
     private fun completedRun(

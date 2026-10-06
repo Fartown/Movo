@@ -148,6 +148,12 @@ internal data class ConversationModelMessageEntity(
         const val LOG_JOURNAL = "journal"
         const val TEXT_FIELD = "message"
 
+        /** 一轮执行中产生的模型消息（进行中）：结果并进 history / journal 后删掉；进程被杀后由恢复取用。 */
+        fun runLog(runId: String) = "run:$runId"
+
+        /** 一轮执行中压缩出的上下文快照（单行）。 */
+        fun runSnapshotLog(runId: String) = "snapshot:$runId"
+
         /** 分块的主人：与删除触发器里拼出的 owner_id 一致。 */
         fun chunkOwner(conversationId: String, log: String, seq: Int) = "$conversationId/$log/$seq"
     }
