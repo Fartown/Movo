@@ -90,4 +90,30 @@ class OverlayLifecyclePolicyTest {
         assertFalse(OverlayLifecyclePolicy.overlayUnneeded(false, runActive = false, preparingRun = false, openingResult = true, resultViewable = false))
         assertFalse(OverlayLifecyclePolicy.overlayUnneeded(false, runActive = false, preparingRun = false, openingResult = false, resultViewable = true))
     }
+
+    /**
+     * 真机反馈：不操作其他 App 的任务（查东西、跑命令）在跑时，用户在别的 App 里看到的常驻悬浮球没有状态、完成也没有 ✓。
+     * 悬浮球显示过这一轮、结束时用户不在 Movo 里：保持结果待查看；用户在 Movo 里看到了结果才回到待命。
+     */
+    @Test
+    fun aRunShownOnTheOrbKeepsItsResultWhenTheUserIsOutsideMovo() {
+        assertEquals(
+            Finish.SHOW_RESULT,
+            OverlayLifecyclePolicy.finish(
+                executedForegroundTool = false,
+                resultConversation = false,
+                standbyOrbPresent = false,
+                resultAwaitedOnOrb = true,
+            ) { error("not evaluated") },
+        )
+        assertEquals(
+            Finish.RETIRE_TO_STANDBY,
+            OverlayLifecyclePolicy.finish(
+                executedForegroundTool = false,
+                resultConversation = false,
+                standbyOrbPresent = false,
+                resultAwaitedOnOrb = false,
+            ) { true },
+        )
+    }
 }

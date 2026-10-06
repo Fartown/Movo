@@ -175,4 +175,24 @@ class AgentChatScrollPolicyTest {
             ),
         )
     }
+
+    /** 「保持最新」时：视口变化、最后一条自己长、末尾新加一条才跟底；上面的执行卡展开把回答往下推不跟（真机：展开执行卡跳一下）。 */
+    @Test
+    fun latestModeFollowsOnlyResizeTailGrowthAndAppends() {
+        val tail = ChatTailLayout("answer", top = 800, bottom = 1200)
+        // 第一次布局：没有可比的上一帧，不跟。
+        assertFalse(followsLatestOnLayoutChange(null, 1500, null, tail))
+        // 键盘弹出、浮层拉低：视口变了。
+        assertTrue(followsLatestOnLayoutChange(1500, 1100, tail, tail))
+        // 回答里的图片加载出来：顶边不动、底边变长。
+        assertTrue(followsLatestOnLayoutChange(1500, 1500, tail, tail.copy(bottom = 1400)))
+        // 末尾新加了一条。
+        assertTrue(followsLatestOnLayoutChange(1500, 1500, tail, ChatTailLayout("suggestions", 1200, 1300)))
+        // 点开上面的执行卡：回答整体被往下推（顶边也动了），不跟。
+        assertFalse(followsLatestOnLayoutChange(1500, 1500, tail, tail.copy(top = 1100, bottom = 1500)))
+        // 收起上面的执行卡：回答整体上移，不跟。
+        assertFalse(followsLatestOnLayoutChange(1500, 1500, tail, tail.copy(top = 600, bottom = 1000)))
+        // 最后一条不在视口里：不跟。
+        assertFalse(followsLatestOnLayoutChange(1500, 1500, tail, null))
+    }
 }

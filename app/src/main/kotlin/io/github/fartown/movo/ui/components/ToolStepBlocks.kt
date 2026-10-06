@@ -1,6 +1,10 @@
 package io.github.fartown.movo.ui.components
 
 import android.graphics.BitmapFactory
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.ui.graphics.graphicsLayer
+import io.github.fartown.movo.ui.theme.MovoMotion
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -88,33 +92,46 @@ internal fun ToolStepImageGone(modifier: Modifier = Modifier) {
 
 @Composable
 private fun ToolStepImage(key: String) {
-    val bitmap by produceState<ImageBitmap?>(null, key) {
-        value = withContext(Dispatchers.IO) {
-            ToolStepImages.get(key)?.let { bytes -> BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() }
-        }
-    }
-    var gone by remember(key) { mutableStateOf(ToolStepImages.get(key) == null) }
-    if (gone) {
+    val bytes = remember(key) { ToolStepImages.get(key) }
+    if (bytes == null) {
         ToolStepImageGone()
         return
     }
-    val image = bitmap ?: return
+    // 先只读宽高、按比例占好位置，图在后台解码好再淡入：展开时高度一次到位，不会等图出来再长一截（界面不能跳闪）。
+    val aspect = remember(key) {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth > 0 && bounds.outHeight > 0) bounds.outWidth.toFloat() / bounds.outHeight else 9f / 19.5f
+    }
+    val bitmap by produceState<ImageBitmap?>(null, key) {
+        value = withContext(Dispatchers.IO) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() }
+    }
+    val imageAlpha by animateFloatAsState(if (bitmap != null) 1f else 0f, MovoMotion.fast(), label = "toolStepImage")
     var viewing by rememberSaveable(key) { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         val shape = RoundedCornerShape(6.dp)
-        Image(
-            bitmap = image,
-            contentDescription = stringResource(R.string.tool_step_open_image),
-            contentScale = ContentScale.FillWidth,
+        Box(
             modifier = Modifier
                 .width(120.dp)
+                .aspectRatio(aspect)
                 .clip(shape)
+                .background(MovoColors.bgSurface)
                 .border(MovoSize.hairline, MovoColors.borderHairline, shape)
-                .movoClickable(PressKind.Solid, shape = shape) { viewing = true },
-        )
+                .movoClickable(PressKind.Solid, shape = shape) { if (bitmap != null) viewing = true },
+        ) {
+            bitmap?.let { image ->
+                Image(
+                    bitmap = image,
+                    contentDescription = stringResource(R.string.tool_step_open_image),
+                    contentScale = ContentScale.FillBounds,
+                    modifier = Modifier.fillMaxSize().graphicsLayer { alpha = imageAlpha },
+                )
+            }
+        }
         Text(stringResource(R.string.tool_step_open_image), style = MovoTypography.numericMicro, color = MovoColors.textTertiary)
     }
-    if (viewing) {
+    val image = bitmap
+    if (viewing && image != null) {
         Dialog(
             onDismissRequest = { viewing = false },
             properties = DialogProperties(usePlatformDefaultWidth = false),

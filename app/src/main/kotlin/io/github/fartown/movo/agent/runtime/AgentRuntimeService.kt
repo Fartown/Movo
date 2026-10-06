@@ -270,6 +270,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     }
     private val panelIdleToken = Any()
     private var hasExecutedForegroundTool = false
+    /** 这一轮悬浮球离开过待命、显示过执行中（用户在 Movo 外面能看到这一轮在跑）。 */
+    private var runShownOnOrb = false
     private val supplementsLock = Any()
     private val activeSupplements = mutableListOf<AgentUiHandoffPayload.Supplement>()
     private var nextSupplementIndex = 1
@@ -680,6 +682,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
         mainHandler.removeCallbacksAndMessages(hideToken)
         hasExecutedForegroundTool = false
+        runShownOnOrb = false
         backgroundRun = if (keepPendingResult) {
             BackgroundRun(session, conversationTarget, request.runId, AgentOverlayState.Initial)
         } else {
@@ -789,6 +792,14 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 } else {
                     val phaseBefore = state.value.phase
                     state.value = state.value.applyEvent(event)
+                    // 用户发起的任务在跑：常驻悬浮球离开待命、显示执行中（规范 8.1：没有任务时才是待命）。
+                    // 不操作其他 App 的任务也一样，否则用户在别的 App 里看到的球没有任何状态、点了是打开浮层（球随之藏起）、
+                    // 完成也没有 ✓（真机反馈）。光晕、收起入口窗口仍只在操作其他 App 时做（下面的 reveal 分支）。
+                    if (standby.value && orbView != null) {
+                        standby.value = false
+                        runShownOnOrb = true
+                        updateStandbyOrbVisibility()
+                    }
                     // ✓ / ! 可能先由事件流（RunFinished / RunFailed）点亮，早于终态交付：从这一刻起算 3 秒保留（常驻关闭时）。
                     val phaseAfter = state.value.phase
                     if (phaseAfter != phaseBefore &&
@@ -807,6 +818,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                     }
                     // 已常驻（待命）时不重新弹出，状态环与角标原地交叉淡化为执行中（规范 9.5）。
                     standby.value = false
+                    runShownOnOrb = true
                     ensureOverlayVisible()
                     updateStandbyOrbVisibility()
                     // 语音对话从 App 内延续过来：展开卡直接以语音模式出现（规范 8.2「跨界面不断线」）。
@@ -1094,6 +1106,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun resetRunOverlayContext(request: AgentRuntimeWire.RunRequest?, runId: String) {
         clearResultHandoff()
         hasExecutedForegroundTool = false
+        runShownOnOrb = false
         isResultConversation = false
         resultConversationTarget = AgentConversationTarget.from(request?.handoff)
         resultConversationRunId = runId.ifBlank { null }
@@ -1283,8 +1296,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 hearing = voice.channel == VoiceChannel.Hearing,
                 longRun = (state.value.elapsedMillis(System.currentTimeMillis()) ?: 0L) >= 10_000L,
                 animateEntrance = animateOrbEntrance,
-                // 展开卡出现（!collapsed）时让真球淡出：两个窗口不再并存，看起来是同一颗球在变形。
-                hideForReveal = !collapsed.value,
+                // 展开卡出现时悬浮球留在原处，卡片从球心长出来（规范 8.1 / 9.5，2026-09-27 定）。
+                // 10-05 改成过「球淡出、像一颗球在变形」，真机看就是点了球、球没了，卡片也不像从球里出来，已撤回。
             )
         }
         val orbLp = orbLayoutParams().apply {
@@ -1548,6 +1561,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         val wm = windowManager ?: return
         mainHandler.removeCallbacksAndMessages(bubbleRemovalToken)
         bubbleRemovalDeferred = false
+        // 卡片从球心长出来：起点取球此刻在屏幕上的位置。
+        publishOrbRect()
         bubbleVisible.value = true
         if (bubbleView == null && !showBubble(wm)) {
             collapsed.value = true
@@ -2134,11 +2149,16 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             // 展开卡从球心长出来，起点要在本窗口内才画得出来（规范 9.5「悬浮球 → 展开卡」）。
             val orb = orbParams
             val orbX = orb?.x ?: dpToPx(ORB_EDGE_DP)
-            val orbBottom = (orb?.y ?: 0) + dpToPx(ORB_WINDOW_DP)
+            // 按悬浮球在屏幕上的实际位置对齐，窗口也不按系统栏留位：两个窗口原来一个从顶、一个按
+            // displayMetrics 从底推算，有导航栏时基准不同，卡片和球错开一截（真机三键导航：卡片高出球约 50dp）。
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) setFitInsetsTypes(0)
+            val orbBottom = orbView?.takeIf { it.isAttachedToWindow && it.height > 0 }
+                ?.let { view -> IntArray(2).also(view::getLocationOnScreen)[1] + view.height }
+                ?: ((orb?.y ?: 0) + dpToPx(ORB_WINDOW_DP))
             gravity = (if (orbOnEnd.value) Gravity.END else Gravity.START) or Gravity.BOTTOM
             val width = resources.displayMetrics.widthPixels
             x = if (orbOnEnd.value) orbX else width - orbX - dpToPx(ORB_WINDOW_DP)
-            y = (resources.displayMetrics.heightPixels - orbBottom - dpToPx(PANEL_SHADOW_DP) + dpToPx(6)).coerceAtLeast(0)
+            y = (screenRealHeight() - orbBottom - dpToPx(PANEL_SHADOW_DP) + dpToPx(6)).coerceAtLeast(0)
             windowAnimations = 0
         }
 
@@ -2290,6 +2310,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             executedForegroundTool = hasExecutedForegroundTool,
             resultConversation = isResultConversation,
             standbyOrbPresent = standby.value && orbView != null,
+            resultAwaitedOnOrb = runShownOnOrb && orbView != null && !VoiceSurfaceTracker.appVisible,
             keepStandbyOrb = { activeSession == null && ensureStandbyOrb() },
         )
         if (finish == OverlayLifecyclePolicy.Finish.SHOW_RESULT) {
@@ -2298,7 +2319,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
             // 屏幕边缘光晕随状态淡出后移除窗口。
             collapseBubble()
             if (!AgentConversationSheetActivity.isConversationVisible(resultConversationTarget)) {
-                ensureOverlayVisible()
+                // 没操作其他 App 的一轮：球已经在了，不再点亮边缘光晕（否则结束时闪一下）。
+                if (hasExecutedForegroundTool || orbView == null) ensureOverlayVisible()
                 scheduleResultOrbHide()
                 updateStandbyOrbVisibility()
                 // 失败：展开卡自动弹出显示原因，保持失败态直到用户点开（规范 9.5）。
@@ -2650,8 +2672,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
         val window = dpToPx(ORB_WINDOW_DP)
         val inset = (window - dpToPx(ORB_DISC_DP)) / 2
-        val left = resources.displayMetrics.widthPixels - lp.x - window + inset
-        val top = lp.y + inset
+        // 优先读球窗口在屏幕上的实际位置：窗口会按系统栏留位，按参数推算会比真实位置偏高一个状态栏，
+        // 展开卡和对话浮层就不是从球里长出来的。拖动中（窗口刚更新、还没排版）退回按参数推算。
+        val onScreen = orbView?.takeIf { it.isAttachedToWindow && it.height > 0 && !orbDragging }
+            ?.let { view -> IntArray(2).also(view::getLocationOnScreen) }
+        val left = (onScreen?.get(0) ?: (resources.displayMetrics.widthPixels - lp.x - window)) + inset
+        val top = (onScreen?.get(1) ?: lp.y) + inset
         val disc = dpToPx(ORB_DISC_DP)
         orbDiscRect = android.graphics.Rect(left, top, left + disc, top + disc)
         // 展开卡揭开动画的起点：球心在屏幕上的实时位置（px）。
