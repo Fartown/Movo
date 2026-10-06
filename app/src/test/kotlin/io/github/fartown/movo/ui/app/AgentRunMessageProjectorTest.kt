@@ -572,4 +572,84 @@ class AgentRunMessageProjectorTest {
         assertEquals("运行 · echo hi", step.argumentsSummary)
         assertEquals(view, step.view)
     }
+
+    @Test
+    fun textWrittenBeforeAToolInTheSameRoundBecomesNarration() {
+        val projector = AgentRunMessageProjector { 0L }
+        val runId = "narr"
+        var messages: List<AgentChatMessageUi> =
+            projector.appendTextDelta(runId, round = 1, index = 1, delta = "我先查一下网络状态，同时试着打开蓝牙。\n", messages = emptyList())
+        messages = projector.startTool(
+            runId,
+            AgentEvent.ToolStarted(round = 1, toolCallId = "call_a", name = "device_read", argsPreview = "{}"),
+            projector.finalizeTextRound(runId, 1, messages),
+        )
+        val narration = messages.filterIsInstance<AgentMessageUi>().single()
+        assertTrue(narration.narration)
+        assertFalse(narration.isStreaming)
+        assertEquals("我先查一下网络状态，同时试着打开蓝牙。", narration.content)
+        // 下一轮的正文（最终回答）不受上一轮工具影响。
+        messages = projector.appendTextDelta(runId, round = 2, index = 1, delta = "Wi‑Fi 连的是 Xiaomi_5G。", messages = messages)
+        assertFalse(messages.filterIsInstance<AgentMessageUi>().last().narration)
+        // 失败等终态只能落到回答上，不能覆盖说明。
+        assertEquals(messages.lastIndex, AgentRunMessageProjector.resultTargetIndex(runId, messages))
+        assertEquals(-1, AgentRunMessageProjector.resultTargetIndex(runId, messages.dropLast(1)))
+    }
+
+    @Test
+    fun hiddenToolSearchStillMarksNarrationButAddsNoStep() {
+        val projector = AgentRunMessageProjector { 0L }
+        val messages = projector.startTool(
+            "narr",
+            AgentEvent.ToolStarted(round = 1, toolCallId = "call_ts", name = "tool_search", argsPreview = "{}"),
+            projector.appendTextDelta("narr", round = 1, index = 0, delta = "我先找一下能用的工具。", messages = emptyList()),
+        )
+        assertTrue((messages.single() as AgentMessageUi).narration)
+    }
+
+    @Test
+    fun onlyTextBeforeAHostedToolIsNarration() {
+        val projector = AgentRunMessageProjector { 0L }
+        var messages = projector.appendTextDelta("narr", round = 1, index = 0, delta = "我搜一下。", messages = emptyList())
+        messages = projector.startHostedTool("narr", AgentEvent.HostedToolStarted(round = 1, toolCallId = "ws_1", name = "网页搜索"), messages)
+        messages = projector.appendTextDelta("narr", round = 1, index = 2, delta = "明天小雨，建议带伞。", messages = messages)
+        assertEquals(listOf(true, false), messages.filterIsInstance<AgentMessageUi>().map { it.narration })
+    }
+
+    @Test
+    fun onceTheCardExistsTextIsWrittenInsideItAndOnlyTheLastSegmentBecomesTheAnswer() {
+        val projector = AgentRunMessageProjector { 0L }
+        val run = "live"
+        // 第一轮还没有执行卡：写在卡外（可能是纯问答）。
+        var messages: List<AgentChatMessageUi> = projector.appendTextDelta(run, 1, 1, "我先查一下网络状态。", emptyList())
+        assertFalse((messages.single() as AgentMessageUi).provisional)
+        messages = projector.startTool(run, AgentEvent.ToolStarted(1, "a", "device_read", "{}"), projector.finalizeTextRound(run, 1, messages))
+        // 执行卡出现之后写的话：边写边显示在卡里。
+        messages = projector.appendTextDelta(run, 2, 1, "蓝牙已经打开，我再打开设置看看。", messages)
+        val second = messages.filterIsInstance<AgentMessageUi>().last()
+        assertTrue(second.provisional)
+        assertTrue(second.isStreaming)
+        // 又调了工具：它定为说明。
+        messages = projector.startTool(run, AgentEvent.ToolStarted(2, "b", "app_open", "{}"), projector.finalizeTextRound(run, 2, messages))
+        assertEquals(listOf(true, true), messages.filterIsInstance<AgentMessageUi>().map { it.narration })
+        assertTrue(messages.filterIsInstance<AgentMessageUi>().none { it.provisional })
+        // 最后一个工具之后写的话：执行中仍在卡里，任务结束时移出卡片成为回答。
+        messages = projector.appendTextDelta(run, 3, 1, "Wi‑Fi 连的是 Xiaomi_5G。", messages)
+        assertTrue(messages.filterIsInstance<AgentMessageUi>().last().provisional)
+        val finished = projector.finalizeRun(run, messages).filterIsInstance<AgentMessageUi>()
+        assertEquals(listOf(true, true, false), finished.map { it.narration })
+        assertTrue(finished.none { it.provisional })
+        assertEquals("Wi‑Fi 连的是 Xiaomi_5G。", finished.last().content)
+    }
+
+    @Test
+    fun aHiddenToolSearchAloneAlsoOpensTheCard() {
+        val projector = AgentRunMessageProjector { 0L }
+        var messages = projector.startTool("ts", AgentEvent.ToolStarted(1, "s", "tool_search", "{}"), emptyList())
+        assertTrue(messages.isEmpty())
+        messages = projector.appendTextDelta("ts", 2, 0, "找到了能用的工具。", messages)
+        assertTrue((messages.single() as AgentMessageUi).provisional)
+        // 另一个 run 不受影响。
+        assertFalse((projector.appendTextDelta("other", 1, 0, "你好", emptyList()).single() as AgentMessageUi).provisional)
+    }
 }

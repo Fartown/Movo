@@ -283,6 +283,8 @@ internal object AgentConversationStore {
                         type = TYPE_ASSISTANT,
                         content = content,
                         renderMarkdown = renderMarkdown,
+                        // 回答行不用工具列：借它存「工具前说明」标记（定稿 21），不改表结构。
+                        toolsJson = if (narration) NARRATION_EXTRA else "[]",
                         contextTokens = usage?.contextTokens,
                         inputTokens = usage?.inputTokens,
                         outputTokens = usage?.outputTokens,
@@ -394,6 +396,7 @@ internal object AgentConversationStore {
                 content = content,
                 isStreaming = false,
                 renderMarkdown = renderMarkdown ?: true,
+                narration = toolsJson == NARRATION_EXTRA,
                 usage = TokenUsageUi(
                     contextTokens = contextTokens,
                     inputTokens = inputTokens,
@@ -519,6 +522,7 @@ internal object AgentConversationStore {
     private const val TYPE_ASSISTANT = "assistant"
     private const val TYPE_SYSTEM_NOTICE = "system_notice"
     private const val TYPE_THINKING = "thinking"
+    private const val NARRATION_EXTRA = "{\"narration\":true}"
     private const val TYPE_TOOL = "tool"
     private const val TYPE_TOOL_SUMMARY = "tool_summary"
     private const val TYPE_SUGGESTIONS = "suggestions"

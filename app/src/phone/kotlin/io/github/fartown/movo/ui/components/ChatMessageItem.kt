@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
@@ -112,6 +113,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.offset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.takeOrElse
 import androidx.lifecycle.Lifecycle
@@ -168,6 +170,7 @@ import io.github.fartown.movo.ui.model.ToolActivityStatusUi
 import io.github.fartown.movo.ui.model.ToolSummaryMessageUi
 import io.github.fartown.movo.ui.model.UserMessageUi
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filter
@@ -427,7 +430,9 @@ internal fun ChatMessageItem(
             onDelete = { onDeleteMessage(message.id) },
             modifier = modifier,
         )
-        is AgentMessageUi -> AgentMessageBlock(
+        is AgentMessageUi -> if (compact && message.inWorkCard) {
+            WorkNarrationStep(message = message, sharedMarkdown = retainedStreamingState, modifier = modifier)
+        } else AgentMessageBlock(
             message = message,
             retainedStreamingState = retainedStreamingState,
             showCopyAction = showCopyAction,
@@ -540,7 +545,42 @@ internal fun AgentWorkProcess(
 ) {
     // 只有思考、没有执行步骤（纯问答）：不出执行卡，一行「✦ 已思考 N 秒 ⌄」（2026-09-27 定稿方案 2）。
     // 之后出现工具步骤时换成执行卡，思考成为卡里第一步。
-    if (messages.isNotEmpty() && messages.all { it is ThinkingMessageUi }) {
+    // 这一段先是「已思考」一行，开始调工具时原地换成执行卡：卡片从收起开始长开，不一帧铺满（真机：先是一帧空白卡体）。
+    var grewFromThinkingRow by rememberSaveable(id) { mutableStateOf(false) }
+    var cardReady by rememberSaveable(id) { mutableStateOf(false) }
+    val allThinking = messages.isNotEmpty() && messages.all { it is ThinkingMessageUi }
+    if (allThinking) grewFromThinkingRow = true
+    // 第一轮（定稿 21，方案 2）：模型先在卡外说了话、随后调工具时，那段话先在原位淡出 120ms（列表增删 9.3），
+    // 这期间仍是「已思考」一行；淡完再原地换成执行卡并向下展开。同时换的话卡片标题会压住还在淡出的那段话（真机）。
+    val holdThinkingRow = !allThinking && grewFromThinkingRow && !cardReady
+    // 本次界面里刚从「已思考」一行换过来（旋转屏幕等重建后不再当成刚换，不重播展开）。
+    var justGrew by remember(id) { mutableStateOf(false) }
+    // 换成卡片时步骤区从 0 长到全高（`standard`）、内容同时淡入（`fast`）；「已思考」一行上下各留 4，执行卡各留 8，
+    // 顶边同时从 4 过渡到 8（真机：卡顶下移 9px）。三个过渡与换卡片在同一个协程里开始：卡片出现的那一帧是第 0 帧，
+    // 下一帧就开始长高。等卡片出现后再由 AnimatedVisibility / LaunchedEffect 开始，要先停两三帧（真机约 50ms）。
+    val grow = remember(id) { androidx.compose.animation.core.Animatable(1f) }
+    val growAlpha = remember(id) { androidx.compose.animation.core.Animatable(1f) }
+    val topPadding = remember(id) { androidx.compose.animation.core.Animatable(8f) }
+    val growScope = androidx.compose.runtime.rememberCoroutineScope()
+    if (holdThinkingRow) {
+        justGrew = true
+        LaunchedEffect(Unit) {
+            kotlinx.coroutines.delay(io.github.fartown.movo.ui.theme.MovoMotion.FAST_EXIT.toLong())
+            grow.snapTo(0f)
+            growAlpha.snapTo(0f)
+            topPadding.snapTo(4f)
+            growScope.launch { grow.animateTo(1f, io.github.fartown.movo.ui.theme.MovoMotion.standard()) }
+            growScope.launch {
+                growAlpha.animateTo(
+                    1f,
+                    tween(io.github.fartown.movo.ui.theme.MovoMotion.FAST, easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard),
+                )
+            }
+            growScope.launch { topPadding.animateTo(8f, io.github.fartown.movo.ui.theme.MovoMotion.standard()) }
+            cardReady = true
+        }
+    }
+    if (allThinking || holdThinkingRow) {
         ThinkingOnlyRow(
             id = id,
             messages = messages.filterIsInstance<ThinkingMessageUi>(),
@@ -568,13 +608,24 @@ internal fun AgentWorkProcess(
     // （真机：无障碍关着，各步 ✕，卡片头却显示绿色「已完成」）。
     val failedIndex = if (answerStarted && outcome == null && !lastCardOfTurn) -1 else unrecoveredFailedStep(tools)
     var expanded by rememberSaveable(id) { mutableStateOf(running) }
+    // 从「已思考」一行长出来的这一次展开由里层步骤区（grow）负责：这段时间外层不做高度过渡，直接是里层的高度。
+    // 外层就算用 snap 也要晚一帧才跟上（测量时先报旧高度），卡片出现后多停一帧（本地逐帧）。
+    val appearing by remember(id) { androidx.compose.runtime.derivedStateOf { grow.value < 1f } }
     var manuallyExpanded by rememberSaveable(id) { mutableStateOf(false) }
 
     // 执行中自动展开；回答开始时立即收成摘要条，没有回答（失败、停止）时在本轮结束后停留 600ms 再收起
     // （9.4「执行卡 · 完成 → 摘要条」）。只自动收起这一次，之后高度固定；用户手动操作过则不动。
     var autoCollapsed by rememberSaveable(id) { mutableStateOf(false) }
     LaunchedEffect(running, paused, answerStarted) {
-        if (manuallyExpanded || autoCollapsed) return@LaunchedEffect
+        if (manuallyExpanded) return@LaunchedEffect
+        // 回答出来时收起过一次，之后这一轮又在执行（例如回答后收到补充、接着调工具）：
+        // 原地展开回「正在执行」，之后回答出来时再照常收一次。
+        if (autoCollapsed && (running || paused) && !answerStarted) {
+            autoCollapsed = false
+            expanded = true
+            return@LaunchedEffect
+        }
+        if (autoCollapsed) return@LaunchedEffect
         if (running || paused) {
             expanded = true
         } else if (expanded) {
@@ -728,7 +779,13 @@ internal fun AgentWorkProcess(
                 layout(placeable.width, height) { placeable.place(0, 0) }
             }
             .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 8.dp)
+            .padding(start = 20.dp, end = 20.dp, bottom = 8.dp)
+            // 顶边在布局阶段读：过渡的 240ms 里不必每帧重组整张卡。
+            .layout { measurable, constraints ->
+                val top = topPadding.value.dp.roundToPx()
+                val placeable = measurable.measure(constraints.offset(vertical = -top))
+                layout(placeable.width, placeable.height + top) { placeable.place(0, top) }
+            }
             .completionGlint(glint) { corner.value }
             .workCardSurface { corner.value }
             // 只在执行中（步骤不断增加）时让卡片高度跟着过渡；收起 / 展开由下面的 AnimatedVisibility 直接驱动高度，
@@ -736,7 +793,7 @@ internal fun AgentWorkProcess(
             // 卡里有一层自己在做高度过渡（点开步骤结果、思考步骤展开、执行中手动收起卡片）时，外层不再叠一层过渡：
             // 直接跟着里层每帧的高度走（snap），整张卡只有一层高度动画，也不会每帧两层都重新测量、外层落后半拍。
             .then(
-                if (running || paused) {
+                if ((running || paused) && !appearing) {
                     Modifier.animateContentSize(
                         if (innerResize.active) androidx.compose.animation.core.snap() else io.github.fartown.movo.ui.theme.MovoMotion.standard(),
                     )
@@ -800,6 +857,10 @@ internal fun AgentWorkProcess(
             var endedAt by rememberSaveable(id) { androidx.compose.runtime.mutableLongStateOf(0L) }
             if (sawRunning && !running && !paused && endedAt == 0L) {
                 SideEffect { if (endedAt == 0L) endedAt = System.currentTimeMillis() }
+            }
+            // 说明被收进卡里、卡片又在执行（定稿 21）：先前记下的停止时刻作废，等真正停下再记。
+            if (running && endedAt != 0L) {
+                SideEffect { endedAt = 0L }
             }
             val elapsed = firstStart?.let { start ->
                 if (ticking) now - start else (turnSpan?.finishedAt ?: endedAt.takeIf { it > 0L } ?: lastFinish)?.let { it - start }
@@ -884,7 +945,18 @@ internal fun AgentWorkProcess(
         // 展开：高度 `standard`，内容与高度同时开始淡入 `fast`（不等待，第一帧就有内容）（规范 9.3「展开 / 收起」）。
         AnimatedVisibility(
             visible = shownExpanded || autoCollapsing || autoCollapseStarting,
-            modifier = Modifier.trackVisibleHeightCap(stepsCap),
+            modifier = Modifier
+                .trackVisibleHeightCap(stepsCap)
+                // 刚从「已思考」一行换成卡片：步骤区已在场，由 grow 从 0 长到全高（见上）。
+                .graphicsLayer {
+                    clip = grow.value < 1f
+                    alpha = growAlpha.value
+                }
+                .layout { measurable, constraints ->
+                    val placeable = measurable.measure(constraints)
+                    val height = (placeable.height * grow.value).roundToInt()
+                    layout(placeable.width, height) { placeable.place(0, 0) }
+                },
             enter = fadeIn(
                 tween(
                     io.github.fartown.movo.ui.theme.MovoMotion.FAST,
@@ -923,10 +995,15 @@ internal fun AgentWorkProcess(
                         .background(io.github.fartown.movo.ui.theme.MovoColors.borderHairline),
                 )
                 // 不看是否执行中：自动收起的过程中仍保持折叠，不在收起前把全部步骤铺开。
-                val folded = !showAllSteps && messages.size > WORK_FOLD_THRESHOLD
+                // 任务结束、最后一段刚移出卡片、正要收成摘要条（定稿 21，方案 2）：卡里保持移出前的样子，整张卡淡出并收起——
+                // 不重排步骤（少一行会解开「前面 N 步」、上面一行当新行进场）、不在收起前补上底部那一行，否则卡片先变长再收（本地逐帧）。
+                val collapsingToSummary = answerStarted && !manuallyExpanded
+                val lastStepMessages = remember { arrayOf(messages) }
+                val stepMessages = if (collapsingToSummary) lastStepMessages[0] else messages.also { lastStepMessages[0] = it }
+                val folded = !showAllSteps && stepMessages.size > WORK_FOLD_THRESHOLD
                 // 「前面 N 步」第一次出现（步骤刚超过阈值）时从顶部展开并淡入，与被收进去的行同时进行；
                 // 直接插在顶部会把下面的步骤一帧往下推一行（真机 stepfold3：106px）。
-                val hidden = messages.dropLast(WORK_FOLD_VISIBLE)
+                val hidden = stepMessages.dropLast(WORK_FOLD_VISIBLE)
                 // 「前面 N 步」只数被折叠的工具步骤，与头部「第 N 步」同一口径（思考不算一步）。
                 val hiddenCount = hidden.count { it is ToolActivityMessageUi }.takeIf { it > 0 } ?: hidden.size
                 val lastHiddenCount = remember { intArrayOf(hiddenCount) }
@@ -949,7 +1026,7 @@ internal fun AgentWorkProcess(
                     label = "workStepsTop",
                 )
                 WorkSteps(
-                    messages = (if (folded) messages.takeLast(WORK_FOLD_VISIBLE) else messages).take(stepLimit),
+                    messages = (if (folded) stepMessages.takeLast(WORK_FOLD_VISIBLE) else stepMessages).take(stepLimit),
                     running = running,
                     onOpenBrowser = onOpenBrowser,
                     currentBrowserMessageId = currentBrowserMessageId,
@@ -961,7 +1038,7 @@ internal fun AgentWorkProcess(
                 )
                 // 结束后点开：末尾一行，左侧起止时间「15:02 开始·15:03 结束」（Figma「05e」），右侧「日志」「收起 ⌃」
                 // （2026-09-27 定稿方案 1）：长记录滑到末尾不用回到头部就能收起；执行中不出这一行（头部即可收起）。
-                if (!running && !paused) {
+                if (!running && !paused && !collapsingToSummary) {
                     WorkCardFooter(
                         span = workTimeSpan(tools, outcome, turnSpan),
                         logMessageId = tools.firstOrNull()?.id ?: messages.firstOrNull()?.id,
@@ -1167,19 +1244,30 @@ private fun ThinkingLiveSeconds(key: String) {
  * 文字按底部对齐排版、超出的往上推出视口，上沿 14 渐隐；新字只会让文字上移，高度不变，不随段落切换跳动。
  */
 @Composable
-private fun ThinkingTicker(content: String, modifier: Modifier = Modifier) {
+private fun ThinkingTicker(
+    content: String,
+    modifier: Modifier = Modifier,
+    /** 露出几行：思考 2 行（固定高）；执行卡里正在写的话 3 行，不足 3 行时按实际行数（定稿 21）。 */
+    lines: Int = 2,
+    color: Color = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
+    hugShortContent: Boolean = false,
+) {
     // 与思考正文同一行高（13 / 20）：思考结束换成全文前两行时高度不变（C3）。
     val style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular.copy(lineHeight = THINKING_BODY_LINE_HEIGHT)
-    // 只排最后一段文字：预览只露两行，全文重排没有意义。
+    // 只排最后一段文字：预览只露几行，全文重排没有意义。
     val tail = remember(content) { content.takeLast(THINKING_TICKER_CHARS).plainPreview() }
     val fadePx = with(androidx.compose.ui.platform.LocalDensity.current) { 14.dp.toPx() }
+    val maxHeight = with(androidx.compose.ui.platform.LocalDensity.current) { (style.lineHeight * lines).toDp() }
+    // 只有超出可见行数时才把上沿渐隐（在排版阶段写入，绘制阶段读取）。
+    val overflows = remember { booleanArrayOf(!hugShortContent) }
     Box(
         modifier = modifier
-            .height(with(androidx.compose.ui.platform.LocalDensity.current) { (style.lineHeight * 2).toDp() })
+            .then(if (hugShortContent) Modifier.heightIn(max = maxHeight) else Modifier.height(maxHeight))
             .clipToBounds()
             .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
             .drawWithContent {
                 drawContent()
+                if (!overflows[0]) return@drawWithContent
                 drawRect(
                     brush = androidx.compose.ui.graphics.Brush.verticalGradient(
                         0f to androidx.compose.ui.graphics.Color.Transparent,
@@ -1192,7 +1280,8 @@ private fun ThinkingTicker(content: String, modifier: Modifier = Modifier) {
         Text(
             text = tail,
             style = style,
-            color = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
+            color = color,
+            onTextLayout = { if (hugShortContent) overflows[0] = it.lineCount > lines },
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .wrapContentHeight(align = Alignment.Bottom, unbounded = true),
@@ -2481,6 +2570,8 @@ internal fun streamingMarkdownBatchEnd(
 private enum class ChatMarkdownTone {
     Answer,
     Thinking,
+    /** 执行卡里的工具前说明（定稿 21）：与思考同一排版，主色。 */
+    Narration,
 }
 
 @Composable
@@ -2556,6 +2647,8 @@ private fun chatMarkdownBodyStyle(tone: ChatMarkdownTone) =
 private fun chatMarkdownTextColor(tone: ChatMarkdownTone): Color =
     if (tone == ChatMarkdownTone.Answer) {
         MiuixTheme.colorScheme.onSurface
+    } else if (tone == ChatMarkdownTone.Narration) {
+        io.github.fartown.movo.ui.theme.MovoColors.textPrimary
     } else {
         // 思考正文三级色（规范 8.1「思考」；折叠态两行与展开后全文同一份排版，C3）。
         io.github.fartown.movo.ui.theme.MovoColors.textTertiary
@@ -3877,6 +3970,82 @@ private fun SupplementStep(
 }
 
 /**
+ * 执行卡里的「说明」一步（定稿 21）：执行中模型写的话。16 图标位居中一个 6 的三级色小圆点，
+ * 正文与思考同一排版（13 号）但用主色。正在写、以及写完还没定是说明还是回答时是最多 3 行的滚动预览（同思考），
+ * 定为说明后换成全文前 3 行（底部渐隐，交叉淡化 `fast`），点这一步展开全文，同时只展开一步。没有用时、不算步数。任务结束时最后一个工具之后的那段移出卡片成为回答。
+ */
+@Composable
+private fun WorkNarrationStep(
+    message: AgentMessageUi,
+    /** 列表按消息持有的解析会话（还不知道是不是回答的那段才有）：在卡里就解析好，移出卡片时直接用。 */
+    sharedMarkdown: StreamingMarkdownState? = null,
+    modifier: Modifier = Modifier,
+) {
+    val (expanded, toggle) = rememberStepExpansion(message.id)
+    if (sharedMarkdown != null) {
+        LaunchedEffect(sharedMarkdown) { sharedMarkdown.parseUpdates() }
+        LaunchedEffect(sharedMarkdown, message.content, message.isStreaming) {
+            sharedMarkdown.parseTargets.trySend(StreamingMarkdownTarget(message.content, message.isStreaming))
+        }
+    }
+    val parsed = sharedMarkdown?.snapshot?.completedStateFor(message.content)
+    // 正文在折叠时就解析好：展开过渡开始时高度已是最终值（同思考步骤）。
+    val markdownState = rememberMarkdownState(
+        content = io.github.fartown.movo.ui.markdown.CjkEmphasis.normalize(message.content),
+        retainState = true,
+    )
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .movoClickableRow(toggle)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            modifier = Modifier.size(width = 16.dp, height = THINKING_BODY_LINE_HEIGHT_DP),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                Modifier
+                    .size(6.dp)
+                    .background(io.github.fartown.movo.ui.theme.MovoColors.textTertiary, CircleShape),
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        // 写完但还没定是说明还是回答（provisional）时仍是滚动预览：任务结束时这段马上移出卡片，此时再换成排版好的前 3 行，
+        // 两种排版交叉淡化会叠字 2～3 帧、紧接着又移出（真机 v5）。又调工具、定为说明时才换。
+        val tickerMode = (message.isStreaming || message.provisional) && !expanded
+        var tickerShown by remember(message.id) { mutableStateOf(false) }
+        if (tickerMode) tickerShown = true
+        androidx.compose.animation.Crossfade(
+            targetState = tickerMode,
+            animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
+            modifier = Modifier.weight(1f),
+            label = "narrationStepMode",
+        ) { ticker ->
+            if (ticker) {
+                ThinkingTicker(
+                    content = message.content,
+                    modifier = Modifier.fillMaxWidth(),
+                    lines = 3,
+                    color = io.github.fartown.movo.ui.theme.MovoColors.textPrimary,
+                    hugShortContent = true,
+                )
+            } else {
+                ThinkingFoldableBody(
+                    expanded = expanded,
+                    startCollapsed = tickerShown,
+                    collapsedLines = 3,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    StableMarkdown(content = message.content, tone = ChatMarkdownTone.Narration, markdownState = markdownState, parsedState = parsed)
+                }
+            }
+        }
+    }
+}
+
+/**
  * `Work/Step` 思考行：sparkle 16 次要色 →「思考中」（Q3 光带）/「思考·N 秒」→ 收起时两行摘要；
  * 整行可点展开完整思考内容（规范 8.1、8.8）。
  */
@@ -3971,11 +4140,13 @@ private fun ThinkingFoldableBody(
     expanded: Boolean,
     startCollapsed: Boolean,
     modifier: Modifier = Modifier,
+    /** 折叠态露出几行：思考 2 行，说明 3 行（定稿 21）。 */
+    collapsedLines: Int = 2,
     content: @Composable () -> Unit,
 ) {
     val reduced = io.github.fartown.movo.ui.theme.LocalReducedMotion.current
     val density = androidx.compose.ui.platform.LocalDensity.current
-    val collapsedPx = with(density) { (THINKING_BODY_LINE_HEIGHT * 2).roundToPx() }
+    val collapsedPx = with(density) { (THINKING_BODY_LINE_HEIGHT * collapsedLines).roundToPx() }
     val fadePx = with(density) { THINKING_BODY_LINE_HEIGHT.toPx() }
     // 长思考可能超过可见区：只把可见区以内的部分按进度过渡，超出的那段在可见区外一次到位（同 [rememberViewportCappedStandard]）。
     val visibleCap = io.github.fartown.movo.ui.components.movo.rememberVisibleHeightCap()
@@ -4055,6 +4226,7 @@ private const val WORK_FIRST_BATCH_STEPS = 12
 
 /** 思考正文行高（[chatMarkdownBodyStyle] Thinking：13 / 20）；折叠态露出两行。 */
 private val THINKING_BODY_LINE_HEIGHT = 20.sp
+private val THINKING_BODY_LINE_HEIGHT_DP = 20.dp
 
 /**
  * 展开（规范 9.3「展开 / 收起」）：高度 `standard`，内容与高度同时开始淡入 `fast`（不等待，第一帧就有内容）。
@@ -4114,11 +4286,25 @@ private fun androidx.compose.animation.AnimatedVisibilityScope.ReportWorkCardInn
 private const val WORK_CARD_RESIZE_SLACK_MS = 32L
 
 /** 思考摘要：去掉常见 Markdown 标记后折叠空白。 */
-private fun String.plainPreview(): String =
-    replace(MARKDOWN_MARKS, "").replace(WHITESPACE_RUNS, " ").trim()
+/** 滚动预览只露几行：去掉 Markdown 标记，表格行改成「单元格 · 单元格」、表格分隔行与列表符号去掉（真机：回答里的表格露出原始竖线）。 */
+internal fun String.plainPreview(): String =
+    lineSequence()
+        .filterNot { TABLE_RULE.matches(it) }
+        .map { line ->
+            val trimmed = line.trim()
+            if (trimmed.startsWith("|")) {
+                trimmed.trim('|').split('|').map { it.trim() }.filter { it.isNotEmpty() }.joinToString(" · ")
+            } else {
+                trimmed.replace(LIST_BULLET, "")
+            }
+        }
+        .joinToString(" ")
+        .replace(MARKDOWN_MARKS, "").replace(WHITESPACE_RUNS, " ").trim()
 
 private val MARKDOWN_MARKS = Regex("[*_`#>]+")
 private val WHITESPACE_RUNS = Regex("\\s+")
+private val TABLE_RULE = Regex("^\\s*\\|?\\s*:?-{3,}:?\\s*(\\|\\s*:?-{3,}:?\\s*)*\\|?\\s*$")
+private val LIST_BULLET = Regex("^[-+*]\\s+")
 
 /**
  * `Work/Step` 工具行：状态图标 16（完成 Green ✓ / 进行中 Indigo 加载圈 / 失败 Rose ✕ / 中断 次要色 !）

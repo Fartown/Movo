@@ -62,6 +62,13 @@ data class AgentMessageUi(
     val characterEditable: Boolean = false,
     val candidateCount: Int = 1,
     val selectedCandidate: Int = 0,
+    /** 工具前说明（定稿 21）：同一轮里、调工具之前写的话，作为一步放进执行卡；最后一个工具之后的正文才是回答。 */
+    val narration: Boolean = false,
+    /**
+     * 执行卡出现之后写的话（定稿 21 修订）：先作为说明边写边显示在卡里；之后又调了工具就成为说明，
+     * 任务结束时它在最后一个工具之后，就移出卡片成为回答。只在运行中存在，不落库。
+     */
+    val provisional: Boolean = false,
 ) : AgentChatMessageUi
 
 /**
