@@ -58,7 +58,11 @@ internal object TvConversationOverlay {
     @Volatile var enabled = false
         private set
     @Volatile var expanded = false
-        private set
+        private set(value) {
+            val changed = field != value
+            field = value
+            if (changed) TvKeyFilter.update()
+        }
 
     fun show(context: Context, autoListen: Boolean): Boolean {
         if (AgentAccessibilityService.current() == null) return false

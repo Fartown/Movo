@@ -137,6 +137,9 @@ internal object TvVoicePanel {
         refresh()
     }
 
+    /** 反问小卡正显示着（这时要先看方向键、数字键和确认键）。 */
+    internal val showingChoices: Boolean get() = choices != null
+
     /** 反问小卡出现时才接管方向键、数字键和确认键；其余时间所有按键都交给前台应用。 */
     fun onKeyEvent(event: KeyEvent): Boolean {
         val card = choices ?: return false
@@ -165,6 +168,12 @@ internal object TvVoicePanel {
 
     fun refresh() {
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post(::refresh); return }
+        refreshPanel()
+        // 胶囊、选项小卡的变化也决定遥控器要不要先经过 Movo。
+        TvKeyFilter.update()
+    }
+
+    private fun refreshPanel() {
         val voice = VoiceSessionManager.state.value
         if (voice.active) { observeApp(); yieldUntil = 0 }
         if (voice.active && !lastActive) sessionBaseline = app?.homeState?.messages?.lastOrNull()?.id

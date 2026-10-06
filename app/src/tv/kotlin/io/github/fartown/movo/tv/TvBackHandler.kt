@@ -36,8 +36,12 @@ internal object TvBackHandler : KeyInterceptor {
 
     fun cancel(): Boolean = stop("本轮已取消")
 
+    /** Movo 按下时收下了某个键、还没抬起（这期间不能关掉拦截）。 */
+    internal val holdingKey: Boolean get() = consuming || consumingCode != KeyEvent.KEYCODE_UNKNOWN
+
     private fun stop(message: String): Boolean {
-        val session = app?.let(AgentAppSession::get)
+        // 只看已经建好的会话：没建过就没有在跑的任务，不为一个按键去建它（要读数据库，会卡住按键）。
+        val session = AgentAppSession.peek()
         if (!VoiceSessionManager.active && session?.voiceRuntimeBusy != true) return false
         VoiceSessionManager.cancelTask()
         VoiceSessionManager.end(message)
@@ -51,16 +55,16 @@ internal object TvBackHandler : KeyInterceptor {
         if (event.keyCode == KeyEvent.KEYCODE_BACK) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) consuming = cancel()
             val handled = consuming
-            if (event.action == KeyEvent.ACTION_UP) consuming = false
+            if (event.action == KeyEvent.ACTION_UP) { consuming = false; TvKeyFilter.update() }
             return handled
         }
         // 按下时消费的键，抬起也要消费，前台应用不能只收到半个按键。
         if (consumingCode == event.keyCode) {
-            if (event.action == KeyEvent.ACTION_UP) consumingCode = KeyEvent.KEYCODE_UNKNOWN
+            if (event.action == KeyEvent.ACTION_UP) { consumingCode = KeyEvent.KEYCODE_UNKNOWN; TvKeyFilter.update() }
             return true
         }
         if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount != 0) return false
-        val session = app?.let(AgentAppSession::get)
+        val session = AgentAppSession.peek()
         val action = remoteAction(
             keyCode = event.keyCode,
             channel = VoiceSessionManager.state.value.channel,
