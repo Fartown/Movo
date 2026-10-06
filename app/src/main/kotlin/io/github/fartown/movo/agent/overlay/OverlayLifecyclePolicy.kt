@@ -9,7 +9,7 @@ internal object OverlayLifecyclePolicy {
         /** 操作过其他 App（或结果在对话浮层里）：保持 ✓ / !，点开查看。 */
         SHOW_RESULT,
 
-        /** 没有操作其他 App：结果在对话里，常驻的悬浮球回到待命（收起展开卡、撤光晕、清提示，不带 ✓）。 */
+        /** 没有操作其他 App、用户也在 Movo 里看到了结果：常驻的悬浮球回到待命（收起展开卡、撤光晕、清提示，不带 ✓）。 */
         RETIRE_TO_STANDBY,
 
         /** 不需要悬浮球（常驻关）：撤掉并停服务。 */
@@ -25,9 +25,11 @@ internal object OverlayLifecyclePolicy {
         executedForegroundTool: Boolean,
         resultConversation: Boolean,
         standbyOrbPresent: Boolean,
+        /** 这一轮悬浮球显示过执行中，结束时用户不在 Movo 里：结果在等用户看，保持 ✓ / !（规范 8.1）。 */
+        resultAwaitedOnOrb: Boolean = false,
         keepStandbyOrb: () -> Boolean,
     ): Finish = when {
-        executedForegroundTool || resultConversation -> Finish.SHOW_RESULT
+        executedForegroundTool || resultConversation || resultAwaitedOnOrb -> Finish.SHOW_RESULT
         standbyOrbPresent || keepStandbyOrb() -> Finish.RETIRE_TO_STANDBY
         else -> Finish.STOP
     }

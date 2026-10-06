@@ -709,6 +709,15 @@ internal fun AgentConversationMessages(
             isBottomSettling = isBottomSettling,
         )
     )
+    // 流式输出与收尾期间：内容怎么变都跟底。
+    val followsAnyGrowth by rememberUpdatedState(
+        resolveBottomFollowEnabled(
+            isStreaming = isStreaming,
+            keepBottomAnchored = keepBottomAnchored,
+            isUserDragging = isUserDragging,
+            isBottomSettling = isBottomSettling,
+        )
+    )
     val currentBottomItemIndex by rememberUpdatedState(bottomItemIndex)
     val bottomFollowDecisions = remember(scrollState) {
         Channel<BottomFollowDecision>(Channel.CONFLATED)
@@ -739,13 +748,16 @@ internal fun AgentConversationMessages(
     // 流式输出及渲染收尾期间发布最新的跟底距离。历史消息中的步骤/思考展开同样会改变
     // 列表高度，但那是用户主动查看内容，不能被误判成尾部文字增长。
     LaunchedEffect(scrollState) {
+        var previousFollowLayout: BottomFollowLayout? = null
         snapshotFlow {
             val layoutInfo = scrollState.layoutInfo
             val sentinel = layoutInfo.visibleItemsInfo.firstOrNull { item ->
                 item.key == ChatBottomSentinelKey
             }
+            val tail = layoutInfo.visibleItemsInfo.firstOrNull { it.index == currentBottomItemIndex - 1 }
             BottomFollowLayout(
                 enabled = shouldFollowBottom,
+                followsAnyGrowth = followsAnyGrowth,
                 bottomItemIndex = currentBottomItemIndex,
                 sentinelBottom = sentinel?.let { it.offset + it.size },
                 // 输入器高度属于滚动内容的 bottom inset，而不是滚动容器高度。
@@ -753,12 +765,20 @@ internal fun AgentConversationMessages(
                 viewportEnd = layoutInfo.viewportEndOffset - layoutInfo.afterContentPadding,
                 lastVisibleIndex = layoutInfo.visibleItemsInfo.lastOrNull()?.index,
                 lastVisibleBottom = layoutInfo.visibleItemsInfo.lastOrNull()?.let { it.offset + it.size },
+                tail = tail?.let { ChatTailLayout(it.key, it.offset, it.offset + it.size) },
             )
         }
             .distinctUntilChanged()
             .collect { layout ->
+                // 只为「保持最新」（对话浮层、打开已有对话）跟底时，不是什么变化都跟：用户点开上面的执行卡、思考，
+                // 回答被整体往下推，跟底会把刚展开的内容滚到顶栏后面（真机：展开执行卡跳一下、卡片上半截被裁掉）。
+                val enabled = layout.enabled && (
+                    layout.followsAnyGrowth ||
+                        followsLatestOnLayoutChange(previousFollowLayout?.viewportEnd, layout.viewportEnd, previousFollowLayout?.tail, layout.tail)
+                    )
+                previousFollowLayout = layout
                 val decision = resolveBottomFollowDecision(
-                    enabled = layout.enabled,
+                    enabled = enabled,
                     bottomItemIndex = layout.bottomItemIndex,
                     sentinelBottom = layout.sentinelBottom,
                     viewportEnd = layout.viewportEnd,
@@ -1057,12 +1077,36 @@ private fun Modifier.movoElevationCard(shape: androidx.compose.ui.graphics.Shape
 
 private data class BottomFollowLayout(
     val enabled: Boolean,
+    /** 流式输出与收尾期间：内容怎么变都跟底；否则只按 [followsLatestOnLayoutChange] 判断。 */
+    val followsAnyGrowth: Boolean,
     val bottomItemIndex: Int,
     val sentinelBottom: Int?,
     val viewportEnd: Int,
     val lastVisibleIndex: Int?,
     val lastVisibleBottom: Int?,
+    val tail: ChatTailLayout?,
 )
+
+/** 列表最后一条内容（底部哨兵前一项）在视口里的位置。 */
+internal data class ChatTailLayout(val key: Any, val top: Int, val bottom: Int)
+
+/**
+ * 「保持最新」时哪些布局变化要跟底：视口变了（键盘、浮层拉高拉低），最后一条自己往下长（顶边不动、底边变长，
+ * 如回答里的图片加载出来），或末尾新加了一条。上面的条目展开把最后一条整体往下推（顶边也动了）不算：
+ * 那是用户在看历史内容，跟底会把刚展开的部分滚走。
+ */
+internal fun followsLatestOnLayoutChange(
+    previousViewportEnd: Int?,
+    viewportEnd: Int,
+    previousTail: ChatTailLayout?,
+    tail: ChatTailLayout?,
+): Boolean {
+    if (previousViewportEnd == null) return false
+    if (previousViewportEnd != viewportEnd) return true
+    if (tail == null || previousTail == null) return false
+    if (tail.key != previousTail.key) return true
+    return tail.top == previousTail.top && tail.bottom > previousTail.bottom
+}
 
 internal data class BottomFollowDecision(
     val scrollByPx: Int = 0,
