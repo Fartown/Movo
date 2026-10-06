@@ -96,7 +96,7 @@ internal object AgentModelClient {
         // S4 非 UI 接线（默认 null=走旧目录组装）：非空时每轮用类型化工具子系统的目录，toolExecutor 由调用方传子系统 pipeline。
         typedCatalog: ((AgentToolCapabilities) -> JSONArray)? = null,
         /** 类型化工具各领域的用法分节；作为一条系统消息注入（工具重构实施方案：去掉写死的工具规则、注入领域分节）。 */
-        toolGuide: () -> String = { "" },
+        toolGuide: (() -> String)? = null,
         sessionId: String = java.util.UUID.randomUUID().toString(),
         compactOnly: Boolean = false,
         operationId: String = sessionId,
@@ -111,7 +111,7 @@ internal object AgentModelClient {
     ): ModelResponse.Text {
         config.validate()
         val initialCapabilities = capabilitiesProvider()
-        val guide = if (rewriteReply) "" else runCatching(toolGuide).getOrDefault("")
+        val guide = if (rewriteReply) "" else toolGuide?.let { runCatching(it).getOrDefault("") }
         // 环境信息每次任务算一次，重建系统消息时沿用同一份（系统消息条数、前缀都不变）。
         val environment = if (rewriteReply || compactOnly) "" else AgentPromptBuilder.environmentLine()
         val messages = AgentPromptBuilder.buildInitialMessages(
@@ -173,6 +173,7 @@ internal object AgentModelClient {
             )
         )
         var promptRootAvailable = initialCapabilities.rootAvailable
+        var currentToolGuide = guide
         val loop = AgentLoop(
             transcript = transcript,
             systemCount = systemCount,
@@ -193,15 +194,17 @@ internal object AgentModelClient {
             initialSupplementIndex = initialSupplementIndex,
             toolsForRound = {
                 val capabilities = capabilitiesProvider()
-                if (capabilities.rootAvailable != promptRootAvailable) {
+                val nextToolGuide = if (rewriteReply) "" else toolGuide?.let { runCatching(it).getOrDefault("") }
+                if (capabilities.rootAvailable != promptRootAvailable || nextToolGuide != currentToolGuide) {
                     val systemMessages = AgentPromptBuilder.buildSystemMessages(
-                        config, skillContext, memoryContext, capabilities.rootAvailable, roleplayContext, spokenReply, guide,
+                        config, skillContext, memoryContext, capabilities.rootAvailable, roleplayContext, spokenReply, nextToolGuide,
                         environment,
                     )
                     for (index in 0 until systemMessages.length()) {
                         messages.put(index, systemMessages.getJSONObject(index))
                     }
                     promptRootAvailable = capabilities.rootAvailable
+                    currentToolGuide = nextToolGuide
                 }
                 toolsFor(capabilities)
             },

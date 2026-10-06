@@ -33,8 +33,15 @@ internal interface Flavor {
     /** 无障碍按键过滤收到的按键；null 表示不拦截。 */
     val keyInterceptor: KeyInterceptor?
 
+    /** Optional screenshot route for devices without accessibility screenshot support. */
+    val screenCapture: DeviceScreenCapture? get() = null
+
     /** 语音会话的宿主：语音轮次写进哪一份会话状态。 */
     fun voiceHost(context: Context): VoiceConversationHost
+
+    /** null uses the SDK microphone and echo cancellation; alternate inputs supply mono PCM16 at 16 kHz. */
+    fun voiceInput(context: Context, onError: (String) -> Unit):
+        io.github.fartown.movo.agent.voice.conversation.DoubaoDialogEngine.PcmInput? = null
 
     /** 本设备装配的工具 Provider（白名单）；元工具由 AgentToolSubsystem 统一追加在最后。 */
     fun toolProviders(inputs: ToolProviderInputs): List<ToolProvider>

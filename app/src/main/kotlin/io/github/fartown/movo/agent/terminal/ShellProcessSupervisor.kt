@@ -11,10 +11,10 @@ internal class ShellProcessSupervisor(
     private val setsidCommand: String = "setsid",
     private val rootAvailable: () -> Boolean = { TerminalRuntime.rootAvailable },
     private val userPtyExecutable: () -> File? = { TerminalRuntime.nativeExecutable("libmovo_pty.so") },
+    private val ownershipWaitMs: Long = 500L,
 ) {
     private companion object {
         const val PROCESS_REAP_TIMEOUT_MS = 1_000L
-        const val PROCESS_OWNERSHIP_WAIT_MS = 500L
         const val PROCESS_SIGNAL_TIMEOUT_MS = 1_000L
         const val DEFAULT_PTY_COLS = 120
         const val DEFAULT_PTY_ROWS = 40
@@ -411,7 +411,7 @@ internal class ShellProcessSupervisor(
 
     private fun resolveProcessOwnership(metadata: ProcessMetadata): ProcessOwnership? {
         metadata.ownership?.let { ownership -> return ownership }
-        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(PROCESS_OWNERSHIP_WAIT_MS)
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(ownershipWaitMs)
         do {
             metadata.ownership?.let { ownership -> return ownership }
             val content = runCatching { metadata.ownershipFile.readText().trim() }.getOrNull().orEmpty()
@@ -470,7 +470,12 @@ internal class ShellProcessSupervisor(
     ) {
         val procPath = "/proc/${ownership.pid}"
         val expectedOwner = shellQuote("$MOVO_PROCESS_OWNER_ENV=${metadata.ownershipToken}")
-        val guardedCommand = if (requireOwnershipProof) {
+        val guardedCommand = if (requireOwnershipProof && !isAndroidRuntime() && !File("/proc").isDirectory) {
+            // macOS development/acceptance runners have no procfs. Keep the same per-launch
+            // ownership proof rather than skipping cleanup or signalling an unverified PGID.
+            "ps eww -p ${ownership.pid} -o command= | tr ' ' '\\n' | " +
+                "grep -Fqx $expectedOwner || exit 0; " + command
+        } else if (requireOwnershipProof) {
             "[ -e $procPath ] || exit 0; " +
                 "[ -r $procPath/environ ] || exit 0; " +
                 "tr '\\000' '\\n' < $procPath/environ | grep -Fqx $expectedOwner || exit 0; " +
@@ -595,6 +600,11 @@ internal fun runOneShotShell(
         outputThread.join(500)
         stderrThread.join(500)
         stdinThread.join(500)
+        // Killing a background child can make the parent's bare `wait` return zero.
+        // Cancellation remains cancellation regardless of that shell exit status.
+        if (processSupervisor.isClosing) {
+            return OneShotShellResult(-3, output.bytes(), "操作已取消".toByteArray())
+        }
         return OneShotShellResult(process.exitValue(), output.bytes(), stderr.bytes())
     } finally {
         if (processSupervisor.isClosing) {

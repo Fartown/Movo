@@ -22,6 +22,8 @@ internal data class AgentToolCapabilities(
     val usageAllowed: Boolean = true,
     val locationAllowed: Boolean = true,
     val colorOs: Boolean = true,
+    val touchscreen: Boolean = true,
+    val screenshotAvailable: Boolean = true,
 ) {
     fun unavailableCode(name: String): String? {
         val requirement = AgentToolRequirements.find(name) ?: return "UNKNOWN_TOOL"
@@ -70,6 +72,9 @@ internal data class AgentToolCapabilities(
                 (context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
                     context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED),
             colorOs = isColorOsDevice(),
+            touchscreen = context.packageManager.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN),
+            screenshotAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
+                RootAccess.isGranted || io.github.fartown.movo.flavor.FlavorModule.screenCapture?.available == true,
         )
     }
 }

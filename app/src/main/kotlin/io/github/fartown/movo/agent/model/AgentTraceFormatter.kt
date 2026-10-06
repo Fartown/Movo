@@ -280,6 +280,7 @@ internal class AgentTraceFormatter {
     ): String {
         result.outcome?.let { return summarizeTypedResult(toolName, result, it) }
         val json = parseResultJson(result)
+        if (result.status == "unknown" || json?.optString("status") == "unknown") return "结果尚未确认"
         // 终端 exit_code != 0 时 ok=false 但没有 code 字段，必须走专用分支保留退出码与输出
         if (toolName == "terminal" || toolName == "run_command") {
             return summarizeTerminalResult(json)

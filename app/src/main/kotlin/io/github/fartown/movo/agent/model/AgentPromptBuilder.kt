@@ -19,7 +19,7 @@ internal object AgentPromptBuilder {
         rootAvailable: Boolean = false,
         roleplayContext: RoleplayRunContext? = null,
         spokenReply: SpokenReply = SpokenReply.NONE,
-        toolGuide: String = "",
+        toolGuide: String? = null,
         /**
          * 环境信息（当前时间、时区），作为系统块最后一条系统消息（工具重构方案「环境信息」）；语音轮在它之后还有语音段。
          * 曾试过加在用户消息开头，真机上模型把它当成用户新说的话（主动报时、做无关的事），所以放进系统消息。
@@ -54,7 +54,7 @@ internal object AgentPromptBuilder {
         roleplayContext: RoleplayRunContext? = null,
         spokenReply: SpokenReply = SpokenReply.NONE,
         /** 类型化工具各领域的用法分节（ToolPipeline.promptSections），作为一条系统消息注入。 */
-        toolGuide: String = "",
+        toolGuide: String? = null,
         environment: String = "",
     ): JSONArray {
         val messages = JSONArray()
@@ -121,7 +121,7 @@ internal object AgentPromptBuilder {
                     "不要改用坐标或 Shell 重放界面动作。"
             )
         )
-        if (config.terminalTools) {
+        if (toolGuide == null && config.terminalTools) {
             messages.put(
                 systemMessage(
                     "任务需要在手机上执行命令、查看 Linux/Android 系统信息、查询包名或使用 shell 时，调用 terminal_run；" +
@@ -152,7 +152,7 @@ internal object AgentPromptBuilder {
                 )
             )
         }
-        if (config.browserTools) {
+        if (toolGuide == null && config.browserTools) {
             messages.put(
                 systemMessage(
                     "网页浏览、读取、交互和截图使用 browser_open、browser_read、browser_act：它们共用 Agent 的离屏浏览器，不会把页面交给外部应用。" +
@@ -161,7 +161,8 @@ internal object AgentPromptBuilder {
                 )
             )
         }
-        if (toolGuide.isNotBlank()) messages.put(systemMessage("各类工具的用法：\n$toolGuide"))
+        // Keep the typed-tool system slot stable when capability-dependent sections change.
+        if (toolGuide != null) messages.put(systemMessage("各类工具的用法：\n" + toolGuide.ifBlank { "以当前公开的工具目录为准。" }))
         roleplayContext?.personaMessage()?.let(messages::put)
         buildMemorySystemMessage(memoryContext, writable = roleplayContext == null)?.let(messages::put)
         buildSkillSystemMessage(skillContext)?.let(messages::put)

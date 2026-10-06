@@ -147,6 +147,10 @@ internal class RealUiScreenBackend(
             includeUiTree = request.nodes,
             maxNodes = request.maxNodes,
         )
+        val details = runCatching { JSONObject(obs.content) }.getOrNull()
+        if (details?.optBoolean("ok", true) == false) {
+            return UiObserveResult.Unavailable(details.optString("message", "无法读取当前屏幕"))
+        }
         val element = obs.elementObservation
         val coord = obs.coordinateSpace
         val snapshot = element?.accessibilitySnapshot
@@ -169,6 +173,10 @@ internal class RealUiScreenBackend(
             screenshotAttached = obs.image != null,
             screenshotQuality = if (obs.image != null) "default" else null,
             screenshot = obs.image,
+            screenshotFailure = if (request.screenshot && obs.image == null) {
+                details?.optJSONObject("screenshot")?.optString("failure")
+                    ?.takeIf { it.isNotBlank() } ?: "SCREENSHOT_UNAVAILABLE"
+            } else null,
         )
     }
 
@@ -227,8 +235,8 @@ internal class RealUiScreenBackend(
             is UiTarget.Element -> {
                 val eo = observations[target.observationId]?.elementObservation
                     ?: return UiInjectResult.NotActionable("观察已失效，重新 ui_observe")
-                if (request.holdMs > 0) controller.longPressElement(eo, target.index, request.holdMs)
-                else controller.tapElement(eo, target.index)
+                if (request.holdMs > 0) controller.longPressElement(eo, target.index, request.holdMs, allowGestureFallback = env.touchscreen)
+                else controller.tapElement(eo, target.index, allowGestureFallback = env.touchscreen)
             }
             is UiTarget.Point -> screenPoint(target.x, target.y).let { (sx, sy) ->
                 if (request.holdMs > 0) controller.longPress(sx, sy, request.holdMs) else controller.tap(sx, sy)
@@ -274,6 +282,25 @@ internal class RealUiScreenBackend(
             code.contains("MISMATCH") -> UiScrollResult.DirectionMismatch
             code == "ACTION_OUTCOME_UNKNOWN" -> UiScrollResult.OutcomeUnknown
             else -> UiScrollResult.NotActionable(obj.optString("message").ifBlank { code.ifBlank { "滚动未生效" } })
+        }
+    }
+
+    override fun focus(element: UiTarget.Element, direction: ScrollDirection?, env: ToolEnvironment): UiInjectResult {
+        val service = AgentAccessibilityService.current() ?: return UiInjectResult.PermissionRequired
+        val snapshot = observations[element.observationId]?.snapshot ?: return UiInjectResult.NotActionable("观察已失效，请重新观察")
+        val before = foregroundPackage()
+        val key = when (direction) {
+            ScrollDirection.UP -> android.view.View.FOCUS_UP
+            ScrollDirection.DOWN -> android.view.View.FOCUS_DOWN
+            ScrollDirection.LEFT -> android.view.View.FOCUS_LEFT
+            ScrollDirection.RIGHT -> android.view.View.FOCUS_RIGHT
+            null -> null
+        }
+        val result = service.focusNode(snapshot, element.index, key)
+        return when {
+            result.ok -> UiInjectResult.Dispatched("ACTION_FOCUS", foregroundPackage(), foregroundPackage() != before)
+            result.code == "ACTION_OUTCOME_UNKNOWN" -> UiInjectResult.OutcomeUnknown
+            else -> UiInjectResult.NotActionable(result.message)
         }
     }
 

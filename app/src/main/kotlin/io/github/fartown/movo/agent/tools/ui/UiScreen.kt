@@ -178,10 +178,13 @@ internal sealed interface UiObserveResult {
         val screenshotQuality: String?,
         /** 附给模型的截图；无则 null。 */
         val screenshot: AgentModelClient.ModelImage?,
+        val screenshotFailure: String? = null,
     ) : UiObserveResult
 
     /** 无障碍不可用且无 root：PERMISSION_REQUIRED。 */
     data object PermissionRequired : UiObserveResult
+
+    data class Unavailable(val reason: String) : UiObserveResult
 }
 
 /** 注入后端：tap/swipe/scroll/input/key/wait + 提交点可读性探针。 */
@@ -193,6 +196,8 @@ internal interface UiActionBackend {
     fun readableNodeAtPoint(x: Double, y: Double): UiNodeProbe?
 
     fun tap(request: UiTapRequest, env: ToolEnvironment): UiInjectResult
+    fun focus(element: UiTarget.Element, direction: ScrollDirection?, env: ToolEnvironment): UiInjectResult =
+        UiInjectResult.NotActionable("此后端不支持移动焦点")
     fun swipe(request: UiSwipeRequest, env: ToolEnvironment): UiInjectResult
     fun scroll(request: UiScrollRequest, env: ToolEnvironment): UiScrollResult
     fun input(request: UiInputRequest, env: ToolEnvironment): UiInputResult

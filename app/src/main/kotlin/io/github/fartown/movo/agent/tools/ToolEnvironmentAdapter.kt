@@ -33,6 +33,8 @@ internal fun AgentToolCapabilities.toToolEnvironment(
     usageAccess = usageAllowed,
     locationAccess = locationAllowed,
     colorOs = colorOs,
+    touchscreen = touchscreen,
+    screenshotAvailable = screenshotAvailable,
     linuxReady = linuxReady,
     switches = switches,
     memoryScope = memoryScope,

@@ -36,6 +36,7 @@ internal data class UiObserveInput(
 
 internal data class UiObserveOutput(
     val observed: UiObserveResult.Observed,
+    val screenshotRequested: Boolean = false,
 ) : ToolOutput
 
 internal class UiObserveTool(
@@ -56,14 +57,16 @@ internal class UiObserveTool(
         }
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
-        boolean("screenshot", "是否附截图（节点为 0 或 Canvas/地图/图片界面时设 true）")
+        if (env.screenshotAvailable) boolean("screenshot", "是否附截图，默认 false；用户要求看图、节点为 0 或 Canvas/地图/图片界面时设 true")
         boolean("nodes", "是否返回节点列表，默认 true")
         integer("max_nodes", "节点数量上限 1–120，默认 60", min = 1, max = 120)
         string("query", "可选的文字过滤，只保留匹配节点，减少 token")
     }
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): UiObserveInput = UiObserveInput(
-        screenshot = args.bool("screenshot", false),
+        screenshot = args.bool("screenshot", false).also {
+            if (it && !env.screenshotAvailable) io.github.fartown.movo.agent.tools.core.invalidArgs("本设备没有可用的截图接口")
+        },
         nodes = args.bool("nodes", true),
         maxNodes = args.int("max_nodes", 60, 1..120),
         query = args.stringOrNull("query")?.trim()?.ifEmpty { null },
@@ -89,7 +92,10 @@ internal class UiObserveTool(
             is UiObserveResult.PermissionRequired -> Verdict.Failed(
                 ToolError(ToolErrorCode.PERMISSION_REQUIRED, "无障碍不可用，无法观察屏幕", hint = "在设置里开启 Movo 无障碍"),
             )
-            is UiObserveResult.Observed -> Verdict.Read(UiObserveOutput(result))
+            is UiObserveResult.Observed -> Verdict.Read(UiObserveOutput(result, input.screenshot))
+            is UiObserveResult.Unavailable -> Verdict.Failed(
+                ToolError(ToolErrorCode.SOURCE_UNAVAILABLE, result.reason),
+            )
         }
     }
 
@@ -130,8 +136,11 @@ internal class UiObserveTool(
         json.put("nodes_truncated", o.nodesTruncated)
         json.put(
             "screenshot",
-            JSONObject().put("attached", o.screenshotAttached)
-                .apply { o.screenshotQuality?.let { put("quality", it) } },
+            JSONObject().put("requested", output.screenshotRequested).put("attached", o.screenshotAttached)
+                .apply {
+                    o.screenshotQuality?.let { put("quality", it) }
+                    o.screenshotFailure?.let { put("failure", it) }
+                },
         )
         return ModelContent.Json(json)
     }

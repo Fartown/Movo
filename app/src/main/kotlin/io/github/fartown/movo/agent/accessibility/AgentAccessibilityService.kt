@@ -51,7 +51,7 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import org.json.JSONObject
 
-class AgentAccessibilityService : AccessibilityService() {
+open class AgentAccessibilityService : AccessibilityService() {
 
     private data class ScreenshotWindow(
         val id: Int,
@@ -436,7 +436,7 @@ class AgentAccessibilityService : AccessibilityService() {
         }
     }
 
-    fun clickNode(snapshot: NodeSnapshot, index: Int): NodeActionResult =
+    fun clickNode(snapshot: NodeSnapshot, index: Int, allowGestureFallback: Boolean = true): NodeActionResult =
         withValidatedIndexedNode(snapshot, index) { indexed ->
             val node = indexed.node
             val actionable = indexed.clickTarget?.resolveFor(node)
@@ -452,6 +452,8 @@ class AgentAccessibilityService : AccessibilityService() {
                         NodeActionResult.failure("ACTION_FAILED", "目标节点拒绝点击动作")
                     ActionDispatch.OUTCOME_UNKNOWN -> NodeActionResult.outcomeUnknown()
                 }
+            } else if (!allowGestureFallback) {
+                NodeActionResult.failure("NOT_ACTIONABLE", "节点没有点击动作，请改用焦点操作")
             } else {
                 val bounds = clippedNodeBounds(node)
                 if (bounds.isEmpty) {
@@ -464,6 +466,7 @@ class AgentAccessibilityService : AccessibilityService() {
         snapshot: NodeSnapshot,
         index: Int,
         durationMs: Long,
+        allowGestureFallback: Boolean = true,
     ): NodeActionResult = withValidatedIndexedNode(snapshot, index) { indexed ->
         val node = indexed.node
         val actionable = indexed.longClickTarget?.resolveFor(node)
@@ -479,6 +482,8 @@ class AgentAccessibilityService : AccessibilityService() {
                     NodeActionResult.failure("ACTION_FAILED", "目标节点拒绝长按动作")
                 ActionDispatch.OUTCOME_UNKNOWN -> NodeActionResult.outcomeUnknown()
             }
+        } else if (!allowGestureFallback) {
+            NodeActionResult.failure("NOT_ACTIONABLE", "节点没有长按动作")
         } else {
             val bounds = clippedNodeBounds(node)
             if (bounds.isEmpty) {
@@ -494,6 +499,18 @@ class AgentAccessibilityService : AccessibilityService() {
             }
         }
     }
+
+    fun focusNode(snapshot: NodeSnapshot, index: Int, direction: Int?): NodeActionResult =
+        withValidatedIndexedNode(snapshot, index) { indexed ->
+            val node = if (direction == null) indexed.node else indexed.node.focusSearch(direction)
+            if (node == null || !node.isVisibleToUser || !node.isEnabled || !node.isFocusable) {
+                NodeActionResult.failure("NOT_ACTIONABLE", "目标方向没有可聚焦节点")
+            } else when (performNodeAction(node, AccessibilityNodeInfo.ACTION_FOCUS)) {
+                ActionDispatch.ACCEPTED -> NodeActionResult.success("ACTION_FOCUS")
+                ActionDispatch.REJECTED -> NodeActionResult.failure("ACTION_FAILED", "目标节点拒绝焦点动作")
+                ActionDispatch.OUTCOME_UNKNOWN -> NodeActionResult.outcomeUnknown()
+            }
+        }
 
     internal fun scrollNode(
         snapshot: NodeSnapshot,

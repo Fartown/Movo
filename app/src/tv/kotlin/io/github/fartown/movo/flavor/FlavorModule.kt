@@ -4,10 +4,8 @@ import android.content.Context
 import io.github.fartown.movo.MovoApp
 import io.github.fartown.movo.agent.tools.ToolProviderInputs
 import io.github.fartown.movo.agent.tools.core.ApprovalMode
-import io.github.fartown.movo.agent.tools.clockmedia.ClockMediaToolProvider
 import io.github.fartown.movo.agent.tools.conversation.ConversationToolProvider
 import io.github.fartown.movo.agent.tools.core.ToolProvider
-import io.github.fartown.movo.agent.tools.device.DeviceToolProvider
 import io.github.fartown.movo.agent.tools.memory.MemoryToolProvider
 import io.github.fartown.movo.agent.tools.ui.UiToolProvider
 import io.github.fartown.movo.agent.voice.session.VoiceConversationHost
@@ -19,6 +17,8 @@ import io.github.fartown.movo.platform.RunSurfaceRenderer
 import io.github.fartown.movo.tv.TvAppSurfaces
 import io.github.fartown.movo.tv.TvPromptProfile
 import io.github.fartown.movo.tv.TvRunSurfaceRenderer
+import io.github.fartown.movo.tv.TvDeviceToolProvider
+import io.github.fartown.movo.tv.TvMediaToolProvider
 import io.github.fartown.movo.ui.app.AgentAppSession
 
 /**
@@ -37,9 +37,17 @@ internal object FlavorModule : Flavor {
     override val interactionCards: Boolean = false
 
     /** P2 接入：本轮进行中按返回取消（§5.8）。 */
-    override val keyInterceptor: KeyInterceptor? = null
+    override val keyInterceptor: KeyInterceptor = io.github.fartown.movo.tv.TvBackHandler
+
+    override val screenCapture: io.github.fartown.movo.platform.DeviceScreenCapture =
+        io.github.fartown.movo.tv.TvAssistantScreenCapture
 
     override fun voiceHost(context: Context): VoiceConversationHost = AgentAppSession.get(context)
+
+    override fun voiceInput(context: Context, onError: (String) -> Unit) =
+        if (io.github.fartown.movo.tv.TclPcmInput.supported(context)) {
+            io.github.fartown.movo.tv.TclPcmInput(context, onError)
+        } else null
 
     /**
      * 白名单（§5.6）：手机新增的 Provider 不会自动进电视。个人数据、文件、终端、浏览器、技能、MCP 暂不装配。
@@ -47,17 +55,23 @@ internal object FlavorModule : Flavor {
     override fun toolProviders(inputs: ToolProviderInputs): List<ToolProvider> {
         val services = inputs.services
         val context = services.context
-        val root = services.root()
         val rootAvailable = services.rootAvailable
         return listOf(
-            DeviceToolProvider(context, root, rootAvailable),
-            ClockMediaToolProvider(context, services.logger, root, rootAvailable),
-            UiToolProvider(context, services.logger, rootAvailable),
+            TvDeviceToolProvider(services),
+            TvMediaToolProvider(services),
+            UiToolProvider(context, services.logger, rootAvailable, includeTouchscreenTools = false),
             MemoryToolProvider(context, inputs.characterId),
             ConversationToolProvider(inputs.conversationLoader),
-        )
+        ).also { providers ->
+            io.github.fartown.movo.diagnostics.MemoryDiagnostics.record("tv.tools", "registered",
+                fields = mapOf("names" to providers.flatMap { it.tools }.joinToString(",") { it.name }))
+        }
     }
 
     /** 电视不启用唤醒词、预测性返回与 Xposed。 */
-    override val initializers: List<(MovoApp) -> Unit> = emptyList()
+    override val initializers: List<(MovoApp) -> Unit> = listOf({
+        io.github.fartown.movo.tv.TvAssistantPermission.restoreIfEnabled(it)
+        io.github.fartown.movo.tv.TvBackHandler.init(it)
+        io.github.fartown.movo.tv.TvVoicePanel.init()
+    })
 }

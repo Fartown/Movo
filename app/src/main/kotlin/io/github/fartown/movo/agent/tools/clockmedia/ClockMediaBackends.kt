@@ -408,6 +408,8 @@ internal class RealMediaControlBackend(
             MediaAction.TOGGLE -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
             MediaAction.NEXT -> KeyEvent.KEYCODE_MEDIA_NEXT
             MediaAction.PREVIOUS -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
+            MediaAction.FAST_FORWARD -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+            MediaAction.REWIND -> KeyEvent.KEYCODE_MEDIA_REWIND
         }
         val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))

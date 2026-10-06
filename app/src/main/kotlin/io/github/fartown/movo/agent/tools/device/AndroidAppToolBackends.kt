@@ -19,10 +19,10 @@ internal class LauncherAppIndex(private val context: Context) {
 
     fun installed(): List<AppMatch> {
         val pm = context.packageManager
-        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val resolveInfos = runCatching {
-            pm.queryIntentActivitiesCompat(intent)
-        }.getOrDefault(emptyList())
+        val categories = listOf(Intent.CATEGORY_LAUNCHER, Intent.CATEGORY_LEANBACK_LAUNCHER)
+        val resolveInfos = categories.flatMap { category ->
+            runCatching { pm.queryIntentActivitiesCompat(Intent(Intent.ACTION_MAIN).addCategory(category)) }.getOrDefault(emptyList())
+        }
         val apps = LinkedHashMap<String, AppMatch>()
         resolveInfos.forEach { info ->
             val appInfo = info.activityInfo?.applicationInfo ?: return@forEach
@@ -64,8 +64,19 @@ internal class LauncherAppIndex(private val context: Context) {
             normalizedName == normalizedQuery -> 2
             normalizedPackage.contains(normalizedQuery) -> 3
             normalizedName.contains(normalizedQuery) -> 4
+            !context.packageManager.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN) &&
+                TV_ALIASES[app.packageName].orEmpty().any { it.contains(normalizedQuery) } -> 5
             else -> Int.MAX_VALUE
         }
+    }
+
+    private companion object {
+        val TV_ALIASES = mapOf(
+            "com.tcl.qiyiguo" to listOf("爱奇艺", "奇异果", "iqiyi", "qiyi"),
+            "com.gitvdemo.video" to listOf("爱奇艺", "奇异果", "iqiyi", "qiyi"),
+            "com.ktcp.csvideo" to listOf("腾讯视频", "云视听极光", "tencent"),
+            "com.xiaodianshi.tv.yst" to listOf("哔哩哔哩", "b站", "bilibili", "小电视"),
+        )
     }
 }
 
@@ -88,7 +99,11 @@ internal class AndroidAppOpenBackend(
     override fun searchByName(name: String): List<AppMatch> = index.search(name, limit = 20)
 
     override fun launchPackage(packageName: String): Boolean {
-        val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName) ?: return false
+        val pm = context.packageManager
+        val launchIntent = if (!pm.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)) {
+            pm.getLeanbackLaunchIntentForPackage(packageName) ?: pm.getLaunchIntentForPackage(packageName)
+        } else pm.getLaunchIntentForPackage(packageName) ?: pm.getLeanbackLaunchIntentForPackage(packageName)
+        if (launchIntent == null) return false
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
         return runCatching { context.startActivity(launchIntent) }.isSuccess
     }

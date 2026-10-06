@@ -36,12 +36,20 @@ internal class DoubaoDialogEngine(
         fun onInputActivity(atElapsedMs: Long)
         fun onPlaybackStarted(turn: Long)
         fun onPlaybackFinished(turn: Long)
+        fun onMediaPlaybackStarted() = Unit
         fun onError(message: String)
     }
 
     /** A same-signature instrumentation test can supply real-time PCM without replacing ASR events. */
     @Keep
     interface PcmInput {
+        /** Inputs without AEC are muted during playback to avoid transcribing our own answers. */
+        val acousticEchoCancellation: Boolean get() = true
+        /** Raw far-field noise cannot use the near-field energy veto; use cloud ASR plus grace. */
+        val localActivityDetection: Boolean get() = true
+        val yieldToMediaPlayback: Boolean get() = false
+        val captureWhileConnecting: Boolean get() = false
+        fun setOutputSuppressed(suppressed: Boolean) = Unit
         fun start(feed: (ByteArray) -> Unit)
         fun close()
     }
@@ -55,6 +63,9 @@ internal class DoubaoDialogEngine(
     private var engine: SpeechEngine? = null
     private var focus: AudioFocusRequest? = null
     private var input: PcmInput? = null
+    private val warmup = PcmWarmupBuffer(4 * 16000 * 2)
+    val submissionGraceMs: Long get() = if (input?.localActivityDetection == false) 1500L else VoiceCommitGate.AUTO_SEND_WAIT_MS
+    val supportsAcousticBargeIn: Boolean get() = input?.acousticEchoCancellation != false
     private var ready = false
     private var ownsAudio = false
     private var turn = 0L
@@ -71,6 +82,8 @@ internal class DoubaoDialogEngine(
     private var outputStartedAt = 0L
     private var playbackPaused = false
     private var pausedAt = 0L
+    private var inputMutedUntil = 0L
+    private var mediaHasAudioFocus = false
     private val inputActivity = VoiceInputActivity()
 
     fun start(credentials: DoubaoSpeechCredentials) = execute {
@@ -84,7 +97,14 @@ internal class DoubaoDialogEngine(
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
             .setOnAudioFocusChangeListener({ change ->
                 if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
-                    fail("语音对话被来电或其他音频中断，请点麦克风继续")
+                    execute {
+                        if (input?.yieldToMediaPlayback == true) {
+                            mediaHasAudioFocus = true
+                            emit { onMediaPlaybackStarted() }
+                        } else fail("语音对话被来电或其他音频中断，请点麦克风继续")
+                    }
+                } else if (change == AudioManager.AUDIOFOCUS_GAIN) {
+                    execute { mediaHasAudioFocus = false }
                 }
             }, main).build()
         check(audio.requestAudioFocus(focus!!) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
@@ -100,6 +120,7 @@ internal class DoubaoDialogEngine(
         engine = sdk
         check(sdk.createEngine() != 0L) { "语音引擎创建失败" }
         sdk.setContext(app)
+        sdk.setWsClient(SpeechWebSocketClient())
         sdk.setOptionString(D.PARAMS_KEY_ENGINE_NAME_STRING, D.DIALOG_ENGINE)
         sdk.setOptionString(D.PARAMS_KEY_DEBUG_PATH_STRING, "")
         sdk.setOptionString(D.PARAMS_KEY_LOG_LEVEL_STRING, D.LOG_LEVEL_ERROR)
@@ -118,7 +139,8 @@ internal class DoubaoDialogEngine(
         sdk.setOptionString(D.PARAMS_KEY_DIALOG_ADDRESS_STRING, "wss://openspeech.bytedance.com")
         sdk.setOptionString(D.PARAMS_KEY_DIALOG_URI_STRING, "/api/v3/realtime/dialogue")
         sdk.setOptionInt(D.PARAMS_KEY_DIALOG_WORK_MODE_INT, D.DIALOG_WORK_MODE_DELEGATE_CHAT_TTS_TEXT)
-        input = sourceFactory?.invoke()
+        input = if (sourceFactory != null) sourceFactory.invoke() else
+            io.github.fartown.movo.flavor.FlavorModule.voiceInput(app) { message -> execute { fail(message) } }
         sdk.setOptionString(D.PARAMS_KEY_RECORDER_TYPE_STRING,
             if (input == null) D.RECORDER_TYPE_RECORDER else D.RECORDER_TYPE_STREAM)
         sdk.setOptionBoolean(D.PARAMS_KEY_DIALOG_ENABLE_PLAYER_BOOL, true)
@@ -165,6 +187,7 @@ internal class DoubaoDialogEngine(
         })
         check(sdk.initEngine() == D.ERR_NO_ERROR) { "豆包语音初始化失败" }
         directive(D.DIRECTIVE_SYNC_STOP_ENGINE, "")
+        if (input?.captureWhileConnecting == true) startInput()
         val parameters = JSONObject()
             .put("asr", JSONObject().put("extra", JSONObject()
                 .put("enable_custom_vad", true).put("end_smooth_window_ms", 1000)))
@@ -173,7 +196,7 @@ internal class DoubaoDialogEngine(
             .put("dialog", JSONObject().put("bot_name", "Movo")
                 .put("extra", JSONObject().put("model", "1.2.1.1").put("input_mode", "keep_alive")))
         directive(D.DIRECTIVE_START_ENGINE, parameters.toString())
-        log("session.starting", mapOf("input" to if (input == null) "microphone" else "instrumented_pcm"))
+        log("session.starting", mapOf("input" to if (input == null) "microphone" else "external_pcm"))
         worker.schedule({ if (!closed.get() && !ready) fail("豆包语音连接超时，请重试") }, 12, TimeUnit.SECONDS)
         worker.scheduleAtFixedRate({ if (!closed.get()) checkPlayback() }, 200, 200, TimeUnit.MILLISECONDS)
     }
@@ -184,10 +207,8 @@ internal class DoubaoDialogEngine(
             D.MESSAGE_TYPE_DIALOG_SESSION_STARTED -> if (!ready) {
                 ready = true
                 log("session.ready")
-                input?.start { bytes -> execute {
-                    recordActivity(bytes, bytes.size)
-                    check(engine?.feedAudio(bytes, bytes.size) == 0) { "语音输入失败" }
-                } }
+                if (input?.captureWhileConnecting == true) warmup.drain().forEach(::feedInput)
+                else startInput()
                 emit { onReady() }
             }
             D.MESSAGE_TYPE_DIALOG_ASR_INFO -> {
@@ -248,6 +269,24 @@ internal class DoubaoDialogEngine(
         }
     }
 
+    private fun startInput() {
+        input?.start { bytes -> execute {
+            if (!ready) {
+                if (!warmup.append(bytes)) fail("语音连接较慢，未发送不完整语句，请重新开始")
+            } else feedInput(bytes)
+        } }
+    }
+
+    private fun feedInput(bytes: ByteArray) {
+        val muted = mediaHasAudioFocus || (input?.acousticEchoCancellation == false &&
+            (outputTurn != null || SystemClock.elapsedRealtime() < inputMutedUntil))
+        val packet = if (muted) ByteArray(bytes.size) else bytes
+        inputObserver?.invoke(bytes, muted)
+        input?.setOutputSuppressed(muted)
+        if (!muted && input?.localActivityDetection != false) recordActivity(packet, packet.size)
+        check(engine?.feedAudio(packet, packet.size) == 0) { "语音输入失败" }
+    }
+
     private fun recordActivity(bytes: ByteArray, size: Int) {
         val now = SystemClock.elapsedRealtime()
         val active = synchronized(inputActivity) { inputActivity.accept(bytes, size, now) }
@@ -256,6 +295,10 @@ internal class DoubaoDialogEngine(
 
     fun speak(id: Long, text: String) = execute {
         if (id != turn || text.isBlank()) return@execute
+        if (mediaHasAudioFocus) {
+            fail(MEDIA_HANDOFF_NOTICE)
+            return@execute
+        }
         outputTurn = id
         outputReplyId = ""
         decoderForClient = false
@@ -353,6 +396,7 @@ internal class DoubaoDialogEngine(
         if (outputStarted && synthesisEnded && expectedDurationMs > 0 &&
             now - outputStartedAt >= expectedDurationMs && now - lastSoundAt >= 500) {
             outputTurn = null
+            inputMutedUntil = now + 500
             log("output.drained", mapOf("turn" to id))
             emit { onPlaybackFinished(id) }
         } else if (outputStarted && now - lastSoundAt > 20_000) {
@@ -376,6 +420,7 @@ internal class DoubaoDialogEngine(
         worker.execute {
             runCatching { input?.close() }
             input = null
+            warmup.clear()
             runCatching { engine?.sendDirective(D.DIRECTIVE_SYNC_STOP_ENGINE, "") }
             runCatching { engine?.destroyEngine() }
             engine = null
@@ -411,6 +456,7 @@ internal class DoubaoDialogEngine(
 
     @Keep
     companion object {
+        const val MEDIA_HANDOFF_NOTICE = "播放应用已接管声音，回答已保留在对话中；可再次说小T小T继续"
         private val audioInUse = AtomicBoolean(false)
         fun hasOpenAudio(): Boolean = audioInUse.get()
         private val environmentLock = Any()
@@ -418,5 +464,6 @@ internal class DoubaoDialogEngine(
         @Keep @JvmStatic var playerObserver: ((ByteArray) -> Unit)? = null
         @Keep @JvmStatic var decoderObserver: ((Long, Boolean, ByteArray) -> Unit)? = null
         @Keep @JvmStatic var pcmInputFactory: (() -> PcmInput)? = null
+        @Keep @JvmStatic var inputObserver: ((ByteArray, Boolean) -> Unit)? = null
     }
 }

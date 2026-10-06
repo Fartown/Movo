@@ -91,7 +91,7 @@ internal class VoiceConversationController(
                 commitGate.endpoint(SystemClock.elapsedRealtime())
                 commit = Runnable {
                     if (!valid() || turns.candidate?.id != turn) return@Runnable
-                    when (commitGate.decision(SystemClock.elapsedRealtime())) {
+                    when (commitGate.decision(SystemClock.elapsedRealtime(), engine?.submissionGraceMs ?: VoiceCommitGate.AUTO_SEND_WAIT_MS)) {
                         VoiceCommitGate.Decision.WAIT -> commit?.let { main.postDelayed(it, 100) }
                         VoiceCommitGate.Decision.EXPIRE -> end("补充语音未能识别，已保留文字，请重新连接后继续")
                         VoiceCommitGate.Decision.COMMIT -> {
@@ -103,13 +103,22 @@ internal class VoiceConversationController(
                 }.also { main.postDelayed(it, 650) }
             }
             override fun onPlaybackStarted(turn: Long) {
-                if (valid()) { status = "正在回答，你可以直接插话"; publish("speaking", turn) }
+                if (valid()) {
+                    status = if (engine?.supportsAcousticBargeIn != false) "正在回答，你可以直接插话" else "正在回答，返回键可停止"
+                    publish("speaking", turn)
+                }
             }
             override fun onPlaybackFinished(turn: Long) {
                 if (!valid()) return
                 turns.playbackFinished(turn)
                 status = idleStatus()
                 publish("listening", turn)
+            }
+            override fun onMediaPlaybackStarted() {
+                if (!valid()) return
+                // Opening a video app may take focus before its tool result comes back.
+                // Keep that accepted run until its result is saved; never listen to the movie.
+                if (turns.running == null) end(DoubaoDialogEngine.MEDIA_HANDOFF_NOTICE)
             }
             override fun onError(message: String) { if (valid()) end(message) }
         }).also { it.start(VoiceSettingsRepository.loadDoubaoCredentials()) }

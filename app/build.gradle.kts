@@ -90,6 +90,7 @@ android {
         create("tv") {
             dimension = "device"
             applicationIdSuffix = ".tv"
+            testInstrumentationRunner = "io.github.fartown.movo.tv.TvAcceptanceInstrumentation"
             minSdk = 28
         }
     }

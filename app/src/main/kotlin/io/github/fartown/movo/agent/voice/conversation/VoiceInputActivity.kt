@@ -44,12 +44,12 @@ internal class VoiceCommitGate {
 
     fun activity(at: Long) { latestActivity = maxOf(latestActivity, at) }
     fun endpoint(at: Long) { endpointAt = at; awaitingRecognition = false }
-    fun decision(now: Long): Decision {
+    fun decision(now: Long, minimumWaitMs: Long = AUTO_SEND_WAIT_MS): Decision {
         // Include sound just before a delayed endpoint event reaches the main thread.
         if (latestActivity >= endpointAt - 150) awaitingRecognition = true
         return when {
             awaitingRecognition && now - endpointAt >= 6_000 -> Decision.EXPIRE
-            awaitingRecognition || now - endpointAt < AUTO_SEND_WAIT_MS -> Decision.WAIT
+            awaitingRecognition || now - endpointAt < minimumWaitMs -> Decision.WAIT
             else -> Decision.COMMIT
         }
     }

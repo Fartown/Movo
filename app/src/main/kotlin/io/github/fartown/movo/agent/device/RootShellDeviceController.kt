@@ -98,6 +98,9 @@ internal class RootShellDeviceController(
         if (accessibility == null && !rootAvailable()) {
             return Observation(accessibilityUnavailable(), null, null, null)
         }
+        if (io.github.fartown.movo.flavor.FlavorModule.screenCapture?.prepareObservation() == false) {
+            return Observation(errorJson("ASSISTANT_WINDOW_STILL_VISIBLE", "助手页面未能收起，无法读取目标应用"), null, null, null)
+        }
         val nodeLimit = maxNodes.coerceIn(1, 120)
         val display = screenSize()
         val focus = accessibility
@@ -359,18 +362,19 @@ internal class RootShellDeviceController(
             json.put("tool", "clear_text").toString()
         }
 
-    fun tapElement(observation: ElementObservation, index: Int): String {
+    fun tapElement(observation: ElementObservation, index: Int, allowGestureFallback: Boolean = true): String {
         val snapshot = observation.accessibilitySnapshot
         if (snapshot != null) {
             val service = AgentAccessibilityService.current()
                 ?: return errorJson("ACCESSIBILITY_UNAVAILABLE", "无障碍服务已断开，请重新观察屏幕")
-            val result = service.clickNode(snapshot, index)
+            val result = service.clickNode(snapshot, index, allowGestureFallback)
             if (result.ok) {
                 waitForUiSettle("tap")
                 return nodeActionJson("tap_element", result)
             }
             return nodeActionJson("tap_element", result)
         }
+        if (!allowGestureFallback) return errorJson("NOT_ACTIONABLE", "本设备需要无障碍节点点击，不能回退坐标注入")
         if (!rootAvailable()) return rootRequired()
         val resolved = resolveUiAutomatorNode(observation, index)
             ?: return errorJson("STALE_NODE", "无法在当前界面唯一确认目标节点，请重新观察屏幕")
@@ -382,18 +386,20 @@ internal class RootShellDeviceController(
         observation: ElementObservation,
         index: Int,
         durationMs: Int,
+        allowGestureFallback: Boolean = true,
     ): String {
         val snapshot = observation.accessibilitySnapshot
         if (snapshot != null) {
             val service = AgentAccessibilityService.current()
                 ?: return errorJson("ACCESSIBILITY_UNAVAILABLE", "无障碍服务已断开，请重新观察屏幕")
-            val result = service.longClickNode(snapshot, index, durationMs.toLong())
+            val result = service.longClickNode(snapshot, index, durationMs.toLong(), allowGestureFallback)
             if (result.ok) {
                 waitForUiSettle("long_press")
                 return nodeActionJson("long_press_element", result)
             }
             return nodeActionJson("long_press_element", result)
         }
+        if (!allowGestureFallback) return errorJson("NOT_ACTIONABLE", "本设备需要无障碍节点长按，不能回退坐标注入")
         if (!rootAvailable()) return rootRequired()
         val resolved = resolveUiAutomatorNode(observation, index)
             ?: return errorJson("STALE_NODE", "无法在当前界面唯一确认目标节点，请重新观察屏幕")
@@ -768,6 +774,19 @@ internal class RootShellDeviceController(
                     criticalWindowMissing = true,
                 )
             }
+        }
+        val deviceCapture = io.github.fartown.movo.flavor.FlavorModule.screenCapture
+        if (excludedPackages.isEmpty() && deviceCapture?.available == true) {
+            val result = deviceCapture.capture()
+            val bitmap = result.bitmap
+            if (bitmap != null) {
+                val image = try { AgentImageCodec.fromScreenBitmap(bitmap, source = "screen") }
+                finally { bitmap.recycle() }
+                return ScreenCapture(image = image, source = "system_assistant", complete = true,
+                    partial = false, expectedWindows = 1, capturedWindows = 1)
+            }
+            logger.warn("Agent device action=capture_screenshot outcome=failed source=system_assistant reason=${result.failure}")
+            return ScreenCapture.failed(source = "system_assistant", failure = result.failure)
         }
         if (
             !rootAvailable() ||
@@ -1335,6 +1354,7 @@ internal class RootShellDeviceController(
         val timedOut: Boolean = false,
         val criticalWindowMissing: Boolean = false,
         val requested: Boolean = true,
+        val failure: String? = null,
     ) {
         fun toJson(): JSONObject {
             val failures = JSONArray()
@@ -1364,6 +1384,7 @@ internal class RootShellDeviceController(
                 .put("failures", failures)
                 .put("timed_out", timedOut)
                 .put("critical_window_missing", criticalWindowMissing)
+                .apply { failure?.let { put("failure", it) } }
         }
 
         companion object {
@@ -1377,13 +1398,14 @@ internal class RootShellDeviceController(
                 requested = false,
             )
 
-            fun failed(source: String): ScreenCapture = ScreenCapture(
+            fun failed(source: String, failure: String? = null): ScreenCapture = ScreenCapture(
                 image = null,
                 source = source,
                 complete = false,
                 partial = false,
                 expectedWindows = 0,
                 capturedWindows = 0,
+                failure = failure,
             )
         }
     }

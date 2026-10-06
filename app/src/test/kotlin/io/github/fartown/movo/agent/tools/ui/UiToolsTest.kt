@@ -38,6 +38,20 @@ class UiToolsTest {
     private val accessibilityEnv = ToolEnvironment(accessibilityAvailable = true)
     private val manualEnv = accessibilityEnv.copy(approvalPolicy = ApprovalPolicy.MANUAL_BUILT_IN)
 
+    @Test fun nonTouchDeviceProjectsOnlyUsableUiArgumentsAndRejectsForgedInputs() {
+        val backend = FakeUiBackend()
+        val television = accessibilityEnv.copy(touchscreen = false, screenshotAvailable = false)
+        val tap = UiTapTool(backend, backend)
+        assertFalse(tap.schema(television).getJSONObject("properties").has("x"))
+        assertTrue(tap.schema(accessibilityEnv).getJSONObject("properties").has("x"))
+        assertFalse(UiObserveTool(backend).schema(television).getJSONObject("properties").has("screenshot"))
+        assertTrue(UiSwipeTool(backend, backend).availability(television) is ToolAvailability.Unavailable)
+        val p = pipeline(provider(ContractTool(tap), ContractTool(UiKeyTool(backend, backend)), ContractTool(UiObserveTool(backend))), television)
+        for ((name, args) in listOf("ui_tap" to "{\"x\":1,\"y\":1}", "ui_key" to "{\"key\":\"enter\"}", "ui_observe" to "{\"screenshot\":true}")) {
+            assertEquals("INVALID_ARGUMENTS", p.execute(call(name, args)).errorCode)
+        }
+    }
+
     private fun pipeline(
         provider: ToolProvider,
         env: ToolEnvironment,

@@ -3,13 +3,46 @@
   电视版专属清单：与 src/main 的共享清单合并（实施方案 §5.3）。
   电视没有触屏，也不要求 leanback 以外的硬件；部分国产电视桌面只列 LAUNCHER，所以两个入口都声明。
 -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
 
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <application android:banner="@drawable/tv_banner">
+        <receiver android:name=".tv.TvAssistantRestoreReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+        <service android:name=".tv.TvScreenAssistantService" android:exported="true"
+            android:label="@string/voice_interaction_service_label" android:permission="android.permission.BIND_VOICE_INTERACTION">
+            <intent-filter><action android:name="android.service.voice.VoiceInteractionService" /></intent-filter>
+            <meta-data android:name="android.voice_interaction" android:resource="@xml/tv_voice_interaction_service" />
+        </service>
+        <service android:name=".tv.TvScreenAssistantSessionService" android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION" />
+        <service android:name=".agent.voice.MovoRecognitionService" android:exported="true"
+            android:permission="android.permission.BIND_SPEECH_RECOGNITION_SERVICE">
+            <intent-filter><action android:name="android.speech.RecognitionService" /></intent-filter>
+            <meta-data android:name="android.speech" android:resource="@xml/recognition_service" />
+        </service>
+        <service android:name=".agent.accessibility.AgentAccessibilityService" tools:node="remove" />
+        <service android:name=".tv.TvAccessibilityService" android:exported="true"
+            android:label="@string/agent_accessibility_label" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/agent_accessibility_service" />
+        </service>
+
+        <service android:name=".tv.TclWakeService" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-enabled TV voice wake handoff" />
+        </service>
 
         <activity
             android:name=".tv.TvMainActivity"

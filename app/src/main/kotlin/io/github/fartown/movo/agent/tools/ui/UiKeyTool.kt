@@ -50,11 +50,15 @@ internal class UiKeyTool(
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
         string(
             "key", "系统键或全局动作", required = true,
-            enum = UiKeyCode.entries.map { it.name.lowercase() },
+            enum = (if (env.touchscreen) UiKeyCode.entries else listOf(UiKeyCode.BACK, UiKeyCode.HOME)).map { it.name.lowercase() },
         )
     }
 
-    override fun parse(args: ToolArgs, env: ToolEnvironment): UiKeyInput = UiKeyInput(args.enum("key"))
+    override fun parse(args: ToolArgs, env: ToolEnvironment): UiKeyInput = UiKeyInput(args.enum<UiKeyCode>("key").also {
+        if (!env.touchscreen && it !in setOf(UiKeyCode.BACK, UiKeyCode.HOME)) {
+            io.github.fartown.movo.agent.tools.core.invalidArgs("本设备只支持 back/home 全局键；其他操作请使用节点或焦点")
+        }
+    })
 
     override fun resolve(input: UiKeyInput, env: ToolEnvironment): CallResolution = CallResolution(
         risk = Risk.LOCAL,

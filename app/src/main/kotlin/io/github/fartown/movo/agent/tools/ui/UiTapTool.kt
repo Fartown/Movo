@@ -50,7 +50,7 @@ internal class UiTapTool(
         }
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
-        flatTarget(allowCoordinates = true, allowArea = true)
+        flatTarget(allowCoordinates = env.touchscreen, allowArea = env.touchscreen)
         integer("hold_ms", "长按毫秒 0–3000，默认 0（即普通点击）", min = 0, max = 3000)
         string(
             "effect", "这一下的后果：发送、删除、提交、付款、转账时声明",
@@ -59,7 +59,7 @@ internal class UiTapTool(
     }
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): UiTapInput = UiTapInput(
-        target = parseFlatTarget(args, allowCoordinates = true, allowArea = true),
+        target = parseFlatTarget(args, allowCoordinates = env.touchscreen, allowArea = env.touchscreen),
         holdMs = args.int("hold_ms", 0, 0..3000),
         effect = if (args.has("effect")) args.enum<UiEffect>("effect") else null,
     )

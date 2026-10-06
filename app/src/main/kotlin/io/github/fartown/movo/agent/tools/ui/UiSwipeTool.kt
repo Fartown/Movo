@@ -41,7 +41,9 @@ internal class UiSwipeTool(
             "起止点绑最近一次 ui_observe 的代际。ok 只代表已送达。"
 
     override fun availability(env: ToolEnvironment): ToolAvailability =
-        if (env.accessibilityUsable || env.rootAvailable) {
+        if (!env.touchscreen) {
+            ToolAvailability.Unavailable(ToolErrorCode.NOT_ACTIONABLE, "本设备不支持触屏滑动，请使用节点操作或移动焦点")
+        } else if (env.accessibilityUsable || env.rootAvailable) {
             ToolAvailability.Available
         } else {
             ToolAvailability.Unavailable(ToolErrorCode.PERMISSION_REQUIRED, "需要无障碍权限才能滑动")

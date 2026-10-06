@@ -22,7 +22,7 @@ import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.objectSchema
 import org.json.JSONObject
 
-internal enum class MediaAction { PLAY, PAUSE, TOGGLE, NEXT, PREVIOUS }
+internal enum class MediaAction { PLAY, PAUSE, TOGGLE, NEXT, PREVIOUS, FAST_FORWARD, REWIND }
 
 internal data class MediaControlInput(val action: MediaAction) : ToolInput
 
@@ -57,7 +57,8 @@ internal class MediaControlTool(
     override val name = "media_control"
     override val domain = ToolDomain.CLOCK_MEDIA
     override val summary =
-        "控制正在播放的媒体：play、pause、toggle、next、previous。媒体键只是派发，不代表播放器已响应，" +
+        "控制正在播放的媒体：play、pause、toggle、next、previous、fast_forward（快进）、rewind（快退）。" +
+            "快进/快退的步长由播放器决定。媒体键只是派发，不代表播放器已响应，" +
             "需再查播放状态确认。独占音频。"
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {

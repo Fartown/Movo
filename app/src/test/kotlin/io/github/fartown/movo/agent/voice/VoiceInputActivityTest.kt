@@ -7,6 +7,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class VoiceInputActivityTest {
+    @Test fun rawFarFieldWaitsForDelayedCloudSpeechWithoutUsingNoiseEnergy() {
+        val gate = VoiceCommitGate().apply { endpoint(2000) }
+        assertEquals(VoiceCommitGate.Decision.WAIT, gate.decision(2650, 1500))
+        assertEquals(VoiceCommitGate.Decision.WAIT, gate.decision(3499, 1500))
+        assertEquals(VoiceCommitGate.Decision.COMMIT, gate.decision(3500, 1500))
+    }
     private fun pcm(amplitude: Int, samples: Int = 320) = ByteArray(samples * 2).apply {
         repeat(samples) { i ->
             val value = if (i % 2 == 0) amplitude else -amplitude

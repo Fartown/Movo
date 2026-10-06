@@ -20,17 +20,19 @@ internal class UiToolProvider(
     context: Context,
     logger: AgentLogger,
     rootAvailable: () -> Boolean = { RootAccess.isGranted },
+    includeTouchscreenTools: Boolean = true,
     /** 截图时要排除的包（正在退场的入口面板），由运行时的 EntrySurfaceGuard 提供。 */
     screenshotExcludedPackages: () -> Set<String> = { emptySet() },
 ) : ToolProvider {
 
     private val screen = RealUiScreenBackend(context, logger, rootAvailable, screenshotExcludedPackages)
 
-    override val tools: List<AgentTool> = listOf(
+    override val tools: List<AgentTool> = listOfNotNull(
         ContractTool(UiObserveTool(screen)),
         ContractTool(UiTapTool(screen, screen)),
+        ContractTool(UiFocusTool(screen, screen)),
         ContractTool(UiScrollTool(screen, screen)),
-        ContractTool(UiSwipeTool(screen, screen)),
+        if (includeTouchscreenTools) ContractTool(UiSwipeTool(screen, screen)) else null,
         ContractTool(UiInputTool(screen, screen)),
         ContractTool(UiKeyTool(screen, screen)),
         ContractTool(UiWaitTool(screen)),
@@ -50,13 +52,14 @@ internal class UiToolProvider(
             - ui_scroll 能判定移动：moved=true 才算滚到；没动可能到边界。
             - ui_input 文字回读一致才算证实；submit 是独立动作，不代表已发送。append 无法插入时不要改用 replace。
             - 遇 unknown 先观察，不要直接重复同一动作。
+            - 无触屏设备只按观察节点操作。ui_focus 可用时用于移动遥控焦点；未提供的截图、滑动和坐标参数不可使用。
         """.trimIndent(),
     )
 
     companion object {
         val NAMES = setOf(
             "ui_observe", "ui_tap", "ui_scroll", "ui_swipe", "ui_input", "ui_key", "ui_wait",
-            "clipboard_read", "clipboard_write",
+            "clipboard_read", "clipboard_write", "ui_focus",
         )
     }
 }

@@ -13,6 +13,18 @@ import org.junit.Test
 
 class RootShellTerminalControllerCancellationTest {
     @Test
+    fun preservesCommandFailureBeforeWaitingForBackgroundJobs() {
+        val controller = RootShellTerminalController(NoOpLogger)
+        try {
+            val result = JSONObject(controller.terminalOpenAndExec(
+                command = "false", cwd = System.getProperty("java.io.tmpdir"), timeoutMs = 3000,
+                identity = "user", mergeStderr = false,
+            ))
+            org.junit.Assert.assertEquals(1, result.getInt("exit_code"))
+        } finally { controller.closeAll() }
+    }
+
+    @Test
     fun interruptAllStopsSynchronousCommandWithoutWaitingForTimeout() {
         val controller = RootShellTerminalController(NoOpLogger)
         val entered = CountDownLatch(1)
@@ -99,7 +111,7 @@ class RootShellTerminalControllerCancellationTest {
                     closeIfDone = false,
                 )
             )
-            assertTrue(started.getBoolean("ok"))
+            assertTrue(started.toString(), started.getBoolean("ok"))
 
             val completed = waitForAsyncResult(controller, started.getString("job_id"))
             val childPid = Regex("CHILD_PID=(\\d+)")
@@ -196,6 +208,12 @@ class RootShellTerminalControllerCancellationTest {
                 args = sys.argv[1:]
                 if args and args[0] == "-w":
                     args = args[1:]
+                # Like setsid -w, fork if the caller is already a process-group leader.
+                if os.getpgrp() == os.getpid():
+                    child = os.fork()
+                    if child:
+                        _, status = os.waitpid(child, 0)
+                        sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 128 + os.WTERMSIG(status))
                 os.setsid()
                 os.execvp(args[0], args)
                 """.trimIndent()
@@ -208,6 +226,9 @@ class RootShellTerminalControllerCancellationTest {
             processSupervisor = ShellProcessSupervisor(
                 allowTreeFallback = false,
                 setsidCommand = setsid.absolutePath,
+                // Python interpreter startup under a full Robolectric run exceeds the
+                // production native setsid launch budget on macOS. Keep production unchanged.
+                ownershipWaitMs = 3000L,
             ),
         )
     }

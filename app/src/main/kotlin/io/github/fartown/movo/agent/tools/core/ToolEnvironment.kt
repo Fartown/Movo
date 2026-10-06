@@ -38,6 +38,8 @@ internal data class ToolEnvironment(
     val usageAccess: Boolean = false,
     val locationAccess: Boolean = false,
     val colorOs: Boolean = false,
+    val touchscreen: Boolean = true,
+    val screenshotAvailable: Boolean = true,
     val linuxReady: Boolean = false,
     val switches: ToolSwitches = ToolSwitches(),
     val memoryScope: MemoryScope = MemoryScope.DISABLED,
