@@ -476,7 +476,10 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
             openedFromOrb = true
             setScrim(0f)
             sheetAlpha = 0f
-            pendingEntrance = { morphWithOrb(orb, expand = true) {} }
+            // 起点取开始长出来那一刻球的位置：点开时球可能还在吸附途中，之后又移到了边上。
+            pendingEntrance = {
+                morphWithOrb(io.github.fartown.movo.agent.runtime.AgentRuntimeService.orbDiscRect ?: orb, expand = true) {}
+            }
             return
         }
         if (isReducedMotion(this)) {
@@ -509,9 +512,9 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         if (pendingEntrance !== entrance) return
         pendingEntrance = null
         entranceStarted = true
-        // 从球里长出来的第一帧：球同时让位（之前一直留着，不先消失）。
-        io.github.fartown.movo.agent.runtime.AgentRuntimeService.onSheetCoversOrb()
         if (!closing) entrance()
+        // 从球里长出来的第一帧画上屏幕之后球再让位：先藏球会空一帧（10-07 真机 120Hz 逐帧：每次空 1 帧）。
+        afterNextFrame { io.github.fartown.movo.agent.runtime.AgentRuntimeService.onSheetCoversOrb() }
     }
 
     /**
@@ -538,9 +541,12 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
             val orb = io.github.fartown.movo.agent.runtime.AgentRuntimeService.orbDiscRect
             if (orb != null) {
                 morphWithOrb(orb, expand = false) {
-                    // 收回到球里的最后一帧：球立刻接上，再结束页面（不等页面暂停后再判断，中间不空）。
-                    io.github.fartown.movo.agent.runtime.AgentRuntimeService.onSheetReturnedToOrb()
-                    finish()
+                    // 缩成球大小的最后一帧画上屏幕之后，球立刻接上、再结束页面：动画结束当下就关页面，最后几帧来不及画，
+                    // 看起来是一块圆角矩形直接跳成球（10-07 真机逐帧）；等页面暂停后再显示球，中间又会空几帧。
+                    afterNextFrame {
+                        io.github.fartown.movo.agent.runtime.AgentRuntimeService.onSheetReturnedToOrb()
+                        finish()
+                    }
                 }
                 return
             }
@@ -622,6 +628,24 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * [action] 在当前内容画成一帧、提交上屏之后执行（主线程，只执行一次）。球与浮层交接用：
+     * 浮层这一帧先画出来再换球，两边之间不空帧。窗口不再出帧时（例如已退到后台）由兜底超时执行。
+     */
+    private fun afterNextFrame(action: () -> Unit) {
+        val decor = window.decorView
+        var done = false
+        val run = Runnable {
+            if (done) return@Runnable
+            done = true
+            action()
+        }
+        // 提交回调不在主线程上调用。
+        decor.viewTreeObserver.registerFrameCommitCallback { decor.post(run) }
+        decor.invalidate()
+        decor.postDelayed(run, FRAME_COMMIT_FALLBACK_MS)
+    }
+
     private fun resetOrbMorph() {
         orbMorphStart = null
         orbMorphProgress = 1f
@@ -640,8 +664,10 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         }
         resizeAnimator?.cancel()
         morphWithOrb(io.github.fartown.movo.agent.runtime.AgentRuntimeService.orbDiscRectOrDefault(this), expand = false) {
-            io.github.fartown.movo.agent.runtime.AgentRuntimeService.onSheetReturnedToOrb()
-            onCollapsed()
+            afterNextFrame {
+                io.github.fartown.movo.agent.runtime.AgentRuntimeService.onSheetReturnedToOrb()
+                onCollapsed()
+            }
         }
     }
 
@@ -867,6 +893,8 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
         }
         /** 从球揭开时内容的起始透明度（A5b：内容从 20% 淡入，一开始就能看出是对话）。 */
         private const val ORB_CONTENT_START_ALPHA = 0.2f
+        /** 等一帧提交上屏的兜底时长。 */
+        private const val FRAME_COMMIT_FALLBACK_MS = 100L
         /** 进场最多等会话打开这么久；更慢时先露出「正在打开对话…」。 */
         private const val ENTRANCE_CONTENT_WAIT_MS = 400L
         /** 收回球里时内容淡出的起点与收尾（相对收起开始 / 结束）。 */

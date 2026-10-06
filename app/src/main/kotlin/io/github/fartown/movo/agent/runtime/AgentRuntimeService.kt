@@ -3028,7 +3028,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
          * 云真机默认关了系统动画，之前一直没测到）。位置都由我们逐帧给出，不需要它。
          */
         private fun WindowManager.LayoutParams.inDisplayCoordinates() {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) setCanPlayMoveAnimation(false)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) setCanPlayMoveAnimation(false)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 setFitInsetsTypes(0)
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
