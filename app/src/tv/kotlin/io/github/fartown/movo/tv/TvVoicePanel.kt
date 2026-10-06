@@ -50,7 +50,8 @@ import kotlinx.coroutines.launch
  * 电视语音浮窗 v4（2026-10-06 定稿，Figma「Movo TV」第一页）：光球演变成胶囊。
  *
  * 左下角（距左 64、距下 80，高过节目字幕区）平时只有一个球（56）；要显示内容时球的右边拉长成单行胶囊，
- * 球就是胶囊左端的半圆，永远不动。字从左往右长，最宽约 20 字，超出就整屏淡入换下一段，始终一行。
+ * 球就是胶囊左端的半圆，永远不动。字从左往右长，宽度跟着内容走、最宽约 20 字；超出就在一行里平滑往左滚（轮播），
+ * 回答跟着朗读速度滚、正在念的部分始终可见，两端渐隐；始终一行，不切屏、不硬切。
  * 你说话白色；Movo 回答胶囊带淡淡的光球色。光球不加任何外圈：状态靠光球自身动效 + 图标 + 文字。
  * 反问选项临时在胶囊上方展开小卡，选完收回；空闲最后 3 秒变暗；结束时字淡出 → 缩回球 → 淡出。
  */
@@ -65,8 +66,6 @@ internal object TvVoicePanel {
     private const val LINGER_MS = 2_500L
     private const val DONE_MS = 1_500L
     private const val YIELD_MS = 2_000L
-    /** 胶囊一行最多约 20 字（文字区 520 / 26 字号）。 */
-    internal const val LINE_CHARS = 20
     /** 普通话朗读约 5 字/秒；略慢一点，宁可字幕晚半拍也不抢在声音前面。 */
     private const val CHARS_PER_SECOND = 4.6
     private const val BALL = 56f
@@ -96,12 +95,12 @@ internal object TvVoicePanel {
     private var choiceFocus = 0
     private var choices: Choices? = null
     private val dimTask = Runnable { root?.animate()?.alpha(0.5f)?.setDuration(DIM_WINDOW_MS)?.start() }
-    private val pageTask = Runnable { refresh() }
 
     internal enum class Indicator { None, BarsLive, BarsIdle, Speaker }
     internal enum class OrbMotion { Still, Working, Speaking }
+    /** 一行放不下时怎么滚：Tail 露出最新的字（你在说）；Speech 跟着朗读滚；End 停在结尾；None 不滚。 */
+    internal enum class Scroll { None, Tail, Speech, End }
     internal data class Choices(val header: String, val items: List<String>)
-    /** [key] 相同的一段内容（同一次回答）宽度只增不减，换屏不会忽宽忽窄。 */
     private data class Model(
         val text: String,
         val textColor: Int = TEXT,
@@ -110,6 +109,7 @@ internal object TvVoicePanel {
         val motion: OrbMotion = OrbMotion.Still,
         val choices: Choices? = null,
         val key: String = "",
+        val scroll: Scroll = Scroll.None,
     )
 
     fun init(context: Context) {
@@ -200,7 +200,7 @@ internal object TvVoicePanel {
         // 空闲超时直接收起；其他结束原因（开始播放等）停留一下，让结果看得到。
         if (notice == null || notice == VoiceConversationController.IDLE_END_MESSAGE) { lingerUntil = 0; return }
         val answer = latestAnswer()
-        linger = Model(answer?.let { screensOf(it.content).lastOrNull() } ?: notice, key = "linger")
+        linger = Model(answer?.let { flatten(it.content) } ?: notice, key = "linger", scroll = Scroll.End)
         val hold = if (answer != null) DONE_MS else LINGER_MS
         lingerUntil = SystemClock.elapsedRealtime() + hold
         main.postDelayed(::refresh, hold + 50)
@@ -220,7 +220,7 @@ internal object TvVoicePanel {
             if (SystemClock.elapsedRealtime() < lingerUntil) return linger
             return null
         }
-        val hearing = { text: String -> Model(transcriptPage(text), indicator = Indicator.BarsLive, key = "you") }
+        val hearing = { text: String -> Model(text.trim(), indicator = Indicator.BarsLive, key = "you", scroll = Scroll.Tail) }
         return when (voice.channel) {
             VoiceChannel.Connecting -> Model("正在连接…", SECONDARY, key = "idle")
             VoiceChannel.Hearing -> hearing(voice.transcript.ifBlank { "…" })
@@ -232,29 +232,15 @@ internal object TvVoicePanel {
                 busy -> working(tools)
                 answer != null -> parseChoices(answer.content)?.let { card ->
                     Model(card.header, indicator = Indicator.Speaker, choices = card, key = "choice")
-                } ?: screensOf(answer.content).let { screens ->
-                    if (screens.size > 1) Model("说「看全文」看完整回答", SECONDARY, Indicator.BarsIdle, movo = true, key = answer.id)
-                    else Model(screens.firstOrNull().orEmpty(), indicator = Indicator.BarsIdle, movo = true, key = answer.id)
-                }
+                } ?: Model(flatten(answer.content), indicator = Indicator.BarsIdle, movo = true, key = answer.id, scroll = Scroll.End)
                 else -> Model("我在，请说", indicator = Indicator.BarsIdle, key = "idle")
             }
         }
     }
 
-    /** 跟着朗读整屏换：按已朗读时间估算到第几屏；念完由 Listening 状态接上「看全文」提示。 */
-    private fun speaking(answer: AgentMessageUi): Model {
-        val screens = screensOf(answer.content)
-        val spokenChars = ((SystemClock.elapsedRealtime() - speakingSince) / 1000.0 * CHARS_PER_SECOND).toInt()
-        var index = 0
-        var consumed = 0
-        while (index < screens.lastIndex && consumed + screens[index].length <= spokenChars) { consumed += screens[index].length; index++ }
-        main.removeCallbacks(pageTask)
-        if (index < screens.lastIndex) {
-            val nextAt = ((consumed + screens[index].length) / CHARS_PER_SECOND * 1000).toLong()
-            main.postDelayed(pageTask, (nextAt - (SystemClock.elapsedRealtime() - speakingSince)).coerceAtLeast(50))
-        }
-        return Model(screens.getOrElse(index) { "" }, indicator = Indicator.Speaker, movo = true, motion = OrbMotion.Speaking, key = answer.id)
-    }
+    /** 回答排成一行，跟着朗读平滑往左滚（滚动由窗口里的逐帧动画按朗读时间算）。 */
+    private fun speaking(answer: AgentMessageUi): Model =
+        Model(flatten(answer.content), indicator = Indicator.Speaker, movo = true, motion = OrbMotion.Speaking, key = answer.id, scroll = Scroll.Speech)
 
     private fun working(tools: List<ToolActivityMessageUi>): Model {
         val latest = tools.firstOrNull()
@@ -272,17 +258,8 @@ internal object TvVoicePanel {
         return if (start >= 0) all.drop(start + 1) else if (sessionBaseline == null) all else emptyList()
     }
 
-    /**
-     * 实时字幕：一行放得下就全显示；放不下就从第 [LINE_CHARS] 字起每 19 字一屏，前面加「…」——
-     * 满宽后整屏换下一段（轮播），不换行、不左右滚动。
-     */
-    internal fun transcriptPage(text: String): String {
-        val t = text.trim()
-        if (t.length <= LINE_CHARS) return t
-        val step = LINE_CHARS - 1
-        val start = LINE_CHARS + (t.length - LINE_CHARS - 1) / step * step
-        return "…" + t.substring(start)
-    }
+    /** 回答排成一行：去掉 Markdown 记号，段落之间空两格。 */
+    internal fun flatten(content: String): String = lines(content).joinToString("  ")
 
     /** 一行要点：取第一句有内容的文字，去掉 Markdown 记号。 */
     internal fun summaryOf(content: String): String = lines(content).firstOrNull() ?: "已回答"
@@ -290,28 +267,6 @@ internal object TvVoicePanel {
     internal fun longHintOf(content: String): String? {
         val all = lines(content)
         return if (all.size > 1 || (all.firstOrNull()?.length ?: 0) > 40) "说「看全文」" else null
-    }
-
-    /**
-     * 把回答切成单行字幕屏：每屏不超过 [perScreen] 字，优先在句号、问号、分号处断，句子太长再在逗号处断，
-     * 仍放不下才硬切；相邻短句合进同一屏。
-     */
-    internal fun screensOf(content: String, perScreen: Int = LINE_CHARS): List<String> {
-        val sentences = lines(content).flatMap { line ->
-            Regex("""[^。！？；!?;]+[。！？；!?;]*""").findAll(line).map { it.value.trim() }.filter { it.isNotEmpty() }.toList()
-        }.flatMap { sentence ->
-            if (sentence.length <= perScreen) listOf(sentence)
-            else Regex("""[^，,、]+[，,、]*""").findAll(sentence).map { it.value }.toList()
-                .flatMap { part -> if (part.length <= perScreen) listOf(part) else part.chunked(perScreen) }
-        }
-        val screens = mutableListOf<String>()
-        val current = StringBuilder()
-        for (piece in sentences) {
-            if (current.isNotEmpty() && current.length + piece.length > perScreen) { screens += current.toString(); current.clear() }
-            current.append(piece)
-        }
-        if (current.isNotEmpty()) screens += current.toString()
-        return screens
     }
 
     private fun lines(content: String): List<String> = content.lines()
@@ -342,9 +297,10 @@ internal object TvVoicePanel {
         var tinted: Boolean = false,
         var width: Int = 0,
         var widthAnimator: ValueAnimator? = null,
-        var growKey: String = "",
-        var growWidth: Int = 0,
         var collapsing: Boolean = false,
+        var scroll: Scroll = Scroll.None,
+        var scrollX: Float = 0f,
+        var ticker: android.animation.TimeAnimator? = null,
     )
 
     private fun dp(context: Context, v: Float) = (v * context.resources.displayMetrics.density).toInt()
@@ -385,12 +341,13 @@ internal object TvVoicePanel {
         row.addView(orb, LinearLayout.LayoutParams(dp(ORB), dp(ORB)))
         val slot = FrameLayout(service).apply { visibility = View.GONE }
         row.addView(slot, LinearLayout.LayoutParams(dp(40f), dp(38f)).apply { marginStart = dp(14f) })
+        // 一行放不下时在原位横向滚动，两端渐隐（TextView 自带的横向渐隐边）。
         val text = TextView(service).apply {
-            textSize = 26f; setTextColor(TEXT); includeFontPadding = false; maxLines = 1; isSingleLine = true
-            ellipsize = TextUtils.TruncateAt.END; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            maxWidth = dp(TEXT_MAX); alpha = 0f
+            textSize = 26f; setTextColor(TEXT); includeFontPadding = false; isSingleLine = true
+            ellipsize = null; setHorizontallyScrolling(true); typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            isHorizontalFadingEdgeEnabled = true; setFadingEdgeLength(dp(28f)); alpha = 0f
         }
-        row.addView(text, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(14f) })
+        row.addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(14f) })
         // 内容层按最大宽度排版、由胶囊轮廓裁切：拉长过程中文字不被挤压、不闪省略号。
         capsule.addView(row, FrameLayout.LayoutParams(dp(6f + ORB + 14f + 40f + 14f + TEXT_MAX + 26f), ViewGroup.LayoutParams.MATCH_PARENT))
         val start = dp(BALL)
@@ -436,15 +393,47 @@ internal object TvVoicePanel {
             pageChange -> { v.text.alpha = 0f; v.text.animate().alpha(1f).setStartDelay(0).setDuration(180).start() }
             else -> if (v.text.alpha < 1f && v.text.animate() != null) v.text.animate().alpha(1f).setStartDelay(0).setDuration(120).start()
         }
-        // 目标宽度：球 + 图标槽 + 文字；同一段内容（同一次回答）只增不减。
-        var target = if (model.text.isEmpty()) dp(BALL) else {
-            val textWidth = minOf(v.text.paint.measureText(model.text), dp(TEXT_MAX).toFloat()).toInt() + 2
-            dp(6f + ORB + 14f) + (if (v.slot.visibility == View.VISIBLE) dp(40f + 14f) else 0) + textWidth + dp(26f)
-        }
-        if (model.key.isNotEmpty() && model.key == v.growKey) target = maxOf(target, v.growWidth)
-        v.growKey = model.key; v.growWidth = target
+        // 宽度跟着内容走：字少就短，到最宽为止；超出靠滚动看完，不留半截空白。
+        val textWidth = if (model.text.isEmpty()) 0 else v.text.paint.measureText(model.text).toInt() + 2
+        val viewport = minOf(textWidth, dp(TEXT_MAX))
+        (v.text.layoutParams as LinearLayout.LayoutParams).let { if (it.width != viewport && viewport > 0) { it.width = viewport; v.text.layoutParams = it } }
+        val target = if (model.text.isEmpty()) dp(BALL)
+            else dp(6f + ORB + 14f) + (if (v.slot.visibility == View.VISIBLE) dp(40f + 14f) else 0) + viewport + dp(26f)
+        if (pageChange || expanding) { v.scrollX = 0f; v.text.scrollTo(0, 0) }
+        startScroll(v, model.scroll, textWidth, viewport)
         animateWidth(v, target, if (expanding) 300 else 200)
         bindChoices(context, v, model.choices)
+    }
+
+    /**
+     * 逐帧算滚动位置并平滑逼近：Tail 露出末尾；Speech 让正在念的位置停在可见区约 60% 处；End 滚到结尾。
+     * 不需要滚时停掉动画。
+     */
+    private fun startScroll(v: Views, scroll: Scroll, textWidth: Int, viewport: Int) {
+        v.scroll = scroll
+        val maxScroll = (textWidth - viewport).coerceAtLeast(0).toFloat()
+        if (scroll == Scroll.None || maxScroll == 0f) { v.ticker?.cancel(); v.ticker = null; v.scrollX = 0f; v.text.scrollTo(0, 0); return }
+        if (v.ticker != null) return
+        v.ticker = android.animation.TimeAnimator().apply {
+            setTimeListener { animator, _, delta ->
+                val text = v.text.text.toString()
+                val width = (v.text.paint.measureText(text) + 2 - v.text.width).coerceAtLeast(0f)
+                val target = when (v.scroll) {
+                    Scroll.Tail, Scroll.End -> width
+                    Scroll.Speech -> {
+                        val chars = ((SystemClock.elapsedRealtime() - speakingSince) / 1000.0 * CHARS_PER_SECOND).toInt().coerceIn(0, text.length)
+                        (v.text.paint.measureText(text, 0, chars) - v.text.width * 0.6f).coerceIn(0f, width)
+                    }
+                    Scroll.None -> 0f
+                }
+                // 平滑逼近：约 150ms 追上，朗读时是连续匀速的滚动，不跳。
+                val k = (delta / 150f).coerceAtMost(1f)
+                v.scrollX += (target - v.scrollX) * k
+                v.text.scrollTo(v.scrollX.toInt(), 0)
+                if (v.scroll != Scroll.Speech && kotlin.math.abs(target - v.scrollX) < 0.5f) { animator.cancel(); if (v.ticker === animator) v.ticker = null }
+            }
+            start()
+        }
     }
 
     private fun animateWidth(v: Views, target: Int, duration: Long) {
@@ -533,7 +522,6 @@ internal object TvVoicePanel {
     /** 收起：字淡出 → 缩回球 → 淡出并移除窗口。 */
     private fun collapse() {
         main.removeCallbacks(dimTask)
-        main.removeCallbacks(pageTask)
         val view = root ?: return
         val v = views
         if (v == null) { removeNow(); return }
@@ -542,7 +530,7 @@ internal object TvVoicePanel {
         v.card?.let { v.column.removeView(it) }; v.card = null
         v.text.animate().alpha(0f).setStartDelay(0).setDuration(120).start()
         setIndicator(view.context, v, Indicator.None)
-        v.growKey = ""
+        v.ticker?.cancel(); v.ticker = null
         main.postDelayed({
             if (root !== view || !v.collapsing) return@postDelayed
             animateWidth(v, dp(view.context, BALL), 200)
@@ -555,7 +543,7 @@ internal object TvVoicePanel {
 
     private fun removeNow() {
         val view = root ?: return
-        views?.widthAnimator?.cancel()
+        views?.widthAnimator?.cancel(); views?.ticker?.cancel()
         runCatching { owner?.getSystemService(WindowManager::class.java)?.removeViewImmediate(view) }
         root = null; owner = null; views = null
     }
