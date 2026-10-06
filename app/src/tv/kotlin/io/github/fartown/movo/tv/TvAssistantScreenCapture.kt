@@ -26,7 +26,8 @@ import kotlinx.coroutines.flow.asStateFlow
  * Each request creates a fresh, UI-less assistant session; no microphone or speech is started.
  */
 internal object TvAssistantScreenCapture : DeviceScreenCapture {
-    private val main = Handler(Looper.getMainLooper())
+    // 用到时才创建：纯 JVM 单测加载 FlavorModule 时没有主线程 Looper。
+    private val main by lazy { Handler(Looper.getMainLooper()) }
     private val nextId = AtomicLong()
     private val requestLock = Any()
     private val stateLock = Any()
