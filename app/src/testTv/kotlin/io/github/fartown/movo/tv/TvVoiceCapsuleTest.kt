@@ -1,6 +1,9 @@
 package io.github.fartown.movo.tv
 
+import android.view.KeyEvent
+import io.github.fartown.movo.agent.voice.session.VoiceChannel
 import io.github.fartown.movo.flavor.FlavorModule
+import io.github.fartown.movo.tv.TvBackHandler.RemoteAction
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -32,5 +35,23 @@ class TvVoiceCapsuleTest {
         assertEquals("宫保鸡丁的做法一共 6 步", TvVoicePanel.summaryOf("## 宫保鸡丁的做法一共 6 步\n1. 鸡腿肉切丁\n2. 调碗汁"))
         assertEquals("说「看全文」", TvVoicePanel.longHintOf("第一句\n第二句"))
         assertNull(TvVoicePanel.longHintOf("要带伞，明天小雨 16–22°"))
+    }
+
+    @Test
+    fun pickingUpTheRemoteHandsTheTvBackToTheUser() {
+        fun action(key: Int, channel: VoiceChannel, running: Boolean = false, movo: Boolean = false) =
+            TvBackHandler.remoteAction(key, channel, running, movo)
+        assertEquals(RemoteAction.Yield, action(KeyEvent.KEYCODE_DPAD_RIGHT, VoiceChannel.Listening))
+        assertEquals(RemoteAction.Yield, action(KeyEvent.KEYCODE_HOME, VoiceChannel.Off, running = true))
+        assertEquals(RemoteAction.Yield, action(KeyEvent.KEYCODE_DPAD_CENTER, VoiceChannel.Thinking, running = true))
+        assertEquals(RemoteAction.Interrupt, action(KeyEvent.KEYCODE_DPAD_CENTER, VoiceChannel.Speaking))
+        assertEquals(RemoteAction.Hold, action(KeyEvent.KEYCODE_ENTER, VoiceChannel.Hearing))
+    }
+
+    @Test
+    fun volumeKeysNoSessionAndMovoOwnPagesKeepNormalRemoteBehaviour() {
+        assertEquals(RemoteAction.PassThrough, TvBackHandler.remoteAction(KeyEvent.KEYCODE_VOLUME_UP, VoiceChannel.Listening, false, false))
+        assertEquals(RemoteAction.PassThrough, TvBackHandler.remoteAction(KeyEvent.KEYCODE_DPAD_DOWN, VoiceChannel.Off, false, false))
+        assertEquals(RemoteAction.PassThrough, TvBackHandler.remoteAction(KeyEvent.KEYCODE_DPAD_DOWN, VoiceChannel.Listening, true, true))
     }
 }

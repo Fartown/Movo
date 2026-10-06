@@ -53,6 +53,7 @@ internal object TvVoicePanel {
     private const val SELECTED = 0xFFEEF0FF.toInt()
     private const val DIM_WINDOW_MS = 3_000L
     private const val LINGER_MS = 2_500L
+    private const val YIELD_MS = 2_000L
 
     private val main by lazy { Handler(Looper.getMainLooper()) }
     private var context: Context? = null
@@ -66,6 +67,7 @@ internal object TvVoicePanel {
     private var lastActive = false
     private var lingerUntil = 0L
     private var lingerText: String? = null
+    private var yieldUntil = 0L
     private var choiceFocus = 0
     private var choices: Choices? = null
     private val dimTask = Runnable { root?.animate()?.alpha(0.5f)?.setDuration(DIM_WINDOW_MS)?.start() }
@@ -91,6 +93,15 @@ internal object TvVoicePanel {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         scope.launch { VoiceSessionManager.state.collect { refresh() } }
         scope.launch { VoiceConversationController.idleEndsAt.collect { scheduleDim(it) } }
+    }
+
+    /** 你拿起遥控器：任务已停、对话已结束，胶囊显示「你来操作，我先停下」2 秒后淡出，不出声（设计稿 D2）。 */
+    fun showYield() {
+        if (Looper.myLooper() != Looper.getMainLooper()) { main.post(::showYield); return }
+        choices = null
+        yieldUntil = SystemClock.elapsedRealtime() + YIELD_MS
+        main.postDelayed(::refresh, YIELD_MS + 50)
+        refresh()
     }
 
     fun suppressForScreenshot(suppress: Boolean) {
@@ -127,7 +138,7 @@ internal object TvVoicePanel {
     fun refresh() {
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post(::refresh); return }
         val voice = VoiceSessionManager.state.value
-        if (voice.active) observeApp()
+        if (voice.active) { observeApp(); yieldUntil = 0 }
         if (lastActive && !voice.active) startLinger(voice)
         lastActive = voice.active
         val service = AgentAccessibilityService.current()
@@ -154,6 +165,7 @@ internal object TvVoicePanel {
 
     private fun startLinger(voice: VoiceSessionUiState) {
         val notice = voice.notice
+        if (SystemClock.elapsedRealtime() < yieldUntil) { lingerUntil = 0; return }
         // 空闲超时直接淡出（不再弹「需要时再叫我」）；其他结束原因停留一下，让结果看得到。
         if (notice == null || notice == VoiceConversationController.IDLE_END_MESSAGE) { lingerUntil = 0; return }
         lingerText = latestAnswer()?.let(::summary) ?: notice
@@ -169,6 +181,8 @@ internal object TvVoicePanel {
         val tools = turn.filterIsInstance<ToolActivityMessageUi>()
         val busy = session?.voiceRuntimeBusy == true
         if (!voice.active) {
+            // 任务停止要一点时间，这期间仍显示让出提示，不闪回「正在…」。
+            if (SystemClock.elapsedRealtime() < yieldUntil) return Model(TvOrbRing.None, Icon.None, TvBackHandler.YIELD_MESSAGE, TEXT)
             if (busy) return working(tools, lastUser)
             if (SystemClock.elapsedRealtime() < lingerUntil) return lingerText?.let { Model(TvOrbRing.Done, Icon.None, it, TEXT) }
             return null
