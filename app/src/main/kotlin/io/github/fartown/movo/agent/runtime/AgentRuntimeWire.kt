@@ -38,6 +38,8 @@ internal object AgentRuntimeWire {
     const val OP_REWRITE_REPLY = "rewrite_reply"
 
     const val AGENT_UI_HANDOFF_SOURCE = "agent_ui"
+    /** 超级小爱交给 Movo 的任务：答复由小爱念出来。 */
+    const val XIAOAI_HANDOFF_SOURCE = "xiaoai"
     const val MOVO_VOICE_HANDOFF_SOURCE = "movo_voice"
 
     internal class PayloadTooLargeException(sizeBytes: Int) : IllegalArgumentException(
@@ -184,6 +186,14 @@ internal object AgentRuntimeWire {
         val origin: String = "",
     ) {
         val isMonitorOrigin: Boolean get() = origin == ORIGIN_MONITOR
+
+        /** 这一轮的答复会不会被念出来：语音会话里说的话，或超级小爱交过来的任务（语音简短回复方案 §4）。 */
+        val spokenReply: io.github.fartown.movo.agent.model.SpokenReply
+            get() = when {
+                voiceSessionId.isNotBlank() -> io.github.fartown.movo.agent.model.SpokenReply.MOVO_VOICE
+                handoff?.source == XIAOAI_HANDOFF_SOURCE -> io.github.fartown.movo.agent.model.SpokenReply.XIAOAI
+                else -> io.github.fartown.movo.agent.model.SpokenReply.NONE
+            }
 
         // 旧入口沿用会话 handoff；无持久会话的入口以首个 run 为会话起点。
         val effectiveModelSessionId: String

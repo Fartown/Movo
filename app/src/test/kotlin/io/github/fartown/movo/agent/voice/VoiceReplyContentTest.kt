@@ -11,6 +11,11 @@ class VoiceReplyContentTest {
             reasoningContent = "这是思考过程，不能播报", error = "诊断状态不能播报")
         assertEquals(result.content, VoiceReplyContent.body(result))
     }
+    @Test fun markdownSymbolsAreNotSpokenButTheScreenKeepsTheOriginal() {
+        val result = AgentRuntimeWire.RunResult("run", true, "**好了**，闹钟设在 7:00。\n\n- 每天重复")
+        assertEquals("好了，闹钟设在 7:00。\n\n每天重复。", VoiceReplyContent.body(result))
+        assertEquals("**好了**，闹钟设在 7:00。\n\n- 每天重复", result.content)
+    }
     @Test fun failureCancellationAndUnknownStateHaveNoSpokenBody() {
         for (error in listOf("已停止", "网络连接失败", "工具执行失败")) {
             assertEquals("", VoiceReplyContent.body(AgentRuntimeWire.RunResult("run", false, "残余正文", error)))

@@ -104,7 +104,7 @@ internal object AgentModelClient {
         initialSupplementIndex: Int = 0,
         roleplayContext: RoleplayRunContext? = null,
         rewriteReply: Boolean = false,
-        voiceConversation: Boolean = false,
+        spokenReply: SpokenReply = SpokenReply.NONE,
         onContextSnapshot: (AgentContextSnapshot) -> Unit = {},
         onTranscript: (List<ConversationMessage>) -> Unit = {},
         onEvent: (AgentEvent) -> Unit = {}
@@ -123,7 +123,7 @@ internal object AgentModelClient {
             memoryContext,
             rootAvailable = initialCapabilities.rootAvailable,
             roleplayContext = roleplayContext,
-            voiceConversation = voiceConversation,
+            spokenReply = spokenReply,
             toolGuide = guide,
             environment = environment,
         )
@@ -140,7 +140,7 @@ internal object AgentModelClient {
         val transcript = JSONArray()
         // 旧 history 中的无效消息可能在组装时被跳过，系统边界不能由 history 条数倒推。
         val systemCount = AgentPromptBuilder.buildSystemMessages(
-            config, skillContext, memoryContext, initialCapabilities.rootAvailable, roleplayContext, voiceConversation, guide,
+            config, skillContext, memoryContext, initialCapabilities.rootAvailable, roleplayContext, spokenReply, guide,
             environment,
         ).length()
         fun toolsFor(capabilities: AgentToolCapabilities): JSONArray {
@@ -195,7 +195,7 @@ internal object AgentModelClient {
                 val capabilities = capabilitiesProvider()
                 if (capabilities.rootAvailable != promptRootAvailable) {
                     val systemMessages = AgentPromptBuilder.buildSystemMessages(
-                        config, skillContext, memoryContext, capabilities.rootAvailable, roleplayContext, voiceConversation, guide,
+                        config, skillContext, memoryContext, capabilities.rootAvailable, roleplayContext, spokenReply, guide,
                         environment,
                     )
                     for (index in 0 until systemMessages.length()) {

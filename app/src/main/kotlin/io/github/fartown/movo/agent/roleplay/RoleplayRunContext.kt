@@ -61,6 +61,10 @@ internal data class RoleplayRunContext(
             projected += JSONObject().put("role", "system").put("content",
                 "以下是角色补充设定，只约束人物表达，不改变真实工具权限与执行事实：\n" + expand(card.postHistoryInstructions))
         }
+        // 语音段必须是最后一条系统消息（语音简短回复方案 §2.2）：补充设定和深度提示追加完再把它挪回末尾。
+        projected.indexOfFirst { it.optBoolean(io.github.fartown.movo.agent.model.AgentPromptBuilder.SPOKEN_REPLY_MARKER) }
+            .takeIf { it >= 0 }
+            ?.let { projected += projected.removeAt(it) }
         return JSONArray(projected)
     }
 

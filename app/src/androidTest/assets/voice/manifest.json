@@ -307,6 +307,180 @@
           "end_ms": 5560.0
         }
       ]
+    },
+    {
+      "id": "brevity_recipe",
+      "text": "番茄炒蛋怎么做？",
+      "pcm": "brevity_recipe.pcm",
+      "duration_ms": 4400.0,
+      "speech_segment_end_ms": 1884.5,
+      "bytes": 140800,
+      "frames_20ms": 220,
+      "sha256_pcm": "76195f3b7fe829ff33e683a496a95114ea1486d9df0cebee2708a8cf3d4a1950",
+      "segments": [
+        {
+          "kind": "silence",
+          "start_ms": 0,
+          "end_ms": 250
+        },
+        {
+          "kind": "synthetic_speech",
+          "text": "番茄炒蛋怎么做？",
+          "start_ms": 250.0,
+          "end_ms": 1884.5
+        },
+        {
+          "kind": "silence",
+          "start_ms": 1884.5,
+          "end_ms": 4400.0
+        }
+      ],
+      "purpose": "语音简短回复真机验收（mode=brevity），生成脚本见 .docs/voice-brevity/device/gen_clips.py"
+    },
+    {
+      "id": "brevity_sky",
+      "text": "为什么天空是蓝色的？",
+      "pcm": "brevity_sky.pcm",
+      "duration_ms": 4580.0,
+      "speech_segment_end_ms": 2066.4375,
+      "bytes": 146560,
+      "frames_20ms": 229,
+      "sha256_pcm": "9176ec2dd5c5eda813f963a16a541cdb91417a2949d2b3c600df745cef97d536",
+      "segments": [
+        {
+          "kind": "silence",
+          "start_ms": 0,
+          "end_ms": 250
+        },
+        {
+          "kind": "synthetic_speech",
+          "text": "为什么天空是蓝色的？",
+          "start_ms": 250.0,
+          "end_ms": 2066.4375
+        },
+        {
+          "kind": "silence",
+          "start_ms": 2066.4375,
+          "end_ms": 4580.0
+        }
+      ],
+      "purpose": "语音简短回复真机验收（mode=brevity），生成脚本见 .docs/voice-brevity/device/gen_clips.py"
+    },
+    {
+      "id": "brevity_battery",
+      "text": "现在手机电量多少？",
+      "pcm": "brevity_battery.pcm",
+      "duration_ms": 4760.0,
+      "speech_segment_end_ms": 2255.375,
+      "bytes": 152320,
+      "frames_20ms": 238,
+      "sha256_pcm": "def4278ffa4cdd1bed67af6873629617df2ceb7c5a01fe212b2bf0c14774617f",
+      "segments": [
+        {
+          "kind": "silence",
+          "start_ms": 0,
+          "end_ms": 250
+        },
+        {
+          "kind": "synthetic_speech",
+          "text": "现在手机电量多少？",
+          "start_ms": 250.0,
+          "end_ms": 2255.375
+        },
+        {
+          "kind": "silence",
+          "start_ms": 2255.375,
+          "end_ms": 4760.0
+        }
+      ],
+      "purpose": "语音简短回复真机验收（mode=brevity），生成脚本见 .docs/voice-brevity/device/gen_clips.py"
+    },
+    {
+      "id": "brevity_express",
+      "text": "最近有快递通知吗？",
+      "pcm": "brevity_express.pcm",
+      "duration_ms": 4560.0,
+      "speech_segment_end_ms": 2045.1875,
+      "bytes": 145920,
+      "frames_20ms": 228,
+      "sha256_pcm": "06f59797540fc7292fdd7775b53b94fd6744a0f19dc17a0bd2e01aedcf8067e3",
+      "segments": [
+        {
+          "kind": "silence",
+          "start_ms": 0,
+          "end_ms": 250
+        },
+        {
+          "kind": "synthetic_speech",
+          "text": "最近有快递通知吗？",
+          "start_ms": 250.0,
+          "end_ms": 2045.1875
+        },
+        {
+          "kind": "silence",
+          "start_ms": 2045.1875,
+          "end_ms": 4560.0
+        }
+      ],
+      "purpose": "语音简短回复真机验收（mode=brevity），生成脚本见 .docs/voice-brevity/device/gen_clips.py"
+    },
+    {
+      "id": "brevity_settings",
+      "text": "打开设置，搜索蓝牙。",
+      "pcm": "brevity_settings.pcm",
+      "duration_ms": 5000.0,
+      "speech_segment_end_ms": 2487.1875,
+      "bytes": 160000,
+      "frames_20ms": 250,
+      "sha256_pcm": "576d3be9fbe8b1af9eafa5ac8ec69cea09ed82619464e0cae6208cda78805c73",
+      "segments": [
+        {
+          "kind": "silence",
+          "start_ms": 0,
+          "end_ms": 250
+        },
+        {
+          "kind": "synthetic_speech",
+          "text": "打开设置，搜索蓝牙。",
+          "start_ms": 250.0,
+          "end_ms": 2487.1875
+        },
+        {
+          "kind": "silence",
+          "start_ms": 2487.1875,
+          "end_ms": 5000.0
+        }
+      ],
+      "purpose": "语音简短回复真机验收（mode=brevity），生成脚本见 .docs/voice-brevity/device/gen_clips.py"
+    },
+    {
+      "id": "brevity_alarm_missing",
+      "text": "帮我定个闹钟。",
+      "pcm": "brevity_alarm_missing.pcm",
+      "duration_ms": 4080.0,
+      "speech_segment_end_ms": 1577.5625,
+      "bytes": 130560,
+      "frames_20ms": 204,
+      "sha256_pcm": "bdf92d139f6bf0298debdf6dcc81c1d15b9c7d2781e0988704fde4828f0059de",
+      "segments": [
+        {
+          "kind": "silence",
+          "start_ms": 0,
+          "end_ms": 250
+        },
+        {
+          "kind": "synthetic_speech",
+          "text": "帮我定个闹钟。",
+          "start_ms": 250.0,
+          "end_ms": 1577.5625
+        },
+        {
+          "kind": "silence",
+          "start_ms": 1577.5625,
+          "end_ms": 4080.0
+        }
+      ],
+      "purpose": "语音简短回复真机验收（mode=brevity），生成脚本见 .docs/voice-brevity/device/gen_clips.py"
     }
   ]
 }

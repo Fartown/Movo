@@ -181,6 +181,8 @@ internal class AgentRuntimeRunExecutor(
                         // 后台监听唤醒的一轮在屏幕关着时没人能作答：不给 ask_user，审批立即返回「无法确认」。
                         // 用户自己发起的任务照常等：亮屏后卡片出现（锁着时先出解锁提示）。
                         interactive = userCanAnswer(request, appContext),
+                        // 答复会被念出来时，提问卡片上的字不会念，语音里只会冷场：不给 ask_user，缺信息就在答复里直接问。
+                        spokenReply = request.spokenReply.spoken,
                         modelInputs = setOf(ModelInput.TEXT, ModelInput.IMAGE),
                         approvalPolicy = io.github.fartown.movo.agent.tools.core.ApprovalSettings.load(appContext),
                     )
@@ -236,7 +238,7 @@ internal class AgentRuntimeRunExecutor(
                 initialSupplementIndex = uiPayload?.lastSupplementIndex ?: 0,
                 roleplayContext = roleplayContext,
                 rewriteReply = request.operation == AgentRuntimeWire.OP_REWRITE_REPLY,
-                voiceConversation = request.voiceSessionId.isNotBlank(),
+                spokenReply = request.spokenReply,
                 compactOnly = request.operation == AgentRuntimeWire.OP_COMPACT,
                 onContextSnapshot = { snapshot ->
                     val committed = snapshot.copy(operationId = request.runId)

@@ -71,8 +71,10 @@ internal class XiaoAiStreamRenderer(
             text(R.string.injected_completed, "Movo completed this task")
         }
         render(finalText, immediate = true)
+        // 小爱念的那份去掉 Markdown 等符号，卡片上仍显示原文（语音简短回复方案 §3.2）。
+        val spoken = io.github.fartown.movo.agent.voice.conversation.VoiceSpeechText.normalize(finalText)
         mainHandler.post {
-            if (!cancelled.get()) speak(finalText)
+            if (!cancelled.get()) speak(spoken)
         }
     }
 

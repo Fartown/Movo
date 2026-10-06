@@ -1,6 +1,7 @@
 package io.github.fartown.movo.agent.runtime
 
 import io.github.fartown.movo.agent.model.AgentModelClient
+import io.github.fartown.movo.agent.model.SpokenReply
 import io.github.fartown.movo.data.model.ReasoningEffort
 import org.junit.Assert.*
 import org.junit.Test
@@ -23,6 +24,24 @@ class VoiceRuntimeWireTest {
         assertEquals(request, decoded)
         assertEquals("conversation-a", decoded.effectiveModelSessionId)
         assertFalse(AgentRuntimeRequestConfigResolver.requiresRuntimeConfig(decoded))
+    }
+    /** 语音简短回复方案 §4：语音会话、超级小爱的答复会被念出来；打字的不会。跨进程后判断不变。 */
+    @Test fun spokenReplyFollowsTheEntryAndSurvivesIpc() {
+        val config = AgentModelClient.ModelConfig(baseUrl = "https://example.invalid/v1", apiKey = "test", model = "m", systemPrompt = "")
+        fun request(voice: String = "", source: String? = null) = AgentRuntimeWire.RunRequest(
+            runId = "r", prompt = "p", images = emptyList(), config = config, voiceSessionId = voice,
+            handoff = source?.let { AgentRuntimeWire.EntryHandoff("r", it, "{}", true) },
+        )
+        val cases = mapOf(
+            request() to SpokenReply.NONE,
+            request(source = AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE) to SpokenReply.NONE,
+            request(voice = "voice-a", source = AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE) to SpokenReply.MOVO_VOICE,
+            request(source = io.github.fartown.movo.hook.xiaoai.XiaoAiHandoff.SOURCE) to SpokenReply.XIAOAI,
+        )
+        cases.forEach { (request, expected) ->
+            assertEquals(expected, request.spokenReply)
+            assertEquals(expected, AgentRuntimeWire.runRequestFromBundle(AgentRuntimeWire.toLegacyBundle(request)).spokenReply)
+        }
     }
     @Test fun uncertainExecutionIsPreservedAcrossFullAndLegacyResultTransports() {
         val uncertain = AgentRuntimeWire.RunResult("run-1", false, "", "连接断开", resultKind="unconfirmed")

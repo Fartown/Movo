@@ -108,6 +108,41 @@ class AgentToolSubsystemTest {
         }
     }
 
+    /** 答复会被念出来时提问卡片不会念：不给 ask_user，用法里改成在答复里直接问；审批不受影响（语音简短回复方案 §3.1）。 */
+    @Test
+    fun spokenReply_hidesAskUserAndTeachesAskingInTheReply() {
+        AgentToolSubsystem(
+            services = ToolServices(
+                context = ApplicationProvider.getApplicationContext(),
+                logger = AndroidAgentLogger,
+                runId = "run-spoken",
+                rootAvailable = { true },
+            ),
+            environment = { capableEnv.copy(spokenReply = true) },
+        ).use { sub ->
+            val names = sub.pipeline.catalog().toolNames()
+            assertTrue("ask_user" !in names)
+            val guide = sub.pipeline.promptSections().joinToString("\n") { it.text }
+            assertTrue("ask_user" !in guide)
+            assertTrue(guide.contains("在最终答复里直接用一句话问"))
+            // 工具结果怎么读的通用规则不能因为两个元工具都不可用而整节消失。
+            assertTrue(guide.contains("unknown 表示可能已生效但未确认"))
+        }
+        // 后台监听的用法：语音轮改成在答复里问停哪个，文字轮照旧用 ask_user。
+        io.github.fartown.movo.agent.monitor.MonitorToolProvider(ApplicationProvider.getApplicationContext()).use { monitor ->
+            assertTrue(monitor.promptSection(capableEnv.copy(spokenReply = true))!!.text.contains("必须先在答复里直接问停哪个"))
+            assertTrue(monitor.promptSection(capableEnv)!!.text.contains("必须先用 ask_user 问停哪个"))
+        }
+        subsystem().use { sub ->
+            val names = sub.pipeline.catalog().toolNames()
+            assertTrue("文字轮照常有 ask_user", "ask_user" in names)
+        }
+    }
+
+    private fun org.json.JSONArray.toolNames(): List<String> = (0 until length()).map { index ->
+        getJSONObject(index).let { it.optJSONObject("function")?.optString("name") ?: it.optString("name") }
+    }
+
     /** tool_search 不在目录里时，提示词与「工具不存在」的提示都不能再教模型去调它。 */
     @Test
     fun noDeferredTools_promptAndUnknownToolHintDoNotMentionToolSearch() {

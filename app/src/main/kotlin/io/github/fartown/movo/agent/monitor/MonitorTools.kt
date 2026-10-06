@@ -79,8 +79,15 @@ internal class MonitorToolProvider(
         """.trimIndent(),
     )
 
+    /** 答复会被念出来时没有 ask_user：改成在答复里直接问停哪个。 */
+    override fun promptSection(env: ToolEnvironment): PromptSection =
+        if (!env.spokenReply) promptSection
+        else promptSection.copy(text = promptSection.text.replace(ASK_WITH_CARD, ASK_IN_REPLY))
+
     companion object {
         val NAMES = setOf("monitor_start", "monitor_stop", "monitor_list", "notify_user")
+        private const val ASK_WITH_CARD = "必须先用 ask_user 问停哪个（选项：每个监听的名字 + 「全部停止」）"
+        private const val ASK_IN_REPLY = "必须先在答复里直接问停哪个（说出每个监听的名字，或者全部停止）"
     }
 }
 
@@ -227,8 +234,9 @@ internal data class MonitorStopOutput(val name: String, val eventCount: Int) : T
 internal class MonitorStopTool(private val gate: MonitorToolGate = MonitorToolGate()) : ToolContract<MonitorStopInput, MonitorStopOutput> {
     override val name = "monitor_stop"
     override val domain = ToolDomain.TERMINAL
+    // 不点名 ask_user：语音轮没有它，怎么问由用法分节说明（语音简短回复方案 §3.1）。
     override val summary = "停止本对话里的一个后台监听（按 task_id）。本对话有多个监听、而用户没说停哪个（如只说「别提醒了」）时，" +
-        "不要直接调用本工具，先用 ask_user 问停哪个（选项：每个监听的名字 + 全部停止）。"
+        "不要直接调用本工具，先问用户停哪个（选项：每个监听的名字 + 全部停止）。"
 
     override fun availability(env: ToolEnvironment): ToolAvailability = gate.availability(env)
 

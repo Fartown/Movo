@@ -20,6 +20,7 @@ internal fun AgentToolCapabilities.toToolEnvironment(
     memoryScope: MemoryScope,
     conversationBound: Boolean,
     interactive: Boolean,
+    spokenReply: Boolean = false,
     conversationId: String? = null,
     modelInputs: Set<ModelInput>,
     approvalPolicy: ApprovalPolicy = ApprovalPolicy.YOLO,
@@ -38,6 +39,7 @@ internal fun AgentToolCapabilities.toToolEnvironment(
     conversationBound = conversationBound,
     conversationId = conversationId,
     interactive = interactive,
+    spokenReply = spokenReply,
     modelInputs = modelInputs,
     approvalPolicy = approvalPolicy,
 )
