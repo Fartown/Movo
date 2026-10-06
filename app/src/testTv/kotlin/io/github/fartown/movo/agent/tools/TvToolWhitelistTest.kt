@@ -44,12 +44,33 @@ class TvToolWhitelistTest {
             "device_read", "setting_read", "app_search", "app_open",
             "ui_observe", "ui_tap", "ui_focus", "ui_scroll", "ui_input", "ui_key", "ui_wait",
             "clipboard_read", "clipboard_write",
-            "media_control", "volume_set", "video_search",
+            "media_control", "volume_set", "video_search", "end_call",
             "memory_read", "memory_write", "conversation_read",
             "ask_user", "tool_search",
         )
         subsystem().use { sub ->
             assertEquals(expected, sub.pipeline.registryView.tools.map { it.name }.toSet())
+        }
+    }
+
+    @Test
+    fun voiceRunsGetEndCallAndItsUsageSection() {
+        AgentToolSubsystem(
+            services = ToolServices(
+                context = ApplicationProvider.getApplicationContext(),
+                logger = AndroidAgentLogger,
+                runId = "run-tv-voice",
+                rootAvailable = { true },
+            ),
+            environment = { capableEnv.copy(spokenReply = true) },
+        ).use { sub ->
+            val catalog = sub.pipeline.catalog()
+            val names = (0 until catalog.length()).map {
+                catalog.getJSONObject(it).getJSONObject("function").getString("name")
+            }.toSet()
+            org.junit.Assert.assertTrue("end_call" in names)
+            val section = sub.pipeline.promptSections().single { it.id == "tv_end_call" }
+            assertEquals(io.github.fartown.movo.tv.TvEndCallToolProvider.USAGE, section.text)
         }
     }
 
@@ -62,6 +83,8 @@ class TvToolWhitelistTest {
                 catalog.getJSONObject(it).getJSONObject("function").getString("name")
             }.toSet()
             assertFalse("电视不弹提问卡，ask_user 不应进目录", "ask_user" in names)
+            assertFalse("打字对话里没有语音会话可结束", "end_call" in names)
+            assertFalse(sub.pipeline.promptSections().any { it.id == "tv_end_call" })
         }
     }
 }

@@ -191,6 +191,20 @@ internal open class VoiceSessionOwner(
         end("已切到文字输入")
     }
     fun stopSpeaking() { if (active) controller?.stopSpeaking() }
+
+    /**
+     * end_call：这一轮回答念完就结束会话，之后不再接收新的话；排队待发的话留作草稿、不再发出。
+     * 没有进行中的会话时返回 false。
+     */
+    @MainThread
+    fun endAfterReply(): Boolean {
+        val current = controller ?: return false
+        if (!current.active) return false
+        queuedTurn?.let { queued -> conversationId?.let { app?.retainVoiceDraft(it, queued.text) } }
+        queuedTurn = null
+        current.endAfterReply()
+        return true
+    }
     fun cancelTask() {
         val conversations = app ?: return
         val waiting = queuedTurn
@@ -380,6 +394,7 @@ internal open class VoiceSessionOwner(
         }
 
         override fun stopSpeaking() = Unit
+        override fun endAfterReply() = end()
         override fun result(turn: Long, answer: String, confirmed: Boolean, failure: String?) = Unit
         override fun runtimeEvent(turn: Long, event: AgentEvent) = Unit
     }

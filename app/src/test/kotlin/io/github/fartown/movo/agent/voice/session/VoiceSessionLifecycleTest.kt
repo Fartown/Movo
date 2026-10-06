@@ -173,6 +173,20 @@ class VoiceSessionLifecycleTest {
         assertTrue(owner.active)
     }
 
+    @Test fun endAfterReplyKeepsWaitingSpeechAsDraftAndNeverSendsIt() {
+        val host = FakeConversations(); host.running = true; begin(host)
+        submit("排队的话")
+        assertTrue(owner.endAfterReply())
+        assertEquals(1, audio.endAfterReplies)
+        assertEquals(listOf("排队的话"), host.retained)
+        host.running = false; Snapshot.sendApplyNotifications()
+        assertTrue(host.sent.isEmpty())
+    }
+
+    @Test fun endAfterReplyWithoutAnActiveSessionReportsFalse() {
+        assertFalse(owner.endAfterReply())
+    }
+
     @Test fun repeatedInactiveEventsAndLateResultsRetainTranscriptOnlyOnce() {
         val host = FakeConversations(); begin(host)
         submit("已发送正文")
@@ -442,7 +456,9 @@ class VoiceSessionLifecycleTest {
         var transcript = ""
         var ends = 0
         var results = 0
+        var endAfterReplies = 0
         override fun start() { active = true; host.onState("listening", true, "我在听", "") }
+        override fun endAfterReply() { endAfterReplies++ }
         override fun end(message: String) { ends++; active = false; host.onState("ended", false, message, transcript) }
         override fun stopSpeaking() = Unit
         override fun result(turn: Long, answer: String, confirmed: Boolean, failure: String?) { results++ }

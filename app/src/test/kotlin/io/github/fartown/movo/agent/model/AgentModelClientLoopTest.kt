@@ -796,6 +796,42 @@ class AgentModelClientLoopTest {
         assertEquals(2, provider.requests.size)
     }
 
+    @Test
+    fun finishingToolThatDeclaresItsOwnReplyKeepsItAndEndsTheRunWithIt() {
+        var requestTools: JSONArray? = null
+        val provider = ScriptedProvider(listOf { request, _ ->
+            requestTools = request.tools
+            assistant(finishReason = "tool_calls", toolCalls = listOf(
+                toolCall("call-end", "end_call", """{"reply":"好的，有事再叫我"}"""),
+            ))
+        })
+        val ownReply = JSONObject().put("type", "string").put("description", "告别语")
+        val endCall = functionTool("end_call", JSONObject().put(AgentLoop.FINISH_REPLY_ARG, ownReply))
+        endCall.getJSONObject("function").getJSONObject("parameters").put("required", JSONArray().put(AgentLoop.FINISH_REPLY_ARG))
+        val executedArgs = mutableListOf<String>()
+        val result = AgentLoop(
+            config = modelConfig(),
+            messages = JSONArray().put(AgentConversationCodec.userTextMessage("退下")),
+            tools = JSONArray().put(endCall),
+            provider = provider,
+            toolExecutor = AgentModelClient.ToolExecutor { call ->
+                executedArgs += call.argumentsJson
+                AgentModelClient.ToolResult(JSONObject().put("ok", true).toString())
+            },
+            runController = AgentRunController(),
+            traceFormatter = AgentTraceFormatter(),
+            onEvent = {},
+            finishingTools = setOf("end_call"),
+        ).run()
+
+        assertEquals("好的，有事再叫我", result.content)
+        assertEquals(1, provider.requests.size)
+        assertEquals(listOf("{}"), executedArgs)
+        val parameters = requestTools!!.getJSONObject(0).getJSONObject("function").getJSONObject("parameters")
+        assertEquals("告别语", parameters.getJSONObject("properties").getJSONObject(AgentLoop.FINISH_REPLY_ARG).getString("description"))
+        assertEquals(AgentLoop.FINISH_REPLY_ARG, parameters.getJSONArray("required").getString(0))
+    }
+
     private fun finishingLoop(
         messages: JSONArray,
         provider: ScriptedProvider,

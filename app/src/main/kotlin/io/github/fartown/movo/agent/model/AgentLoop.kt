@@ -250,7 +250,9 @@ internal class AgentLoop(
             val tool = roundTools.optJSONObject(index)
             val function = tool?.optJSONObject("function")
             val properties = function?.optJSONObject("parameters")?.optJSONObject("properties")
-            if (function == null || properties == null || function.optString("name") !in finishingTools) {
+            // 工具自己声明了回答参数（如 end_call 的告别语）时保留它的说明与必填，不用通用说明覆盖。
+            if (function == null || properties == null || function.optString("name") !in finishingTools ||
+                properties.has(FINISH_REPLY_ARG)) {
                 result.put(roundTools.opt(index))
                 continue
             }

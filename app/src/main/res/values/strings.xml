@@ -255,6 +255,7 @@
   <string name="tool_scroll">Scroll</string>
   <string name="tool_move_focus">Move focus</string>
   <string name="tool_video_search">Search videos</string>
+  <string name="tool_end_call">End voice chat</string>
   <string name="tool_scroll_element">Scroll element</string>
   <string name="tool_input_text">Enter text</string>
   <string name="tool_replace_text">Replace text</string>

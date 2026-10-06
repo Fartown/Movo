@@ -140,6 +140,7 @@ internal fun toolDisplayNameResource(name: String): Int? = when (name) {
     "ui_scroll" -> R.string.tool_scroll
     "ui_focus" -> R.string.tool_move_focus
     "video_search" -> R.string.tool_video_search
+    "end_call" -> R.string.tool_end_call
     "ui_input" -> R.string.tool_input_text
     "ui_key" -> R.string.tool_press_key
     "ui_wait" -> R.string.tool_wait

@@ -120,7 +120,11 @@ internal object TvConversationOverlay {
             return true
         }
         if (event.keyCode == KeyEvent.KEYCODE_BACK && (expanded || backHeld)) {
-            if (event.action == KeyEvent.ACTION_DOWN) backHeld = true
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                // 语音对话中按返回 = 让 Movo 退下（与浮窗收起时一样）；只是打字时的返回仍只收起浮窗。
+                if (event.repeatCount == 0 && VoiceSessionManager.active) TvBackHandler.cancel()
+                backHeld = true
+            }
             if (event.action == KeyEvent.ACTION_UP && backHeld) { backHeld = false; collapse() }
             return true
         }

@@ -57,8 +57,11 @@ internal object FlavorModule : Flavor {
     /** 打开了其他 App（含直达视频搜索）后，回答念完就结束会话：不留在后台把节目声音当成你在说话。 */
     override val voiceHandoffTools: Set<String> = setOf("app_open", "video_search")
 
-    /** 「打开 X」打开就算做完：模型在 app_open 里带上回答，成功后直接结束，不再为一句「已打开」多请求一轮模型。 */
-    override val finishingTools: Set<String> = setOf("app_open")
+    /**
+     * 「打开 X」打开就算做完：模型在 app_open 里带上回答，成功后直接结束，不再为一句「已打开」多请求一轮模型。
+     * end_call 同理：告别语随调用给出，直接作为本轮回答念出，念完会话关闭。
+     */
+    override val finishingTools: Set<String> = setOf("app_open", io.github.fartown.movo.tv.TvEndCallTool.NAME)
 
     /** 隔 2 分钟以上再叫「小T小T」就开新对话：刚问完接着问仍能接上文，隔久了从头开始，请求更快。 */
     override val voiceNewConversationAfterMs: Long = 120_000L
@@ -86,6 +89,7 @@ internal object FlavorModule : Flavor {
         return listOf(
             TvDeviceToolProvider(services),
             TvMediaToolProvider(services),
+            io.github.fartown.movo.tv.TvEndCallToolProvider(),
             UiToolProvider(context, services.logger, rootAvailable, includeTouchscreenTools = false, screenshotExcludedPackages = services.screenshotExcludedPackages),
             MemoryToolProvider(context, inputs.characterId),
             ConversationToolProvider(inputs.conversationLoader),

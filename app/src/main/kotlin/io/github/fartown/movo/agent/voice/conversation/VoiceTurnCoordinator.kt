@@ -28,6 +28,8 @@ internal class VoiceTurnCoordinator(
     var running: Turn? = null; private set
     var pending: Turn? = null; private set
     var speaking: Turn? = null; private set
+    /** 已登记“这一轮回答念完就结束”（end_call）：不再接收新的话，回答念完、没有回答或失败时结束。 */
+    var closing = false; private set
     private var prefix = ""
     private var heldDraft = ""
     private var endedTurn = -1L
@@ -53,10 +55,11 @@ internal class VoiceTurnCoordinator(
         speechDiscarded = false
         responseOwner = null
         deferredAnswer = null
+        closing = false
     }
 
     fun speechStarted(id: Long): List<Action> {
-        if (!active || id <= latestTurnId) return emptyList()
+        if (!active || closing || id <= latestTurnId) return emptyList()
         // A new segment during the end-of-turn grace period is still the same user turn.
         prefix = candidate?.text.orEmpty()
         candidate = null
@@ -68,7 +71,7 @@ internal class VoiceTurnCoordinator(
     }
 
     fun partial(id: Long, text: String): List<Action> {
-        if (!active || id != latestTurnId || (!hearing && candidate == null) || text.isBlank()) return emptyList()
+        if (!active || closing || id != latestTurnId || (!hearing && candidate == null) || text.isBlank()) return emptyList()
         transcript = listOf(prefix, text.trim()).filter(String::isNotBlank).joinToString("，")
         candidate?.let { candidate = it.copy(text = transcript) }
         if (speaking != null && !speechDiscarded) {
@@ -80,7 +83,7 @@ internal class VoiceTurnCoordinator(
     }
 
     fun speechEnded(id: Long): List<Action> {
-        if (!active || id != latestTurnId || endedTurn == id) return emptyList()
+        if (!active || closing || id != latestTurnId || endedTurn == id) return emptyList()
         endedTurn = id
         hearing = false
         if (transcript.isBlank()) {
@@ -92,7 +95,7 @@ internal class VoiceTurnCoordinator(
 
     /** Timer carries the segment identity; stale callbacks cannot submit a new utterance. */
     fun commit(id: Long): List<Action> {
-        val turn = candidate?.takeIf { active && !hearing && it.id == id } ?: return emptyList()
+        val turn = candidate?.takeIf { active && !closing && !hearing && it.id == id } ?: return emptyList()
         candidate = null
         transcript = ""
         prefix = ""
@@ -149,6 +152,13 @@ internal class VoiceTurnCoordinator(
         val done = running?.takeIf { it.id == id } ?: return emptyList()
         running = null
         if (!active) return emptyList()
+        if (closing) {
+            // 念完这一轮的回答（告别语）就结束；没有回答（失败、取消）就直接结束。待发的话不再发出，结束时留作草稿。
+            if (answer.isBlank()) return end()
+            deferredAnswer = null
+            speaking = done.copy(id = latestTurnId, text = answer)
+            return listOf(Action.Speak(speaking!!))
+        }
         val next = pending
         pending = null
         if (next != null) {
@@ -168,8 +178,23 @@ internal class VoiceTurnCoordinator(
         return listOf(Action.Speak(speaking!!))
     }
 
+    /**
+     * 登记“这一轮回答念完就结束”（end_call 工具）：立即不再接收新的话；正在执行的这一轮结束后念出回答，念完结束。
+     * 没有在执行、也没有在念时直接结束。
+     */
+    fun endAfterReply(): List<Action> {
+        if (!active) return emptyList()
+        closing = true
+        hearing = false
+        candidate = null
+        if (running == null && speaking == null) return end()
+        return emptyList()
+    }
+
     /** 界面上的"停止播报"：只停这次朗读，会话与任务都继续。与语音命令"别念了"同一条路径。 */
     fun stopSpeaking(): List<Action> {
+        // 告别语被打断：直接结束。
+        if (active && closing && speaking != null) return end()
         if (!active || (speaking == null && deferredAnswer == null)) return emptyList()
         speaking = null
         responseOwner = null
@@ -177,8 +202,11 @@ internal class VoiceTurnCoordinator(
         return listOf(Action.DiscardSpeech)
     }
 
-    fun playbackFinished(id: Long) {
-        if (speaking?.id == id) speaking = null
+    /** 朗读结束；登记了 [endAfterReply] 时返回结束会话的动作。 */
+    fun playbackFinished(id: Long): List<Action> {
+        if (speaking?.id != id) return emptyList()
+        speaking = null
+        return if (active && closing && running == null) end() else emptyList()
     }
 
     fun end(): List<Action> {
@@ -193,6 +221,7 @@ internal class VoiceTurnCoordinator(
         candidate = null
         pending = null
         speaking = null
+        closing = false
         return listOf(Action.DiscardSpeech, Action.EndSession)
     }
 }

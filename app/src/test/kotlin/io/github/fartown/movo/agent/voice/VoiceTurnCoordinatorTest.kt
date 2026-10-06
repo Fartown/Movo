@@ -131,6 +131,50 @@ class VoiceTurnCoordinatorTest {
         assertTrue(s.say(1, "结束对话。").contains(Action.EndSession))
         assertFalse(s.active); assertNull(s.running)
     }
+    @Test fun endAfterReplySpeaksThisRunsAnswerThenEnds() {
+        val s = session()
+        s.say(1, "退下")
+        assertTrue(s.endAfterReply().isEmpty())
+        assertTrue(s.closing)
+        // 登记后不再接收新的话。
+        assertTrue(s.say(2, "新的一句").isEmpty())
+        assertEquals(1L, s.running?.id)
+        val speak = s.runtimeFinished(1, "好的，有事再叫我").single() as Action.Speak
+        assertEquals("好的，有事再叫我", speak.turn.text)
+        assertTrue(s.active)
+        assertTrue(s.playbackFinished(speak.turn.id).contains(Action.EndSession))
+        assertFalse(s.active); assertFalse(s.closing)
+    }
+    @Test fun endAfterReplyEndsAtOnceWhenTheRunHasNoAnswer() {
+        val s = session()
+        s.say(1, "退下")
+        s.endAfterReply()
+        assertTrue(s.runtimeFinished(1, "").contains(Action.EndSession))
+        assertFalse(s.active)
+    }
+    @Test fun endAfterReplyNeverDispatchesWaitingSpeechAndKeepsItAsDraft() {
+        val s = session()
+        s.say(1, "放个电影")
+        s.say(2, "顺便调小声音")
+        assertEquals(2L, s.pending?.id)
+        s.endAfterReply()
+        val speak = s.runtimeFinished(1, "好的").single() as Action.Speak
+        assertTrue(s.playbackFinished(speak.turn.id).contains(Action.EndSession))
+        assertEquals("顺便调小声音", s.transcript)
+    }
+    @Test fun interruptingTheFarewellEndsTheSession() {
+        val s = session()
+        s.say(1, "退下")
+        s.endAfterReply()
+        s.runtimeFinished(1, "好的")
+        assertTrue(s.stopSpeaking().contains(Action.EndSession))
+        assertFalse(s.active)
+    }
+    @Test fun endAfterReplyWithNothingRunningEndsImmediately() {
+        val s = session()
+        assertTrue(s.endAfterReply().contains(Action.EndSession))
+        assertFalse(s.active)
+    }
     @Test fun feedbackAndProgressDoNotCreateSecondTask() {
         listOf("好的", "等一下", "做到哪了").forEach { text ->
             val s = session(); s.say(1, "任务"); val actions = s.say(2, text)

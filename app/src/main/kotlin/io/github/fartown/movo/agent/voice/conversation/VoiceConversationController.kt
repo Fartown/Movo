@@ -17,6 +17,8 @@ internal interface VoiceConversationSession {
     fun start()
     fun end(message: String = "语音对话已结束")
     fun stopSpeaking()
+    /** 这一轮回答念完就结束（end_call）：立即不再接收新的话。 */
+    fun endAfterReply()
     fun result(turn: Long, answer: String, confirmed: Boolean = true, failure: String? = null)
     fun runtimeEvent(turn: Long, event: io.github.fartown.movo.agent.runtime.AgentEvent)
 }
@@ -65,9 +67,11 @@ internal class VoiceConversationController(
         publish("connecting")
         engine = DoubaoDialogEngine(context, object : DoubaoDialogEngine.Listener {
             private fun valid() = current == generation && turns.active
+            /** 登记了念完就结束后，不再接收新的话。 */
+            private fun listening() = valid() && !turns.closing
             override fun onReady() { if (valid()) { status = "我在听，说完会自动发送"; publish("listening"); tick(current) } }
             override fun onSpeechStarted(turn: Long) {
-                if (!valid()) return
+                if (!listening()) return
                 // 你接着说了，说明还要继续，不按「打开 App 就结束」处理。
                 handoff = false
                 commit?.let(main::removeCallbacks)
@@ -78,17 +82,17 @@ internal class VoiceConversationController(
                 publish("hearing", turn)
             }
             override fun onPartial(turn: Long, text: String) {
-                if (!valid()) return
+                if (!listening()) return
                 apply(turns.partial(turn, text))
                 publish("transcript", turn)
             }
             override fun onInputActivity(atElapsedMs: Long) {
-                if (!valid()) return
+                if (!listening()) return
                 commitGate.activity(atElapsedMs)
                 if (turns.candidate != null) observer?.invoke("input.activity", turns.latestTurnId, "", "")
             }
             override fun onSpeechEnded(turn: Long) {
-                if (!valid()) return
+                if (!listening()) return
                 utteranceSince = 0
                 apply(turns.speechEnded(turn))
                 status = if (turns.candidate != null) "听到了，可以继续补充…" else idleStatus()
@@ -117,7 +121,8 @@ internal class VoiceConversationController(
             }
             override fun onPlaybackFinished(turn: Long) {
                 if (!valid()) return
-                turns.playbackFinished(turn)
+                val closing = turns.playbackFinished(turn)
+                if (closing.isNotEmpty()) { status = END_CALL_NOTICE; apply(closing); return }
                 if (handoff && turns.running == null && turns.speaking == null) { handoff = false; end(APP_HANDOFF_NOTICE); return }
                 status = idleStatus()
                 publish("listening", turn)
@@ -140,7 +145,10 @@ internal class VoiceConversationController(
         }
         observer?.invoke("runtime.terminal", turn, failure.orEmpty(), if (failure == null) "ok" else "failed")
         observer?.invoke("answer", turn, answer, status)
-        apply(turns.runtimeFinished(turn, answer))
+        val closing = turns.closing
+        val actions = turns.runtimeFinished(turn, answer)
+        if (closing && VoiceTurnCoordinator.Action.EndSession in actions) status = END_CALL_NOTICE
+        apply(actions)
         if (active && turns.speaking == null) status = failure?.takeIf { turns.running == null } ?: idleStatus()
         publish("result", turn)
         // 打开了其他 App 但没有要念的回答：直接结束，不留在后台听节目。
@@ -168,11 +176,21 @@ internal class VoiceConversationController(
     /** 停止当前播报，不结束语音通道、不取消任务。 */
     override fun stopSpeaking() {
         if (!turns.active) return
+        val closing = turns.closing
         val actions = turns.stopSpeaking()
         if (actions.isEmpty()) return
+        if (closing) { status = END_CALL_NOTICE; apply(actions); return }
         apply(actions)
         status = "已停止播报，你可以继续说"
         publish("listening")
+    }
+
+    override fun endAfterReply() {
+        if (!turns.active) return
+        commit?.let(main::removeCallbacks)
+        val actions = turns.endAfterReply()
+        if (actions.isNotEmpty()) { status = END_CALL_NOTICE; apply(actions); return }
+        publish("closing")
     }
 
     override fun end(message: String) {
@@ -261,6 +279,9 @@ internal class VoiceConversationController(
 
         /** 空闲超时结束时的状态文案。 */
         const val IDLE_END_MESSAGE = "暂时没有听到说话，语音已结束，可再次唤醒"
+
+        /** end_call 登记后会话结束时的提示。 */
+        const val END_CALL_NOTICE = "语音对话已结束"
 
         /** 打开了其他 App 后结束会话的提示。 */
         const val APP_HANDOFF_NOTICE = "已打开，语音已结束"
