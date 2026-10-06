@@ -16,10 +16,16 @@ internal fun recordDiagnosticEvent(event: AgentEvent) {
             "phase" to event.phase, "tokens_before" to event.tokensBefore, "tokens_after" to event.tokensAfter,
             "code" to MemoryDiagnostics.token(event.reasonCode),
         )
-        is AgentEvent.UsageReceived -> "model.usage" to mapOf(
-            "round" to event.round, "input_tokens" to event.usage.inputTokens, "output_tokens" to event.usage.outputTokens,
-            "context_tokens" to event.usage.contextTokens,
-        )
+        is AgentEvent.UsageReceived -> {
+            // 提示缓存命中情况（只有数字）：真机上按它核对跨任务的缓存（提示缓存方案第 3 版）。
+            io.github.fartown.movo.core.AndroidAgentLogger.info(
+                "Model usage: round=${event.round}, in=${event.usage.inputTokens}, cached=${event.usage.cachedTokens}",
+            )
+            "model.usage" to mapOf(
+                "round" to event.round, "input_tokens" to event.usage.inputTokens, "output_tokens" to event.usage.outputTokens,
+                "context_tokens" to event.usage.contextTokens, "cached_tokens" to event.usage.cachedTokens,
+            )
+        }
         is AgentEvent.RunFinished -> "run.completed" to mapOf("round" to event.round)
         else -> return
     }

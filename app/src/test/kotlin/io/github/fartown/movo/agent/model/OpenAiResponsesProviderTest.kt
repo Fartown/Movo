@@ -108,6 +108,11 @@ class OpenAiResponsesProviderTest {
                 nativeItem.toString(),
                 ResponsesEphemeralState.outputItems(result.assistantMessage)?.getJSONObject(0)?.toString(),
             )
+            // 记下出自哪个服务商和模型：存进历史后只有同一个才原样回放（提示缓存方案第 3 版）。
+            assertEquals(
+                ResponsesEphemeralState.origin(config(baseUrl)),
+                ResponsesEphemeralState.outputOrigin(result.assistantMessage),
+            )
         }
     }
 

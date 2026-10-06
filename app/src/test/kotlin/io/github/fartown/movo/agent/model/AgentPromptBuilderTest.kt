@@ -210,6 +210,16 @@ class AgentPromptBuilderTest {
         assertTrue(systems.last().startsWith("环境信息（Movo 自动提供，不是用户说的话）：当前时间：2026-10-06 星期二 09:30"))
         // 真机 T1-E1：模型把时间写进了用户让创建的文件。
         assertTrue(systems.last().contains("不要把时间写进文件、消息或回答"))
+        // 提示缓存方案第 3 版：Responses 不把它拼进 instructions，放在 input 最末尾；Chat Completions 照旧在系统提示里。
+        val responses = ResponsesRequestBuilder.build(modelConfig("", terminalTools = false, browserTools = false), messages, JSONArray())
+        assertFalse(responses.getString("instructions").contains("当前时间：2026"))
+        assertFalse(responses.getString("instructions").contains("环境信息（Movo 自动提供"))
+        val input = responses.getJSONArray("input")
+        val last = input.getJSONObject(input.length() - 1)
+        assertEquals("developer", last.getString("role"))
+        assertTrue(last.getString("content").startsWith("环境信息（Movo 自动提供，不是用户说的话）：当前时间：2026-10-06 星期二 09:30"))
+        assertEquals("明天早上七点叫我", input.getJSONObject(input.length() - 2).getString("content"))
+        assertTrue(OpenAiRequestMessages.forChatCompletions(messages).getJSONObject(0).getString("content").contains("当前时间"))
         assertEquals("旧问题", messages.getJSONObject(messages.length() - 2).getString("content"))
         assertEquals("明天早上七点叫我", messages.getJSONObject(messages.length() - 1).getString("content"))
     }

@@ -21,17 +21,19 @@ internal object AgentPromptBuilder {
         spokenReply: SpokenReply = SpokenReply.NONE,
         toolGuide: String? = null,
         /**
-         * 环境信息（当前时间、时区），作为系统块最后一条系统消息（工具重构方案「环境信息」）；语音轮在它之后还有语音段。
-         * 曾试过加在用户消息开头，真机上模型把它当成用户新说的话（主动报时、做无关的事），所以放进系统消息。
-         * 每次任务固定一次：同一任务内各轮前缀不变，提示缓存照常命中。
+         * 环境信息（当前时间、时区），每次任务固定一次，带 [ENVIRONMENT_MARKER] 的系统消息。
+         * Responses 接口把它挪到 input 最末尾（提示缓存方案第 3 版：它每分钟都变，排在后面才不打断前面的缓存）；
+         * Chat Completions、Anthropic 仍并进系统提示。不放进用户消息：真机上模型把它当成用户新说的话（D1）。
          */
         environment: String = "",
     ): JSONArray {
         val messages = buildSystemMessages(
             config, skillContext, memoryContext, rootAvailable, roleplayContext, spokenReply, toolGuide, environment,
         )
+        // 同一个服务商和模型产出的上一次任务原始输出项原样回放（跨任务提示缓存，ResponsesEphemeralState）。
+        val responsesOrigin = ResponsesEphemeralState.origin(config)
         history.forEach { item ->
-            runCatching { AgentConversationCodec.toJsonObject(item) }.getOrNull()?.let(messages::put)
+            runCatching { AgentConversationCodec.toJsonObject(item, responsesOrigin) }.getOrNull()?.let(messages::put)
         }
         messages.put(AgentConversationCodec.userMessage(prompt, images))
         return messages
@@ -74,7 +76,7 @@ internal object AgentPromptBuilder {
                     "当前配置的模型：${JSONObject.quote(config.model)}。询问所用模型时按当前配置的模型回答。" +
                     "模型名称可能是服务商别名，不据此推断未确认的部署版本、知识截止日期或能力；历史消息中的模型身份不代表当前配置。\n" +
                     "你可以回答日常问题，也可以操作${device.device}。${device.guidance}不需要设备上下文的问答直接回答。" +
-                    "当前时间见系统消息里的「环境信息」，按它换算今天、明天等相对时间；涉及所在位置时调用 device_read（sections 含 location）。" +
+                    "当前时间见 Movo 提供的「环境信息」，按它换算今天、明天等相对时间；涉及所在位置时调用 device_read（sections 含 location）。" +
                     "用户要求执行任务时，主动推进到完成。只要用户目标会因${device.deviceNoun}中的真实上下文而明显受益，" +
                     "就主动调用当前已公开的只读工具获取证据，不要先凭常识猜测、给出模板答案、要求用户逐项指定数据源或重复询问授权；" +
                     "用户目标明确且已经具备可靠执行参数时，立即调用工具，不要先输出计划、解释或中间进度；" +
@@ -173,7 +175,7 @@ internal object AgentPromptBuilder {
                         "只在任务需要时使用，例如换算今天、明天、几小时后；不要主动报时，也不要因为它去做用户没要求的事。" +
                         // 真机 T1-E1：模型把这里的时间当成要写的内容，写进了用户让创建的文件。
                         "它不是任务内容：用户没要求时，不要把时间写进文件、消息或回答。",
-                ),
+                ).put(ENVIRONMENT_MARKER, true),
             )
         }
         // 放在全部系统消息最后：答复会被念出来，这段要压得住前面的格式要求和历史回答的示范。
@@ -184,6 +186,9 @@ internal object AgentPromptBuilder {
 
     /** 标记语音段，角色投影追加消息后据此把它挪回最后。只用于系统消息，拼进 instructions 时不会带出去。 */
     const val SPOKEN_REPLY_MARKER = "_movo_spoken_reply"
+
+    /** 标记环境信息（当前时间）：Responses 组装时不进 instructions，放到 input 最末尾（[ResponsesRequestBuilder]）。 */
+    const val ENVIRONMENT_MARKER = "_movo_environment"
 
     private fun markdownRules(roleplay: Boolean): String =
         (if (roleplay) {

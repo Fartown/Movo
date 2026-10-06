@@ -217,22 +217,14 @@ internal object AgentModelClient {
                 cause = throwable,
                 contextSnapshot = if (rewriteReply) null else loop.contextSnapshot(),
                 reasoningContent = loop.reasoningSnapshot(),
-                transcript = AgentToolBatchRecovery.completeInterrupted(AgentConversationCodec.transcript(
-                    transcript,
-                    0,
-                    loop.sensitiveToolCallIdsSnapshot(),
-                )),
+                transcript = AgentToolBatchRecovery.completeInterrupted(AgentConversationCodec.transcript(transcript, 0)),
             )
         }
         return ModelResponse.Text(
             content = result.content,
             contextSnapshot = if (rewriteReply) null else loop.contextSnapshot(),
             reasoningContent = result.reasoningContent,
-            transcript = AgentConversationCodec.transcript(
-                transcript,
-                0,
-                result.sensitiveToolCallIds,
-            ),
+            transcript = AgentConversationCodec.transcript(transcript, 0),
         )
     }
 
@@ -310,6 +302,10 @@ internal object AgentModelClient {
         val compactedUserTurns: Int = 0,
         val summaryThroughUserTurn: Int = 0,
         val messageId: String = "",
+        /** Responses 接口这一步的原始输出项（JSON 数组），见 [ResponsesEphemeralState]。 */
+        val responsesOutputJson: String = "",
+        /** 产出 [responsesOutputJson] 的服务商与模型（[ResponsesEphemeralState.origin]）。 */
+        val responsesOrigin: String = "",
     )
 
     fun interface ToolExecutor {

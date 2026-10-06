@@ -42,7 +42,6 @@ internal class AgentLoop(
     data class Result(
         val content: String,
         val reasoningContent: String,
-        val sensitiveToolCallIds: Set<String>,
     )
 
     private data class ToolOutcome(
@@ -52,11 +51,10 @@ internal class AgentLoop(
 
     private var toolCallValidator = AgentToolCallValidator(tools)
     private val accumulatedReasoning = StringBuilder()
-    private val sensitiveToolCallIds = linkedSetOf<String>()
     private var pendingToolImageMessage: JSONObject? = null
     private val context = AgentContextSession(
         config, messages, systemCount, operationId, provider, runController,
-        { sensitiveToolCallIds }, onEvent, onContextSnapshot, { transcript.length() },
+        onEvent, onContextSnapshot, { transcript.length() },
         roleplay = roleplayContext != null,
     )
     private var supplementIndex = initialSupplementIndex
@@ -72,18 +70,16 @@ internal class AgentLoop(
 
     private fun publishTranscript() {
         if (publishedTranscriptSize == transcript.length()) return
-        onTranscript(AgentConversationCodec.transcript(transcript, 0, sensitiveToolCallIds))
+        onTranscript(AgentConversationCodec.transcript(transcript, 0))
         publishedTranscriptSize = transcript.length()
     }
 
     fun compactOnly(): Result {
         context.compact(tools, force = true)
-        return Result("", "", emptySet())
+        return Result("", "")
     }
 
     fun reasoningSnapshot(): String = accumulatedReasoning.toString().trim()
-
-    fun sensitiveToolCallIdsSnapshot(): Set<String> = sensitiveToolCallIds.toSet()
 
     fun run(): Result {
         var round = 1
@@ -219,7 +215,7 @@ internal class AgentLoop(
                 }
                 context.compact(roundTools, final = true)
                 onEvent(AgentEvent.RunFinished(round = round, contentChars = finish.length))
-                return Result(content = finish, reasoningContent = reasoningSnapshot(), sensitiveToolCallIds = sensitiveToolCallIds.toSet())
+                return Result(content = finish, reasoningContent = reasoningSnapshot())
             }
 
             publishTranscript()
@@ -242,7 +238,6 @@ internal class AgentLoop(
             return Result(
                 content = content,
                 reasoningContent = reasoningSnapshot(),
-                sensitiveToolCallIds = sensitiveToolCallIds.toSet(),
             )
         }
     }
@@ -362,10 +357,6 @@ internal class AgentLoop(
                     .toString(),
             )
         }
-        if (result.sensitive || AgentSensitiveToolPolicy.isSensitive(toolCall.name)) {
-            sensitiveToolCallIds += toolCall.id
-        }
-
         emitToolFinished(round, toolCall, result)
         return ToolOutcome(toolCall, result)
     }
@@ -399,9 +390,7 @@ internal class AgentLoop(
                 .put("code", code)
                 .put("message", message)
                 .toString(),
-            sensitive = AgentSensitiveToolPolicy.isSensitive(toolCall.name),
         )
-        if (result.sensitive) sensitiveToolCallIds += toolCall.id
         emitToolFinished(round, toolCall, result)
         return ToolOutcome(toolCall, result)
     }

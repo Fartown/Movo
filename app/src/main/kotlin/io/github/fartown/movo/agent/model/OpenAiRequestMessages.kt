@@ -25,14 +25,26 @@ internal object OpenAiRequestMessages {
         }
     }
 
+    /** Responses 的 instructions：环境信息（当前时间）除外，它放在 input 最末尾（[ResponsesRequestBuilder]）。 */
     fun responsesInstructions(source: JSONArray): String =
-        collectInstructions(source, RESPONSES_INSTRUCTION_ROLES)
+        collectInstructions(source, RESPONSES_INSTRUCTION_ROLES, skipEnvironment = true)
 
-    private fun collectInstructions(source: JSONArray, roles: Set<String>): String =
+    /** 环境信息（当前时间）的正文；没有时为空。 */
+    fun environmentText(source: JSONArray): String =
+        buildList {
+            for (index in 0 until source.length()) {
+                val message = source.optJSONObject(index) ?: continue
+                if (!message.optBoolean(AgentPromptBuilder.ENVIRONMENT_MARKER)) continue
+                providerMessageText(message.opt("content")).trim().takeIf(String::isNotEmpty)?.let(::add)
+            }
+        }.joinToString("\n\n")
+
+    private fun collectInstructions(source: JSONArray, roles: Set<String>, skipEnvironment: Boolean = false): String =
         buildList {
             for (index in 0 until source.length()) {
                 val message = source.optJSONObject(index) ?: continue
                 if (message.optString("role") !in roles) continue
+                if (skipEnvironment && message.optBoolean(AgentPromptBuilder.ENVIRONMENT_MARKER)) continue
                 providerMessageText(message.opt("content"))
                     .trim()
                     .takeIf(String::isNotEmpty)
