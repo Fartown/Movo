@@ -22,6 +22,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -41,12 +42,19 @@ class ProviderRepositoryTest {
         context.deleteDatabase("movo.db")
         SettingsDataStore.init(context)
         ProviderRepository.init(context)
+        // 不受本机 .env 打包的默认模型影响。
+        ProviderRepository.packagedProvider = { null }
         runBlocking {
             // 仓库单例可能还拿着上一个 Robolectric Application：先用当前 Context 打开并清空测试库。
             MovoDatabase.get(context).providerDao().replaceAll(emptyList())
             SettingsDataStore.setSelection(providerId = null, modelId = null)
             SettingsDataStore.setProviderDataVersion(0)
         }
+    }
+
+    @After
+    fun tearDown() {
+        ProviderRepository.packagedProvider = io.github.fartown.movo.data.provider.PackagedModelDefaults::provider
     }
 
     @Test

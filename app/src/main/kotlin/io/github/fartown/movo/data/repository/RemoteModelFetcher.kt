@@ -71,6 +71,10 @@ internal object RemoteModelFetcher {
     }
 
     private fun fetchOpenAiCompatible(provider: ProviderSetting): List<Model> {
+        // 火山方舟 Agent Plan 没有模型列表接口（/models 404）：给出套餐的模型清单。
+        if (io.github.fartown.movo.data.provider.ArkAgentPlanModels.matches(provider.baseUrl)) {
+            return io.github.fartown.movo.data.provider.ArkAgentPlanModels.models()
+        }
         val request = Request.Builder()
             .url(ProviderUrls.openAiModelsUrl(provider.baseUrl))
             .headers(
