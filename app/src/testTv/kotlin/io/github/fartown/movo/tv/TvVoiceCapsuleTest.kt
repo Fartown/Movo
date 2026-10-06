@@ -54,4 +54,23 @@ class TvVoiceCapsuleTest {
         assertEquals(RemoteAction.PassThrough, TvBackHandler.remoteAction(KeyEvent.KEYCODE_DPAD_DOWN, VoiceChannel.Off, false, false))
         assertEquals(RemoteAction.PassThrough, TvBackHandler.remoteAction(KeyEvent.KEYCODE_DPAD_DOWN, VoiceChannel.Listening, true, true))
     }
+
+    @Test
+    fun longAnswersBecomeSubtitleScreensOfAtMostTwoLines() {
+        val answer = "要带。明天上海小雨，16–22°，下午 3 点后雨会变大，傍晚出门最好带一把长柄伞。后天多云转晴，18–25°，不用带伞。早晚温差有 7 度，出门可以加一件薄外套。"
+        val screens = TvVoicePanel.screensOf(answer)
+        assertTrue(screens.size > 1)
+        assertTrue(screens.all { it.length <= TvVoicePanel.SCREEN_CHARS })
+        assertEquals(answer, screens.joinToString(""))
+        assertTrue("优先在句末断屏", screens.dropLast(1).all { it.last() in "。！？；，" })
+    }
+
+    @Test
+    fun liveTranscriptKeepsOnlyTheTail() {
+        val long = "帮我打开奇异果然后搜索狂飙第二季再从第一集开始播放并且把音量调到二十"
+        val shown = TvVoicePanel.tail(long)
+        assertEquals(TvVoicePanel.SCREEN_CHARS, shown.length)
+        assertTrue(shown.startsWith("…") && long.endsWith(shown.drop(1)))
+        assertEquals("明天要不要带伞", TvVoicePanel.tail(" 明天要不要带伞 "))
+    }
 }
