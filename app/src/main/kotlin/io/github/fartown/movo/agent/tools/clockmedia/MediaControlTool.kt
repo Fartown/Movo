@@ -76,8 +76,8 @@ internal class MediaControlTool(
     override val domain = ToolDomain.CLOCK_MEDIA
     override val summary =
         "控制媒体播放：play、pause、toggle、stop、next、previous、fast_forward、rewind（快进快退步长由播放器定）。" +
-            "没有在播的内容时 pause/stop/切换/快进快退直接报错。派发后回读：effect_verified=true 才是确认生效，" +
-            "false 只是送达。独占音频。"
+            "没有播放器时 pause/stop/切歌/快进快退直接报错；暂停中的播放器能切歌。派发后回读：effect_verified=true " +
+            "才是确认生效，false 只是送达。独占音频。"
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
         string(
@@ -139,6 +139,8 @@ internal class MediaControlTool(
     /**
      * 派发前判断：确实没有可控制的播放时返回错误（不派发）。play / toggle 照常派发：
      * 没有会话时媒体键会唤起上一个播放应用。暂停中的播放器仍可切歌、快进，只有 pause / stop 要求正在播。
+     * 看不到会话（没有通知使用权、没有 Root）时分不清「没有播放器」和「播放器暂停着」：只有 pause / stop
+     * 在没声音时报没在播；切歌、快进快退照发媒体键（重构前的做法），结果只算送达。
      */
     private fun nothingToControl(action: MediaAction, now: Playback): ToolError? {
         if (action == MediaAction.PLAY || action == MediaAction.TOGGLE) return null
@@ -167,7 +169,7 @@ internal class MediaControlTool(
             } else {
                 null
             }
-            MediaSessionState.Unknown -> if (now.audio == false) {
+            MediaSessionState.Unknown -> if (needsPlaying && now.audio == false) {
                 nothingPlaying(
                     "现在没有正在播放的内容（没有检测到媒体声音）",
                     hint = "如实告诉用户现在没有在播放，不要说已经暂停或切换。没有通知使用权，看不到暂停中的播放器；" +

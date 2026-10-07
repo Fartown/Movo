@@ -38,32 +38,42 @@ import org.json.JSONObject
 
 /**
  * clock_create 真实后端（回读型，方案 a）。
- * 派发顺序：挂透明窗 → 派发 Intent → 按证据核实 → 撤窗。
+ * 派发顺序：挂透明窗 → 派发 Intent（优先交给 ColorOS 时钟）→ 按证据核实 → 撤窗。
  * 核实归因到本次创建：无 Root 用 AlarmManager.getNextAlarmClock() 匹配本次请求时刻；
  * 有 Root 再用 dumpsys alarm 做更精确的归因（见 [rootAttributed]），不被日历 0 点闹钟占住。
+ * 已经有更早的闹钟时新闹钟成不了「下一个」，无 Root 核实不到，按已交给时钟应用报（[ClockCreateResult.NotAttributed]）。
+ * 启动时钟失败（后台启动被拦等）不算「没有时钟应用」：改为打开时钟的闹钟 / 计时器页让用户自己设（重构前的兜底）。
  */
 internal class RealClockCreateBackend(
     private val context: Context,
     private val logger: AgentLogger,
     private val root: BoundedRootCommandExecutor,
     private val rootAvailable: () -> Boolean,
+    /** 派发后最多等多久核实；测试里调短。 */
+    private val pollTimeoutMs: Long = POLL_TIMEOUT_MS,
 ) : ClockCreateBackend {
 
     override fun createAndVerify(input: ClockCreateInput, env: ToolEnvironment): ClockCreateResult {
-        val intent = buildIntent(input)
-        if (resolveClockActivity(intent) == null) return ClockCreateResult.NoClockApp
+        val target = resolveClockActivity(buildIntent(input)) ?: return ClockCreateResult.NoClockApp
+        val clockPackage = target.`package` ?: target.resolveActivity(context.packageManager)?.packageName
 
         val before = nextAlarmTriggerMs()
         val dispatchedAt = System.currentTimeMillis()
+        var pageOpened = false
         val dispatched = ClockBackgroundAnchor.withVisibleWindow(context) {
-            runCatching { context.startActivity(intent) }.isSuccess
+            runCatching { context.startActivity(target) }
+                .onFailure { error ->
+                    logger.warn("clock_create launch failed type=${input.type} error=${error.javaClass.simpleName}")
+                    pageOpened = openClockPage(input.type, clockPackage)
+                }
+                .isSuccess
         }
-        if (!dispatched) return ClockCreateResult.NoClockApp
+        if (!dispatched) return ClockCreateResult.LaunchFailed(clockPageOpened = pageOpened)
         logger.info("clock_create dispatched type=${input.type} marker=${ClockCreateTool.requestMarker(input)}")
 
         val expected = expectedTriggerMs(input, dispatchedAt)
         val marker = ClockCreateTool.requestMarker(input)
-        val deadline = SystemClock.elapsedRealtime() + POLL_TIMEOUT_MS
+        val deadline = SystemClock.elapsedRealtime() + pollTimeoutMs
         do {
             val after = nextAlarmTriggerMs()
             if (after != null && after != before && matches(input, after, expected)) {
@@ -101,7 +111,25 @@ internal class RealClockCreateBackend(
             .apply { input.label?.let { putExtra(AlarmClock.EXTRA_MESSAGE, it) } }
     }
 
-    /** 优先用 ColorOS 时钟处理；否则用系统能解析到的时钟。解析不到返回 null。 */
+    /**
+     * 直接创建没发出去时，打开时钟的闹钟 / 计时器页让用户自己设：先试刚才那个时钟应用的页，再试系统默认时钟，
+     * 最后打开那个时钟应用。重构前只认 ColorOS 时钟，小米等机型上没有兜底。打开了返回 true。
+     */
+    private fun openClockPage(type: ClockType, clockPackage: String?): Boolean {
+        val pm = context.packageManager
+        val action = if (type == ClockType.ALARM) AlarmClock.ACTION_SHOW_ALARMS else AlarmClock.ACTION_SHOW_TIMERS
+        val candidates = listOfNotNull(
+            clockPackage?.let { Intent(action).setPackage(it) },
+            Intent(action),
+            clockPackage?.let { runCatching { pm.getLaunchIntentForPackage(it) }.getOrNull() },
+        )
+        return candidates.any { page ->
+            page.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            page.resolveActivity(pm) != null && runCatching { context.startActivity(page) }.isSuccess
+        }
+    }
+
+    /** 优先用 ColorOS 时钟处理（派发的就是这个带包名的 Intent）；否则用系统能解析到的时钟。解析不到返回 null。 */
     private fun resolveClockActivity(intent: Intent): Intent? {
         val pm = context.packageManager
         val preferred = Intent(intent).setPackage(COLOROS_CLOCK_PACKAGE)
