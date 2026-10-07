@@ -43,6 +43,8 @@ internal object FlavorModule : Flavor {
 
     /** 手机有运行日志页：能导出、清空、关掉完整运行日志。 */
     override val fullRunLog: Boolean = true
+    /** 播放控制、音量回读确认生效后，用模型同一轮写好的 reply 直接结束，不再多请求一轮。 */
+    override val finishingTools: Set<String> = setOf("media_control", "volume_set")
 
     override fun voiceHost(context: Context): VoiceConversationHost = AgentAppSession.get(context)
 

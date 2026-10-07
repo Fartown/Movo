@@ -267,6 +267,9 @@ internal class AgentLoop(
         val outcome = outcomes.singleOrNull() ?: return null
         if (stopReason != AssistantStopReason.TOOL_USE || outcome.call.name !in finishingTools) return null
         if (!traceFormatter.isSuccessResult(outcome.result)) return null
+        // 只在效果已确认、没有警告时收尾：只送达（effect_verified=false）或有警告（音量被钳制等）时让模型看完结果再说。
+        val toolOutcome = outcome.result.outcome
+        if (toolOutcome?.effectVerified == false || toolOutcome?.warnings?.isNotEmpty() == true) return null
         return runCatching { JSONObject(outcome.call.argumentsJson).optString(FINISH_REPLY_ARG).trim() }
             .getOrNull()?.takeIf { it.isNotEmpty() }
     }

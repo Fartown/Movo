@@ -4051,6 +4051,7 @@ private fun buildPermissionHealthState(context: Context): PermissionHealthUiStat
     val notificationsEnabled = context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled()
     val locationAccess = DeviceLocationProvider.accessState(context)
     val notificationHistoryEnabled = io.github.fartown.movo.agent.device.AgentNotificationHistoryService.isEnabled(context)
+    val mediaControlEnabled = io.github.fartown.movo.agent.device.MediaAccessService.enabled(context)
     val usageAccessEnabled = io.github.fartown.movo.agent.tool.AgentPersonalContextTools.hasUsageAccess(context)
     val microphoneEnabled = androidx.core.content.ContextCompat.checkSelfPermission(
         context,
@@ -4119,6 +4120,13 @@ private fun buildPermissionHealthState(context: Context): PermissionHealthUiStat
                 },
                 status = if (notificationHistoryEnabled) PermissionStatusUi.Available else PermissionStatusUi.Missing,
                 primaryActionLabel = if (notificationHistoryEnabled) null else context.getString(R.string.state_ui_to_authorize_762ec4),
+            ),
+            PermissionHealthItemUi(
+                id = "media_control",
+                title = context.getString(R.string.capability_media_control_title),
+                summary = context.getString(R.string.capability_media_control_summary),
+                status = if (mediaControlEnabled) PermissionStatusUi.Available else PermissionStatusUi.Missing,
+                primaryActionLabel = if (mediaControlEnabled) null else context.getString(R.string.state_ui_to_authorize_762ec4),
             ),
             PermissionHealthItemUi(
                 id = "usage_access",

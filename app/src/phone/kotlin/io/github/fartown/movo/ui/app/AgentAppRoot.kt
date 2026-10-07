@@ -589,6 +589,19 @@ internal fun AgentAppRoot(
                                             context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                                         }
                                     }
+                                    "media_control" -> {
+                                        // 直接打开 Movo「播放控制」这一项的授权页，不是通知历史那一项。
+                                        runCatching {
+                                            context.startActivity(
+                                                Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS).putExtra(
+                                                    Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME,
+                                                    io.github.fartown.movo.agent.device.MediaAccessService.component(context).flattenToString(),
+                                                ),
+                                            )
+                                        }.onFailure {
+                                            runCatching { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+                                        }
+                                    }
                                     "usage_access" -> {
                                         runCatching {
                                             context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
