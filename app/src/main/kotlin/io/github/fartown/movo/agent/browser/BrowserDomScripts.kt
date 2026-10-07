@@ -186,9 +186,13 @@ internal object BrowserDomScripts {
           }
           function resolveTarget(selector, x, y) {
             var target = null;
-            var deadline = Date.now() + 300;
             if (selector) {
-              target = document.querySelector(selector);
+              // 和动作前的检查（inspectTarget）取同一个：第一个可见的，都不可见再取第一个。
+              var matches = document.querySelectorAll(selector);
+              for (var index = 0; index < matches.length && index < 2000; index++) {
+                if (visible(matches[index])) { target = matches[index]; break; }
+              }
+              if (!target && matches.length) target = matches[0];
             } else if (Number.isFinite(x) && Number.isFinite(y)) {
               target = document.elementFromPoint(x, y);
             }
@@ -443,6 +447,7 @@ internal object BrowserDomScripts {
         return {
           selector_used: selector,
           element_count: elements.length,
+          match_count: matches.length,
           scanned_elements: scanned,
           truncated: scanned < matches.length,
           elements: elements

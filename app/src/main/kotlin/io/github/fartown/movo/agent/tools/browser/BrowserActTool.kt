@@ -65,8 +65,8 @@ internal class BrowserActTool(
         )
         string("ref", "browser_read elements 返回的 ref（首选）", maxLength = 128)
         string("selector", "CSS 选择器（次选）", maxLength = 512)
-        integer("x", "截图像素横坐标（末选，与 y 同时给）")
-        integer("y", "截图像素纵坐标（末选，与 x 同时给）")
+        integer("x", "截图像素横坐标（末选，与 y 同时给；和截图、elements 的 bounds 同一单位）")
+        integer("y", "截图像素纵坐标（末选，与 x 同时给；和截图、elements 的 bounds 同一单位）")
         string("text", "type 要输入的文本（整体替换输入框值）", maxLength = 8_000)
         boolean("submit", "type 后是否提交（回车）")
         string("option", "select 要选择的选项（文本或 value）", maxLength = 512)
@@ -169,8 +169,11 @@ internal class BrowserActTool(
                     !target.exists -> return Verdict.Failed(
                         ToolError(ToolErrorCode.NOT_FOUND, "找不到目标元素"),
                     )
-                    !target.visible -> return Verdict.Failed(
-                        ToolError(ToolErrorCode.NOT_ACTIONABLE, "目标元素不可见"),
+                    !target.visible && !hiddenControlAllowed(request.action, target) -> return Verdict.Failed(
+                        ToolError(
+                            ToolErrorCode.NOT_ACTIONABLE, "目标元素不可见",
+                            hint = "先 browser_read elements 找页面上看得见的那个；被样式藏起来的选项可以点它旁边的文字",
+                        ),
                     )
                     request.action == BrowserActionType.TYPE && !target.editable -> return Verdict.Failed(
                         ToolError(ToolErrorCode.NOT_ACTIONABLE, "目标元素不可输入"),
@@ -194,6 +197,19 @@ internal class BrowserActTool(
             }
         } catch (failure: BrowserException) {
             Verdict.Failed(ToolError(failure.code, failure.message, failure.hint, failure.detail))
+        }
+    }
+
+    /**
+     * 被样式藏起来的单选 / 复选框（页面显示的是自绘的样式）和原生下拉框（外面套了自绘的下拉）：
+     * 重构前直接用脚本点 / 选，这里照样放行；其他看不见的元素多半是选错了目标，不点。
+     */
+    private fun hiddenControlAllowed(action: BrowserActionType, target: BrowserActTarget): Boolean {
+        val tag = target.tag.lowercase()
+        return when (action) {
+            BrowserActionType.CLICK -> tag == "input" && target.type.lowercase() in setOf("checkbox", "radio")
+            BrowserActionType.SELECT -> tag == "select"
+            else -> false
         }
     }
 
@@ -242,6 +258,13 @@ internal class BrowserActTool(
             .put("target", result.targetSummary)
             .put("effect_verified", false)
         result.title?.let { json.put("title", it) }
+        // 滚动前后位置：一样就是没滚动（到底或到顶了），别再往同一方向滚。
+        if (result.scrollBefore != null && result.scrollAfter != null) {
+            json.put("scroll_before", result.scrollBefore).put("scroll_after", result.scrollAfter)
+            if (result.scrollBefore == result.scrollAfter) json.put("scrolled", false)
+        }
+        result.typedChars?.let { json.put("typed_chars", it) }
+        result.submitted?.let { json.put("submitted", it) }
         return ModelContent.Json(json)
     }
 
