@@ -29,7 +29,8 @@ internal class FileToolProvider(
     override val promptSection = PromptSection(
         id = "file",
         domain = ToolDomain.FILE,
-        text = "找文件用 file_search 拿句柄再交给 file_read，不要猜路径；读文本给 offset/limit 分页；" +
-            "写文件用 file_write（默认工作区，写系统位置要确认）；列目录用 file_list。",
+        text = "用户说的是 Movo 工作区里的文件（例如刚写的、只给了文件名）时，直接用 file_read 读相对路径（相对路径就在工作区），" +
+            "或先 file_list 看工作区；在手机共享存储里找文件才用 file_search 拿句柄再交给 file_read，不要猜路径。" +
+            "读文本给 offset/limit 分页；写文件用 file_write（默认工作区，写系统位置要确认）；列目录用 file_list。",
     )
 }
