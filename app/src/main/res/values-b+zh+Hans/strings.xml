@@ -7,6 +7,9 @@
   <string name="agent_accessibility_label">Movo Agent</string>
   <string name="agent_accessibility_description">读取屏幕内容并执行点击、滑动、文字输入等操作，协助 Agent 完成任务。</string>
   <string name="notification_history_service_label">Movo 通知历史</string>
+  <string name="media_access_service_label">Movo 播放控制</string>
+  <string name="capability_media_control_title">播放控制</string>
+  <string name="capability_media_control_summary">读取正在播放的进度，跳到指定时间、切集；不读取通知内容</string>
   <string name="voice_interaction_service_label">Movo</string>
   <string name="recognition_service_label">Movo 语音识别</string>
   <string name="action_back">返回</string>
