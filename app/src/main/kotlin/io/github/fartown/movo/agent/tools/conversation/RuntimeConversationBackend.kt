@@ -3,7 +3,8 @@ package io.github.fartown.movo.agent.tools.conversation
 import io.github.fartown.movo.agent.model.AgentModelClient
 
 /**
- * 真实会话后端：由主流程在运行启动时绑定 [loader]，返回当前持久会话的脱敏历史。
+ * 真实会话后端：由主流程在运行启动时绑定 [loader]（AgentRuntimeRunExecutor 传 request.history），
+ * 返回本次任务开始前的会话历史——压缩过的部分是摘要，不是原文。
  * 每条消息渲染成「角色 + 文本」：优先取 content，其次工具调用/推理摘要，避免把整条 JSON 塞给模型。
  *
  * [loader] 的接线（绑定当前运行的 transcript 快照）由主流程完成（见返回报告）。

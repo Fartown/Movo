@@ -83,7 +83,18 @@ class GuiReadinessGuardTest {
         assertNull(check(tool("clipboard_read", ToolDomain.UI)))
         assertNull(check(tool("clipboard_write", ToolDomain.UI)))
         assertEquals(0, dismissals)
-        assertEquals(2, accessibilityChecks)
+    }
+
+    @Test
+    fun clipboardToolsNeedNeitherAccessibilityNorRoot() {
+        // #15：剪贴板走 ClipboardManager，与 AgentToolRequirements 的登记一致，不要求无障碍或 Root。
+        accessibilityAvailable = false
+        assertNull(check(tool("clipboard_read", ToolDomain.UI)))
+        assertNull(check(tool("clipboard_write", ToolDomain.UI)))
+        assertEquals(0, accessibilityChecks)
+        // 屏幕工具照旧要求；没在 AgentToolRequirements 登记的 UI 工具（ui_focus）也照旧要求。
+        assertEquals(ToolErrorCode.PERMISSION_REQUIRED, check(tool("ui_tap", ToolDomain.UI))?.error?.code)
+        assertEquals(ToolErrorCode.PERMISSION_REQUIRED, check(tool("ui_focus", ToolDomain.UI))?.error?.code)
     }
 
     @Test

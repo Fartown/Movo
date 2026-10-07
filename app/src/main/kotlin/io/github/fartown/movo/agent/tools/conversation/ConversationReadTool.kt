@@ -39,8 +39,9 @@ internal data class ConversationReadOutput(
 ) : ToolOutput
 
 /**
- * conversation_read（只读，§40）：读当前会话完整脱敏历史。摘要有损，需核对旧指令、操作细节、工具结果时用。
- * 按消息分页：entries 渲染成「角色: 文本」而非整条 JSON，省 token。
+ * conversation_read（只读，§40）：读本次任务开始前的会话历史，就是这次发给模型的那份（request.history）：
+ * 早前被压缩过的部分只剩摘要，原文读不回来；本次任务里的步骤不在其中；敏感工具原文和图片本就不进历史。
+ * 按消息分页：entries 渲染成「角色: 文本」而非整条 JSON，省 token；单条超过 max_chars 的消息只给开头。
  * 可用性：仅当本次运行绑定了持久会话（env.conversationBound）时进入目录。
  */
 internal class ConversationReadTool(
@@ -49,8 +50,8 @@ internal class ConversationReadTool(
     override val name = "conversation_read"
     override val domain = ToolDomain.MEMORY
     override val summary =
-        "读当前会话完整脱敏历史。摘要有损，需核对旧指令、操作细节、工具结果时用。" +
-            "可用 query 过滤、cursor 续读；敏感工具原文和图片不在历史里。"
+        "读本次任务之前的会话历史，核对旧指令、操作细节、工具结果时用。早前压缩过的部分只剩摘要，原文读不回来；" +
+            "可用 query 过滤、cursor 续读，单条超长消息只给开头；敏感工具原文和图片不在历史里。"
 
     override fun availability(env: ToolEnvironment): ToolAvailability =
         if (env.conversationBound) {

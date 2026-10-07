@@ -78,6 +78,28 @@ class S7RoutingReadinessTest {
     }
 
     @Test
+    fun toolSearch_neverReachesTheModelWhileEveryToolIsResident() {
+        // #28：所有工具都常驻、没有按需工具时 tool_search 不可用：不进目录，系统提示里也不教模型去调它。
+        AgentToolSubsystem(
+            services = ToolServices(
+                context = ApplicationProvider.getApplicationContext(),
+                logger = AndroidAgentLogger,
+                runId = "run-s7-meta",
+                rootAvailable = { true },
+            ),
+            environment = { capableEnv },
+        ).use { sub ->
+            val catalog = sub.pipeline.catalog()
+            val names = (0 until catalog.length()).map { catalog.getJSONObject(it).getJSONObject("function").getString("name") }
+            assertTrue("ask_user 仍在目录里", "ask_user" in names)
+            assertTrue("tool_search 不应进目录：$names", "tool_search" !in names)
+            val prompt = sub.pipeline.promptSections().joinToString("\n") { it.text }
+            assertTrue(prompt.contains("ask_user"))
+            assertTrue("系统提示不应提 tool_search", !prompt.contains("tool_search"))
+        }
+    }
+
+    @Test
     fun capabilityMapping_isFaithful() {
         val caps = AgentToolCapabilities(
             rootAvailable = true,
