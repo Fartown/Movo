@@ -1234,6 +1234,7 @@ internal class RootShellDeviceController(
         if (result.clipboardWritten) json.put("clipboard_written", true)
         result.verified?.let { verified -> json.put("verified", verified) }
         result.readback?.let { readback -> json.put("readback", readback) }
+        if (result.lineBreaksLost) json.put("line_breaks_lost", true)
         result.bounds?.let { bounds ->
             json.put("bounds", org.json.JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
         }

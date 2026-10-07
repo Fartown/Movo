@@ -402,6 +402,7 @@ internal class RealUiScreenBackend(
             readback = if (verified || obj.isNull("readback")) null else obj.optString("readback"),
             clipboardWritten = obj.optBoolean("clipboard_written", false),
             submitError = submitError,
+            lineBreaksLost = obj.optBoolean("line_breaks_lost", false),
         )
     }
 

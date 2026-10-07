@@ -318,6 +318,8 @@ internal sealed interface UiInputResult {
         val clipboardWritten: Boolean = false,
         /** 要求了 submit 但没提交成功的原因。 */
         val submitError: String? = null,
+        /** 输入框（编辑器）把换行改成了空格或吞掉，其余文字都写进去了。 */
+        val lineBreaksLost: Boolean = false,
     ) : UiInputResult
     /** 没写进去：无焦点、不可编辑、读不到原文没法追加等。[code] 是后端的细分码。 */
     data class NotActionable(val reason: String, val code: String = "") : UiInputResult

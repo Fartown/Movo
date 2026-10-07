@@ -11,11 +11,17 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * terminal_job read 用真进程验证：不带 cursor 读尾部、带 cursor 续读（stdout / stderr 各有偏移）、
  * 长输出时缓冲区保留开头和最近的部分；tty=true 真的用伪终端启动并直接转后台。
+ * 进程慢的时候会走到打警告日志的分支（满负荷全量跑时出现过），所以跑在 Robolectric 上（要有 Android 的 Log）。
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [36])
 class TerminalJobRegistryReadTest {
     private val registries = mutableListOf<TerminalJobRegistry>()
 

@@ -22,24 +22,35 @@ class TextEditPlannerTest {
     }
 
     @Test
-    fun `fields inside a web page are never pasted into`() {
-        // 真机：网页粘贴出来的是更早的剪贴板内容。
-        assertFalse(TextEditPlanner.canPaste(inWebView = true, supportsPaste = true))
-        assertTrue(TextEditPlanner.canPaste(inWebView = false, supportsPaste = true))
-        assertFalse(TextEditPlanner.canPaste(inWebView = false, supportsPaste = false))
+    fun `edge whitespace in the readback does not count`() {
+        // 真机：小米笔记写「AAA」读回「\nAAA」。
+        assertTrue(TextEditPlanner.sameText("AAA", "\nAAA"))
+        assertTrue(TextEditPlanner.sameText("AAA", "AAA"))
+        assertFalse(TextEditPlanner.sameText("第一行\n第二行", "\n第一行 第二行"))
+        assertFalse(TextEditPlanner.sameText("AAA", null))
     }
 
     @Test
-    fun `line breaks lost by a multi line field are detected`() {
-        assertTrue(TextEditPlanner.lostLineBreaks("第一行\n\n第二行😋", "第一行  第二行😋", multiLine = true))
-        assertTrue(TextEditPlanner.lostLineBreaks("第一行\n第二行", "第一行第二行", multiLine = true))
-        // 单行框本来就不收换行。
-        assertFalse(TextEditPlanner.lostLineBreaks("第一行\n第二行", "第一行 第二行", multiLine = false))
+    fun `a rejected web field is not pasted into`() {
+        // 真机：网页粘贴出来的可能是更早的剪贴板内容，被拒时又没法用直接写入改回来。
+        assertFalse(TextEditPlanner.canPasteWhenRejected(inWebView = true, supportsPaste = true))
+        assertTrue(TextEditPlanner.canPasteWhenRejected(inWebView = false, supportsPaste = true))
+        assertFalse(TextEditPlanner.canPasteWhenRejected(inWebView = false, supportsPaste = false))
+    }
+
+    @Test
+    fun `line breaks lost by an editor are detected`() {
+        assertTrue(TextEditPlanner.lostLineBreaks("第一行\n\n第二行😋", "第一行  第二行😋", multiLine = true, inWebView = false))
+        assertTrue(TextEditPlanner.lostLineBreaks("第一行\n第二行", "第一行第二行", multiLine = true, inWebView = false))
+        // 小米笔记：网页编辑器把换行改成空格，读回前面还多一个换行；报不准多行。
+        assertTrue(TextEditPlanner.lostLineBreaks("加水。\n唯一的", "\n加水。 唯一的", multiLine = false, inWebView = true))
+        // 原生单行框本来就不收换行。
+        assertFalse(TextEditPlanner.lostLineBreaks("第一行\n第二行", "第一行 第二行", multiLine = false, inWebView = false))
         // 其他差异（限长、自动格式化）不是换行问题。
-        assertFalse(TextEditPlanner.lostLineBreaks("第一行\n第二行", "第一行", multiLine = true))
-        assertFalse(TextEditPlanner.lostLineBreaks("13800138000", "138 0013 8000", multiLine = true))
-        assertFalse(TextEditPlanner.lostLineBreaks("第一行\n第二行", "第一行\n第二行", multiLine = true))
-        assertFalse(TextEditPlanner.lostLineBreaks("第一行\n第二行", null, multiLine = true))
+        assertFalse(TextEditPlanner.lostLineBreaks("第一行\n第二行", "第一行", multiLine = true, inWebView = false))
+        assertFalse(TextEditPlanner.lostLineBreaks("13800138000", "138 0013 8000", multiLine = true, inWebView = false))
+        assertFalse(TextEditPlanner.lostLineBreaks("第一行\n第二行", "第一行\n第二行", multiLine = true, inWebView = false))
+        assertFalse(TextEditPlanner.lostLineBreaks("第一行\n第二行", null, multiLine = true, inWebView = false))
     }
 
     @Test

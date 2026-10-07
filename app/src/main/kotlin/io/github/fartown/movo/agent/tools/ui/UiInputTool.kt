@@ -58,6 +58,7 @@ internal data class UiInputOutput(
     val readback: String? = null,
     val clipboardWritten: Boolean = false,
     val submitError: String? = null,
+    val lineBreaksLost: Boolean = false,
 ) : ToolOutput
 
 internal class UiInputTool(
@@ -193,6 +194,7 @@ internal class UiInputTool(
                     readback = result.readback.takeUnless { result.readbackMatches },
                     clipboardWritten = result.clipboardWritten,
                     submitError = result.submitError,
+                    lineBreaksLost = result.lineBreaksLost,
                 )
                 if (result.readbackMatches) {
                     // 文字已回读证实在输入框里（submit 另行报告，不等于已发送）。
@@ -270,6 +272,10 @@ internal class UiInputTool(
                 output.readback?.let { put("readback", clipReadback(it)) }
                 if (output.clipboardWritten) put("clipboard_written", true)
                 output.submitError?.let { put("submit_error", it) }
+                if (output.lineBreaksLost) {
+                    // 真机：小米笔记把换行改成空格，模型以为没写对，反复重写、还往笔记里写测试文字。
+                    put("note", "这个输入框把换行改成了空格（编辑器自己改的），其余文字都已写入；不要反复重写，也不要写测试文字")
+                }
             }
             .put("submitted", output.submitted)
             .put("after", afterJson(output.packageName, output.windowChanged)),

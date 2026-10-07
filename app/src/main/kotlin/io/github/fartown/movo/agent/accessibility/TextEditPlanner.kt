@@ -19,17 +19,24 @@ internal object TextEditPlanner {
         if (append) existing?.let { it + text } else text
 
     /**
-     * 能不能改用粘贴。网页里的输入框不行：真机上网页粘贴出来的是更早的剪贴板内容，不是刚写进去的
-     * （`.docs/input-text-investigation/probe/`，小米浏览器），会把用户之前复制的东西贴进去。
+     * 读回的和要写的算不算一样：开头结尾的空白不算（真机：小米笔记的编辑器读回来总在最前面多一个换行，
+     * 写「AAA」读回「\nAAA」）。
      */
-    fun canPaste(inWebView: Boolean, supportsPaste: Boolean): Boolean = supportsPaste && !inWebView
+    fun sameText(wanted: String, readback: String?): Boolean =
+        readback != null && (readback == wanted || readback.trim() == wanted.trim())
 
     /**
-     * 直接设置后要不要改用粘贴重写：多行输入框把换行改成了空格或吞掉（读回的只差在换行）。
-     * 单行输入框本来就不收换行，改用粘贴也一样，不重写。
+     * 输入框不接受直接写入时能不能改用粘贴。网页里的不行：真机上网页粘贴出来的可能是更早的剪贴板内容
+     * （`.docs/input-text-investigation/probe/`，小米浏览器），而这时也没法用直接写入改回来。
      */
-    fun lostLineBreaks(wanted: String, readback: String?, multiLine: Boolean): Boolean {
-        if (!multiLine || readback == null || readback == wanted || '\n' !in wanted) return false
+    fun canPasteWhenRejected(inWebView: Boolean, supportsPaste: Boolean): Boolean = supportsPaste && !inWebView
+
+    /**
+     * 直接写入后要不要改用粘贴补回换行：编辑器把换行改成了空格或吞掉（读回的只差在空白）。
+     * 原生单行框本来就不收换行，不重写；网页里的框报不准是不是多行（真机：小米笔记），都试。
+     */
+    fun lostLineBreaks(wanted: String, readback: String?, multiLine: Boolean, inWebView: Boolean): Boolean {
+        if (!(multiLine || inWebView) || readback == null || sameText(wanted, readback) || '\n' !in wanted) return false
         return withoutWhitespace(readback) == withoutWhitespace(wanted)
     }
 

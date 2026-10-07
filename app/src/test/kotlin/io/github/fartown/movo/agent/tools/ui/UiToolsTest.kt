@@ -380,6 +380,23 @@ class UiToolsTest {
     }
 
     @Test
+    fun uiInput_lineBreaksLost_saysSoAndNotToRetry() {
+        // 真机：小米笔记把换行改成空格，模型以为没写对，反复重写、还往笔记里写测试文字。
+        val backend = FakeUiBackend(
+            inputResult = UiInputResult.Written(
+                "ACTION_SET_TEXT", false, 9, false, "com.miui.notes", false,
+                readback = "\n第一段 第二段", lineBreaksLost = true,
+            ),
+        )
+        val data = JSONObject(
+            pipeline(provider(ContractTool(UiInputTool(backend, backend))), accessibilityEnv)
+                .execute(call("ui_input", """{"text":"第一段\\n第二段"}""")).content,
+        ).getJSONObject("data")
+        assertTrue(data.getString("note"), data.getString("note").contains("换行改成了空格"))
+        assertTrue(data.getString("note").contains("不要反复重写"))
+    }
+
+    @Test
     fun uiInput_longReadbackKeepsHeadAndTail() {
         val long = "评".repeat(2_000)
         val backend = FakeUiBackend(

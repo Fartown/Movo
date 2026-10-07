@@ -138,6 +138,9 @@ open class AgentAccessibilityService : AccessibilityService() {
                 ) {
                     WINDOW_FRAME_GENERATION.incrementAndGet()
                 }
+                if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                    RecentAppTracker.record(event.packageName?.toString(), SystemClock.elapsedRealtime(), ::notAUserApp)
+                }
                 signalWindowChanged()
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
@@ -152,6 +155,17 @@ open class AgentAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() = Unit
+
+    /** 「用户最近在用的应用」不算的包：Movo 自己、系统界面、输入法。 */
+    private fun notAUserApp(pkg: String): Boolean =
+        pkg == packageName || pkg == "com.android.systemui" || pkg in inputMethodPackages
+
+    private val inputMethodPackages: Set<String> by lazy {
+        runCatching {
+            getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                .inputMethodList.map { it.packageName }.toSet()
+        }.getOrDefault(emptySet())
+    }
 
     /** 只有无障碍配置开启了按键过滤（电视版）时系统才会派发；是否消费由设备的 KeyInterceptor 决定。 */
     override fun onKeyEvent(event: KeyEvent): Boolean =
@@ -789,8 +803,9 @@ open class AgentAccessibilityService : AccessibilityService() {
      * ui_input 的写入。[index] 给了就写观察里的那个输入框（先让它获得输入焦点），否则写当前输入焦点。
      * [append] 时接在已有内容末尾，否则整段替换；密码框读不出原文，总是整段替换。
      *
-     * 写法按 [TextEditPlanner]：先直接设置文字（ACTION_SET_TEXT）；输入框不接受、或者多行输入框把换行改掉了，改用粘贴
-     * （临时剪贴板标记为敏感，写完恢复原内容）。网页里的输入框不粘贴：真机上粘出来的是更早的剪贴板内容。
+     * 写法按 [TextEditPlanner]：先直接设置文字（ACTION_SET_TEXT）；原生输入框不接受时改用粘贴（临时剪贴板标记为敏感，
+     * 写完恢复原内容）；编辑器把换行改掉了（真机：小米笔记）也试一次粘贴，读回不对就马上用直接写入改回来——
+     * 网页里粘出来的可能是更早的剪贴板内容（真机：小米浏览器）。
      * 写完在 [READBACK_WINDOW_MS] 内反复读回：网页里的文字约 100ms 后才更新，马上读是旧值（真机实验）。
      */
     fun writeText(snapshot: NodeSnapshot?, index: Int?, text: String, append: Boolean): NodeActionResult {
@@ -810,14 +825,20 @@ open class AgentAccessibilityService : AccessibilityService() {
             )
         val bounds = Rect().also(node::getBoundsInScreen)
         val inWebView = node.inWebView()
-        val canPaste = TextEditPlanner.canPaste(inWebView, node.supportsAction(AccessibilityNodeInfo.ACTION_PASTE))
+        val supportsPaste = node.supportsAction(AccessibilityNodeInfo.ACTION_PASTE)
         val direct = setTextAndReadBack(node, wanted)
-        val needsPaste = when {
-            direct.code == "ACTION_FAILED" -> true
-            direct.ok && direct.verified == false -> TextEditPlanner.lostLineBreaks(wanted, direct.readback, node.isMultiLine)
-            else -> false
+        if (direct.code == "ACTION_FAILED" && TextEditPlanner.canPasteWhenRejected(inWebView, supportsPaste)) {
+            return pasteWrite(node, existing, text, wanted, append).copy(bounds = bounds)
         }
-        if (needsPaste && canPaste) return pasteWrite(node, existing, text, wanted, append).copy(bounds = bounds)
+        if (direct.ok && direct.verified == false && supportsPaste &&
+            TextEditPlanner.lostLineBreaks(wanted, direct.readback, node.isMultiLine, inWebView)
+        ) {
+            // 粘贴一次补回换行（这时框里是直接写入的内容，整段替换）；读回不对就马上改回直接写入的结果。
+            val pasted = pasteWrite(node, existing = direct.readback, text = wanted, wanted = wanted, append = false)
+            if (pasted.ok && pasted.verified == true) return pasted.copy(bounds = bounds)
+            val restored = setTextAndReadBack(node, wanted)
+            return restored.copy(bounds = bounds, clipboardWritten = true, lineBreaksLost = true)
+        }
         if (direct.code == "ACTION_FAILED") {
             return NodeActionResult.failure(
                 "TEXT_INPUT_REJECTED",
@@ -828,7 +849,11 @@ open class AgentAccessibilityService : AccessibilityService() {
                 },
             )
         }
-        return direct.copy(bounds = bounds)
+        return direct.copy(
+            bounds = bounds,
+            lineBreaksLost = direct.ok && direct.verified == false &&
+                TextEditPlanner.lostLineBreaks(wanted, direct.readback, node.isMultiLine, inWebView),
+        )
     }
 
     private sealed interface WriteTarget {
@@ -947,7 +972,7 @@ open class AgentAccessibilityService : AccessibilityService() {
                     node.isShowingHintText -> ""
                     else -> node.text?.toString() ?: "".takeIf { wanted.isEmpty() }
                 }
-                if (last == wanted) return Readback(true, last)
+                if (TextEditPlanner.sameText(wanted, last)) return Readback(true, last)
             }
             if (SystemClock.uptimeMillis() >= deadline) return Readback(false, last)
             SystemClock.sleep(READBACK_STEP_MS)
@@ -2079,6 +2104,8 @@ open class AgentAccessibilityService : AccessibilityService() {
         val readback: String? = null,
         /** 被操作的输入框在屏幕上的位置（给输入指示描边用）。 */
         val bounds: Rect? = null,
+        /** 写进去了，但编辑器把换行改成了空格或吞掉（补救也没成）。 */
+        val lineBreaksLost: Boolean = false,
     ) {
         companion object {
             fun success(method: String, verified: Boolean? = null): NodeActionResult =
