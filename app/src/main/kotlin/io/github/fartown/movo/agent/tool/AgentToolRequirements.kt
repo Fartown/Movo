@@ -65,14 +65,15 @@ internal object AgentToolRequirements {
             "memory_read", "skill_read", "skill_install", "conversation_read", "ask_user", "tool_search",
             "mcp_find", "mcp_call", "monitor_start", "monitor_stop", "monitor_list", "notify_user",
         )
+        // sms_code_read：有 Root 读短信库，没有 Root 时从短信通知里取（要通知使用权）。
         register(
             RootRequirement.PARTIAL,
             "device_toggle", "setting_read", "personal_search", "file_search", "file_read", "file_write",
-            "file_list", "terminal_run", "terminal_job",
+            "file_list", "terminal_run", "terminal_job", "sms_code_read",
         )
         register(
             RootRequirement.REQUIRED,
-            "setting_write", "app_control", "device_diagnostics", "clock_read", "sms_code_read",
+            "setting_write", "app_control", "device_diagnostics", "clock_read",
             "health_read", "wifi_password_read",
         )
         listOf("ui_observe", "ui_tap", "ui_scroll", "ui_swipe", "ui_input", "ui_key", "ui_wait")
@@ -86,6 +87,7 @@ internal object AgentToolRequirements {
         ).forEach { name -> put(name, getValue(name).copy(accessibility = true)) }
         mapOf(
             "recent_notifications" to ToolSystemAccess.NOTIFICATIONS,
+            "sms_code_read" to ToolSystemAccess.NOTIFICATIONS,
             "search_notification_history" to ToolSystemAccess.NOTIFICATIONS,
             "search_personal_orders" to ToolSystemAccess.NOTIFICATIONS,
             "recent_app_activity" to ToolSystemAccess.USAGE,

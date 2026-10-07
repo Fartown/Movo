@@ -73,6 +73,7 @@ internal class AndroidDeviceReadBackend(
                 .put("age_seconds", result.ageMillis / 1000L)
             is DeviceLocationProvider.Result.Unavailable -> throw locationUnavailable(result.status)
         }
+        DeviceSection.TIME -> deviceTime(java.time.ZonedDateTime.now())
     }
 
     @Suppress("DEPRECATION")

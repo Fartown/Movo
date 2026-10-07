@@ -64,7 +64,8 @@ internal class MemoryWriteTool(
     override val name = "memory_write"
     override val domain = ToolDomain.MEMORY
     override val summary =
-        "写长期记忆（记住/更新/删除跨会话有用的稳定信息）：append 追加；replace 把唯一匹配的 old_text 换成 new_text" +
+        "写记忆（记住/更新/删除跨会话有用的稳定信息）：普通会话写用户的长期记忆；角色会话写本角色的剧情记忆，不写现实记忆。" +
+            "append 追加；replace 把唯一匹配的 old_text 换成 new_text" +
             "（可空表删除该段）；clear 清空（需 revision）。用户说“记住/以后/别忘了”用它；读取已有记忆用 memory_read。new_text ≤3500 字。"
 
     override fun availability(env: ToolEnvironment): ToolAvailability =
@@ -119,14 +120,23 @@ internal class MemoryWriteTool(
             ),
         )
 
-    override fun approvalPreview(input: MemoryWriteInput): ApprovalPreview = when (input.mode) {
-        MemoryWriteMode.CLEAR -> ApprovalPreview("清空长期记忆？", "清空全部长期记忆，之后 Movo 不再记得你让它记住的内容")
-        MemoryWriteMode.APPEND -> ApprovalPreview("写进长期记忆？", "记住：${input.newText.orEmpty().take(120)}")
-        MemoryWriteMode.REPLACE -> ApprovalPreview(
-            "修改长期记忆？",
-            if (input.newText.isNullOrEmpty()) "删掉：${input.oldText.orEmpty().take(120)}"
-            else "改为：${input.newText.take(120)}",
-        )
+    /** 角色会话写的是这个角色的剧情记忆，确认卡不能说成用户的长期记忆。 */
+    override fun approvalPreview(input: MemoryWriteInput): ApprovalPreview {
+        val character = input.scope == MemoryScopeArg.CHARACTER
+        val target = if (character) "角色的剧情记忆" else "长期记忆"
+        return when (input.mode) {
+            MemoryWriteMode.CLEAR -> if (character) {
+                ApprovalPreview("清空角色的剧情记忆？", "清空这个角色的剧情记忆，之后它不再记得你们之间的剧情；你的现实记忆不受影响")
+            } else {
+                ApprovalPreview("清空长期记忆？", "清空全部长期记忆，之后 Movo 不再记得你让它记住的内容")
+            }
+            MemoryWriteMode.APPEND -> ApprovalPreview("写进$target？", "记住：${input.newText.orEmpty().take(120)}")
+            MemoryWriteMode.REPLACE -> ApprovalPreview(
+                "修改$target？",
+                if (input.newText.isNullOrEmpty()) "删掉：${input.oldText.orEmpty().take(120)}"
+                else "改为：${input.newText.take(120)}",
+            )
+        }
     }
 
     override fun execute(

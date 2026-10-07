@@ -27,7 +27,8 @@ class AgentModelClientLoopTest {
             { request, _ ->
                 assertFalse(request.tools.toString().contains("set_setting"))
                 assertFalse(request.messages.toString().contains("相关应用私有文件与数据库"))
-                assertTrue(request.messages.toString().contains("identity=user"))
+                // 终端身份说明改由工具分节给（这里没传 toolGuide），核心规则里的 Root 说明照样跟着这一轮的能力快照变。
+                assertTrue(request.messages.toString().contains("当前没有设备 Root 权限"))
                 assistant(finishReason = "tool_calls", toolCalls = listOf(
                     toolCall("stale", "terminal", "{\"action\":\"open\",\"identity\":\"root\"}"),
                 ))

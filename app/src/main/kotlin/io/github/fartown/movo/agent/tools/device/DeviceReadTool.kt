@@ -25,11 +25,28 @@ import io.github.fartown.movo.agent.tools.core.ToolWarning
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.fail
 import io.github.fartown.movo.agent.tools.core.objectSchema
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.time.format.TextStyle
+import java.time.temporal.ChronoUnit
+import java.util.Locale
 import org.json.JSONObject
 
 /** 纵向链路第一条真工具：device_read（只读）。验证合同接线，不走审批、不占资源。 */
 
-internal enum class DeviceSection { BATTERY, MEMORY, STORAGE, SYSTEM, NETWORK, ENVIRONMENT, LOCATION }
+internal enum class DeviceSection { BATTERY, MEMORY, STORAGE, SYSTEM, NETWORK, ENVIRONMENT, LOCATION, TIME }
+
+/**
+ * device_read 的 time：读取那一刻的时间，到秒，带时区和星期（重构前 get_current_context 的字段）。
+ * 环境信息里的时间只在任务开始时给一次、只到分钟，长任务中途要准确时间就读它。
+ */
+internal fun deviceTime(now: ZonedDateTime): JSONObject {
+    val time = now.truncatedTo(ChronoUnit.SECONDS)
+    return JSONObject()
+        .put("datetime", time.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME))
+        .put("timezone", time.zone.id)
+        .put("weekday", time.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.SIMPLIFIED_CHINESE))
+}
 
 internal data class DeviceReadInput(val sections: List<DeviceSection>) : ToolInput
 
@@ -70,9 +87,9 @@ internal class DeviceReadTool(
     override val name = "device_read"
     override val domain = ToolDomain.DEVICE
     override val summary =
-        "只读设备自身的电量、内存、存储空间、系统信息、网络连接、环境、位置这些系统指标（按 sections 选）。" +
+        "只读设备自身的电量、内存、存储空间、系统信息、网络连接、环境、位置、当前时间这些系统指标（按 sections 选）。" +
             "仅限这些系统状态；找文件/照片用 file_search、Wi‑Fi 密码用 wifi_password_read、App 用量用 usage_read、" +
-            "系统设置用 setting_read。当前时间已在环境信息中。"
+            "系统设置用 setting_read。time 是读取时的时间（到秒、带时区）；环境信息里的时间是任务开始时的，只到分钟。"
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
         stringArray(
@@ -149,9 +166,11 @@ internal class DeviceReadTool(
         }
     }
 
-    override fun uiTitle(input: DeviceReadInput): String =
-        "查看设备状态" + input.sections.takeIf { it.isNotEmpty() && it.size <= 3 }
+    override fun uiTitle(input: DeviceReadInput): String {
+        if (input.sections == listOf(DeviceSection.TIME)) return "看当前时间"
+        return "查看设备状态" + input.sections.takeIf { it.isNotEmpty() && it.size <= 3 }
             ?.joinToString("、", prefix = " · ") { it.label() }.orEmpty()
+    }
 
     override fun renderForUi(input: DeviceReadInput, output: DeviceReadOutput): ToolUiView {
         val battery = output.data.optJSONObject("battery")?.takeIf { it.has("percent") }
@@ -181,6 +200,7 @@ internal class DeviceReadTool(
         DeviceSection.NETWORK -> "网络"
         DeviceSection.ENVIRONMENT -> "环境"
         DeviceSection.LOCATION -> "位置"
+        DeviceSection.TIME -> "时间"
     }
 
     override fun renderForModel(output: DeviceReadOutput): ModelContent = ModelContent.Json(output.data)

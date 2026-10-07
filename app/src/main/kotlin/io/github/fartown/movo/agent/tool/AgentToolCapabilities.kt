@@ -36,7 +36,7 @@ internal data class AgentToolCapabilities(
         return when (requirement.systemAccess) {
             ToolSystemAccess.NONE -> null
             ToolSystemAccess.NOTIFICATIONS -> if (notificationsAllowed ||
-                (rootAvailable && (name == "recent_notifications" ||
+                (rootAvailable && (name == "recent_notifications" || name == "sms_code_read" ||
                     (name == "search_personal_orders" && colorOs)))
             ) null else "NOTIFICATION_ACCESS_REQUIRED"
             ToolSystemAccess.USAGE -> if (usageAllowed) null else "APP_USAGE_ACCESS_REQUIRED"
