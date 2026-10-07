@@ -46,7 +46,7 @@ internal object TvAssistantScreenCapture : DeviceScreenCapture {
         get() = service?.let { isSelected(it) && screenContentAllowed(it) } == true
 
     /**
-     * 截图前先撤下胶囊和对话浮层（[TvVoicePanel.suppressForScreenshot]），并等前台换成别的应用（[prepareObservation]），
+     * 截图前先等前台换成别的应用（[prepareObservation]），并撤下展开的对话浮层；语音胶囊按 v5 定稿留在截图里。
      * 所以要求排除 Movo 自己时也能用。语音发起的任务第一张截图会要求排除 Movo；
      * 原来因此绕开这条路线、走电视上没有的无障碍截图，10-07 语音任务里截图全部失败。
      */
@@ -117,7 +117,6 @@ internal object TvAssistantScreenCapture : DeviceScreenCapture {
                 val active = service
                 if (active == null) complete(request.id, DeviceScreenCapture.Result(failure = "ASSISTANT_DISCONNECTED"))
                 else runCatching {
-                    TvVoicePanel.suppressForScreenshot(true)
                     TvConversationOverlay.suppressForScreenshot(true)
                     // Let the removed overlay surface disappear before the system samples a frame.
                     main.postDelayed({
@@ -148,7 +147,6 @@ internal object TvAssistantScreenCapture : DeviceScreenCapture {
             }
             main.post {
                 TvConversationOverlay.suppressForScreenshot(false)
-                TvVoicePanel.suppressForScreenshot(false)
             }
             MemoryDiagnostics.record("tv.capture", if (result.bitmap == null) "failed" else "completed",
                 fields = mapOf("source" to "system_assistant", "request" to request.id,
