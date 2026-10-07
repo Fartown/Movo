@@ -154,6 +154,8 @@
   <string name="movo_work_analyzing">正在分析任務</string>
   <string name="movo_work_done_steps">已完成 %1$d 個步驟</string>
   <string name="movo_work_done">已完成</string>
+  <string name="movo_work_done_step">已完成·第 %1$d 步</string>
+  <string name="movo_work_done_step_range">已完成·第 %1$d–%2$d 步</string>
   <string name="movo_work_failed_step">第 %1$d 步未完成</string>
   <string name="movo_work_unfinished_steps">未完成·已執行 %1$d 步</string>
   <string name="movo_work_stopped_steps">已停止·已執行 %1$d 步</string>

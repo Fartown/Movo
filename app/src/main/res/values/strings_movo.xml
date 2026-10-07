@@ -155,6 +155,8 @@
   <string name="movo_work_analyzing">Analyzing the task</string>
   <string name="movo_work_done_steps">Completed %1$d steps</string>
   <string name="movo_work_done">Done</string>
+  <string name="movo_work_done_step">Completed · step %1$d</string>
+  <string name="movo_work_done_step_range">Completed · steps %1$d–%2$d</string>
   <string name="movo_work_failed_step">Step %1$d didn\'t finish</string>
   <string name="movo_work_unfinished_steps">Not finished · ran %1$d steps</string>
   <string name="movo_work_stopped_steps">Stopped · ran %1$d steps</string>
