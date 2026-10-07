@@ -1062,8 +1062,8 @@ open class AgentAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 先在 ([x1], [y1]) 按住 [holdMs] 再拖到 ([x2], [y2])（拖动排序、拖图标）：同一根手指的两段连续笔画，
-     * 第一段原地按住不抬起，完成后用 continueStroke 接着拖过去再抬起，两次 dispatchGesture（见 [GestureStrokes]）。
+     * 先在 ([x1], [y1]) 按住 [holdMs] 再拖到 ([x2], [y2])（拖动排序、拖图标）：一段笔画，按住阶段手指在起点
+     * 来回一两个像素，再拖过去抬起（见 [GestureStrokes.holdThenDrag]）。
      */
     fun gestureHoldAndDrag(
         x1: Float,

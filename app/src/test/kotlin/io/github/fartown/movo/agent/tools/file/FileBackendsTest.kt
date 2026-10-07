@@ -93,6 +93,30 @@ class FileBackendsTest {
     }
 
     @Test
+    fun sharedStorageWithoutAllFilesAccess_isAPermissionErrorNotAnEmptyList() {
+        // 真机：没有「所有文件访问」时列 /sdcard/Download、按 MediaStore 搜，都回空 ok，像是「没有文件」。
+        val download = File(android.os.Environment.getExternalStorageDirectory(), "Download").absolutePath
+        val list = RealFileListBackend(context, noRoot, rootAvailable = { false }, sharedStorageHidden = { true })
+        assertFailure(ToolErrorCode.PERMISSION_REQUIRED) { list.list(download, hidden = false, limit = 10, cursor = null) }
+        val search = RealFileSearchBackend(context, noRoot, rootAvailable = { false }, sharedStorageHidden = { true })
+        assertFailure(ToolErrorCode.PERMISSION_REQUIRED) {
+            search.search(FileType.ANY, FileLocation.DOWNLOADS, null, null, null, limit = 10, cursor = null)
+        }
+        // 有 Root 时改用 Root 列（这里的 Root 执行器总是失败：报 Root 的错，而不是缺权限的空列表）。
+        val withRoot = RealFileListBackend(context, noRoot, rootAvailable = { true }, sharedStorageHidden = { true })
+        assertFailure(ToolErrorCode.ROOT_REQUIRED) { withRoot.list(download, hidden = false, limit = 10, cursor = null) }
+    }
+
+    @Test
+    fun sharedStorageWithAllFilesAccess_isListedNormally() {
+        val dir = File(android.os.Environment.getExternalStorageDirectory(), "Download").apply { mkdirs() }
+        File(dir, "shared.txt").writeText("x")
+        val output = RealFileListBackend(context, noRoot, rootAvailable = { false }, sharedStorageHidden = { false })
+            .list(dir.absolutePath, hidden = false, limit = 10, cursor = null)
+        assertTrue(output.entries.any { it.name == "shared.txt" })
+    }
+
+    @Test
     fun chatImageScanFailure_isAnErrorNotAnEmptyResult() {
         // C14：以前微信/QQ 位置直接回空列表，模型会以为「没找到」。
         val backend = RealFileSearchBackend(context, noRoot, rootAvailable = { true })

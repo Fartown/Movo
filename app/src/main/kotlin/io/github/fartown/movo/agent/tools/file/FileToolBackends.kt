@@ -38,6 +38,25 @@ private fun resolveLocalFile(context: Context, rawPath: String): File {
     }
 }
 
+/**
+ * 共享存储（/sdcard）里别的应用的文件看不看得到。Android 11 起要「所有文件访问」：没有时列目录只剩 Movo 自己的文件、
+ * MediaStore 也只搜得到 Movo 自己的，结果是空的却像「没有」（真机：/sdcard/Download）。
+ */
+internal object SharedStorageAccess {
+    const val MESSAGE = "Movo 没有「所有文件访问」权限，看不到共享存储里别的应用的文件"
+    const val HINT = "请用户在系统设置里给 Movo 打开「所有文件访问」（设置 → 应用 → Movo → 权限）后再试"
+
+    fun hidden(): Boolean =
+        android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R &&
+            !android.os.Environment.isExternalStorageManager()
+
+    fun covers(file: File): Boolean {
+        val path = file.absolutePath
+        val external = android.os.Environment.getExternalStorageDirectory().absolutePath
+        return path == external || path.startsWith("$external/") || path.startsWith("/sdcard") || path.startsWith("/storage/")
+    }
+}
+
 /** [BoundedRootCommandExecutor] 在 su 被拒或 Root 不可用时给的 errorCode。 */
 private const val ROOT_DENIED = "ROOT_REQUIRED"
 
@@ -63,6 +82,7 @@ internal class RealFileSearchBackend(
     private val context: Context,
     private val root: BoundedRootCommandExecutor,
     rootAvailable: () -> Boolean = { RootAccess.isGranted },
+    private val sharedStorageHidden: () -> Boolean = SharedStorageAccess::hidden,
 ) : FileSearchBackend {
     // 构造参数与接口方法同名：类里直接写 rootAvailable() 会调到方法自己（无限递归，原来查微信/QQ 就是栈溢出），这里换个名字存。
     private val rootGranted = rootAvailable
@@ -80,6 +100,10 @@ internal class RealFileSearchBackend(
     ): FileSearchOutput {
         ChatImageSource.of(location)?.let { source ->
             return searchChatImages(source, query, sinceMillis, untilMillis, limit, cursor)
+        }
+        // 没有「所有文件访问」时 MediaStore 只回 Movo 自己的文件：说清缺权限，不回一个假的空结果。
+        if (sharedStorageHidden()) {
+            fail(ToolErrorCode.PERMISSION_REQUIRED, SharedStorageAccess.MESSAGE, hint = SharedStorageAccess.HINT)
         }
         val collection = when (type) {
             FileType.IMAGE -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
@@ -596,10 +620,16 @@ internal class RealFileListBackend(
     private val context: Context,
     private val root: BoundedRootCommandExecutor,
     private val rootAvailable: () -> Boolean = { RootAccess.isGranted },
+    private val sharedStorageHidden: () -> Boolean = SharedStorageAccess::hidden,
 ) : FileListBackend {
 
     override fun list(path: String?, hidden: Boolean, limit: Int, cursor: String?): FileListOutput {
         val dir = resolveLocalFile(context, path ?: "~")
+        if (SharedStorageAccess.covers(dir) && sharedStorageHidden()) {
+            // 目录本身读得了，但列出来只剩 Movo 自己的文件：有 Root 用 Root 列，没有就说清缺权限，不回一个假的空列表。
+            if (rootAvailable()) return rootList(dir.absolutePath, hidden, limit, cursor)
+            fail(ToolErrorCode.PERMISSION_REQUIRED, SharedStorageAccess.MESSAGE, hint = SharedStorageAccess.HINT)
+        }
         if (dir.isDirectory && dir.canRead()) {
             val all = (dir.listFiles() ?: emptyArray())
                 .filter { hidden || !it.name.startsWith('.') }

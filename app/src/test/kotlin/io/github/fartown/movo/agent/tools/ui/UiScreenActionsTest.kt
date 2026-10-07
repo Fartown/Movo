@@ -287,6 +287,33 @@ class UiScreenActionsTest {
     }
 
     @Test
+    fun scrollUntil_unconfirmedScrollAtTheEnd_reportsNotFoundInsteadOfUnknown() {
+        // 真机：设置首页找不存在的「关于手机」，滚到底时那一下确认不了动没动，原来整次报 unknown。
+        val fake = Fake().apply {
+            scrollScript += UiScrollResult.Finished(true, false, APP)
+            scrollScript += UiScrollResult.OutcomeUnknown
+        }
+        val result = run(fake, scroll(fake), """{"direction":"down","until_text":"关于手机"}""")
+        val json = JSONObject(result.content)
+        assertEquals("ok", json.getString("status"))
+        val data = json.getJSONObject("data")
+        assertFalse(data.getBoolean("found"))
+        assertEquals(1, data.getInt("scrolls"))
+        assertTrue(data.getString("stopped"), data.getString("stopped").contains("可能已经到头"))
+    }
+
+    @Test
+    fun scrollUntil_unconfirmedScrollButTextNowVisible_found() {
+        val fake = Fake().apply {
+            textVisibleAfter = 1
+            unknownScrollMoves = true
+            scrollScript += UiScrollResult.OutcomeUnknown
+        }
+        val data = JSONObject(run(fake, scroll(fake), """{"direction":"down","until_text":"设置"}""").content).getJSONObject("data")
+        assertTrue(data.getBoolean("found"))
+    }
+
+    @Test
     fun scrollUntil_failures_firstReportedLaterStopped() {
         val first = Fake().apply { scrollScript += UiScrollResult.NotActionable("不可滚动") }
         assertEquals("NOT_ACTIONABLE", run(first, scroll(first), """{"direction":"down","until_text":"x"}""").errorCode)
@@ -298,12 +325,6 @@ class UiScreenActionsTest {
         val data = JSONObject(run(later, scroll(later), """{"direction":"down","until_text":"x"}""").content).getJSONObject("data")
         assertEquals(1, data.getInt("scrolls"))
         assertTrue(data.getString("stopped").contains("节点没了"))
-
-        val unknown = Fake().apply {
-            scrollScript += UiScrollResult.Finished(true, false, APP)
-            scrollScript += UiScrollResult.OutcomeUnknown
-        }
-        assertEquals("OUTCOME_UNKNOWN", run(unknown, scroll(unknown), """{"direction":"down","until_text":"x"}""").errorCode)
     }
 
     // ---- ui_swipe hold_ms（#9）----
@@ -534,6 +555,7 @@ class UiScreenActionsTest {
         var probeCalls = 0
         var textVisibleAfter: Int? = null
         var scrollCalls = 0
+        var unknownScrollMoves = false
         private var moves = 0
         val scrollScript = ArrayDeque<UiScrollResult>()
         var tapResult: UiInjectResult = UiInjectResult.Dispatched("gesture", APP, false, touch = UiTouch.Press(540, 1200, 800))
@@ -590,6 +612,8 @@ class UiScreenActionsTest {
             scrollCalls++
             val result = scrollScript.removeFirstOrNull() ?: UiScrollResult.Finished(true, false, APP)
             if (result is UiScrollResult.Finished && result.moved) moves++
+            // 确认不了动没动的一下，实际上可能动了。
+            if (result is UiScrollResult.OutcomeUnknown && unknownScrollMoves) moves++
             return result
         }
 

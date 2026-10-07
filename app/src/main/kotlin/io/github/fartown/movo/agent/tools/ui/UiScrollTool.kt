@@ -163,7 +163,8 @@ internal class UiScrollTool(
     /**
      * 滚到 [text] 出现为止。先看一眼，已经在屏幕上就不滚；之后每滚一次看一次。
      * 停下：找到了、这一下没动（到头）、动了但已到边界、滚满 [MAX_UNTIL_SCROLLS] 次。
-     * 第一下就失败按普通滚动报错；滚过几次之后失败：结果不确定的报 unknown，确定没滚的停下并写原因。
+     * 确认不了动没动的一下：再看一眼有没有这段文字，没有就停下并写原因（不报 unknown）；
+     * 确定滚不了的：第一下就这样按普通滚动报错，滚过几次之后停下并写原因。
      */
     private fun scrollUntil(
         input: UiScrollInput,
@@ -180,13 +181,14 @@ internal class UiScrollTool(
             ctx.checkCancelled()
             val step = backend.scroll(UiScrollRequest(input.direction, input.element, resolution.backend), ctx.env)
             if (step !is UiScrollResult.Finished) {
-                if (scrolls == 0) return verdictOf(step)
                 if (step is UiScrollResult.DirectionMismatch || step is UiScrollResult.OutcomeUnknown) {
-                    return Verdict.Unknown(
-                        reason = "已滚动 $scrolls 次，没找到「$text」；下一次滚动结果不确定",
-                        next = "先 ui_observe 确认当前位置",
-                    )
+                    // 这一下确认不了动没动（真机：设置页滚到底时就这样）。滚动不改数据，直接再看一眼：
+                    // 找到了就算找到，没找到就停下并写明原因，不把整次查找报成 unknown。
+                    hit = backend.findText(text)
+                    if (hit == null) stopped = "第 ${scrolls + 1} 次滚动确认不了有没有动，可能已经到头"
+                    break
                 }
+                if (scrolls == 0) return verdictOf(step)
                 stopped = when (step) {
                     is UiScrollResult.NotActionable -> "无法继续滚动：${step.reason}"
                     else -> "无障碍不可用，无法继续滚动"

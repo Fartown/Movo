@@ -2,6 +2,7 @@ package io.github.fartown.movo.agent.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.graphics.Path
+import android.graphics.PathMeasure
 import android.graphics.RectF
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
@@ -14,6 +15,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.annotation.GraphicsMode
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
@@ -23,6 +25,8 @@ import org.robolectric.annotation.Config
  * 屏幕动作在无障碍服务这一层：坐标系的窗口代际、锁屏 / 截屏 / 收起通知栏全局动作、先按住再拖的连续笔画。
  */
 @RunWith(RobolectricTestRunner::class)
+// 量路径（PathMeasure）要真的算：用原生图形。
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [36])
 class ScreenActionGesturesTest {
 
@@ -88,21 +92,26 @@ class ScreenActionGesturesTest {
     // ---- 先按住再拖 ----
 
     @Test
-    fun strokeChain_holdStaysDownThenContinuesIntoTheDrag() {
-        val strokes = GestureStrokes.chain(GestureStrokes.holdThenDrag(100f, 800f, 100f, 300f, holdMs = 600, dragMs = 400))
-        assertEquals(2, strokes.size)
-        assertTrue("按住那段不抬起", strokes[0].willContinue())
-        assertEquals(600L, strokes[0].duration)
-        assertFalse("拖完抬起", strokes[1].willContinue())
-        assertEquals(400L, strokes[1].duration)
-        assertEquals(RectF(100f, 800f, 100f, 800f), strokes[0].path.bounds())
-        assertEquals(RectF(100f, 300f, 100f, 800f), strokes[1].path.bounds())
+    fun holdThenDrag_staysAtTheStartForTheHoldThenDrags() {
+        // 一段笔画：按住 600ms（手指在起点来回 2px），再用 400ms 拖到终点。
+        val stroke = GestureStrokes.holdThenDrag(100f, 800f, 100f, 300f, holdMs = 600, dragMs = 400).single()
+        assertEquals(1_000L, stroke.durationMs)
+        val bounds = stroke.path.bounds()
+        assertEquals(300f, bounds.top, 0.01f)
+        assertTrue("按住阶段只在起点来回一两个像素", bounds.bottom <= 802f)
+        val measure = PathMeasure(stroke.path, false)
+        val pos = FloatArray(2)
+        // 匀速走：第 590ms 还在起点附近，第 1000ms 到终点。
+        measure.getPosTan(measure.length * 590f / 1_000f, pos, null)
+        assertTrue(pos.contentToString(), kotlin.math.abs(pos[1] - 800f) <= 2.01f)
+        measure.getPosTan(measure.length, pos, null)
+        assertEquals(300f, pos[1], 0.01f)
         // 普通手势仍是一段、按完抬起。
         assertFalse(GestureStrokes.chain(listOf(GestureStrokes.Stroke(Path().apply { moveTo(1f, 1f) }, 50))).single().willContinue())
     }
 
     @Test
-    fun holdAndDrag_dispatchesTwoGesturesInOrderAsAgentInjection() {
+    fun holdAndDrag_dispatchesOneGestureAsAgentInjection() {
         val service = Robolectric.setupService(AgentAccessibilityService::class.java)
         shadowOf(service).setCanDispatchGestures(true)
         val yields = mutableListOf<Pair<Float, Float>>()
@@ -119,16 +128,11 @@ class ScreenActionGesturesTest {
             val dispatched = shadowOf(service).gesturesDispatched
             awaitUntil { shadowOf(Looper.getMainLooper()).idle(); dispatched.size == 1 }
             assertTrue("整个手势期间按 Agent 注入标记", AgentTouchInjection.active)
-            val hold = dispatched[0]
-            assertTrue(hold.description().getStroke(0).willContinue())
-            assertEquals(600L, hold.description().getStroke(0).duration)
-            // 按住那段做完：接着派发拖动那段，手指不抬起。
-            hold.callback().onCompleted(hold.description())
-            assertEquals(2, dispatched.size)
-            val drag = dispatched[1]
-            assertFalse(drag.description().getStroke(0).willContinue())
-            assertEquals(400L, drag.description().getStroke(0).duration)
-            drag.callback().onCompleted(drag.description())
+            val gesture = dispatched.single()
+            val stroke = gesture.description().getStroke(0)
+            assertFalse("一段笔画，做完抬起", stroke.willContinue())
+            assertEquals(1_000L, stroke.duration)
+            gesture.callback().onCompleted(gesture.description())
             val result = pending.get(5, TimeUnit.SECONDS)
             assertTrue(result.message, result.ok)
             assertEquals("GESTURE_HOLD_DRAG", result.method)
