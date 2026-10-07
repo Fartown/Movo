@@ -771,121 +771,188 @@ open class AgentAccessibilityService : AccessibilityService() {
         }
     }
 
-    fun inputTextFocused(text: String): NodeActionResult = runNodeActionOnMainSync {
-        val node = findFocusedEditableNode()
-            ?: return@runNodeActionOnMainSync NodeActionResult.failure(
-                "NO_FOCUSED_EDITABLE",
-                "没有获得输入焦点的可编辑节点",
-            )
-        node.incrementalTextValidationError()?.let { error ->
-            return@runNodeActionOnMainSync error
+    /**
+     * ui_input 的写入。[index] 给了就写观察里的那个输入框（先让它获得输入焦点），否则写当前输入焦点。
+     * [append] 时接在已有内容末尾，否则整段替换；密码框读不出原文，总是整段替换。
+     *
+     * 写法按 [TextEditPlanner]：先直接设置文字（ACTION_SET_TEXT）；输入框不接受、或者多行输入框把换行改掉了，改用粘贴
+     * （临时剪贴板标记为敏感，写完恢复原内容）。网页里的输入框不粘贴：真机上粘出来的是更早的剪贴板内容。
+     * 写完在 [READBACK_WINDOW_MS] 内反复读回：网页里的文字约 100ms 后才更新，马上读是旧值（真机实验）。
+     */
+    fun writeText(snapshot: NodeSnapshot?, index: Int?, text: String, append: Boolean): NodeActionResult {
+        val node = when (val target = writeTarget(snapshot, index)) {
+            is WriteTarget.Found -> target.node
+            is WriteTarget.Missing -> return target.result
         }
-        val plan = TextEditPlanner.insertAtSelection(
-            currentText = node.existingInputText().orEmpty(),
-            insertedText = text,
-            selectionStart = node.textSelectionStart,
-            selectionEnd = node.textSelectionEnd,
-        ) ?: return@runNodeActionOnMainSync NodeActionResult.failure(
-            "TEXT_SELECTION_UNAVAILABLE",
-            "当前输入框没有可靠的光标或选区；改用 mode=replace 写入完整内容",
-        )
-        setNodeText(node, plan.text, plan.cursor)
-    }
-
-    fun setTextNode(
-        snapshot: NodeSnapshot?,
-        index: Int?,
-        text: String,
-    ): NodeActionResult {
-        if (index != null) {
-            val requiredSnapshot = snapshot
-                ?: return NodeActionResult.failure("NO_OBSERVATION", "指定 index 需要有效观察快照")
-            return withValidatedNode(requiredSnapshot, index) { node ->
-                if (!node.isEditable) {
-                    NodeActionResult.failure("NOT_EDITABLE", "指定节点不可编辑")
+        if (index != null && !node.isFocused) {
+            // 粘贴和输入法回车都作用在输入焦点上：写指定的框之前先把焦点移过去（免得写进别的框）。
+            node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        }
+        val existing = node.existingInputText()
+        val wanted = TextEditPlanner.target(existing, text, append = append && !node.isPassword)
+            ?: return NodeActionResult.failure(
+                "TEXT_CONTENT_UNAVAILABLE",
+                "读不到输入框里原有的文字，不知道接在哪里",
+            )
+        val bounds = Rect().also(node::getBoundsInScreen)
+        val inWebView = node.inWebView()
+        val canPaste = TextEditPlanner.canPaste(inWebView, node.supportsAction(AccessibilityNodeInfo.ACTION_PASTE))
+        val direct = setTextAndReadBack(node, wanted)
+        val needsPaste = when {
+            direct.code == "ACTION_FAILED" -> true
+            direct.ok && direct.verified == false -> TextEditPlanner.lostLineBreaks(wanted, direct.readback, node.isMultiLine)
+            else -> false
+        }
+        if (needsPaste && canPaste) return pasteWrite(node, existing, text, wanted, append).copy(bounds = bounds)
+        if (direct.code == "ACTION_FAILED") {
+            return NodeActionResult.failure(
+                "TEXT_INPUT_REJECTED",
+                if (inWebView) {
+                    "网页里的这个输入框不接受直接写入（网页里粘贴会贴进旧的剪贴板内容，所以没有改用粘贴）"
                 } else {
-                    setNodeText(node, text, text.length)
-                }
-            }
+                    "输入框既不接受直接写入，也不接受粘贴"
+                },
+            )
         }
-        return runNodeActionOnMainSync {
-            val node = findFocusedEditableNode()
-                ?: return@runNodeActionOnMainSync NodeActionResult.failure(
-                    "NO_FOCUSED_EDITABLE",
-                    "没有获得输入焦点的可编辑节点",
-                )
-            setNodeText(node, text, text.length)
-        }
+        return direct.copy(bounds = bounds)
     }
 
-    /** 优先直接按选区写入，只有目标拒绝 SET_TEXT 时才回退系统粘贴。 */
-    fun pasteText(text: String): NodeActionResult = runNodeActionOnMainSync {
-        val node = findFocusedEditableNode()
-            ?: return@runNodeActionOnMainSync NodeActionResult.failure(
-                "NO_FOCUSED_EDITABLE",
-                "没有获得输入焦点的可编辑节点",
-            )
-        node.incrementalTextValidationError()?.let { error ->
-            return@runNodeActionOnMainSync error
+    private sealed interface WriteTarget {
+        data class Found(val node: AccessibilityNodeInfo) : WriteTarget
+        data class Missing(val result: NodeActionResult) : WriteTarget
+    }
+
+    private fun writeTarget(snapshot: NodeSnapshot?, index: Int?): WriteTarget {
+        if (index == null) {
+            val focused = runOnMainSync { findFocusedEditableNode() }
+                ?: return WriteTarget.Missing(
+                    NodeActionResult.failure("NO_FOCUSED_EDITABLE", "没有获得输入焦点的可编辑节点"),
+                )
+            return WriteTarget.Found(focused)
         }
-        val plan = TextEditPlanner.insertAtSelection(
-            currentText = node.existingInputText().orEmpty(),
-            insertedText = text,
-            selectionStart = node.textSelectionStart,
-            selectionEnd = node.textSelectionEnd,
-        ) ?: return@runNodeActionOnMainSync NodeActionResult.failure(
-            "TEXT_SELECTION_UNAVAILABLE",
-            "当前输入框没有可靠的光标或选区；改用 mode=replace 写入完整内容",
+        val requiredSnapshot = snapshot
+            ?: return WriteTarget.Missing(NodeActionResult.failure("NO_OBSERVATION", "指定 index 需要有效观察快照"))
+        var found: AccessibilityNodeInfo? = null
+        val validation = withValidatedNode(requiredSnapshot, index) { node ->
+            found = node
+            NodeActionResult.success(method = "")
+        }
+        val node = found ?: return WriteTarget.Missing(validation)
+        if (!node.isEditable) {
+            return WriteTarget.Missing(NodeActionResult.failure("NOT_EDITABLE", "指定节点不可编辑"))
+        }
+        return WriteTarget.Found(node)
+    }
+
+    /** 直接设置为 [wanted]，光标放到末尾，再读回核对。 */
+    private fun setTextAndReadBack(node: AccessibilityNodeInfo, wanted: String): NodeActionResult {
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, wanted)
+        }
+        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+            return NodeActionResult.failure("ACTION_FAILED", "输入节点拒绝文本修改动作")
+        }
+        val selection = Bundle().apply {
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, wanted.length)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, wanted.length)
+        }
+        val readback = readBack(node, wanted)
+        val selectionRestored = readback.matched && node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selection)
+        return readback.toResult(if (selectionRestored) "ACTION_SET_TEXT_AND_SELECTION" else "ACTION_SET_TEXT", node.isPassword)
+    }
+
+    /**
+     * 用粘贴写：append 时把光标放到原有内容末尾再贴 [text]；否则先全选（框里有内容时）再贴 [wanted]。
+     * 粘贴走输入框自己的粘贴流程，网页能收到正常的输入事件，编辑器也会保留换行。
+     */
+    private fun pasteWrite(
+        node: AccessibilityNodeInfo,
+        existing: String?,
+        text: String,
+        wanted: String,
+        append: Boolean,
+    ): NodeActionResult {
+        val pasted = if (append && existing != null) text else wanted
+        val selectionStart = if (append && existing != null) existing.length else 0
+        val selectionEnd = if (append && existing != null) existing.length else (existing?.length ?: 0)
+        if (pasted.isEmpty()) {
+            // 清空没法粘贴：直接设置为空。
+            return setTextAndReadBack(node, wanted)
+        }
+        node.performAction(
+            AccessibilityNodeInfo.ACTION_SET_SELECTION,
+            Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, selectionStart)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, selectionEnd)
+            },
         )
-        val directResult = setNodeText(node, plan.text, plan.cursor)
-        if (directResult.ok) {
-            return@runNodeActionOnMainSync directResult.copy(method = "ACTION_SET_TEXT_PASTE")
-        }
-        if (directResult.code != "ACTION_FAILED") {
-            return@runNodeActionOnMainSync directResult
-        }
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val originalClip = runCatching { clipboard.primaryClip }.getOrNull()
         val temporaryLabel = "$CLIP_LABEL:${CLIP_IDS.incrementAndGet()}"
-        val temporaryClip = ClipData.newPlainText(temporaryLabel, text).apply {
+        val temporaryClip = ClipData.newPlainText(temporaryLabel, pasted).apply {
             description.extras = PersistableBundle().apply {
                 putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
             }
         }
-        val copied = runCatching {
-            clipboard.setPrimaryClip(temporaryClip)
-        }.isSuccess
-        if (!copied) {
-            return@runNodeActionOnMainSync NodeActionResult.failure(
-                "CLIPBOARD_WRITE_FAILED",
-                "写入剪贴板失败",
-            )
+        if (runCatching { clipboard.setPrimaryClip(temporaryClip) }.isFailure) {
+            return NodeActionResult.failure("CLIPBOARD_WRITE_FAILED", "写入剪贴板失败")
         }
-        val pasteResult = try {
+        val result = try {
             if (node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
-                val verified = runCatching { node.refresh() }.getOrDefault(false) &&
-                    node.text?.toString() == plan.text
-                if (verified) {
-                    NodeActionResult.success(method = "ACTION_PASTE", verified = true)
-                } else {
-                    NodeActionResult.outcomeUnknown()
-                }
+                readBack(node, wanted).toResult("ACTION_PASTE", node.isPassword)
             } else {
                 NodeActionResult.failure("ACTION_FAILED", "输入节点拒绝粘贴动作")
             }
         } catch (_: Throwable) {
             NodeActionResult.outcomeUnknown()
         }
-        val restored = restoreClipboardIfStillOwned(
-            clipboard = clipboard,
-            temporaryLabel = temporaryLabel,
-            originalClip = originalClip,
-        )
-        if (!restored) {
-            NodeActionResult.outcomeUnknown().copy(clipboardWritten = true)
-        } else {
-            pasteResult.copy(clipboardWritten = true)
+        restoreClipboardIfStillOwned(clipboard, temporaryLabel, originalClip)
+        return result.copy(clipboardWritten = true)
+    }
+
+    private data class Readback(val matched: Boolean, val text: String?)
+
+    private fun Readback.toResult(method: String, password: Boolean): NodeActionResult =
+        NodeActionResult.success(method = method, verified = matched && !password)
+            .copy(readback = text.takeUnless { password })
+
+    /**
+     * 在 [READBACK_WINDOW_MS] 内每 [READBACK_STEP_MS] 读回一次，和 [wanted] 一致就停；一直不一致返回最后一次读到的文字。
+     * 显示的是提示文字时按空处理。
+     */
+    private fun readBack(node: AccessibilityNodeInfo, wanted: String): Readback {
+        // 密码框读回的是掩码，等多久也对不上。
+        if (node.isPassword) return Readback(false, null)
+        val deadline = SystemClock.uptimeMillis() + READBACK_WINDOW_MS
+        var last: String? = null
+        while (true) {
+            val refreshed = runCatching { node.refresh() }.getOrDefault(false)
+            if (refreshed) {
+                // 清空后的框常报 null 或提示文字（真机：设置搜索框、头条评论框），都按空算。
+                last = when {
+                    node.isShowingHintText -> ""
+                    else -> node.text?.toString() ?: "".takeIf { wanted.isEmpty() }
+                }
+                if (last == wanted) return Readback(true, last)
+            }
+            if (SystemClock.uptimeMillis() >= deadline) return Readback(false, last)
+            SystemClock.sleep(READBACK_STEP_MS)
         }
+    }
+
+    private fun AccessibilityNodeInfo.supportsAction(action: Int): Boolean =
+        actionList.any { it.id == action }
+
+    /** 输入框在网页里（WebView 及其内核的视图层级下）。 */
+    private fun AccessibilityNodeInfo.inWebView(): Boolean {
+        var parent = parent
+        var depth = 0
+        while (parent != null && depth < MAX_UI_TREE_DEPTH) {
+            if (parent.className?.toString()?.contains("WebView") == true) return true
+            parent = parent.parent
+            depth++
+        }
+        return false
     }
 
     private fun restoreClipboardIfStillOwned(
@@ -1262,40 +1329,6 @@ open class AgentAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun setNodeText(
-        node: AccessibilityNodeInfo,
-        text: String,
-        cursor: Int,
-    ): NodeActionResult {
-        val setTextArgs = Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
-        }
-        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, setTextArgs)) {
-            return NodeActionResult.failure("ACTION_FAILED", "输入节点拒绝文本修改动作")
-        }
-        val safeCursor = cursor.coerceIn(0, text.length)
-        val selectionArgs = Bundle().apply {
-            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, safeCursor)
-            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, safeCursor)
-        }
-        val refreshed = runCatching { node.refresh() }.getOrDefault(false)
-        if (!node.isPassword && (!refreshed || node.text?.toString() != text)) {
-            return NodeActionResult.outcomeUnknown()
-        }
-        val selectionRestored = refreshed && node.performAction(
-                AccessibilityNodeInfo.ACTION_SET_SELECTION,
-                selectionArgs,
-            )
-        return NodeActionResult.success(
-            method = if (selectionRestored) {
-                "ACTION_SET_TEXT_AND_SELECTION"
-            } else {
-                "ACTION_SET_TEXT"
-            },
-            verified = !node.isPassword,
-        )
-    }
-
     private fun findFocusedEditableNode(): AccessibilityNodeInfo? {
         // 先取跨窗口的输入焦点（服务开了 flagRetrieveInteractiveWindows）：活动窗口不一定是有输入焦点的那个，
         // 例如刚点过 Movo 悬浮卡时活动窗口还是卡片，只按活动窗口找会落空（真机 P8）。Movo 自己的窗口不算。
@@ -1320,29 +1353,6 @@ open class AgentAccessibilityService : AccessibilityService() {
         } else {
             TextEditPlanner.existingText(text?.toString(), isShowingHintText, textSelectionStart, textSelectionEnd)
         }
-
-    private fun AccessibilityNodeInfo.incrementalTextValidationError(): NodeActionResult? {
-        val currentText = existingInputText()
-            ?: return NodeActionResult.failure(
-                "TEXT_CONTENT_UNAVAILABLE",
-                "当前输入框读不到已有文字，没法在原有内容后追加；改用 mode=replace 写入完整内容",
-            )
-        if (
-            !TextEditPlanner.canSafelyReconstruct(
-                password = false,
-                textAvailable = true,
-                textLength = currentText.length,
-                selectionStart = textSelectionStart,
-                selectionEnd = textSelectionEnd,
-            )
-        ) {
-            return NodeActionResult.failure(
-                "TEXT_SELECTION_UNAVAILABLE",
-                "当前输入框没有可靠的光标或选区；改用 mode=replace 写入完整内容",
-            )
-        }
-        return null
-    }
 
     private fun findBestScrollableNode(
         root: AccessibilityNodeInfo,
@@ -2004,6 +2014,10 @@ open class AgentAccessibilityService : AccessibilityService() {
         val method: String = "",
         val clipboardWritten: Boolean = false,
         val verified: Boolean? = null,
+        /** 写入文字后读回的实际内容（密码框为 null）。 */
+        val readback: String? = null,
+        /** 被操作的输入框在屏幕上的位置（给输入指示描边用）。 */
+        val bounds: Rect? = null,
     ) {
         companion object {
             fun success(method: String, verified: Boolean? = null): NodeActionResult =
@@ -2397,6 +2411,9 @@ open class AgentAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val CLIP_LABEL = "movo_agent"
+        /** 写入文字后读回核对的时长和间隔：网页、富文本编辑器里的文字异步更新。 */
+        private const val READBACK_WINDOW_MS = 800L
+        private const val READBACK_STEP_MS = 100L
         private const val WINDOW_POLL_FALLBACK_MS = 80L
         private const val MAX_UI_TREE_DEPTH = 24
         private const val UI_TREE_VISIT_MULTIPLIER = 8

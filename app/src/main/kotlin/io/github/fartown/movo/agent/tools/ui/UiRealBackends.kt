@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.PersistableBundle
 import io.github.fartown.movo.agent.accessibility.AgentAccessibilityService
 import io.github.fartown.movo.agent.device.RootShellDeviceController
+import io.github.fartown.movo.agent.overlay.GestureIndicator
 import io.github.fartown.movo.agent.tools.core.InjectionBackend
 import io.github.fartown.movo.agent.tools.core.ToolEnvironment
 import io.github.fartown.movo.core.AgentLogger
@@ -32,16 +33,22 @@ import java.util.concurrent.atomic.AtomicLong
 
 internal class RealClipboardReadBackend(
     private val context: Context,
+    /** Movo 自己在前台（有界面显示着）。 */
+    private val inForeground: () -> Boolean = ::movoInForeground,
 ) : ClipboardReadBackend {
     override fun read(): ClipboardReadResult {
         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
             ?: return ClipboardReadResult.Unavailable
-        // Android 10+ 仅前台应用/IME/有焦点者可读剪贴板内容；非前台时 getPrimaryClip() 返回 null。
-        // 用 hasPrimaryClip() 区分「确实为空」与「有内容但读不到（后台受限）」，避免把被拒当成空、冒领结果。
+        // Android 10+ 只有前台应用、默认输入法、有焦点的窗口能读剪贴板。被拒时 hasPrimaryClip() 也返回 false、
+        // getPrimaryClip() 返回 null，和「确实是空的」分不开：Movo 不在前台时按被拒报，不冒充「空」。
         val hasClip = runCatching { cm.hasPrimaryClip() }.getOrDefault(false)
         val clip = cm.primaryClip
         if (clip == null || clip.itemCount == 0) {
-            return if (hasClip) ClipboardReadResult.Unavailable else ClipboardReadResult.Empty
+            return when {
+                hasClip -> ClipboardReadResult.Unavailable
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !inForeground() -> ClipboardReadResult.Rejected
+                else -> ClipboardReadResult.Empty
+            }
         }
         val full = clip.getItemAt(0).coerceToText(context)?.toString().orEmpty()
         if (full.isEmpty()) return ClipboardReadResult.Empty
@@ -53,6 +60,12 @@ internal class RealClipboardReadBackend(
         return ClipboardReadResult.Text(text, truncated, sensitive)
     }
 }
+
+/** 本进程是不是前台（Movo 的界面显示着）；前台服务不算。 */
+private fun movoInForeground(): Boolean =
+    android.app.ActivityManager.RunningAppProcessInfo()
+        .also(android.app.ActivityManager::getMyMemoryState)
+        .importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
 
 internal class RealClipboardWriteBackend(
     private val context: Context,
@@ -307,29 +320,43 @@ internal class RealUiScreenBackend(
     override fun input(request: UiInputRequest, env: ToolEnvironment): UiInputResult {
         if (backend(env) == InjectionBackend.NONE) return UiInputResult.PermissionRequired
         val before = foregroundPackage()
+        // append 和 replace 都按 index 指定的输入框写（没给 index 写当前焦点）；接在哪、用什么方式写由控制器决定。
         val eo = request.element?.let { observations[it.observationId]?.elementObservation }
-        val json = when (request.mode) {
-            UiInputMode.REPLACE -> controller.replaceText(request.text, request.element?.index, eo)
-            UiInputMode.APPEND -> controller.inputText(request.text)
-        }
+        val json = controller.writeText(
+            text = request.text,
+            index = request.element?.index,
+            observation = eo,
+            append = request.mode == UiInputMode.APPEND,
+        )
         val obj = parse(json) ?: return UiInputResult.OutcomeUnknown
         if (!obj.optBoolean("ok", false)) {
             val code = obj.optString("code")
             return if (code == "ACTION_OUTCOME_UNKNOWN") UiInputResult.OutcomeUnknown
-            else UiInputResult.NotActionable(obj.optString("message").ifBlank { code.ifBlank { "无法写入" } })
+            else UiInputResult.NotActionable(obj.optString("message").ifBlank { code.ifBlank { "无法写入" } }, code)
+        }
+        // 规范 9.5 输入文字指示：写进去之后给这个输入框描边。
+        obj.optJSONArray("bounds")?.takeIf { it.length() == 4 }?.let { b ->
+            GestureIndicator.showInput(context, android.graphics.Rect(b.optInt(0), b.optInt(1), b.optInt(2), b.optInt(3)))
         }
         var submitted = false
+        var submitError: String? = null
         if (request.submit) {
-            submitted = parse(controller.pressKey("ENTER"))?.optBoolean("ok", false) ?: false
+            val submit = parse(controller.pressKey("ENTER"))
+            submitted = submit?.optBoolean("ok", false) ?: false
+            if (!submitted) submitError = submit?.optString("message")?.ifBlank { null } ?: "回车没有被接受"
         }
         val after = foregroundPackage()
+        val verified = obj.optBoolean("verified", true)
         return UiInputResult.Written(
             method = obj.optString("method").ifBlank { "set_text" },
-            readbackMatches = obj.optBoolean("verified", true),
+            readbackMatches = verified,
             readbackLength = request.text.length,
             submitted = submitted,
             afterPackage = after ?: before,
             windowChanged = after != null && after != before,
+            readback = if (verified || obj.isNull("readback")) null else obj.optString("readback"),
+            clipboardWritten = obj.optBoolean("clipboard_written", false),
+            submitError = submitError,
         )
     }
 

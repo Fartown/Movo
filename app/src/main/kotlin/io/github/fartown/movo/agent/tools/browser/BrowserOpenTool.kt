@@ -57,8 +57,8 @@ internal class BrowserOpenTool(
     override val name = "browser_open"
     override val domain = ToolDomain.BROWSER
     override val summary =
-        "打开网址（仅 http/https），或 nav 后退/前进/刷新；返回标题和最终网址。" +
-            "读网页先 open 再 browser_read。独占浏览器。"
+        "在 Movo 的离屏浏览器里打开网址（仅 http/https），或 nav 后退/前进/刷新；返回标题和最终网址。" +
+            "读网页先 open 再 browser_read。用户看不到这个浏览器。独占浏览器。"
 
     /** 网页开关关闭时整类工具不可用。 */
     override fun availability(env: ToolEnvironment): ToolAvailability =

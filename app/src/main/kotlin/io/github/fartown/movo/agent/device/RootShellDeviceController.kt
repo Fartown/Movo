@@ -317,50 +317,23 @@ internal class RootShellDeviceController(
         )
     }
 
-    fun inputText(text: String): String {
-        if (text.isEmpty()) return errorJson("INVALID_ARGUMENT", "text 不能为空")
-        if (text.length > MAX_INPUT_TEXT_CHARS) {
-            return errorJson("TEXT_TOO_LONG", "input_text 最多支持 $MAX_INPUT_TEXT_CHARS 个字符")
+    /**
+     * ui_input 的写入：[index] 指定观察里的输入框（没给写当前焦点），[append] 时接在已有内容末尾，否则整段替换。
+     * 用什么方式写（直接设置文字 / 粘贴）由无障碍服务按输入框决定；结果带回读的实际文字和输入框位置。
+     */
+    fun writeText(text: String, index: Int?, observation: ElementObservation?, append: Boolean): String {
+        if (text.length > MAX_WRITE_TEXT_CHARS) {
+            return errorJson("TEXT_TOO_LONG", "一次最多写入 $MAX_WRITE_TEXT_CHARS 个字符")
         }
-        AgentAccessibilityService.current()?.let { service ->
-            val result = service.inputTextFocused(text)
-            if (result.ok) {
-                waitForUiSettle("input_text")
-                return nodeActionJson("input_text", result)
-            }
-            return nodeActionJson("input_text", result)
-        }
-        return errorJson(
-            "ACCESSIBILITY_UNAVAILABLE",
-            "input_text 需要无障碍服务确认真实输入焦点；本次未发送任何按键",
-        )
+        val service = AgentAccessibilityService.current()
+            ?: return errorJson(
+                "ACCESSIBILITY_UNAVAILABLE",
+                "写入文字需要无障碍服务确认真实输入框；本次没有输入",
+            )
+        val result = service.writeText(observation?.accessibilitySnapshot, index, text, append)
+        if (result.ok) waitForUiSettle("input_text")
+        return nodeActionJson("input_text", result)
     }
-
-    fun replaceText(
-        text: String,
-        index: Int?,
-        observation: ElementObservation?,
-    ): String {
-        if (text.length > MAX_REPLACE_TEXT_CHARS) {
-            return errorJson("TEXT_TOO_LONG", "replace_text 最多支持 $MAX_REPLACE_TEXT_CHARS 个字符")
-        }
-        AgentAccessibilityService.current()?.let { service ->
-            val snapshot = observation?.accessibilitySnapshot
-            val result = service.setTextNode(snapshot, index, text)
-            if (result.ok) {
-                waitForUiSettle("replace_text")
-                return nodeActionJson("replace_text", result)
-            }
-            return nodeActionJson("replace_text", result)
-        }
-        return errorJson("ACCESSIBILITY_UNAVAILABLE", "replace_text 需要先启用 Movo Agent 无障碍服务")
-    }
-
-    fun clearText(index: Int?, observation: ElementObservation?): String =
-        replaceText("", index, observation).let { result ->
-            val json = JSONObject(result)
-            json.put("tool", "clear_text").toString()
-        }
 
     fun tapElement(observation: ElementObservation, index: Int, allowGestureFallback: Boolean = true): String {
         val snapshot = observation.accessibilitySnapshot
@@ -660,24 +633,6 @@ internal class RootShellDeviceController(
                 .put("message", "剪贴板为空，或当前应用无权读取剪贴板")
         }
         return json.toString()
-    }
-
-    fun pasteText(text: String): String {
-        if (text.length > MAX_CLIPBOARD_TEXT_CHARS) {
-            return errorJson("TEXT_TOO_LONG", "paste_text 最多支持 $MAX_CLIPBOARD_TEXT_CHARS 个字符")
-        }
-        AgentAccessibilityService.current()?.let { service ->
-            val result = service.pasteText(text)
-            if (result.ok) {
-                waitForUiSettle("input_text")
-                return nodeActionJson("paste_text", result)
-            }
-            return nodeActionJson("paste_text", result)
-        }
-        return errorJson(
-            "ACCESSIBILITY_UNAVAILABLE",
-            "paste_text 需要无障碍服务确认真实输入焦点；本次未修改剪贴板",
-        )
     }
 
     fun openSystemPanel(panel: String): String {
@@ -1271,6 +1226,10 @@ internal class RootShellDeviceController(
         if (result.method.isNotBlank()) json.put("method", result.method)
         if (result.clipboardWritten) json.put("clipboard_written", true)
         result.verified?.let { verified -> json.put("verified", verified) }
+        result.readback?.let { readback -> json.put("readback", readback) }
+        result.bounds?.let { bounds ->
+            json.put("bounds", org.json.JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
+        }
         if (!result.ok) {
             json
                 .put("code", result.code)
@@ -1446,8 +1405,8 @@ internal class RootShellDeviceController(
     }
 
     companion object {
-        private const val MAX_INPUT_TEXT_CHARS = 1_000
-        private const val MAX_REPLACE_TEXT_CHARS = 4_000
+        /** ui_input 一次写入的上限（与工具 schema 的 20000 一致）。 */
+        private const val MAX_WRITE_TEXT_CHARS = 20_000
         private const val MAX_CLIPBOARD_TEXT_CHARS = 20_000
         private val ROOT_OBSERVATION_IDS = AtomicLong(0)
     }

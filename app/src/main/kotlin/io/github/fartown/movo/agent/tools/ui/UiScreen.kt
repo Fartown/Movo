@@ -43,7 +43,10 @@ internal enum class UiKeyCode {
     BACK, HOME, RECENTS, ENTER, NOTIFICATIONS, QUICK_SETTINGS, LOCK_SCREEN, SCREENSHOT, DISMISS_NOTIFICATIONS
 }
 
-/** 文本写入目标语义；写入方式（set_text/paste）由后端选，不改变此语义。 */
+/**
+ * 文本写入目标语义：APPEND 接在输入框已有内容的末尾，REPLACE 整段替换。
+ * 写入方式（直接设置文字 / 粘贴）由后端选，不改变此语义。
+ */
 internal enum class UiInputMode { APPEND, REPLACE }
 
 /** 模型声明的动作后果：手动审批时用来判断这一步属于哪类高敏动作（合同 §0.6）。 */
@@ -254,9 +257,15 @@ internal sealed interface UiInputResult {
         val submitted: Boolean,
         val afterPackage: String?,
         val windowChanged: Boolean,
+        /** 写完后输入框里实际的文字：读得到、但和要写的不一致时才有（自动格式化、限长、换行被改）；密码框为 null。 */
+        val readback: String? = null,
+        /** 走了粘贴：剪贴板被临时改过（写完已尽量恢复）。 */
+        val clipboardWritten: Boolean = false,
+        /** 要求了 submit 但没提交成功的原因。 */
+        val submitError: String? = null,
     ) : UiInputResult
-    /** 无焦点 / 不可编辑 / append 无法插入——不自动降级为 replace。 */
-    data class NotActionable(val reason: String) : UiInputResult
+    /** 没写进去：无焦点、不可编辑、读不到原文没法追加等。[code] 是后端的细分码。 */
+    data class NotActionable(val reason: String, val code: String = "") : UiInputResult
     data object OutcomeUnknown : UiInputResult
     data object SystemRejected : UiInputResult
     data object PermissionRequired : UiInputResult

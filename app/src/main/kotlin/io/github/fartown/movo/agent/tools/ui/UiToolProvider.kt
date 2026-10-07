@@ -50,7 +50,8 @@ internal class UiToolProvider(
             - 每次新观察让旧 index 失效；动作结果不返回新的 observation_id。
             - 动作 ok 只代表已送达（effect_verified=false），关键步骤后重新 ui_observe 确认。
             - ui_scroll 能判定移动：moved=true 才算滚到；没动可能到边界。
-            - ui_input 文字回读一致才算证实；submit 是独立动作，不代表已发送。append 无法插入时不要改用 replace。
+            - ui_input：append 接在框里已有内容末尾，replace 整段替换；框是空的、密码框或读不到原文时用 replace，要保留原文就先看清再整段写。
+              回读一致才算证实；不一致时结果里有框里实际的文字（readback），据此判断，不要盲目重写。submit 是独立动作，不代表已发送。
             - 遇 unknown 先观察，不要直接重复同一动作。
             - 无触屏设备只按观察节点操作。ui_focus 可用时用于移动遥控焦点；未提供的截图、滑动和坐标参数不可使用。
         """.trimIndent(),
