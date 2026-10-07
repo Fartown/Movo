@@ -393,7 +393,7 @@ internal object BrowserResultParser {
         val text = json.optString("text")
         val truncated = json.optBoolean("truncated", false)
         // next_offset 可能为 null（JS 已读完）：没有下一段就不发游标。
-        val hasNext = truncated && !json.isNull("next_offset") && json.has("next_offset")
+        val hasNext = truncated && !json.isNull("next_offset")
         return BrowserTextRead(
             text = text,
             format = json.text("content_format") ?: defaultFormat,
