@@ -7,6 +7,9 @@
   <string name="agent_accessibility_label">Movo Agent</string>
   <string name="agent_accessibility_description">Read screen content and perform taps, swipes, text input, and other actions to help the agent complete tasks.</string>
   <string name="notification_history_service_label">Movo notification history</string>
+  <string name="media_access_service_label">Movo playback control</string>
+  <string name="capability_media_control_title">Playback control</string>
+  <string name="capability_media_control_summary">Read what is playing and its progress, jump to a time, switch episodes. Notification contents are not read.</string>
   <string name="voice_interaction_service_label">Movo</string>
   <string name="recognition_service_label">Movo speech recognition</string>
   <string name="action_back">Back</string>

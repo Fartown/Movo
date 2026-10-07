@@ -366,6 +366,53 @@ class ClockMediaToolsTest {
     private fun noRootExecutor() =
         io.github.fartown.movo.agent.device.BoundedRootCommandExecutor(AndroidAgentLogger, rootAvailable = { false })
 
+    // ---- media_control：媒体会话版（没授权时交给媒体键工具） ----
+
+    private fun sessionTool(backend: MediaControlBackend?) = MediaSessionControlTool(
+        ApplicationProvider.getApplicationContext(),
+        { listOf(android.content.ComponentName("io.github.fartown.movo", "io.github.fartown.movo.agent.device.MediaAccessService")) },
+        backend?.let { MediaControlTool(it, readBackTimeoutMs = 50, pollIntervalMs = 1) },
+    )
+
+    private fun runSession(backend: MediaControlBackend?, args: String): JSONObject =
+        JSONObject(pipeline(provider(ContractTool(sessionTool(backend))), ToolEnvironment()).execute(call("media_control", args)).content)
+
+    @Test
+    fun mediaSession_withoutAccess_pauseGoesThroughTheKeyToolAndItsReadBack() {
+        // 没授权「播放控制」：暂停交给媒体键工具，按会话 / 媒体声音回读确认。
+        val backend = FakeMedia(
+            listOf(MediaSessionState.Unknown),
+            audio = listOf(true, false),
+        )
+        val json = runSession(backend, """{"action":"pause"}""")
+        assertEquals("ok", json.getString("status"))
+        assertTrue(json.getBoolean("effect_verified"))
+        assertEquals(listOf(MediaAction.PAUSE), backend.dispatched)
+    }
+
+    @Test
+    fun mediaSession_withoutAccess_nextIsNotSentBlind() {
+        // 上下集不盲发：确认不了是否生效，模型再去界面补一次就会多跳一集（真机 10-07）。
+        val backend = FakeMedia(listOf(MediaSessionState.Unknown), audio = listOf(true))
+        val json = runSession(backend, """{"action":"next"}""")
+        assertEquals("PERMISSION_REQUIRED", json.getString("code"))
+        assertTrue(backend.dispatched.isEmpty())
+    }
+
+    @Test
+    fun mediaSession_withoutAccess_seekAsksForThePermission() {
+        val json = runSession(null, """{"action":"seek","position_s":300}""")
+        assertEquals("error", json.getString("status"))
+        assertEquals("PERMISSION_REQUIRED", json.getString("code"))
+    }
+
+    @Test
+    fun mediaSession_seekNeedsAPosition() {
+        val json = runSession(null, """{"action":"seek"}""")
+        assertEquals("error", json.getString("status"))
+        assertTrue(json.toString().contains("position_s"))
+    }
+
     // ---- volume_set ----
 
     @Test

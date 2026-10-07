@@ -65,7 +65,7 @@ internal object FlavorModule : Flavor {
     override val voiceHandoffTools: Set<String> = setOf("app_open", "video_search")
 
     /** 「打开 X」打开就算做完：模型在 app_open 里带上回答，成功后直接结束，不再为一句「已打开」多请求一轮模型。 */
-    override val finishingTools: Set<String> = setOf("app_open")
+    override val finishingTools: Set<String> = setOf("app_open", "media_control", "volume_set")
 
     /** 隔 2 分钟以上再叫「小T小T」就开新对话：刚问完接着问仍能接上文，隔久了从头开始，请求更快。 */
     override val voiceNewConversationAfterMs: Long = 120_000L
