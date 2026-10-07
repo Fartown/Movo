@@ -52,15 +52,15 @@ internal class TerminalJobTool(
     override val name = "terminal_job"
     override val domain = ToolDomain.TERMINAL
     override val summary =
-        "管理后台任务：action=list 列出、read 读输出（可分页、可等待）、write 给 tty 任务发输入、stop 停止。" +
-            "read 不带 cursor 读尾部，带则续读。"
+        "管理本次任务里的后台命令：action=list 列出、read 读输出（可等待）、write 给 tty 任务发输入、stop 停止。" +
+            "read 不带 cursor 读最新的尾部，带 next_cursor 续读，cursor=0:0 从头读。"
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
         string("action", "动作", required = true, enum = TerminalJobAction.entries.map { it.name.lowercase() })
         string("job_id", "任务 ID（read、write、stop 必填）")
         string("input", "要写入的输入（write 必填）")
         integer("wait_ms", "read/write 等待输出的毫秒", min = 0, max = 180_000)
-        string("cursor", "续读游标；不带则读尾部")
+        string("cursor", "续读游标：上一次 read 返回的 next_cursor；不带则读最新的尾部，0:0 从头读")
         string("stream", "读取的输出流，默认 both", enum = TerminalStream.entries.map { it.name.lowercase() })
     }
 
@@ -127,7 +127,13 @@ internal class TerminalJobTool(
             append("running: ").append(read.info.running).append('\n')
             read.info.exitCode?.let { append("exit_code: ").append(it).append('\n') }
             append("identity: ").append(read.info.identity.name.lowercase()).append('\n')
+            if (read.info.streamsMerged) append("streams: merged（伪终端里 stderr 也在 stdout 里）\n")
             read.nextCursor?.let { append("next_cursor: ").append(it).append('\n') }
+            // 说清这段之前有没有没给的输出，以及怎么读到：读尾部省略的开头可以 0:0 从头读；续读跳过的是缓冲区已丢弃的。
+            val skippedNote = if (read.tail) "之前的输出没给，cursor=0:0 从头读" else "缓冲区已丢弃，读不回来"
+            if (read.stdoutSkipped > 0) append("stdout_skipped: ").append(read.stdoutSkipped).append("（$skippedNote）\n")
+            if (read.stderrSkipped > 0) append("stderr_skipped: ").append(read.stderrSkipped).append("（$skippedNote）\n")
+            if (read.hasMore) append("more: true（还有没读完的输出，用 next_cursor 续读）\n")
             if (input.stream != TerminalStream.STDERR) {
                 append("--- stdout ---\n").append(read.stdout).append('\n')
             }
@@ -222,7 +228,7 @@ internal class TerminalJobTool(
         ToolError(
             ToolErrorCode.NOT_FOUND,
             "任务不存在：$jobId",
-            hint = "非 keep_alive 任务会随本次任务结束清理",
+            hint = "后台命令只在启动它的那次任务里能查看；用 terminal_job list 看现有的",
         ),
     )
 }

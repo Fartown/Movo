@@ -8,53 +8,49 @@ import org.junit.Test
 
 class TextEditPlannerTest {
     @Test
-    fun `refuses to reconstruct password or unreadable populated input`() {
-        assertFalse(TextEditPlanner.canSafelyReconstruct(true, true, 3, 1, 1))
-        assertFalse(TextEditPlanner.canSafelyReconstruct(false, false, 3, 3, 3))
-        assertTrue(TextEditPlanner.canSafelyReconstruct(false, true, 3, 3, 3))
-        assertTrue(TextEditPlanner.canSafelyReconstruct(false, true, 0, -1, -1))
+    fun `append goes after the existing text and replace writes the text as is`() {
+        assertEquals("味道不错。下次还来", TextEditPlanner.target("味道不错。", "下次还来", append = true))
+        assertEquals("下次还来", TextEditPlanner.target("", "下次还来", append = true))
+        assertEquals("新的", TextEditPlanner.target("旧的", "新的", append = false))
+        assertEquals("", TextEditPlanner.target("旧的", "", append = false))
     }
 
     @Test
-    fun `inserts at cursor instead of always appending`() {
-        assertEquals(
-            TextEditPlanner.Plan("AXBC", 2),
-            TextEditPlanner.insertAtSelection("ABC", "X", 1, 1),
-        )
+    fun `append is refused when the existing text cannot be read`() {
+        assertNull(TextEditPlanner.target(null, "下次还来", append = true))
+        assertEquals("全部", TextEditPlanner.target(null, "全部", append = false))
     }
 
     @Test
-    fun `replaces selected range regardless of selection direction`() {
-        assertEquals(
-            TextEditPlanner.Plan("AXC", 2),
-            TextEditPlanner.insertAtSelection("ABC", "X", 2, 1),
-        )
+    fun `edge whitespace in the readback does not count`() {
+        // 真机：小米笔记写「AAA」读回「\nAAA」。
+        assertTrue(TextEditPlanner.sameText("AAA", "\nAAA"))
+        assertTrue(TextEditPlanner.sameText("AAA", "AAA"))
+        assertFalse(TextEditPlanner.sameText("第一行\n第二行", "\n第一行 第二行"))
+        assertFalse(TextEditPlanner.sameText("AAA", null))
     }
 
     @Test
-    fun `uses UTF 16 offsets exposed by accessibility nodes`() {
-        assertEquals(
-            TextEditPlanner.Plan("😀X好", 3),
-            TextEditPlanner.insertAtSelection("😀好", "X", 2, 2),
-        )
+    fun `a rejected web field is not pasted into`() {
+        // 真机：网页粘贴出来的可能是更早的剪贴板内容，被拒时又没法用直接写入改回来。
+        assertFalse(TextEditPlanner.canPasteWhenRejected(inWebView = true, supportsPaste = true))
+        assertTrue(TextEditPlanner.canPasteWhenRejected(inWebView = false, supportsPaste = true))
+        assertFalse(TextEditPlanner.canPasteWhenRejected(inWebView = false, supportsPaste = false))
     }
 
     @Test
-    fun `invalid selection on existing text is rejected instead of appending`() {
-        assertNull(TextEditPlanner.insertAtSelection("ABC", "X", -1, -1))
-    }
-
-    @Test
-    fun `partially invalid selection is rejected`() {
-        assertNull(TextEditPlanner.insertAtSelection("ABC", "X", -1, 0))
-    }
-
-    @Test
-    fun `empty text has one safe insertion point before cursor exists`() {
-        assertEquals(
-            TextEditPlanner.Plan("X", 1),
-            TextEditPlanner.insertAtSelection("", "X", -1, -1),
-        )
+    fun `line breaks lost by an editor are detected`() {
+        assertTrue(TextEditPlanner.lostLineBreaks("第一行\n\n第二行😋", "第一行  第二行😋", multiLine = true, inWebView = false))
+        assertTrue(TextEditPlanner.lostLineBreaks("第一行\n第二行", "第一行第二行", multiLine = true, inWebView = false))
+        // 小米笔记：网页编辑器把换行改成空格，读回前面还多一个换行；报不准多行。
+        assertTrue(TextEditPlanner.lostLineBreaks("加水。\n唯一的", "\n加水。 唯一的", multiLine = false, inWebView = true))
+        // 原生单行框本来就不收换行。
+        assertFalse(TextEditPlanner.lostLineBreaks("第一行\n第二行", "第一行 第二行", multiLine = false, inWebView = false))
+        // 其他差异（限长、自动格式化）不是换行问题。
+        assertFalse(TextEditPlanner.lostLineBreaks("第一行\n第二行", "第一行", multiLine = true, inWebView = false))
+        assertFalse(TextEditPlanner.lostLineBreaks("13800138000", "138 0013 8000", multiLine = true, inWebView = false))
+        assertFalse(TextEditPlanner.lostLineBreaks("第一行\n第二行", "第一行\n第二行", multiLine = true, inWebView = false))
+        assertFalse(TextEditPlanner.lostLineBreaks("第一行\n第二行", null, multiLine = true, inWebView = false))
     }
 
     @Test

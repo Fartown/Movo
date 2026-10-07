@@ -240,7 +240,7 @@ internal class RealBrowserBackend(
                 args.put("action", "key").put(
                     "key",
                     request.key
-                        ?: throw BrowserException(ToolErrorCode.INVALID_ARGUMENTS, "key 需要 key（如 Enter/Tab/Escape/ArrowDown）"),
+                        ?: throw BrowserException(ToolErrorCode.INVALID_ARGUMENTS, "key 需要 key（enter、esc、tab、backspace、up、down、left、right）"),
                 )
         }
         // 动作前记录 URL/标题，动作+settle 后回读对比，判定是否跳转。

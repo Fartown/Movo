@@ -344,11 +344,86 @@ class UiToolsTest {
 
     @Test
     fun uiInput_appendCannotInsert_notActionable_noReplaceDowngrade() {
-        val backend = FakeUiBackend(inputResult = UiInputResult.NotActionable("append 无法插入"))
+        val backend = FakeUiBackend(
+            inputResult = UiInputResult.NotActionable("读不到输入框里原有的文字，不知道接在哪里", "TEXT_CONTENT_UNAVAILABLE"),
+        )
         val result = pipeline(provider(ContractTool(UiInputTool(backend, backend))), accessibilityEnv)
             .execute(call("ui_input", """{"text":"x","mode":"append"}"""))
         assertEquals("error", result.status)
         assertEquals("NOT_ACTIONABLE", result.errorCode)
+        // 提示和报错一致：框是空的就整段写，要保留原文先看清再整段写（不再说「不要改用 replace」）。
+        val json = JSONObject(result.content)
+        assertTrue(json.toString(), json.getString("hint").contains("mode=replace"))
+        assertFalse(json.toString(), json.toString().contains("不要改用 replace"))
+        assertEquals("TEXT_CONTENT_UNAVAILABLE", json.getString("detail"))
+    }
+
+    @Test
+    fun uiInput_readbackDiffers_tellsTheModelWhatIsInTheField() {
+        // 网页手机号框自动加空格：结果里直接给出框里的实际文字，模型不用再观察一次。
+        val backend = FakeUiBackend(
+            inputResult = UiInputResult.Written(
+                "ACTION_PASTE", false, 11, false, "com.android.browser", false,
+                readback = "138 0013 8000", clipboardWritten = true,
+            ),
+        )
+        val json = JSONObject(
+            pipeline(provider(ContractTool(UiInputTool(backend, backend))), accessibilityEnv)
+                .execute(call("ui_input", """{"text":"13800138000"}""")).content,
+        )
+        assertEquals("ok", json.getString("status"))
+        assertFalse(json.getBoolean("effect_verified"))
+        val data = json.getJSONObject("data")
+        assertFalse(data.getBoolean("text_verified"))
+        assertEquals("138 0013 8000", data.getString("readback"))
+        assertTrue(data.getBoolean("clipboard_written"))
+    }
+
+    @Test
+    fun uiInput_lineBreaksLost_saysSoAndNotToRetry() {
+        // 真机：小米笔记把换行改成空格，模型以为没写对，反复重写、还往笔记里写测试文字。
+        val backend = FakeUiBackend(
+            inputResult = UiInputResult.Written(
+                "ACTION_SET_TEXT", false, 9, false, "com.miui.notes", false,
+                readback = "\n第一段 第二段", lineBreaksLost = true,
+            ),
+        )
+        val data = JSONObject(
+            pipeline(provider(ContractTool(UiInputTool(backend, backend))), accessibilityEnv)
+                .execute(call("ui_input", """{"text":"第一段\\n第二段"}""")).content,
+        ).getJSONObject("data")
+        assertTrue(data.getString("note"), data.getString("note").contains("换行改成了空格"))
+        assertTrue(data.getString("note").contains("不要反复重写"))
+    }
+
+    @Test
+    fun uiInput_longReadbackKeepsHeadAndTail() {
+        val long = "评".repeat(2_000)
+        val backend = FakeUiBackend(
+            inputResult = UiInputResult.Written("ACTION_SET_TEXT", false, 2_001, false, "com.example.app", false, readback = long),
+        )
+        val data = JSONObject(
+            pipeline(provider(ContractTool(UiInputTool(backend, backend))), accessibilityEnv)
+                .execute(call("ui_input", """{"text":"x"}""")).content,
+        ).getJSONObject("data")
+        val readback = data.getString("readback")
+        assertTrue(readback.length < 700)
+        assertTrue(readback.contains("中间省略 1400 字"))
+    }
+
+    @Test
+    fun uiInput_submitFailureSaysWhy() {
+        val backend = FakeUiBackend(
+            inputResult = UiInputResult.Written(
+                "ACTION_SET_TEXT", true, 2, false, "com.example.app", false, submitError = "输入节点拒绝回车动作",
+            ),
+        )
+        val data = JSONObject(
+            pipeline(provider(ContractTool(UiInputTool(backend, backend))), accessibilityEnv)
+                .execute(call("ui_input", """{"text":"烧烤","submit":true}""")).content,
+        ).getJSONObject("data")
+        assertFalse(data.getBoolean("submitted"))
+        assertEquals("输入节点拒绝回车动作", data.getString("submit_error"))
     }
 
     @Test

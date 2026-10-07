@@ -58,18 +58,37 @@ internal class AgentPrivateDatabaseTools(
         return ok("list_active_timers", items, limit)
     }
 
-    private fun searchClipboard(database: SQLiteDatabase, args: JSONObject): String {
+    /**
+     * 剪贴板历史：按关键词和时间窗（since_millis / until_millis，毫秒，可选）过滤，按时间倒序。
+     * TIME 统一换成毫秒再比、再排（小于 1e12 的按秒存，乘 1000）；参数按文本绑定，要 CAST 成整数，否则整数永远小于文本。
+     */
+    internal fun searchClipboard(database: SQLiteDatabase, args: JSONObject): String {
         if (!database.hasColumns("CLIPBOARD_ITEM", setOf("TIME", "CONTENT"))) {
             return error("CLIPBOARD_SCHEMA_UNSUPPORTED", "当前剪贴板历史结构暂不受支持")
         }
         val limit = args.optInt("limit", 20).coerceIn(1, 50)
         val query = args.optString("query").trim()
+        val conditions = mutableListOf<String>()
+        val conditionArgs = mutableListOf<String>()
+        if (query.isNotBlank()) {
+            conditions += "CONTENT LIKE ? ESCAPE '\\' COLLATE NOCASE"
+            conditionArgs += "%${query.escapeLike()}%"
+        }
+        val timeMillis = "(CASE WHEN TIME < $SECONDS_THRESHOLD THEN TIME * 1000 ELSE TIME END)"
+        args.optLong("since_millis", -1L).takeIf { it >= 0 }?.let {
+            conditions += "$timeMillis >= CAST(? AS INTEGER)"
+            conditionArgs += it.toString()
+        }
+        args.optLong("until_millis", -1L).takeIf { it >= 0 }?.let {
+            conditions += "$timeMillis <= CAST(? AS INTEGER)"
+            conditionArgs += it.toString()
+        }
         val items = database.rows(
             table = "CLIPBOARD_ITEM",
             columns = listOf("TIME", "CONTENT"),
-            selection = query.takeIf(String::isNotBlank)?.let { "CONTENT LIKE ? ESCAPE '\\' COLLATE NOCASE" },
-            selectionArgs = query.takeIf(String::isNotBlank)?.let { arrayOf("%${it.escapeLike()}%") },
-            order = "TIME DESC",
+            selection = conditions.takeIf { it.isNotEmpty() }?.joinToString(" AND "),
+            selectionArgs = conditionArgs.takeIf { it.isNotEmpty() }?.toTypedArray(),
+            order = "$timeMillis DESC",
             limit = limit,
         )
         return ok("search_clipboard_history", items, limit)
@@ -257,6 +276,8 @@ internal class AgentPrivateDatabaseTools(
         const val SNAPSHOT_PREFIX = "movo-private-data-"
         const val MAX_FIELD_CHARS = 4_000
         const val DAY_MS = 24L * 60 * 60 * 1_000
+        /** 小于它（约 2001-09 的毫秒数）的时间戳按秒存。 */
+        const val SECONDS_THRESHOLD = 1_000_000_000_000L
         val CLOCK_DATABASE = DatabaseSource(
             "/data/user_de/{user}/com.coloros.alarmclock/databases/alarms.db",
             32L * 1024 * 1024,

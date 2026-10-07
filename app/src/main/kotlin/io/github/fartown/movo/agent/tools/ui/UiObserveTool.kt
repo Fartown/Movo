@@ -21,11 +21,15 @@ import io.github.fartown.movo.agent.tools.core.ToolInput
 import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.ToolResource
 import io.github.fartown.movo.agent.tools.core.Verdict
+import io.github.fartown.movo.agent.tools.core.invalidArgs
 import io.github.fartown.movo.agent.tools.core.objectSchema
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** §9 ui_observe（只读）：观察屏幕，返回 observation_id、代际 gen、节点、可选截图。 */
+/**
+ * §9 ui_observe（只读）：观察屏幕，返回 observation_id、代际 gen、节点、可选截图。
+ * query 只保留文字或描述里含这段字的节点（不分大小写），其余不返回；index 仍是这次观察里的序号，可直接用来操作。
+ */
 
 internal data class UiObserveInput(
     val screenshot: Boolean,
@@ -37,7 +41,12 @@ internal data class UiObserveInput(
 internal data class UiObserveOutput(
     val observed: UiObserveResult.Observed,
     val screenshotRequested: Boolean = false,
+    /** 带了 query 才有：过滤后的节点已放进 [observed]。 */
+    val query: QueryMatch? = null,
 ) : ToolOutput
+
+/** query 的过滤结果：[matched] 个节点命中，[total] 是这次观察看到的节点数。 */
+internal data class QueryMatch(val text: String, val matched: Int, val total: Int)
 
 internal class UiObserveTool(
     private val backend: UiObserveBackend,
@@ -60,7 +69,7 @@ internal class UiObserveTool(
         if (env.screenshotAvailable) boolean("screenshot", "是否附截图，默认 false；用户要求看图、节点为 0 或 Canvas/地图/图片界面时设 true")
         boolean("nodes", "是否返回节点列表，默认 true")
         integer("max_nodes", "节点数量上限 1–120，默认 60", min = 1, max = 120)
-        string("query", "可选的文字过滤，只保留匹配节点，减少 token")
+        string("query", "可选：只返回文字或描述里含这段字的节点（不分大小写），其余不返回，减少 token")
     }
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): UiObserveInput = UiObserveInput(
@@ -69,7 +78,9 @@ internal class UiObserveTool(
         },
         nodes = args.bool("nodes", true),
         maxNodes = args.int("max_nodes", 60, 1..120),
-        query = args.stringOrNull("query")?.trim()?.ifEmpty { null },
+        query = args.stringOrNull("query")?.trim()?.ifEmpty { null }.also { query ->
+            if (query != null && !args.bool("nodes", true)) invalidArgs("query 只过滤节点，不能和 nodes=false 一起用")
+        },
     )
 
     override fun resolve(input: UiObserveInput, env: ToolEnvironment): CallResolution = CallResolution(
@@ -87,16 +98,43 @@ internal class UiObserveTool(
                 ToolError(ToolErrorCode.PERMISSION_REQUIRED, "无障碍不可用，无法观察屏幕", hint = "在设置里开启 Movo 无障碍"),
             )
         }
-        val request = UiObserveRequest(input.screenshot, input.nodes, input.maxNodes, input.query)
+        // 带 query 时按上限抓，再过滤、截到 max_nodes：要找的字可能排在前 max_nodes 个节点之后。
+        val captureLimit = if (input.query != null) MAX_NODES else input.maxNodes
+        val request = UiObserveRequest(input.screenshot, input.nodes, captureLimit, input.query)
         return when (val result = backend.observe(request, ctx.env)) {
             is UiObserveResult.PermissionRequired -> Verdict.Failed(
                 ToolError(ToolErrorCode.PERMISSION_REQUIRED, "无障碍不可用，无法观察屏幕", hint = "在设置里开启 Movo 无障碍"),
             )
-            is UiObserveResult.Observed -> Verdict.Read(UiObserveOutput(result, input.screenshot))
+            is UiObserveResult.Observed -> Verdict.Read(
+                input.query?.let { query -> filtered(result, query, input.maxNodes, input.screenshot) }
+                    ?: UiObserveOutput(result, input.screenshot),
+            )
             is UiObserveResult.Unavailable -> Verdict.Failed(
                 ToolError(ToolErrorCode.SOURCE_UNAVAILABLE, result.reason),
             )
         }
+    }
+
+    /**
+     * 只保留文字或描述里含 [query] 的节点（不分大小写），超过 [maxNodes] 截断。焦点节点的 index 照旧给：
+     * 它是这次观察里的序号，没被过滤掉也能用。
+     */
+    private fun filtered(
+        observed: UiObserveResult.Observed,
+        query: String,
+        maxNodes: Int,
+        screenshotRequested: Boolean,
+    ): UiObserveOutput {
+        val matches = textMatcher(query, WaitMatch.CONTAINS)
+        val hits = observed.nodes.filter { node -> listOfNotNull(node.text, node.desc).any(matches) }
+        return UiObserveOutput(
+            observed = observed.copy(
+                nodes = hits.take(maxNodes),
+                nodesTruncated = observed.nodesTruncated || hits.size > maxNodes,
+            ),
+            screenshotRequested = screenshotRequested,
+            query = QueryMatch(query, matched = hits.size, total = observed.nodes.size),
+        )
     }
 
     override fun uiTitle(input: UiObserveInput): String =
@@ -105,9 +143,10 @@ internal class UiObserveTool(
     /** 摘要写在哪个应用、看到多少元素；截图由 ContractTool 加进视图；没截图时列出看到的主要文字。 */
     override fun renderForUi(input: UiObserveInput, output: UiObserveOutput): ToolUiView {
         val o = output.observed
+        val found = output.query?.let { q -> if (q.matched > 0) "找到 ${q.matched} 个" else "没找到「${q.text.forTitle()}」" }
         val summary = listOfNotNull(
             o.packageName?.takeIf { it.isNotBlank() }?.let { "「${appLabel(it)}」" },
-            "${o.nodes.size} 个元素".takeIf { o.nodes.isNotEmpty() },
+            found ?: "${o.nodes.size} 个元素".takeIf { o.nodes.isNotEmpty() },
             "截图".takeIf { o.screenshotAttached },
         ).joinToString(" · ").ifBlank { "已查看" }
         val texts = o.nodes.mapNotNull { node -> (node.text ?: node.desc)?.takeIf { it.isNotBlank() } }.distinct()
@@ -134,6 +173,16 @@ internal class UiObserveTool(
             json.put("nodes", arr)
         }
         json.put("nodes_truncated", o.nodesTruncated)
+        output.query?.let { q ->
+            json.put(
+                "query",
+                JSONObject().put("text", q.text).put("matched", q.matched).put("total", q.total).apply {
+                    if (q.matched == 0) {
+                        put("note", "看到的 ${q.total} 个节点里没有文字或描述含「${q.text}」；换个词、去掉 query 看全部节点，或附截图找")
+                    }
+                },
+            )
+        }
         json.put(
             "screenshot",
             JSONObject().put("requested", output.screenshotRequested).put("attached", o.screenshotAttached)
@@ -148,6 +197,11 @@ internal class UiObserveTool(
     /** 把截图作为本回合图片附给模型（合同新增 images()）。 */
     override fun images(output: UiObserveOutput): List<AgentModelClient.ModelImage> =
         listOfNotNull(output.observed.screenshot)
+
+    companion object {
+        /** 一次观察最多返回的节点数（max_nodes 上限）。 */
+        const val MAX_NODES = 120
+    }
 
     private fun nodeJson(n: UiObservedNode): JSONObject = JSONObject().apply {
         put("index", n.index)

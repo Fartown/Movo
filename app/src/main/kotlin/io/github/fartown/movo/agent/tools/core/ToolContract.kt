@@ -91,7 +91,7 @@ internal data class ResourceKey(val resource: ToolResource, val instance: String
     override fun toString(): String = if (instance.isEmpty()) resource.name else "${resource.name}:$instance"
 }
 
-/** 目标身份：GUI 节点/坐标绑观察代际（gen）；文件/会话/MCP 绑各自实例身份。 */
+/** 目标身份：GUI 节点绑观察代际（gen），坐标绑那次观察的坐标系（gen 只作记录）；文件/会话/MCP 绑各自实例身份。 */
 internal sealed interface TargetIdentity {
     data object None : TargetIdentity
     data class Observed(val observationId: String, val gen: Long, val index: Int?) : TargetIdentity

@@ -25,8 +25,9 @@ import org.json.JSONObject
  * 屏幕 UI 领域共享类型与工具函数。
  *
  * 本领域最难的两点都落在这里：
- * 1. **观察代际绑定**（合同 §5.1）：index 必带 observation_id；坐标隐式绑最近一次 ui_observe 的 gen；
- *    gen 失效一律 STALE_OBSERVATION，不允许“默认最近观察”兜底。
+ * 1. **观察绑定**（合同 §5.1）：index 必带 observation_id，绑那次观察的内容代际，失效一律 STALE_OBSERVATION，
+ *    不允许“默认最近观察”兜底。坐标隐式绑最近一次 ui_observe 的坐标系（[CoordinateFrame]）：只在从没观察过、
+ *    屏幕方向或尺寸变了、前台窗口 / 应用换了时拒绝，页面内容刷新、滚动、文字变化都不算（见 [coordinateError]）。
  * 2. **审批分类**统一由 [buildUiActionResolution] 声明：模型声明的发送 / 支付等后果、所在应用；
  *    要不要弹卡由权限模式决定。读不到坐标点上的节点只记录（readableTarget），不单独确认。
  */
@@ -43,7 +44,10 @@ internal enum class UiKeyCode {
     BACK, HOME, RECENTS, ENTER, NOTIFICATIONS, QUICK_SETTINGS, LOCK_SCREEN, SCREENSHOT, DISMISS_NOTIFICATIONS
 }
 
-/** 文本写入目标语义；写入方式（set_text/paste）由后端选，不改变此语义。 */
+/**
+ * 文本写入目标语义：APPEND 接在输入框已有内容的末尾，REPLACE 整段替换。
+ * 写入方式（直接设置文字 / 粘贴）由后端选，不改变此语义。
+ */
 internal enum class UiInputMode { APPEND, REPLACE }
 
 /** 模型声明的动作后果：手动审批时用来判断这一步属于哪类高敏动作（合同 §0.6）。 */
@@ -93,8 +97,40 @@ internal sealed interface UiTarget {
     }
 }
 
-/** 一次观察的身份：供坐标隐式绑定。 */
-internal data class ObservationRef(val observationId: String, val gen: Long)
+/**
+ * 一次观察的身份：供坐标隐式绑定。[coordWidth] × [coordHeight] 是它返回给模型的 coord_space
+ * （附了截图是截图像素，否则是屏幕），坐标的合法范围按它算；未知为 0，不查范围。
+ */
+internal data class ObservationRef(
+    val observationId: String,
+    val gen: Long,
+    val coordWidth: Int = 0,
+    val coordHeight: Int = 0,
+)
+
+/**
+ * 坐标系：同一个 (x, y) 还是不是指同一块屏幕。坐标动作只看它，不看页面内容。
+ * - [width] × [height] 是屏幕实际宽高，横竖屏切换时互换；读不到为 0；
+ * - [windowGen] 是前台窗口代际：新 Activity、对话框、弹出菜单、输入法这类窗口出现才 +1，
+ *   内容刷新、滚动、文字变化、Movo 自己的浮窗都不算；没有无障碍时读不到，为 null；
+ * - [packageName] 是前台应用；读不到为 null。
+ * 读不到的项不参与比较。
+ */
+internal data class CoordinateFrame(
+    val width: Int,
+    val height: Int,
+    val windowGen: Long?,
+    val packageName: String?,
+)
+
+/**
+ * 动作实际按在屏幕上的位置（真实屏幕坐标），成功后给手势指示用（规范 9.5）。
+ * [Press] 是点按（[holdMs] > 0 为长按），[Drag] 是滑动 / 拖动。
+ */
+internal sealed interface UiTouch {
+    data class Press(val x: Int, val y: Int, val holdMs: Int) : UiTouch
+    data class Drag(val x1: Int, val y1: Int, val x2: Int, val y2: Int, val durationMs: Int) : UiTouch
+}
 
 /** 节点探针：观察节点、提交点识别命中节点、ui_wait 命中节点共用的轻量视图。 */
 internal data class UiNodeProbe(
@@ -123,6 +159,12 @@ internal interface UiObservationRegistry {
 
     /** 最近一次 ui_observe（供坐标隐式绑定）；从未观察过返回 null。 */
     fun latest(): ObservationRef?
+
+    /** 某次观察时的坐标系；未知返回 null（不据此拒绝）。 */
+    fun observationFrame(observationId: String): CoordinateFrame? = null
+
+    /** 现在的坐标系；读不到返回 null（不据此拒绝）。 */
+    fun currentFrame(): CoordinateFrame? = null
 
     /** 当前可信前台包名；覆盖层/多窗/安全窗无法可信归因时返回 null（合同 §5.3）。 */
     fun foregroundPackage(): String?
@@ -192,8 +234,17 @@ internal interface UiActionBackend {
     /** 当前可用的注入后端；NONE 表示既无无障碍也无 root。 */
     fun backend(env: ToolEnvironment): InjectionBackend
 
-    /** 坐标处能否实时读到可信节点（提交点识别）；读不到返回 null → readableTarget=false。 */
+    /**
+     * 坐标处实时抓树读到的可信节点（给确认卡写「点按「转账」」）；读不到返回 null → readableTarget=false。
+     * 要抓整棵树（只有 Root 时是一次 uiautomator dump），只在这一步真的要弹确认卡时才调用。
+     */
     fun readableNodeAtPoint(x: Double, y: Double): UiNodeProbe?
+
+    /** 现在屏幕上第一个文字或描述包含 [text] 的节点（单次查询，不登记观察）；没有或读不到返回 null。 */
+    fun findText(text: String): UiNodeProbe? = null
+
+    /** 动作成功后在被点的位置显示手势指示、配触感（规范 9.5）；默认不显示。 */
+    fun showTouch(touch: UiTouch) = Unit
 
     fun tap(request: UiTapRequest, env: ToolEnvironment): UiInjectResult
     fun focus(element: UiTarget.Element, direction: ScrollDirection?, env: ToolEnvironment): UiInjectResult =
@@ -210,8 +261,9 @@ internal data class UiSwipeRequest(
     val x: Double, val y: Double, val x2: Double, val y2: Double,
     val durationMs: Int, val holdMs: Int?, val backend: InjectionBackend,
 )
+/** 滚动一次。until_text 由 ui_scroll 逐次滚动 + [UiActionBackend.findText] 完成，不进请求。 */
 internal data class UiScrollRequest(
-    val direction: ScrollDirection, val element: UiTarget.Element?, val untilText: String?,
+    val direction: ScrollDirection, val element: UiTarget.Element?,
     val backend: InjectionBackend,
 )
 internal data class UiInputRequest(
@@ -226,7 +278,13 @@ internal data class UiWaitRequest(
 
 /** tap / swipe / key 的送达型结果。 */
 internal sealed interface UiInjectResult {
-    data class Dispatched(val method: String, val afterPackage: String?, val windowChanged: Boolean) : UiInjectResult
+    /** [touch] 是实际按下的屏幕位置（tap / swipe 才有），成功后给手势指示用。 */
+    data class Dispatched(
+        val method: String,
+        val afterPackage: String?,
+        val windowChanged: Boolean,
+        val touch: UiTouch? = null,
+    ) : UiInjectResult
     /** 系统拒绝派发，确定没执行。 */
     data object SystemRejected : UiInjectResult
     data class NotActionable(val reason: String) : UiInjectResult
@@ -254,9 +312,17 @@ internal sealed interface UiInputResult {
         val submitted: Boolean,
         val afterPackage: String?,
         val windowChanged: Boolean,
+        /** 写完后输入框里实际的文字：读得到、但和要写的不一致时才有（自动格式化、限长、换行被改）；密码框为 null。 */
+        val readback: String? = null,
+        /** 走了粘贴：剪贴板被临时改过（写完已尽量恢复）。 */
+        val clipboardWritten: Boolean = false,
+        /** 要求了 submit 但没提交成功的原因。 */
+        val submitError: String? = null,
+        /** 输入框（编辑器）把换行改成了空格或吞掉，其余文字都写进去了。 */
+        val lineBreaksLost: Boolean = false,
     ) : UiInputResult
-    /** 无焦点 / 不可编辑 / append 无法插入——不自动降级为 replace。 */
-    data class NotActionable(val reason: String) : UiInputResult
+    /** 没写进去：无焦点、不可编辑、读不到原文没法追加等。[code] 是后端的细分码。 */
+    data class NotActionable(val reason: String, val code: String = "") : UiInputResult
     data object OutcomeUnknown : UiInputResult
     data object SystemRejected : UiInputResult
     data object PermissionRequired : UiInputResult
@@ -330,7 +396,7 @@ internal fun buildUiActionResolution(
     selfProtect: Boolean,
     sensitivity: Sensitivity = Sensitivity.NORMAL,
     extraResources: Set<ResourceKey> = emptySet(),
-    /** resolve 预检出的观察失效（[genError]）：在确认之前就拒绝。 */
+    /** resolve 预检出的拒绝（观察失效 [genError] / [coordinateError]、坐标越界）：在确认之前就拒绝。 */
     stale: ToolError? = null,
     action: String = "操作屏幕",
 ): CallResolution {
@@ -411,6 +477,101 @@ internal fun genError(registry: UiObservationRegistry, observationId: String?, b
     return null
 }
 
+/**
+ * 坐标动作（ui_tap 坐标 / 区域、ui_swipe）的预检与复核：坐标只绑最近一次观察的坐标系。
+ * 从没观察过、屏幕方向或尺寸变了、前台窗口 / 应用换了才拒绝；页面内容刷新（视频进度条约 0.12 秒一次）、
+ * 滚动、文字变化都不算，否则持续刷新的页面上坐标动作永远追不上。resolve 时预检（不先弹卡让用户白点），
+ * execute 前用同一条规则复核（确认期间可能切走了）。
+ */
+internal fun coordinateError(registry: UiObservationRegistry, observationId: String?): ToolError? {
+    if (observationId.isNullOrEmpty()) {
+        return ToolError(
+            ToolErrorCode.STALE_OBSERVATION,
+            "没有可用的屏幕观察",
+            hint = "先调用 ui_observe，坐标用它返回的 coord_space",
+        )
+    }
+    val bound = registry.observationFrame(observationId) ?: return null
+    val now = registry.currentFrame() ?: return null
+    val change = frameChange(bound, now, registry.selfPackage) ?: return null
+    return ToolError(
+        ToolErrorCode.STALE_OBSERVATION,
+        "坐标系已变：$change",
+        hint = "重新 ui_observe，按新的 coord_space 给坐标",
+    )
+}
+
+/**
+ * 两个坐标系哪里变了（写给模型看）；没变或比不了返回 null。
+ * 前台是 Movo 自己（悬浮卡等）时不算换了应用：有目标的动作另有自我保护拒绝。
+ */
+internal fun frameChange(bound: CoordinateFrame, now: CoordinateFrame, selfPackage: String): String? {
+    val sizeKnown = bound.width > 0 && bound.height > 0 && now.width > 0 && now.height > 0
+    if (sizeKnown && (bound.width != now.width || bound.height != now.height)) {
+        return "屏幕方向或尺寸变了（${bound.width}x${bound.height} → ${now.width}x${now.height}）"
+    }
+    val before = bound.packageName?.takeIf { it.isNotBlank() }
+    val after = now.packageName?.takeIf { it.isNotBlank() && it != selfPackage }
+    if (before != null && after != null && before != after) return "前台应用变了（$before → $after）"
+    if (bound.windowGen != null && now.windowGen != null && bound.windowGen != now.windowGen) {
+        return "前台窗口变了（打开了新页面、对话框或菜单）"
+    }
+    return null
+}
+
+/**
+ * 坐标越界：按观察的 coord_space 检查，报参数错误并写出合法范围（不让控制器抛异常，
+ * 被管线兜成「内部错误，可以重试」诱导原样重试）。范围未知时不查。
+ */
+internal fun coordinateRangeError(ref: ObservationRef?, vararg points: Pair<Double, Double>): ToolError? {
+    val width = ref?.coordWidth ?: 0
+    val height = ref?.coordHeight ?: 0
+    if (width <= 0 || height <= 0) return null
+    val (x, y) = points.firstOrNull { (px, py) -> px < 0 || py < 0 || px >= width || py >= height } ?: return null
+    return ToolError(
+        ToolErrorCode.INVALID_ARGUMENTS,
+        "坐标 (${x.coordText()}, ${y.coordText()}) 超出屏幕范围",
+        hint = "合法范围：x 0–${width - 1}，y 0–${height - 1}（最近一次 ui_observe 的 coord_space ${width}x$height）",
+    )
+}
+
+private fun Double.coordText(): String = if (this % 1.0 == 0.0) toLong().toString() else toString()
+
+// ---------------------------------------------------------------------------
+// 屏幕文字匹配（ui_wait、ui_scroll until_text）
+// ---------------------------------------------------------------------------
+
+/** 文字匹配：contains 不分大小写；exact、prefix 区分大小写；regex 部分匹配。 */
+internal fun textMatcher(needle: String, match: WaitMatch): (String) -> Boolean {
+    // 正则只编译一次：等待时每轮要比对上百个节点。
+    val regex = if (match == WaitMatch.REGEX) runCatching { Regex(needle) }.getOrNull() else null
+    return { value ->
+        when (match) {
+            WaitMatch.CONTAINS -> value.contains(needle, ignoreCase = true)
+            WaitMatch.EXACT -> value == needle
+            WaitMatch.PREFIX -> value.startsWith(needle)
+            WaitMatch.REGEX -> regex?.containsMatchIn(value) == true
+        }
+    }
+}
+
+/** 节点的文字或描述命中即算。 */
+internal fun List<UiNodeProbe>.firstMatching(matches: (String) -> Boolean): UiNodeProbe? =
+    firstOrNull { node -> listOfNotNull(node.text, node.desc).any(matches) }
+
+/** ui_wait 文字条件的一次判定：[met] 是否满足；等出现时 [node] 是命中的节点。 */
+internal data class TextCheck(val met: Boolean, val node: UiNodeProbe? = null)
+
+/**
+ * ui_wait 文字条件的一次判定。等出现：有节点命中就满足，带回命中的节点。
+ * 等消失（[gone]）：要读到了节点、且没有一个命中才算消失；读不到屏幕（null 或空）不算，
+ * 免得把「看不见」当成「没有了」。
+ */
+internal fun textCheck(nodes: List<UiNodeProbe>?, needle: String, match: WaitMatch, gone: Boolean): TextCheck {
+    val hit = nodes?.firstMatching(textMatcher(needle, match))
+    return if (gone) TextCheck(met = !nodes.isNullOrEmpty() && hit == null) else TextCheck(met = hit != null, node = hit)
+}
+
 /** 动作后现场：after{package, window_changed}。 */
 internal fun afterJson(packageName: String?, windowChanged: Boolean): JSONObject =
     JSONObject().apply {
@@ -470,6 +631,6 @@ internal fun UiKeyCode.label(): String = when (this) {
     UiKeyCode.QUICK_SETTINGS -> "快捷设置"
     UiKeyCode.LOCK_SCREEN -> "锁屏"
     UiKeyCode.SCREENSHOT -> "截屏"
-    UiKeyCode.DISMISS_NOTIFICATIONS -> "清除通知"
+    UiKeyCode.DISMISS_NOTIFICATIONS -> "收起通知栏"
 }
 

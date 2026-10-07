@@ -20,7 +20,7 @@ internal class FileToolProvider(
 ) : ToolProvider {
 
     override val tools: List<AgentTool> = listOf(
-        ContractTool(FileSearchTool(RealFileSearchBackend(context, rootAvailable))),
+        ContractTool(FileSearchTool(RealFileSearchBackend(context, rootExecutor, rootAvailable))),
         ContractTool(FileReadTool(RealFileReadBackend(context, rootExecutor, rootAvailable))),
         ContractTool(FileWriteTool(RealFileWriteBackend(context, rootAvailable))),
         ContractTool(FileListTool(RealFileListBackend(context, rootExecutor, rootAvailable))),

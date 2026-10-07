@@ -63,8 +63,13 @@ internal class TerminalRunTool(
         string("identity", "身份，默认 user", enum = TerminalIdentity.entries.map { it.name.lowercase() })
         string("cwd", "工作目录")
         integer("wait_ms", "前台等待毫秒，1000–180000，默认 30000，到时未结束转后台", min = 1000, max = 180_000)
-        boolean("tty", "交互式伪终端，返回 job_id，用 terminal_job write 发输入")
-        string("mode", "运行方式，默认 wait", enum = TerminalMode.entries.map { it.name.lowercase() })
+        boolean("tty", "在伪终端里运行交互程序：直接转后台返回 job_id，用 terminal_job write 发输入、read 看输出（stderr 并入 stdout）")
+        string(
+            "mode",
+            "运行方式，默认 wait。background：转后台，本次任务结束时停止；" +
+                "keep_alive：转后台，本次任务结束时不停止，但之后的任务看不到也停不了它",
+            enum = TerminalMode.entries.map { it.name.lowercase() },
+        )
     }
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): TerminalRunInput = TerminalRunInput(
@@ -182,12 +187,11 @@ internal class TerminalRunTool(
         append("environment: ").append(input.environment.name.lowercase()).append('\n')
         append("identity: ").append(input.identity.name.lowercase()).append('\n')
         input.cwd?.let { append("cwd: ").append(it).append('\n') }
+        // 输出过长时缓冲区在中间注明省略量（见 TerminalJobRegistry.BoundedBuffer），这里不再另加截断说明。
         append("--- stdout ---\n")
         append(result.stdout)
-        if (result.stdoutTruncated) append("\n…(stdout 已截断)…")
         append("\n--- stderr ---\n")
         append(result.stderr)
-        if (result.stderrTruncated) append("\n…(stderr 已截断)…")
     }
 
     private fun backgroundedBody(input: TerminalRunInput, result: TerminalRunResult.Backgrounded): String =

@@ -54,18 +54,25 @@ class FileToolsTest {
         )
     }
 
+    private val sampleImage = AgentModelClient.ModelImage(
+        reference = "data:image/jpeg;base64,AAAA",
+        mimeType = "image/jpeg",
+        bytes = 3,
+        width = 640,
+        height = 480,
+        source = "file_read",
+    )
+
     private val readBackend = object : FileReadBackend {
         override fun resolve(file: String): ResolvedFile? = when {
             file.contains("missing") -> null
             file.endsWith(".png") -> ResolvedFile(FileKind.IMAGE, file, true, 100, "image/png")
+            file.endsWith(".pdf") -> ResolvedFile(FileKind.PDF, file, true, 100, "application/pdf")
             else -> ResolvedFile(FileKind.TEXT, file, true, 50, "text/plain")
         }
         override fun readText(file: String, offsetLine: Int, limitLines: Int) =
             TextRead("line1\nline2", "utf-8", totalLines = 10, nextOffsetLine = offsetLine + limitLines)
-        override fun readImage(file: String) = ImageRead(640, 480)
-        override fun readPdf(file: String, pages: String?, mode: FileReadMode) = error("unused")
-        override fun readVideo(file: String, frames: Int) = error("unused")
-        override fun transcribeAudio(file: String) = error("unused")
+        override fun readImage(file: String) = ImageRead(640, 480, sampleImage)
     }
 
     private var existedBefore = false
@@ -127,6 +134,64 @@ class FileToolsTest {
     }
 
     @Test
+    fun fileSearch_chatImages_onlyImages() {
+        // 聊天缓存目录里只有图片：查视频不静默回空，直接说明。
+        rootGranted = true
+        val r = pipeline(ToolEnvironment(rootAvailable = true))
+            .execute(call("file_search", """{"type":"video","location":"qq"}"""))
+        assertEquals("INVALID_ARGUMENTS", r.errorCode)
+    }
+
+    @Test
+    fun fileSearch_chatLocationsListedOnlyWithRoot() {
+        val tool = ContractTool(FileSearchTool(searchBackend))
+        fun locations(env: ToolEnvironment): Set<String> {
+            val array = tool.parameters(env).getJSONObject("properties").getJSONObject("location").getJSONArray("enum")
+            return (0 until array.length()).map { array.getString(it) }.toSet()
+        }
+        assertFalse("wechat" in locations(ToolEnvironment(rootAvailable = false)))
+        assertFalse("qq" in locations(ToolEnvironment(rootAvailable = false)))
+        assertTrue(locations(ToolEnvironment(rootAvailable = true)).containsAll(setOf("wechat", "qq")))
+    }
+
+    @Test
+    fun chatImageSource_parsesScanRows_andChecksPrintfBeforeScanning() {
+        val dir = ChatImageSource.QQ.directory
+        val stdout = listOf(
+            "1700000000.5|2048|$dir/chatraw/a/1.jpg",
+            "1699999999.0|512|$dir/chatthumb/a/2",
+            "1699999998.0|1024|/elsewhere/3.jpg",
+            "garbage line",
+        ).joinToString("\n")
+        val rows = ChatImageSource.QQ.parse(stdout)
+        assertEquals(2, rows.size)
+        assertEquals(1_700_000_000_500L, rows[0].modifiedAtMillis)
+        assertEquals("original", rows[0].variant)
+        assertEquals("thumbnail", rows[1].variant)
+        assertEquals("thumbnail", ChatImageSource.WECHAT.parse("1.0|1|${ChatImageSource.WECHAT.directory}/x/image2/ab/th_abc").single().variant)
+
+        val command = ChatImageSource.WECHAT.command()
+        assertTrue(command.contains("exit ${ChatImageSource.EXIT_DIRECTORY_MISSING}"))
+        assertTrue(command.contains("-printf '' >/dev/null 2>&1 || exit ${ChatImageSource.EXIT_PRINTF_UNSUPPORTED}"))
+        assertTrue(command.contains("*/image2/*"))
+    }
+
+    @Test
+    fun rootListing_parsesFindOutput() {
+        val stdout = "a b.txt\tf\t12\t1700000000.250\nsub\td\t4096\t1700000001\nlink\tl\t7\t1\nodd\tname\tf\t3\t2\n\n"
+        val entries = parseRootListing(stdout)
+        assertEquals(listOf("a b.txt", "sub", "link", "odd\tname"), entries.map { it.name })
+        assertEquals(listOf("file", "dir", "link", "file"), entries.map { it.type })
+        assertEquals(1_700_000_000_250L, entries[0].modifiedAtMillis)
+        assertEquals(12L, entries[0].sizeBytes)
+
+        val command = rootListCommand("/data/x", hidden = false, fromLine = 81, toLine = 161)
+        assertTrue(command.contains("! -name '.*'"))
+        assertTrue(command.contains("sed -n '81,161p'"))
+        assertFalse(rootListCommand("/data/x", hidden = true, fromLine = 1, toLine = 2).contains("! -name"))
+    }
+
+    @Test
     fun fileRead_text_returnsContentAndNextOffset() {
         val r = pipeline().execute(call("file_read", """{"file":"/sdcard/note.txt"}"""))
         val json = JSONObject(r.content)
@@ -143,6 +208,42 @@ class FileToolsTest {
         val data = JSONObject(r.content).getJSONObject("data")
         assertEquals("image", data.getString("kind"))
         assertTrue(data.getBoolean("image_attached"))
+    }
+
+    @Test
+    fun fileRead_image_isActuallyAttachedToTheModel() {
+        // D1：以前只回 image_attached:true，图片并没有附给模型。
+        val r = pipeline().execute(call("file_read", """{"file":"/sdcard/a.png"}"""))
+        assertEquals(listOf(sampleImage), r.images)
+        val json = JSONObject(r.content)
+        assertEquals(1, json.getInt("images_attached"))
+        val data = json.getJSONObject("data")
+        assertTrue(data.getBoolean("image_attached"))
+        assertEquals(640, data.getInt("width"))
+    }
+
+    @Test
+    fun fileRead_text_attachesNoImage() {
+        val r = pipeline().execute(call("file_read", """{"file":"/sdcard/note.txt"}"""))
+        assertTrue(r.images.isEmpty())
+        assertFalse(JSONObject(r.content).has("images_attached"))
+    }
+
+    @Test
+    fun fileRead_schemaOffersOnlyImplementedParams() {
+        // #22：pages / mode / frames 一律 UNSUPPORTED，不再出现在 schema 里；说明里不再说「默认关闭」。
+        val tool = ContractTool(FileReadTool(readBackend))
+        val props = tool.parameters(ToolEnvironment()).getJSONObject("properties")
+        assertEquals(setOf("file", "offset", "limit"), props.keys().asSequence().toSet())
+        assertTrue(tool.description.contains("暂不支持"))
+        assertFalse(tool.description.contains("默认关闭"))
+    }
+
+    @Test
+    fun fileRead_pdf_unsupportedWithoutCallingBackend() {
+        val r = pipeline().execute(call("file_read", """{"file":"/sdcard/a.pdf"}"""))
+        assertEquals("error", r.status)
+        assertEquals("UNSUPPORTED", r.errorCode)
     }
 
     @Test

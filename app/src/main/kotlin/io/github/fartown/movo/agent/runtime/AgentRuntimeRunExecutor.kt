@@ -280,6 +280,7 @@ internal class AgentRuntimeRunExecutor(
                         .filter { it.isNotBlank() }
                         .joinToString("\n\n")
                 },
+                environmentExtra = { recentAppEnvironment(appContext) },
                 images = request.images,
                 history = request.history,
                 runController = runController,
@@ -435,6 +436,18 @@ internal class AgentRuntimeRunExecutor(
  * 当前选中的 Linux 发行版能不能跑命令：装好了（与终端页的判断一致），且对应后端可用——
  * 免 Root 方式要有 PRoot 组件，chroot 方式要有 Root。
  */
+/** 环境信息里「用户最近在用的其他应用」（半小时内的才算）。 */
+private fun recentAppEnvironment(context: android.content.Context): String =
+    io.github.fartown.movo.agent.accessibility.RecentAppTracker.environmentLine(
+        nowElapsedMillis = android.os.SystemClock.elapsedRealtime(),
+        maxAgeMillis = 30 * 60_000L,
+    ) { pkg ->
+        runCatching {
+            val pm = context.packageManager
+            pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+        }.getOrNull()
+    }
+
 private fun linuxEnvironmentReady(context: android.content.Context): Boolean = runCatching {
     val distribution = io.github.fartown.movo.data.repository.LinuxEnvironmentSettingsRepository.current(context)
     val rootfs = io.github.fartown.movo.agent.terminal.LinuxEnvironmentPaths.rootfsDir(context, distribution).absolutePath

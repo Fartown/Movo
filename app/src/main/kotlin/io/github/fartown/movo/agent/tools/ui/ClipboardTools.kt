@@ -57,7 +57,7 @@ internal class ClipboardReadTool(
     override val name = "clipboard_read"
     override val domain = ToolDomain.UI
     override val summary =
-        "读系统剪贴板文本（最多 8000 字）。Movo 不在前台时系统可能拒绝（与‘空’区分）。"
+        "读系统剪贴板文本（最多 8000 字）。Movo 不在前台时系统不让读，会报 SYSTEM_REJECTED（这时分不出剪贴板空不空）。"
 
     /** 受“敏感读取”开关控制（§16）。 */
     override fun availability(env: ToolEnvironment): ToolAvailability =
@@ -88,8 +88,8 @@ internal class ClipboardReadTool(
             is ClipboardReadResult.Rejected -> Verdict.Failed(
                 ToolError(
                     ToolErrorCode.SYSTEM_REJECTED,
-                    "Movo 不在前台，系统拒绝读取剪贴板",
-                    hint = "把 Movo 切到前台后再读",
+                    "Movo 不在前台，系统不让读剪贴板（分不出里面有没有内容）",
+                    hint = "需要剪贴板里的内容，请用户直接发给你，或打开 Movo 后再读",
                 ),
             )
             is ClipboardReadResult.Unavailable -> Verdict.Failed(

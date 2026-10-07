@@ -35,12 +35,15 @@ class RootlessDeviceToolsTest {
         listOf(
             controller.tap(10, 10),
             controller.swipe(10, 10, 20, 20, 100),
+            controller.holdAndDrag(10, 10, 20, 20, 600, 300),
             controller.scroll("down"),
-            controller.waitForText("目标", 60_000, true, "exact"),
             controller.waitForPackage("example.app", 60_000),
+            controller.pressKey("LOCK_SCREEN"),
         ).forEach { result ->
             assertEquals("ACCESSIBILITY_UNAVAILABLE", JSONObject(result).getString("code"))
         }
+        // 读不到屏幕是 null，不是空屏：ui_wait 等文字消失不能把它当成「没有了」。
+        assertNull(controller.currentNodes(120))
         assertEquals("ROOT_REQUIRED", JSONObject(controller.pressKey("PASTE")).getString("code"))
     }
 

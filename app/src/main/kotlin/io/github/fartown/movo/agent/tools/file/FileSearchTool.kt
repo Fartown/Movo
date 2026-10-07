@@ -21,6 +21,7 @@ import io.github.fartown.movo.agent.tools.core.ToolInput
 import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.fail
+import io.github.fartown.movo.agent.tools.core.invalidArgs
 import io.github.fartown.movo.agent.tools.core.objectSchema
 import org.json.JSONArray
 import org.json.JSONObject
@@ -31,8 +32,12 @@ import java.time.ZoneOffset
 /** 查找类型。把第二版的 kind 拆成 type + location，一个下载的 PDF 可同时命中。 */
 internal enum class FileType { IMAGE, VIDEO, AUDIO, DOCUMENT, ANY }
 
-/** 查找位置。recordings=录音，downloads=下载，wechat/qq=聊天图片（必须 Root）。 */
-internal enum class FileLocation { ANY, RECORDINGS, DOWNLOADS, WECHAT, QQ }
+/** 查找位置。recordings=录音，downloads=下载，wechat/qq=聊天图片缓存（必须 Root，只有图片）。 */
+internal enum class FileLocation {
+    ANY, RECORDINGS, DOWNLOADS, WECHAT, QQ;
+
+    val isChatImages: Boolean get() = this == WECHAT || this == QQ
+}
 
 internal data class FileSearchInput(
     val type: FileType,
@@ -54,6 +59,8 @@ internal data class FileSearchItem(
     val path: String,
     val durationSeconds: Long? = null,
     val summaryAvailable: Boolean = false,
+    /** 聊天图片的版本：original 原图、image、thumbnail 缩略图；其他位置为空。 */
+    val variant: String? = null,
 )
 
 internal data class FileSearchOutput(
@@ -85,11 +92,14 @@ internal class FileSearchTool(
     override val domain = ToolDomain.FILE
     override val summary =
         "查找本机文件/照片/视频/录音/文档（找相册照片=type:image）：type 选 image/video/audio/document/any，" +
-            "location 选 any/recordings/downloads/wechat/qq。返回句柄交给 file_read，本工具不读内容。聊天图片需 Root。"
+            "location 选 any/recordings/downloads/wechat/qq。返回句柄交给 file_read，本工具不读内容。微信/QQ 聊天图片需 Root。"
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
         string("type", "文件类型", required = true, enum = FileType.entries.map { it.name.lowercase() })
-        string("location", "查找位置，默认 any", enum = FileLocation.entries.map { it.name.lowercase() })
+        // 微信/QQ 聊天图片只能 Root 扫描：没有 Root 时不列这两个位置。
+        val locations = FileLocation.entries.filter { env.rootAvailable || !it.isChatImages }
+        val chatNote = if (env.rootAvailable) "；wechat/qq 是聊天图片缓存，只能配 type=image 或 any，query 匹配路径" else ""
+        string("location", "查找位置，默认 any$chatNote", enum = locations.map { it.name.lowercase() })
         string("query", "文件名关键词", maxLength = 200)
         string("since", "起始时间，ISO 8601（含时区）或日期")
         string("until", "截止时间，ISO 8601（含时区）或日期")
@@ -97,15 +107,23 @@ internal class FileSearchTool(
         string("cursor", "续页游标")
     }
 
-    override fun parse(args: ToolArgs, env: ToolEnvironment): FileSearchInput = FileSearchInput(
-        type = args.enum<FileType>("type"),
-        location = args.enum<FileLocation>("location", FileLocation.ANY),
-        query = args.stringOrNull("query")?.trim()?.ifEmpty { null },
-        sinceMillis = parseTime(args.stringOrNull("since"), "since"),
-        untilMillis = parseTime(args.stringOrNull("until"), "until"),
-        limit = args.int("limit", default = 10, range = 1..30),
-        cursor = args.stringOrNull("cursor"),
-    )
+    override fun parse(args: ToolArgs, env: ToolEnvironment): FileSearchInput {
+        val type = args.enum<FileType>("type")
+        val location = args.enum<FileLocation>("location", FileLocation.ANY)
+        // 聊天缓存目录里只有图片：查视频/音频/文档不静默返回空，直接说明。
+        if (location.isChatImages && type != FileType.IMAGE && type != FileType.ANY) {
+            invalidArgs("location=${location.name.lowercase()} 只能查聊天图片", "type 改用 image")
+        }
+        return FileSearchInput(
+            type = type,
+            location = location,
+            query = args.stringOrNull("query")?.trim()?.ifEmpty { null },
+            sinceMillis = parseTime(args.stringOrNull("since"), "since"),
+            untilMillis = parseTime(args.stringOrNull("until"), "until"),
+            limit = args.int("limit", default = 10, range = 1..30),
+            cursor = args.stringOrNull("cursor"),
+        )
+    }
 
     override fun resolve(input: FileSearchInput, env: ToolEnvironment): CallResolution = CallResolution(
         risk = Risk.READ,
@@ -118,7 +136,7 @@ internal class FileSearchTool(
         resolution: CallResolution,
         ctx: ToolContext,
     ): Verdict<FileSearchOutput> {
-        if (input.location == FileLocation.WECHAT || input.location == FileLocation.QQ) {
+        if (input.location.isChatImages) {
             if (!backend.rootAvailable()) {
                 return Verdict.Failed(
                     io.github.fartown.movo.agent.tools.core.ToolError(
@@ -183,6 +201,7 @@ internal class FileSearchTool(
                 .put("path", item.path)
             item.durationSeconds?.let { obj.put("duration_seconds", it) }
             if (item.summaryAvailable) obj.put("summary_available", true)
+            item.variant?.let { obj.put("variant", it) }
             items.put(obj)
         }
         val data = JSONObject().put("items", items).put("count", output.items.size)

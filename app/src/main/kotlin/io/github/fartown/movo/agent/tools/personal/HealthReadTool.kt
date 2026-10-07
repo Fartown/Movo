@@ -39,13 +39,13 @@ internal data class HealthReadOutput(
 internal sealed interface HealthReadResult {
     data class Ok(val summary: JSONObject, val hasData: Boolean) : HealthReadResult
 
-    /** 数据源不可用（Health Connect 缺权限、数据库读不到等），与"无数据"区分开。 */
+    /** 数据源不可用（Root 读不到系统健康数据库、数据库结构不认识等），与"无数据"区分开。 */
     data class Unavailable(val error: ToolError) : HealthReadResult
 }
 
 /**
- * 可测后端：读最近 N 天健康汇总。真实实现优先 Health Connect aggregate（免 Root，声明健康权限），
- * 否则 Root 读 healthconnect.db；多来源按来源去重，不直接 SUM（手机 + 手表会翻倍）。
+ * 可测后端：读最近 N 天健康汇总。真实实现只有一条路：Root 读系统 Health Connect 数据库（healthconnect.db 快照）；
+ * 免 Root 的 Health Connect API 没有接入。多来源按来源去重，不直接 SUM（手机 + 手表会翻倍）。
  */
 internal interface HealthReadBackend {
     fun available(env: ToolEnvironment): Boolean
@@ -69,8 +69,8 @@ internal class HealthReadTool(
             ToolAvailability.Available
         } else {
             ToolAvailability.Unavailable(
-                ToolErrorCode.PERMISSION_REQUIRED,
-                "读取健康数据需要 Health Connect 健康权限或 Root 授权",
+                ToolErrorCode.ROOT_REQUIRED,
+                "读取健康数据需要 Root 授权（读系统 Health Connect 数据库）",
             )
         }
 
@@ -91,7 +91,7 @@ internal class HealthReadTool(
     ): Verdict<HealthReadOutput> {
         if (!backend.available(ctx.env)) {
             return Verdict.Failed(
-                ToolError(ToolErrorCode.PERMISSION_REQUIRED, "没有可用的健康数据源"),
+                ToolError(ToolErrorCode.ROOT_REQUIRED, "读取健康数据需要 Root 授权"),
             )
         }
         ctx.checkCancelled()

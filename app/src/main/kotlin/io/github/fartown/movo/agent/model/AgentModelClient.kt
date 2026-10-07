@@ -107,13 +107,21 @@ internal object AgentModelClient {
         spokenReply: SpokenReply = SpokenReply.NONE,
         onContextSnapshot: (AgentContextSnapshot) -> Unit = {},
         onTranscript: (List<ConversationMessage>) -> Unit = {},
+        /** 环境信息里时间之后的补充行（例如用户最近在用的其他应用），每次任务算一次。 */
+        environmentExtra: () -> String = { "" },
         onEvent: (AgentEvent) -> Unit = {}
     ): ModelResponse.Text {
         config.validate()
         val initialCapabilities = capabilitiesProvider()
         val guide = if (rewriteReply) "" else toolGuide?.let { runCatching(it).getOrDefault("") }
         // 环境信息每次任务算一次，重建系统消息时沿用同一份（系统消息条数、前缀都不变）。
-        val environment = if (rewriteReply || compactOnly) "" else AgentPromptBuilder.environmentLine()
+        val environment = if (rewriteReply || compactOnly) {
+            ""
+        } else {
+            listOf(AgentPromptBuilder.environmentLine(), runCatching(environmentExtra).getOrDefault(""))
+                .filter { it.isNotBlank() }
+                .joinToString("\n")
+        }
         val messages = AgentPromptBuilder.buildInitialMessages(
             config,
             prompt,

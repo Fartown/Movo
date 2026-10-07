@@ -48,8 +48,8 @@ internal class BrowserActTool(
     override val name = "browser_act"
     override val domain = ToolDomain.BROWSER
     override val summary =
-        "操作当前网页：click、type（整体替换输入框值，可 submit）、scroll、select、key（Enter/Esc/Tab）。" +
-            "目标用 browser_read 的 ref；动作只是送达，需再读页面确认。独占浏览器。"
+        "操作 Movo 离屏浏览器里的网页（不是手机屏幕上的网页）：click、type（整体替换输入框值，可 submit）、scroll、select、" +
+            "key（回车、Esc、Tab、退格、方向键）。目标用 browser_read 的 ref；动作只是送达，需再读页面确认。独占浏览器。"
 
     override fun availability(env: ToolEnvironment): ToolAvailability =
         if (env.switches.browser) {
@@ -70,7 +70,7 @@ internal class BrowserActTool(
         string("text", "type 要输入的文本（整体替换输入框值）", maxLength = 8_000)
         boolean("submit", "type 后是否提交（回车）")
         string("option", "select 要选择的选项（文本或 value）", maxLength = 512)
-        string("key", "key 要发送的按键", enum = listOf("enter", "esc", "tab"))
+        string("key", "key 要发送的按键", enum = listOf("enter", "esc", "tab", "backspace", "up", "down", "left", "right"))
         string("direction", "scroll 方向", enum = listOf("up", "down"))
         integer("amount", "scroll 像素量，1–5000，默认 600", min = 1, max = 5_000)
     }
@@ -142,7 +142,12 @@ internal class BrowserActTool(
         val state = runCatching { backend.state() }.getOrNull()
         if (state == null || !state.available) {
             return Verdict.Failed(
-                ToolError(ToolErrorCode.NOT_FOUND, "当前没有网页", hint = "先用 browser_open 打开网址"),
+                ToolError(
+                    ToolErrorCode.NOT_FOUND,
+                    "Movo 的离屏浏览器里还没有网页",
+                    hint = "要操作手机屏幕上浏览器 App 里正在显示的网页，用 ui_observe 看屏幕后用 ui_tap / ui_input；" +
+                        "要在离屏浏览器里看网页，先 browser_open 打开网址",
+                ),
             )
         }
         if (state.userControlling) {

@@ -9,7 +9,7 @@ import io.github.fartown.movo.core.AgentLogger
 
 /**
  * 终端领域（domain=TERMINAL）的工具集合：terminal_run、terminal_job。
- * 两个工具共享一个 [TerminalJobRegistry]，运行结束由 [close] 统一回收（keep_alive 除外，见 registry TODO）。
+ * 两个工具共享一个 [TerminalJobRegistry]，运行结束由 [close] 统一回收；keep_alive 的进程不停止，但之后的任务管不到它（见 registry）。
  */
 internal class TerminalToolProvider(
     logger: AgentLogger,

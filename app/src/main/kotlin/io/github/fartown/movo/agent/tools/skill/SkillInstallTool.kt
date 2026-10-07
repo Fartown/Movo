@@ -48,7 +48,7 @@ internal sealed interface SkillDiscoverResult {
 internal sealed interface SkillInstallOutcome {
     data class Installed(val items: List<InstalledSkillView>) : SkillInstallOutcome
 
-    /** 与已安装技能冲突，需当场确认替换。 */
+    /** 与已安装技能同名：不替换，作为 CONFLICT 回给模型，由它确认用户意图后带 replace=true 重试。 */
     data class Conflict(val conflicts: List<SkillConflictView>) : SkillInstallOutcome
 
     /** 提交阶段失败、目录状态不确定 → OUTCOME_UNKNOWN。 */
@@ -85,7 +85,7 @@ internal data class SkillInstallOutput(
  * - install：安装选中目录；脚本不执行，available:"next_task"。
  *
  * 风险/确认：install → Risk.EXTERNAL（中央先确认一次）；curated/inspect 只是网络发现 → Risk.READ。
- * 冲突：install 命中已安装技能时当场弹确认卡（ctx.interaction），确认后以 replace 重装。
+ * 冲突：install 命中已安装技能且没传 replace 时不替换，也不弹卡，把 CONFLICT 回给模型；用户要更新时由模型带 replace=true 重试。
  * 提交失败目录状态不确定 → Verdict.Unknown（绝不冒领 ok）。
  */
 internal class SkillInstallTool(

@@ -33,7 +33,7 @@ internal data class FileListInput(
 
 internal data class DirEntry(
     val name: String,
-    /** file、dir、other。 */
+    /** file、dir、link（Root 列出的符号链接）、other。 */
     val type: String,
     val sizeBytes: Long,
     val modifiedAtMillis: Long,
@@ -57,7 +57,8 @@ internal class FileListTool(
     override val name = "file_list"
     override val domain = ToolDomain.FILE
     override val summary =
-        "列目录：返回 name、type、size_bytes、modified_at。默认 Movo 工作区，支持 hidden 与分页（limit+cursor）。"
+        "列目录：返回 name、type、size_bytes、modified_at。默认 Movo 工作区，支持 hidden 与分页（limit+cursor）；" +
+            "App 读不了的目录有 Root 时用 Root 列。"
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
         string("path", "目录路径，默认工作区", maxLength = 1024)
