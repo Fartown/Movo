@@ -82,6 +82,13 @@ internal class ToolPipeline(
         return runCatching { tool.stepTitle(args, currentEnvironment) }.getOrNull()?.takeIf { it.isNotBlank() }
     }
 
+    override fun unavailableReason(toolName: String): Pair<String, String>? {
+        val tool = registry.find(toolName) ?: return null
+        val env = currentEnvironment.let { snapshot -> runCatching { refreshSwitches(snapshot) }.getOrDefault(snapshot) }
+        val unavailable = registry.availability(tool, env) as? ToolAvailability.Unavailable ?: return null
+        return unavailable.code.name to unavailable.reason
+    }
+
     /** [normalize] 按边界处理过的参数说明，执行时写进这次调用结果的 warnings。 */
     private val argumentNotes = ConcurrentHashMap<String, List<ToolWarning>>()
 

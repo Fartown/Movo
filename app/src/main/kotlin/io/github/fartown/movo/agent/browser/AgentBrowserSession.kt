@@ -150,6 +150,9 @@ internal object AgentBrowserSession {
     @Volatile
     private var currentHttpStatus: Int? = null
 
+    /** [currentHttpStatus] 属于哪个网址：WebView 先报 HTTP 错误、后报 onPageStarted，同一网址开始加载时不能清掉它。 */
+    private var httpStatusUrl: String? = null
+
     @Volatile
     private var currentProgress: Int = 0
 
@@ -461,6 +464,7 @@ internal object AgentBrowserSession {
             }
             currentError = null
             currentHttpStatus = null
+            httpStatusUrl = null
             currentUrl = rawUrl
             currentHost = hostOf(rawUrl)
             currentLoading = true
@@ -864,6 +868,7 @@ internal object AgentBrowserSession {
         currentTitle = ""
         currentError = null
         currentHttpStatus = null
+        httpStatusUrl = null
         currentProgress = 0
         currentLoading = false
         currentPageVisible = false
@@ -1129,8 +1134,12 @@ internal object AgentBrowserSession {
             currentUrl = url.orEmpty()
             currentHost = hostOf(currentUrl)
             currentTitle = view.title.orEmpty()
-            currentError = null
-            currentHttpStatus = null
+            if (url != httpStatusUrl) {
+                currentError = null
+                currentHttpStatus = null
+            }
+            // 只保留一次：之后同一网址再开始加载（刷新）照常清掉。
+            httpStatusUrl = null
             currentLoading = true
             currentPageVisible = false
             currentProgress = 0
@@ -1176,6 +1185,7 @@ internal object AgentBrowserSession {
         ) {
             if (!request.isForMainFrame) return
             currentHttpStatus = errorResponse.statusCode
+            httpStatusUrl = request.url.toString()
             if (errorResponse.statusCode >= 400) {
                 currentError = "网页返回 HTTP ${errorResponse.statusCode}"
             }

@@ -307,6 +307,12 @@ internal object AgentModelClient {
 
         /** 合同校验前整理参数（例如上限类参数越界按边界处理），返回实际执行的调用。 */
         fun normalize(toolCall: ToolCall): ToolCall = toolCall
+
+        /**
+         * 工具存在、但这一轮不在目录里时说明原因（错误码 to 原因），例如任务中途在设置里关掉了开关；
+         * 不认识的工具返回 null，按「未在目录中声明」处理。
+         */
+        fun unavailableReason(toolName: String): Pair<String, String>? = null
     }
 
     data class ToolCall(

@@ -58,6 +58,34 @@ class AgentModelClientLoopTest {
     }
 
     @Test
+    fun toolDroppedFromTheCatalogMidRunSaysWhichSwitchIsOff() {
+        val provider = ScriptedProvider(listOf(
+            { request, _ ->
+                assertFalse(request.tools.toString().contains("\"terminal_run\""))
+                assistant(finishReason = "tool_calls", toolCalls = listOf(toolCall("off", "terminal_run", "{\"command\":\"date\"}")))
+            },
+            { request, _ ->
+                val messages = request.messages.toString()
+                assertTrue(messages.contains("DISABLED"))
+                assertTrue(messages.contains("终端与文件"))
+                assertFalse(messages.contains("未在本次运行的能力目录中声明"))
+                assistant(content = "完成", finishReason = "stop")
+            },
+        ))
+        AgentModelClient.complete(
+            config = modelConfig(),
+            typedCatalog = TestToolCatalog::build,
+            prompt = "开始",
+            provider = provider,
+            toolExecutor = object : AgentModelClient.ToolExecutor {
+                override fun execute(toolCall: AgentModelClient.ToolCall): AgentModelClient.ToolResult = error("关掉的工具不应执行")
+                override fun unavailableReason(toolName: String): Pair<String, String>? =
+                    if (toolName == "terminal_run") "DISABLED" to "需要在 设置 → 工具 里开启「终端与文件」" else null
+            },
+        )
+    }
+
+    @Test
     fun textOnlyRunReturnsIncrementalTranscript() {
         val provider = ScriptedProvider(
             assistant(content = "完成", finishReason = "stop")

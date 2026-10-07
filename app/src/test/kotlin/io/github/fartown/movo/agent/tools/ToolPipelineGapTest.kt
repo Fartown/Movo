@@ -98,6 +98,21 @@ class ToolPipelineGapTest {
     }
 
     @Test
+    fun switchTurnedOffMidRun_unavailableReasonNamesTheSwitch() {
+        var sensitiveRead = true
+        val p = pipeline(
+            FakeTool("personal_search"),
+            refresh = { env -> env.copy(switches = env.switches.copy(sensitiveRead = sensitiveRead)) },
+        )
+        assertEquals(null, p.unavailableReason("personal_search"))
+        sensitiveRead = false
+        val reason = p.unavailableReason("personal_search")
+        assertEquals("DISABLED", reason?.first)
+        assertTrue(reason!!.second.contains("读取敏感信息"))
+        assertEquals("不认识的工具交给「未声明」处理", null, p.unavailableReason("no_such_tool"))
+    }
+
+    @Test
     fun memoryTurnedOffMidRun_memoryToolsStopToo() {
         var scope = MemoryScope.REAL
         val memoryTool = FakeTool(
