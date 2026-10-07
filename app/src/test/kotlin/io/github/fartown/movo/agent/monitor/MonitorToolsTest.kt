@@ -40,6 +40,17 @@ class MonitorToolsTest {
     }
 
     @Test
+    fun identityListsRootOnlyWhenRootIsAvailable() {
+        val tool = MonitorStartTool(ApplicationProvider.getApplicationContext())
+        fun identities(e: ToolEnvironment): List<String> {
+            val enum = tool.schema(e).getJSONObject("properties").getJSONObject("identity").getJSONArray("enum")
+            return (0 until enum.length()).map { enum.getString(it) }
+        }
+        assertEquals(listOf("user"), identities(env.copy(rootAvailable = false)))
+        assertEquals(listOf("user", "root"), identities(env.copy(rootAvailable = true)))
+    }
+
+    @Test
     fun durationAboveTheSchemaLimitIsAcceptedAndExplainedInsteadOfRejected() {
         val tool = MonitorStartTool(ApplicationProvider.getApplicationContext())
         val schema = tool.schema(env).getJSONObject("properties").getJSONObject("timeout_ms")

@@ -111,7 +111,7 @@ internal class FileReadTool(
     )
 
     /**
-     * 开关按来源管（定义清单 §0.5，见 [execute]）：读任意路径要「终端与文件」，读句柄和附件要「读取敏感信息」。
+     * 开关按来源管（定义清单 §0.5，见 [execute]）：读任意路径（含 file://）要「终端与文件」，读句柄和 content:// 附件要「读取敏感信息」。
      * 两个都关着时什么都读不了，不进目录（以前仍在目录里，调用了才报 DISABLED）。
      * 只关「终端与文件」时还能读 file_search 的句柄和附件，留在目录里。
      */
@@ -140,10 +140,10 @@ internal class FileReadTool(
         val switches = ctx.env.switches
         when (sourceClass(input.file)) {
             SourceClass.PATH -> if (!switches.terminal) {
-                return disabled("读取任意路径需要开启「文件与终端」开关")
+                return disabled("读取任意路径需要开启「终端与文件」开关")
             }
             SourceClass.HANDLE, SourceClass.ATTACHMENT -> if (!switches.sensitiveRead) {
-                return disabled("读取句柄与附件需要开启「读取个人数据」开关")
+                return disabled("读取句柄与附件需要开启「读取敏感信息」开关")
             }
         }
 
@@ -256,7 +256,8 @@ internal class FileReadTool(
 
     private fun sourceClass(file: String): SourceClass = when {
         FileSupport.decodeHandlePath(file) != null -> SourceClass.HANDLE
-        file.startsWith("content://") || file.startsWith("file://") -> SourceClass.ATTACHMENT
+        // file:// 只是路径的另一种写法，和直接写路径一样看「终端与文件」（与重构前一致）。
+        file.startsWith("content://") -> SourceClass.ATTACHMENT
         else -> SourceClass.PATH
     }
 

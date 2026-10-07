@@ -109,7 +109,7 @@ internal class TerminalJobTool(
         ctx: ToolContext,
     ): Verdict<TerminalJobOutput> {
         if (!ctx.env.switches.terminal) {
-            return Verdict.Failed(ToolError(ToolErrorCode.DISABLED, "终端需要开启「文件与终端」开关"))
+            return Verdict.Failed(ToolError(ToolErrorCode.DISABLED, "终端需要开启「终端与文件」开关"))
         }
         ctx.checkCancelled()
         return when (input.action) {

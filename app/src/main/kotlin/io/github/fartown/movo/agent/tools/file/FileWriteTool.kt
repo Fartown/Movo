@@ -115,7 +115,7 @@ internal class FileWriteTool(
         ctx: ToolContext,
     ): Verdict<FileWriteOutput> {
         if (!ctx.env.switches.terminal) {
-            return Verdict.Failed(ToolError(ToolErrorCode.DISABLED, "写文件需要开启「文件与终端」开关"))
+            return Verdict.Failed(ToolError(ToolErrorCode.DISABLED, "写文件需要开启「终端与文件」开关"))
         }
         ctx.checkCancelled()
         val existedBefore = backend.exists(input.path)
