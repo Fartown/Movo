@@ -6,7 +6,10 @@ internal enum class TerminalEnv { ANDROID, LINUX }
 /** 身份：user=App 进程；root=su。 */
 internal enum class TerminalIdentity { USER, ROOT }
 
-/** 运行方式：wait=前台等 wait_ms；background=直接转后台；keep_alive=后台且本次任务结束后仍存活。 */
+/**
+ * 运行方式：wait=前台等 wait_ms；background=直接转后台，本次任务结束时停止；
+ * keep_alive=直接转后台，本次任务结束时不停止进程，但之后的任务看不到、也停不了它（跨任务守护没有实现）。
+ */
 internal enum class TerminalMode { WAIT, BACKGROUND, KEEP_ALIVE }
 
 /** 读取的输出流。 */
@@ -36,6 +39,7 @@ internal sealed interface TerminalRunResult {
         val stdout: String,
         val stderr: String,
         val elapsedMs: Long,
+        /** 缓冲区是否在中间丢过输出（丢过时正文接缝处已注明省略了多少字）。 */
         val stdoutTruncated: Boolean,
         val stderrTruncated: Boolean,
     ) : TerminalRunResult
@@ -77,6 +81,13 @@ internal data class TerminalJobReadResult(
     val stdout: String,
     val stderr: String,
     val nextCursor: String?,
+    /** 没带 cursor、读的是尾部（最新的输出）。 */
+    val tail: Boolean = false,
+    /** 本次给出的这段之前没有给出的字数：读尾部时是省略的前面部分，续读时是缓冲区已丢弃、跳过的部分。 */
+    val stdoutSkipped: Long = 0,
+    val stderrSkipped: Long = 0,
+    /** next_cursor 之后还有已产生、没读完的输出。 */
+    val hasMore: Boolean = false,
 )
 
 /** stop 的判定结果。 */

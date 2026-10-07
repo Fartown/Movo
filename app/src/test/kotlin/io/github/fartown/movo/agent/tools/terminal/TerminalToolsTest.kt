@@ -186,6 +186,42 @@ class TerminalToolsTest {
     }
 
     @Test
+    fun terminalJob_read_tailWindowExplainsWhatWasSkipped() {
+        // #25：不带 cursor 读的是尾部，前面没给的要说清楚、给出从头读的办法。
+        val tailBackend = object : TerminalJobBackend by jobBackend {
+            override fun read(jobId: String, cursor: String?, stream: TerminalStream, waitMs: Long) = TerminalJobReadResult(
+                info = jobBackend.list().single().copy(streamsMerged = true),
+                stdout = "last lines", stderr = "", nextCursor = "52000:0",
+                tail = true, stdoutSkipped = 45_000, hasMore = false,
+            )
+        }
+        val r = ContractTool(TerminalJobTool(tailBackend))
+        val p = ToolPipeline(
+            registry = ToolRegistry(listOf(object : ToolProvider { override val tools = listOf(r) })),
+            environment = { ToolEnvironment() },
+            appContext = ApplicationProvider.getApplicationContext(),
+            logger = AndroidAgentLogger,
+            runId = "run1",
+            cancelled = { false },
+        ).also { it.catalog() }
+        val content = p.execute(call("terminal_job", """{"action":"read","job_id":"job_1"}""")).content
+        assertTrue(content, content.contains("next_cursor: 52000:0"))
+        assertTrue(content, content.contains("stdout_skipped: 45000（之前的输出没给，cursor=0:0 从头读）"))
+        assertTrue(content, content.contains("streams: merged"))
+        assertFalse(content, content.contains("more: true"))
+    }
+
+    @Test
+    fun terminalSchemas_tellTheTruthAboutTailReadAndKeepAlive() {
+        val run = ContractTool(TerminalRunTool(runBackend)).parameters(ToolEnvironment()).getJSONObject("properties")
+        val mode = run.getJSONObject("mode").getString("description")
+        assertTrue(mode, mode.contains("之后的任务看不到也停不了它"))
+        assertTrue(run.getJSONObject("tty").getString("description").contains("直接转后台"))
+        val job = ContractTool(TerminalJobTool(jobBackend))
+        assertTrue(job.description, job.description.contains("不带 cursor 读最新的尾部"))
+    }
+
+    @Test
     fun terminalJob_read_missing_notFound() {
         val r = pipeline().execute(call("terminal_job", """{"action":"read","job_id":"nope"}"""))
         assertEquals("error", r.status)

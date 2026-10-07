@@ -15,10 +15,11 @@ import java.util.concurrent.atomic.AtomicInteger
  * Linux 环境进入用户在设置里选的发行版（免 Root 走 PRoot，Root 走 chroot，共享文件夹挂到 /workspace/mounts）。
  * 停止与取消按进程树结束。wait 模式在 wait_ms 内结束返回 Completed，否则登记任务转后台；
  * 前台等待期间每 200ms 检查一次运行是否已取消，取消就结束进程树，不等命令自己跑完（真机：sleep 20 时点停止要等 21 秒）。
+ * tty=true 时进程跑在伪终端里（与终端页同一套 PTY 启动器），stdout/stderr 合成一路，直接转后台、用 terminal_job write 发输入。
  *
- * TODO（见报告）：
- * - 环形缓冲落盘：当前只在内存保留首尾，超限截断，不落盘。
- * - keep_alive 跨 run 存活：应走 DetachedTaskSupervisor，这里只在本注册表内保留，不真正脱离进程。
+ * 输出只在内存里保留开头和最近的一段（见 [BoundedBuffer]），不落盘。
+ * keep_alive 不跨任务：本次任务结束时不停止进程，但注册表随任务一起释放，之后的任务看不到、也停不了它
+ * （跨任务守护应走 DetachedTaskSupervisor，没有实现）。
  */
 internal class TerminalJobRegistry(
     private val logger: AgentLogger,
@@ -32,11 +33,16 @@ internal class TerminalJobRegistry(
 
     override fun run(spec: TerminalRunSpec): TerminalRunResult {
         val job = start(spec)
-        val background = spec.mode != TerminalMode.WAIT
+        // 交互程序在等输入，前台等到 wait_ms 也不会结束：tty 直接转后台，交还 job_id。
+        val background = spec.mode != TerminalMode.WAIT || spec.tty
         if (background) {
             return TerminalRunResult.Backgrounded(
                 jobId = job.id,
-                reason = if (spec.mode == TerminalMode.KEEP_ALIVE) "keep_alive" else "background",
+                reason = when {
+                    spec.mode == TerminalMode.KEEP_ALIVE -> "keep_alive"
+                    spec.mode == TerminalMode.BACKGROUND -> "background"
+                    else -> "tty"
+                },
                 startedAtMillis = job.startedAtMillis,
                 keepAlive = spec.mode == TerminalMode.KEEP_ALIVE,
             )
@@ -73,6 +79,7 @@ internal class TerminalJobRegistry(
             )
         }
         job.finish()
+        job.drainOutput()
         jobs.remove(job.id)
         val elapsed = (job.endedAtMillis ?: System.currentTimeMillis()) - job.startedAtMillis
         return TerminalRunResult.Completed(
@@ -89,15 +96,32 @@ internal class TerminalJobRegistry(
 
     override fun list(): List<TerminalJobInfo> = jobs.values.map { it.info() }
 
+    /**
+     * 不带 cursor 读尾部（每路最近的一段）；带 cursor 从游标处续读。两路各有偏移，游标写成「stdout偏移:stderr偏移」，
+     * 每次都返回 next_cursor（没有新输出时也给，模型拿它等下一段）。一次最多给 [READ_CHARS] 字，两路都读时各占一半。
+     */
     override fun read(jobId: String, cursor: String?, stream: TerminalStream, waitMs: Long): TerminalJobReadResult? {
         val job = jobs[jobId] ?: return null
+        val from = cursor?.let { JobCursor.parse(it) }
         if (job.isRunning() && waitMs > 0) job.waitForOutput(waitMs)
         job.refreshExit()
-        val outSlice = if (stream == TerminalStream.STDERR) StreamSlice.EMPTY else job.slice(StreamBuf.OUT, cursor)
-        val errSlice = if (stream == TerminalStream.STDOUT) StreamSlice.EMPTY else job.slice(StreamBuf.ERR, cursor)
-        val nextCursor = maxOf(outSlice.nextOffset, errSlice.nextOffset)
-            .takeIf { it > (cursor?.toIntOrNull() ?: 0) }?.toString()
-        return TerminalJobReadResult(job.info(), outSlice.text, errSlice.text, nextCursor)
+        job.drainOutput()
+        val budget = if (stream == TerminalStream.BOTH) READ_CHARS / 2 else READ_CHARS
+        val out = if (stream == TerminalStream.STDERR) null else job.read(StreamBuf.OUT, from?.out, budget)
+        val err = if (stream == TerminalStream.STDOUT) null else job.read(StreamBuf.ERR, from?.err, budget)
+        // 这次没读的那一路保留原游标（没有就从 0 开始），之后换成两路一起读不会漏。
+        val next = JobCursor(out?.next ?: from?.out ?: 0L, err?.next ?: from?.err ?: 0L)
+        return TerminalJobReadResult(
+            info = job.info(),
+            stdout = out?.text.orEmpty(),
+            stderr = err?.text.orEmpty(),
+            nextCursor = next.encode(),
+            tail = from == null,
+            stdoutSkipped = out?.skipped ?: 0L,
+            stderrSkipped = err?.skipped ?: 0L,
+            hasMore = (out != null && out.next < job.total(StreamBuf.OUT)) ||
+                (err != null && err.next < job.total(StreamBuf.ERR)),
+        )
     }
 
     override fun write(jobId: String, input: String, waitMs: Long): Boolean {
@@ -133,7 +157,7 @@ internal class TerminalJobRegistry(
     override fun close() {
         jobs.values.forEach { job ->
             if (!job.keepAlive) {
-                // TODO：keep_alive 应移交 DetachedTaskSupervisor 继续存活；非 keep_alive 这里停掉。
+                // keep_alive 不停（进程留着，但注册表一清就没人管得到它；跨任务守护没有实现）；其余的这里停掉。
                 terminate(job)
             }
         }
@@ -163,13 +187,25 @@ internal class TerminalJobRegistry(
                 environment = launch.environment,
                 linuxRootfsPath = launch.rootfsPath,
                 linuxSharedMounts = launch.sharedMounts,
+                pty = spec.tty,
             )
         }.getOrNull() ?: run {
-            logger.warn("terminal_run start failed: environment=${launch.environment.wireName} identity=${launch.identity}")
+            logger.warn(
+                "terminal_run start failed: environment=${launch.environment.wireName} identity=${launch.identity} tty=${spec.tty}",
+            )
             throw io.github.fartown.movo.agent.tools.core.ToolFailure(
                 io.github.fartown.movo.agent.tools.core.ToolErrorCode.SYSTEM_REJECTED,
-                if (launch.environment.isLinux) "Linux 环境里的命令无法启动" else "命令无法启动",
-                hint = if (launch.environment.isLinux) "确认设置里的 Linux 工具环境已装好；需要 Root 的 chroot 方式要先授权 Root" else null,
+                when {
+                    launch.environment.isLinux -> "Linux 环境里的命令无法启动"
+                    spec.tty -> "伪终端（tty）里的命令无法启动"
+                    else -> "命令无法启动"
+                },
+                hint = when {
+                    launch.environment.isLinux -> "确认设置里的 Linux 工具环境已装好；需要 Root 的 chroot 方式要先授权 Root"
+                    // Root 身份的伪终端靠 BusyBox script；没有时只能去掉 tty 或改用 user 身份。
+                    spec.tty -> "去掉 tty 再试，或改用 identity=user"
+                    else -> null
+                },
             )
         }
         val job = Job(id, spec, process)
@@ -182,38 +218,98 @@ internal class TerminalJobRegistry(
 
     private enum class StreamBuf { OUT, ERR }
 
-    private data class StreamSlice(val text: String, val nextOffset: Int) {
-        companion object { val EMPTY = StreamSlice("", 0) }
-    }
+    /** 一次读出的一段：[next] 是读到哪儿（总偏移），[skipped] 是这段之前没给出的字数。 */
+    private data class StreamSlice(val text: String, val next: Long, val skipped: Long)
 
-    private class BoundedBuffer(private val max: Int = 256 * 1024) {
-        private val sb = StringBuilder()
-        var truncated = false
-            private set
+    /**
+     * 有界输出缓冲：保留开头 [headMax] 字和最近的 [tailMax] 字，中间的丢弃，长时间运行的任务也读得到最新输出。
+     * 偏移按「已产生的总字数」计；续读游标落在已丢弃的那段时，从仍保留的最早位置接着读，并报告跳过了多少字。
+     */
+    private class BoundedBuffer(
+        private val headMax: Int = 64 * 1024,
+        private val tailMax: Int = 192 * 1024,
+    ) {
+        private val head = StringBuilder()
+        private val tail = StringBuilder()
+        /** 已产生的总字数（含已丢弃的）。 */
+        private var total = 0L
+        /** [tail] 第一个字在全部输出里的偏移。 */
+        private var tailStart = 0L
+
+        /** 中间丢弃了多少字。 */
+        private val dropped: Long get() = if (tail.isEmpty()) 0L else tailStart - head.length
+
+        @get:Synchronized
+        val truncated: Boolean get() = dropped > 0
+
+        @Synchronized
+        fun total(): Long = total
 
         @Synchronized
         fun append(text: String) {
-            if (sb.length >= max) {
-                truncated = true
-                return
+            var from = 0
+            if (tail.isEmpty() && total == head.length.toLong() && head.length < headMax) {
+                var take = minOf(headMax - head.length, text.length)
+                if (take in 1 until text.length && text[take - 1].isHighSurrogate()) take--
+                head.append(text, 0, take)
+                total += take
+                from = take
+                if (from == text.length) return
             }
-            sb.append(text)
-            if (sb.length > max) {
-                sb.setLength(max)
-                truncated = true
+            if (tail.isEmpty()) tailStart = total
+            tail.append(text, from, text.length)
+            total += text.length - from
+            // 攒到多出四分之一再丢最旧的，避免每次追加都搬动整段。
+            if (tail.length > tailMax + tailMax / 4) {
+                var drop = tail.length - tailMax
+                if (drop < tail.length && tail[drop].isLowSurrogate()) drop++
+                tail.delete(0, drop)
+                tailStart += drop
             }
         }
 
+        /** 全部保留的输出；中间丢弃过时在接缝处注明省略了多少字。 */
         @Synchronized
-        fun length(): Int = sb.length
+        fun snapshot(): String = if (dropped > 0) {
+            "$head\n…(输出过长，缓冲区只保留开头和最近的部分，中间省略 $dropped 字符)…\n$tail"
+        } else {
+            head.toString() + tail
+        }
 
+        /**
+         * 从总偏移 [from] 起最多读 [max] 字。开头那段读到头、后面紧接着就是保留的最近部分时接着读；
+         * 中间丢过的话先停在开头那段末尾，下一次再从保留的最近部分读，并报告跳过的字数。
+         */
         @Synchronized
-        fun snapshot(): String = sb.toString()
+        fun slice(from: Long, max: Int): StreamSlice {
+            var pos = from.coerceIn(0L, total)
+            var skipped = 0L
+            val out = StringBuilder()
+            if (pos < head.length) {
+                val end = minOf(head.length.toLong(), pos + max).toInt()
+                out.append(head, pos.toInt(), end)
+                pos = end.toLong()
+                if (dropped > 0 || out.length >= max) return StreamSlice(out.toString(), pos, skipped)
+            }
+            if (pos < total && tail.isNotEmpty()) {
+                if (pos < tailStart) {
+                    skipped = tailStart - pos
+                    pos = tailStart
+                }
+                val start = (pos - tailStart).toInt()
+                val end = minOf(tail.length, start + (max - out.length))
+                out.append(tail, start, end)
+                pos = tailStart + end
+            }
+            return StreamSlice(out.toString(), pos, skipped)
+        }
 
+        /** 最近的 [max] 字；[StreamSlice.skipped] 是它之前还有多少字没给。 */
         @Synchronized
-        fun slice(cursor: Int): Pair<String, Int> {
-            val from = cursor.coerceIn(0, sb.length)
-            return sb.substring(from) to sb.length
+        fun tail(max: Int): StreamSlice {
+            val start = maxOf(0L, total - max)
+            val slice = slice(start, max)
+            return slice.copy(skipped = start)
         }
     }
 
@@ -258,11 +354,23 @@ internal class TerminalJobRegistry(
             }
         }
 
+        private val readers = mutableListOf<Thread>()
+
         private fun thread(suffix: String, block: () -> Unit) {
-            Thread({ runCatching { block() } }, "terminal-$id-$suffix").apply {
+            readers += Thread({ runCatching { block() } }, "terminal-$id-$suffix").apply {
                 isDaemon = true
                 start()
             }
+        }
+
+        /**
+         * 进程退出后管道里可能还有没读完的输出：先等读线程收尾（最多 [READER_DRAIN_MS]），
+         * 读到的才是完整结尾。后台留下的子进程还占着管道时等不完，按时间放弃。
+         */
+        fun drainOutput() {
+            if (process.isAlive) return
+            val deadline = System.currentTimeMillis() + READER_DRAIN_MS
+            readers.forEach { reader -> runCatching { reader.join((deadline - System.currentTimeMillis()).coerceAtLeast(1)) } }
         }
 
         fun isRunning(): Boolean = process.isAlive
@@ -293,12 +401,13 @@ internal class TerminalJobRegistry(
             return BufferView(buffer.snapshot(), buffer.truncated)
         }
 
-        fun slice(which: StreamBuf, cursor: String?): StreamSlice {
+        /** 带偏移续读；偏移为空时读尾部。 */
+        fun read(which: StreamBuf, from: Long?, max: Int): StreamSlice {
             val buffer = if (which == StreamBuf.OUT) out else err
-            val from = cursor?.toIntOrNull() ?: 0
-            val (text, next) = buffer.slice(from)
-            return StreamSlice(text, next)
+            return if (from == null) buffer.tail(max) else buffer.slice(from, max)
         }
+
+        fun total(which: StreamBuf): Long = (if (which == StreamBuf.OUT) out else err).total()
 
         fun info(): TerminalJobInfo = TerminalJobInfo(
             jobId = id,
@@ -311,6 +420,8 @@ internal class TerminalJobRegistry(
             exitCode = exitCode,
             startedAtMillis = startedAtMillis,
             endedAtMillis = endedAtMillis,
+            // 伪终端里 stderr 也写到终端上，与 stdout 是同一路。
+            streamsMerged = spec.tty,
         )
     }
 
@@ -360,3 +471,29 @@ private fun launchPlan(spec: TerminalRunSpec): LaunchPlan {
 private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
 private const val CANCEL_POLL_MS = 200L
+
+/** 进程退出后等读线程把管道读完的上限。 */
+private const val READER_DRAIN_MS = 500L
+
+/** terminal_job read 一次最多给的字数（两路都读时各一半），加上头部仍在给模型的 16000 字上限之内。 */
+internal const val READ_CHARS = 14_000
+
+/** terminal_job read 的游标：stdout、stderr 各自的总偏移，写成「out:err」；只有一个数时两路同用（旧格式）。 */
+internal data class JobCursor(val out: Long, val err: Long) {
+    fun encode(): String = "$out:$err"
+
+    companion object {
+        fun parse(raw: String): JobCursor {
+            val parts = raw.trim().split(':')
+            val numbers = parts.map { it.trim().toLongOrNull()?.takeIf { n -> n >= 0 } }
+            if (numbers.isEmpty() || numbers.size > 2 || numbers.any { it == null }) {
+                throw io.github.fartown.movo.agent.tools.core.ToolFailure(
+                    io.github.fartown.movo.agent.tools.core.ToolErrorCode.INVALID_ARGUMENTS,
+                    "cursor 格式不对：$raw",
+                    hint = "用上一次 read 返回的 next_cursor；不带 cursor 读最新的尾部，0:0 从头读",
+                )
+            }
+            return JobCursor(numbers.first()!!, numbers.last()!!)
+        }
+    }
+}
