@@ -46,6 +46,13 @@ internal object SharedStorageAccess {
     const val MESSAGE = "Movo 没有「所有文件访问」权限，看不到共享存储里别的应用的文件"
     const val HINT = "请用户在系统设置里给 Movo 打开「所有文件访问」（设置 → 应用 → Movo → 权限）后再试"
 
+    /** 读写共享存储失败、又没有「所有文件访问」时的说法：多半是缺权限，也可能文件确实不在。 */
+    fun readFailure(path: String): Nothing =
+        fail(ToolErrorCode.PERMISSION_REQUIRED, "读不到 $path：$MESSAGE（也可能文件确实不存在）", hint = HINT)
+
+    fun writeFailure(path: String): Nothing =
+        fail(ToolErrorCode.PERMISSION_REQUIRED, "写不了 $path：Movo 没有「所有文件访问」权限，不能改共享存储里别的应用的文件", hint = HINT)
+
     fun hidden(): Boolean =
         android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R &&
             !android.os.Environment.isExternalStorageManager()
@@ -464,6 +471,7 @@ internal class RealFileReadBackend(
     private val context: Context,
     private val root: BoundedRootCommandExecutor,
     private val rootAvailable: () -> Boolean = { RootAccess.isGranted },
+    private val sharedStorageHidden: () -> Boolean = SharedStorageAccess::hidden,
 ) : FileReadBackend {
 
     override fun resolve(file: String): ResolvedFile? {
@@ -485,7 +493,7 @@ internal class RealFileReadBackend(
                 if (c.moveToFirst() && sizeCol >= 0) size = c.getLong(sizeCol)
             }
         }
-        val kind = kindOf(mime, uri).orSniff { contentHeader(parsed) }
+        val kind = kindOf(mime, uri) { contentHeader(parsed) }
         return ResolvedFile(kind, uri, exists = mime != null, sizeBytes = size, mime = mime)
     }
 
@@ -493,8 +501,11 @@ internal class RealFileReadBackend(
         val file = resolveLocalFile(context, rawPath)
         val path = file.absolutePath
         val mime = guessMime(path)
+        if (file.isDirectory) {
+            fail(ToolErrorCode.INVALID_ARGUMENTS, "$path 是目录，不是文件", hint = "用 file_list 列出目录里的文件")
+        }
         if (file.exists()) {
-            val kind = kindOf(mime, path).orSniff { localHeader(file) }
+            val kind = kindOf(mime, path) { localHeader(file) }
             return ResolvedFile(kind, path, exists = true, sizeBytes = file.length(), mime = mime)
         }
         // App 读不到时，用 Root 探测存在性。
@@ -506,35 +517,33 @@ internal class RealFileReadBackend(
             )
             if (probe.ok && !probe.stdout.contains("MISSING")) {
                 val size = probe.stdout.trim().toLongOrNull() ?: 0L
-                val kind = kindOf(mime, path).orSniff { rootHeader(path) }
+                val kind = kindOf(mime, path) { rootHeader(path) }
                 return ResolvedFile(kind, path, exists = true, sizeBytes = size, mime = mime)
             }
         }
+        // 共享存储里看不到：没有「所有文件访问」时说清缺权限，不说「文件不存在」。
+        if (SharedStorageAccess.covers(file) && sharedStorageHidden()) SharedStorageAccess.readFailure(path)
         return null
     }
 
-    override fun readText(file: String, offsetLine: Int, limitLines: Int): TextRead {
+    override fun readText(file: String, offsetLine: Int, limitLines: Int, column: Int): TextRead {
         val local = resolveLocalFile(context, file)
         val start = offsetLine.coerceAtLeast(1)
         if (local.isFile && local.canRead()) {
-            val allLines = local.bufferedReader(Charsets.UTF_8).useLines { it.toList() }
-            val total = allLines.size
-            val slice = allLines.drop(start - 1).take(limitLines)
-            val next = if (start - 1 + slice.size < total) start + slice.size else null
-            return TextRead(slice.joinToString("\n"), encoding = "utf-8", totalLines = total, nextOffsetLine = next)
+            return pageText(start, column, limitLines) { local.inputStream() }
         }
         if (file.startsWith("content://")) {
             val parsed = Uri.parse(file)
-            val allLines = context.contentResolver.openInputStream(parsed)?.bufferedReader(Charsets.UTF_8)
-                ?.useLines { it.toList() }
-                ?: fail(ToolErrorCode.NOT_FOUND, "无法打开 content URI：$file")
-            val total = allLines.size
-            val slice = allLines.drop(start - 1).take(limitLines)
-            val next = if (start - 1 + slice.size < total) start + slice.size else null
-            return TextRead(slice.joinToString("\n"), encoding = "utf-8", totalLines = total, nextOffsetLine = next)
+            return pageText(start, column, limitLines) {
+                context.contentResolver.openInputStream(parsed) ?: fail(ToolErrorCode.NOT_FOUND, "无法打开 content URI：$file")
+            }
+        }
+        if (!rootAvailable() && SharedStorageAccess.covers(local) && sharedStorageHidden()) {
+            SharedStorageAccess.readFailure(local.absolutePath)
         }
         // Root 路径：用 sed 取行，不用 dd（dd bs=1 会切坏 UTF-8，RS:779）。
         if (!rootAvailable()) fail(ToolErrorCode.PERMISSION_REQUIRED, "没有权限读取该文件")
+        // TODO：Root 文本分页不支持 column、不按编码识别（Root 路径不在这次范围）。
         val end = start + limitLines - 1
         val quoted = FileSupport.shellQuote(local.absolutePath)
         val result = root.execute(
@@ -547,7 +556,35 @@ internal class RealFileReadBackend(
         val lineCount = if (content.isEmpty()) 0 else content.count { it == '\n' } + 1
         // TODO：Root 文本分页为近似（未取 wc -l 全量行数）。
         val next = if (lineCount >= limitLines) end + 1 else null
-        return TextRead(content, encoding = "utf-8", totalLines = start - 1 + lineCount, nextOffsetLine = next)
+        return TextRead(
+            content, encoding = "utf-8", totalLines = start - 1 + lineCount, nextOffsetLine = next,
+            startLine = start, endLine = start - 1 + lineCount,
+        )
+    }
+
+    /** 先看开头判定编码，再从头流式分页（[open] 会被调用两次：一次看开头，一次分页）。 */
+    private fun pageText(offsetLine: Int, column: Int, limitLines: Int, open: () -> InputStream): TextRead {
+        val header = open().use { it.readHeader(FileSupport.ENCODING_SNIFF_BYTES) }
+        val encoding = FileSupport.detectEncoding(header)
+        return open().use { stream ->
+            if (encoding.bomBytes > 0) stream.skipFully(encoding.bomBytes.toLong())
+            java.io.InputStreamReader(stream, encoding.charset).buffered().use { reader ->
+                TextPager.read(reader, encoding.name, offsetLine, column.coerceAtLeast(0), limitLines)
+            }
+        }
+    }
+
+    private fun InputStream.skipFully(count: Long) {
+        var left = count
+        while (left > 0) {
+            val skipped = skip(left)
+            if (skipped <= 0) {
+                if (read() < 0) return
+                left--
+            } else {
+                left -= skipped
+            }
+        }
     }
 
     override fun readImage(file: String): ImageRead {
@@ -611,10 +648,26 @@ internal class RealFileReadBackend(
     private fun imageCacheDirectory(): File =
         context.externalCacheDir?.takeIf { it.isDirectory || it.mkdirs() } ?: context.cacheDir
 
-    // ---- 按内容判定类型（没有扩展名或扩展名不认识时）----
+    // ---- 判定类型：扩展名 / mime 先猜，再看文件开头核对 ----
 
-    private inline fun FileKind.orSniff(header: () -> ByteArray?): FileKind =
-        if (this != FileKind.UNKNOWN) this else header()?.let(FileSupport::sniffKind) ?: FileKind.UNKNOWN
+    /**
+     * 文本扩展名直接当文本；没有扩展名或不认识的按内容判断（[FileSupport.sniffKind]）；
+     * 扩展名或 mime 说是图片、视频、音频、PDF 的，开头其实是 UTF-8 文本时按文本读——
+     * 以前 mime 优先，`.ts` 代码被当成视频、`.svg` 被当成图片、`.m3u8` 被当成音频，读不了。
+     */
+    private inline fun kindOf(mime: String?, path: String, header: () -> ByteArray?): FileKind =
+        when (val guess = guessKind(mime, path)) {
+            FileKind.TEXT -> FileKind.TEXT
+            FileKind.UNKNOWN -> header()?.let(FileSupport::sniffKind) ?: FileKind.UNKNOWN
+            else -> {
+                val head = header()
+                when {
+                    head == null -> guess
+                    FileSupport.looksLikeUtf8Text(head) -> FileKind.TEXT
+                    else -> guess
+                }
+            }
+        }
 
     private fun localHeader(file: File): ByteArray? =
         if (!file.isFile || !file.canRead()) null else runCatching { file.inputStream().use { it.readHeader() } }.getOrNull()
@@ -628,9 +681,9 @@ internal class RealFileReadBackend(
         return if (result.ok) FileSupport.parseOdHex(result.stdout) else null
     }
 
-    /** 读开头 [FileSupport.SNIFF_BYTES] 字节（电视版最低 API 28，不用 readNBytes）。 */
-    private fun InputStream.readHeader(): ByteArray {
-        val buffer = ByteArray(FileSupport.SNIFF_BYTES)
+    /** 读开头 [size] 字节（电视版最低 API 28，不用 readNBytes）。 */
+    private fun InputStream.readHeader(size: Int = FileSupport.SNIFF_BYTES): ByteArray {
+        val buffer = ByteArray(size)
         var filled = 0
         while (filled < buffer.size) {
             val n = read(buffer, filled, buffer.size - filled)
@@ -640,7 +693,7 @@ internal class RealFileReadBackend(
         return buffer.copyOf(filled)
     }
 
-    private fun kindOf(mime: String?, path: String): FileKind {
+    private fun guessKind(mime: String?, path: String): FileKind {
         if (mime != null) {
             when {
                 mime.startsWith("text/") || mime in TEXT_MIMES -> return FileKind.TEXT
@@ -669,7 +722,11 @@ internal class RealFileReadBackend(
     private companion object {
         const val IMAGE_COPY_TIMEOUT_MS = 15_000L
         val TEXT_MIMES = setOf("application/json", "application/xml", "application/javascript")
-        val TEXT_EXT = setOf("txt", "md", "json", "xml", "csv", "log", "kt", "java", "py", "js", "ts", "html", "css", "sh", "yaml", "yml", "ini", "toml", "properties", "gradle")
+        val TEXT_EXT = setOf(
+            "txt", "md", "json", "xml", "csv", "log", "kt", "java", "py", "js", "html", "css", "sh", "yaml", "yml", "ini",
+            "toml", "properties", "gradle", "conf", "cfg", "lrc", "srt", "m3u", "m3u8", "svg", "tsx", "jsx", "c", "h", "cpp",
+            "go", "rs", "rb", "php", "sql", "env", "gitignore",
+        )
         val IMAGE_EXT = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "heic", "heif")
         val VIDEO_EXT = setOf("mp4", "mkv", "webm", "mov", "avi", "3gp")
         val AUDIO_EXT = setOf("mp3", "wav", "m4a", "aac", "ogg", "flac", "amr")
@@ -683,6 +740,7 @@ internal class RealFileReadBackend(
 internal class RealFileWriteBackend(
     private val context: Context,
     private val rootAvailable: () -> Boolean = { RootAccess.isGranted },
+    private val sharedStorageHidden: () -> Boolean = SharedStorageAccess::hidden,
 ) : FileWriteBackend {
 
     override fun exists(path: String): Boolean {
@@ -695,9 +753,9 @@ internal class RealFileWriteBackend(
         val file = resolveLocalFile(context, path)
         val parent = file.parentFile
         if (parent != null && !parent.exists() && !parent.mkdirs() && !parent.isDirectory) {
-            // App 建不出父目录：多半是 Root 路径。
+            // App 建不出父目录：共享存储里多半是缺「所有文件访问」，其余多半是 Root 才能写的位置。
             // TODO：Root 任意内容写入（现码 RootShellTerminalController.writeFile 走 su + stdin）。
-            fail(ToolErrorCode.UNSUPPORTED, "无法写入该路径", detail = "root_write_todo")
+            writeDenied(file)
         }
         if (file.exists() && !file.isFile) {
             fail(ToolErrorCode.CONFLICT, "目标不是普通文件")
@@ -706,7 +764,7 @@ internal class RealFileWriteBackend(
         runCatching {
             FileOutputStream(file, append).use { it.write(bytes) }
         }.getOrElse {
-            fail(ToolErrorCode.UNSUPPORTED, "无法写入该路径", detail = "root_write_todo")
+            writeDenied(file)
         }
         val verifiedSize = file.length()
         // 覆盖写：回读整文件内容哈希作为证据；追加：只回读 size。
@@ -715,7 +773,23 @@ internal class RealFileWriteBackend(
         } else {
             null
         }
-        return FileWriteResult(bytesWritten = bytes.size.toLong(), sha256Hex = hash, verifiedSize = verifiedSize)
+        return FileWriteResult(
+            bytesWritten = bytes.size.toLong(),
+            sha256Hex = hash,
+            verifiedSize = verifiedSize,
+            absolutePath = file.absolutePath,
+        )
+    }
+
+    /** 写不进去时说清原因：以前一律报「设备不支持」，模型会告诉用户写不了，而不是让用户去开权限。 */
+    private fun writeDenied(file: File): Nothing {
+        if (SharedStorageAccess.covers(file) && sharedStorageHidden()) SharedStorageAccess.writeFailure(file.absolutePath)
+        fail(
+            ToolErrorCode.PERMISSION_REQUIRED,
+            "Movo 没有权限写 ${file.absolutePath}",
+            hint = "写到工作区（相对路径）或共享存储里；系统位置需要 Root",
+            detail = "write_denied",
+        )
     }
 }
 

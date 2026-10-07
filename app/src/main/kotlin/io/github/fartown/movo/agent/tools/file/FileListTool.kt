@@ -90,7 +90,26 @@ internal class FileListTool(
         }
         ctx.checkCancelled()
         val output = backend.list(input.path, input.hidden, input.limit, input.cursor)
-        return Verdict.Read(output)
+        return Verdict.Read(fitToBudget(output, input.cursor))
+    }
+
+    /**
+     * 一页控制在 [MAX_PAGE_CHARS] 以内：长文件名多的目录，200 条可能超过给模型的 24000 字上限，
+     * 整份结果会被截成一段纯文本、next_cursor 也跟着丢了。超了就少给几条，next_cursor 指向没给的第一条
+     * （App 列和 Root 列的游标都是偏移）。
+     */
+    private fun fitToBudget(output: FileListOutput, cursor: String?): FileListOutput {
+        var used = 0
+        var kept = 0
+        for (entry in output.entries) {
+            val cost = entryJson(entry).toString().length + 1
+            if (kept > 0 && used + cost > MAX_PAGE_CHARS) break
+            used += cost
+            kept++
+        }
+        if (kept == output.entries.size) return output
+        val start = cursor?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+        return output.copy(entries = output.entries.take(kept), nextCursor = (start + kept).toString())
     }
 
     override fun uiTitle(input: FileListInput): String =
@@ -115,17 +134,20 @@ internal class FileListTool(
 
     override fun renderForModel(output: FileListOutput): ModelContent {
         val entries = JSONArray()
-        output.entries.forEach { entry ->
-            entries.put(
-                JSONObject()
-                    .put("name", entry.name)
-                    .put("type", entry.type)
-                    .put("size_bytes", entry.sizeBytes)
-                    .put("modified_at", entry.modifiedAtMillis),
-            )
-        }
+        output.entries.forEach { entry -> entries.put(entryJson(entry)) }
         val data = JSONObject().put("path", output.path).put("entries", entries).put("count", output.entries.size)
         output.nextCursor?.let { data.put("next_cursor", it) }
         return ModelContent.Json(data)
+    }
+
+    private fun entryJson(entry: DirEntry): JSONObject = JSONObject()
+        .put("name", entry.name)
+        .put("type", entry.type)
+        .put("size_bytes", entry.sizeBytes)
+        .put("modified_at", entry.modifiedAtMillis)
+
+    private companion object {
+        /** 一页条目给模型的上限（JSON 字数），给路径和外层留出余量，整份不超过 24000 字。 */
+        const val MAX_PAGE_CHARS = 20_000
     }
 }

@@ -48,6 +48,8 @@ internal data class FileWriteResult(
     val sha256Hex: String?,
     /** 回读到的文件大小（字节）。 */
     val verifiedSize: Long,
+    /** 实际写到的绝对路径（相对路径落在工作区里的哪儿）；拿不到时为 null。 */
+    val absolutePath: String? = null,
 )
 
 /** 可测后端：真实实现写工作区 / 共享存储 / Root 路径；测试用假实现。 */
@@ -126,7 +128,8 @@ internal class FileWriteTool(
             Evidence.ReadBack("size=${result.verifiedSize}")
         }
         val output = FileWriteOutput(
-            path = input.path,
+            // 回实际写到的绝对路径（与旧 write_file 一样）：相对路径落在工作区里，之后报给用户或交给别的工具都不会错。
+            path = result.absolutePath ?: input.path,
             bytesWritten = result.bytesWritten,
             created = !existedBefore,
             evidenceText = when (evidence) {
