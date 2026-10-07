@@ -1,7 +1,7 @@
 package io.github.fartown.movo.agent.tools.core
 
 /**
- * 「设置 → 工具」里五个开关管哪些工具（沿用重构前的分组，见旧 AgentToolCatalog / AgentDeviceToolCatalog）。
+ * 「设置 → 工具」里五个开关管哪些工具（沿用工具重构前的分组）。
  * 开关关着的工具不进目录，执行时复核也拒绝。各工具不用各自判断开关；个别按参数细分的（file_read 按来源）仍在工具内。
  */
 internal object ToolSwitchGate {

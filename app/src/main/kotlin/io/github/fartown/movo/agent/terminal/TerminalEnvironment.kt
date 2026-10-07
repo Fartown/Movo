@@ -1,7 +1,5 @@
 package io.github.fartown.movo.agent.terminal
 
-internal const val SELECTED_LINUX_WIRE_NAME = "linux"
-
 /** Movo 支持的 Linux 用户态发行版。内核仍由 Android 提供，发行版只替换 rootfs。 */
 internal enum class LinuxDistribution(val wireName: String) {
     ALPINE("alpine"),

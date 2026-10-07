@@ -98,7 +98,7 @@ private data class ProviderSpec(
     val uriTemplate: String? = null,
 )
 
-/** 从通知里认订单：外卖、快递、出行、酒店、票务等订单状态通知里常见的字（沿用旧 AgentStructuredDeviceTools.ORDER_KEYWORDS）。 */
+/** 从通知里认订单：外卖、快递、出行、酒店、票务等订单状态通知里常见的字（沿用工具重构前的关键词表）。 */
 internal object OrderNotifications {
     val KEYWORDS = listOf(
         "订单", "外卖", "取餐", "配送", "骑手", "送达", "商家", "快递", "车票", "机票",

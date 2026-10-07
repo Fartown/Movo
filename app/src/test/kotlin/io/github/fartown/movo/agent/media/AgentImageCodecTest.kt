@@ -151,7 +151,7 @@ class AgentImageCodecTest {
         bitmap.recycle()
 
         try {
-            val image = AgentImageCodec.fromToolFile(sourceFile, "tool_read_image")
+            val image = AgentModelImageEncoder.toolVision(sourceFile.readBytes(), "tool_read_image")
                 ?: error("无法编码文件工具图片")
 
             assertEquals("image/jpeg", image.mimeType)

@@ -94,7 +94,7 @@ internal object McpErrorMapping {
 
 /**
  * 真实后端：按服务器复用一个 [McpHttpClient]，调用并把原始结果规范化为 [McpCallOutcome]。
- * content 文本/结构化/图片的抽取与大小上限沿用旧 McpRunContext.adaptResult 的策略。
+ * content 文本/结构化/图片的抽取与大小上限沿用工具重构前的策略。
  */
 internal class RealMcpBackend(
     @Suppress("unused") private val catalog: McpCatalog,
@@ -132,7 +132,7 @@ internal class RealMcpBackend(
 }
 
 /**
- * 把 tools/call 的原始结果规范化为 [McpCallOutcome]（沿用旧 McpRunContext.adaptResult 的抽取与大小上限）：
+ * 把 tools/call 的原始结果规范化为 [McpCallOutcome]（沿用工具重构前的抽取与大小上限）：
  * 文本 64KB、结构化 64KB、图片 2MB；input_required 与新协议下未完成的结果按不支持返回。
  */
 internal object McpResultAdapter {

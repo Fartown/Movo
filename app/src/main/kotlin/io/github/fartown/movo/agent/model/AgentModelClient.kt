@@ -91,10 +91,9 @@ internal object AgentModelClient {
         runController: AgentRunController = AgentRunController(),
         skillContext: SkillContext = SkillContext.EMPTY,
         memoryContext: AgentMemoryContext = AgentMemoryContext.DISABLED,
-        additionalTools: JSONArray = JSONArray(),
         capabilitiesProvider: () -> AgentToolCapabilities = { AgentToolCapabilities(rootAvailable = false) },
-        // S4 非 UI 接线（默认 null=走旧目录组装）：非空时每轮用类型化工具子系统的目录，toolExecutor 由调用方传子系统 pipeline。
-        typedCatalog: ((AgentToolCapabilities) -> JSONArray)? = null,
+        /** 每轮的工具目录（类型化工具子系统给出），toolExecutor 由调用方传子系统 pipeline；默认不给工具。 */
+        typedCatalog: (AgentToolCapabilities) -> JSONArray = { JSONArray() },
         /** 类型化工具各领域的用法分节；作为一条系统消息注入（工具重构实施方案：去掉写死的工具规则、注入领域分节）。 */
         toolGuide: (() -> String)? = null,
         sessionId: String = java.util.UUID.randomUUID().toString(),
@@ -153,23 +152,7 @@ internal object AgentModelClient {
         ).length()
         fun toolsFor(capabilities: AgentToolCapabilities): JSONArray {
             if (rewriteReply) return JSONArray()
-            typedCatalog?.let { return it(capabilities) }   // S4 类型化子系统目录（flag 开时注入）
-            val tools = AgentToolCatalog.build(
-                terminalTools = config.terminalTools,
-                browserTools = config.browserTools,
-                deviceDirectTools = config.deviceDirectTools,
-                deviceSensitiveReadTools = config.deviceSensitiveReadTools,
-                deviceSensitiveActionTools = config.deviceSensitiveActionTools,
-                skillGitHubDiscovery = true,
-                skillGitHubInstall = true,
-                memoryTools = memoryContext.enabled,
-                memoryWritable = roleplayContext == null,
-                capabilities = capabilities,
-            )
-            for (index in 0 until additionalTools.length()) {
-                tools.put(additionalTools.opt(index))
-            }
-            return tools
+            return typedCatalog(capabilities)
         }
         val tools = toolsFor(initialCapabilities)
         onEvent(

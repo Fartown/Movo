@@ -52,7 +52,7 @@ internal object FileSupport {
         return if (private) Sensitivity.PRIVATE else Sensitivity.NORMAL
     }
 
-    /** Root shell 单引号转义，复用 AgentImageTools / AgentPersonalDataTools 的既有写法。 */
+    /** Root shell 单引号转义。 */
     fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
     // ---- 按内容判定类型：没有扩展名的文件（微信/QQ 聊天图片缓存、日志、配置）靠文件开头的字节判断 ----

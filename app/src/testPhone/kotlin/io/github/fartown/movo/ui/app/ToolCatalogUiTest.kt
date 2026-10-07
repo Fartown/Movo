@@ -1,8 +1,6 @@
 package io.github.fartown.movo.ui.app
 
 import androidx.compose.material.icons.Icons
-import io.github.fartown.movo.agent.model.AgentToolCatalog
-import io.github.fartown.movo.agent.tool.AgentToolCapabilities
 import io.github.fartown.movo.agent.tool.RootRequirement
 import io.github.fartown.movo.ui.components.toolIcon
 import io.github.fartown.movo.ui.theme.MovoIcons
@@ -21,23 +19,10 @@ import org.robolectric.annotation.Config
 @Config(sdk = [36])
 class ToolCatalogUiTest {
     @Test
-    fun everyRuntimeToolAndDisplayedCardHasASpecificIcon() {
-        val tools = AgentToolCatalog.build(
-            terminalTools = true,
-            browserTools = true,
-            deviceSensitiveReadTools = true,
-            deviceSensitiveActionTools = true,
-            skillGitHubDiscovery = true,
-            skillGitHubInstall = true,
-            memoryTools = true,
-            capabilities = AgentToolCapabilities(rootAvailable = true, lsposedAvailable = true),
-        )
-        val runtimeNames = (0 until tools.length()).map {
-            tools.getJSONObject(it).getJSONObject("function").getString("name")
-        }
+    fun everyDisplayedCardHasASpecificIcon() {
         val cardIds = buildToolsState(RuntimeEnvironment.getApplication()).groups
             .flatMap { it.tools }.map { it.id }
-        (runtimeNames + cardIds).distinct().forEach { name ->
+        cardIds.distinct().forEach { name ->
             assertNotEquals(name, MovoIcons.Wrench, toolIcon(name))
         }
     }

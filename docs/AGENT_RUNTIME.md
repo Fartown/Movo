@@ -8,7 +8,7 @@ Movo 的 Agent Runtime 负责把一次用户输入组织为模型回合、工具
 - `AgentLoop`：单次 run 的状态机，不依赖 Android Service、Room 或 Compose。
 - `AgentPromptBuilder`：系统约束、Skill 索引、历史和当前用户输入。
 - `AgentConversationCodec`：Provider JSON 与稳定会话 DTO 的转换。
-- `AgentToolCatalog` 及分组目录：模型可见的工具 schema，不执行工具。
+- `agent/tools/core/ToolRegistry`（经 `ToolPipeline.catalog()`）：模型可见的工具 schema；`AgentModelClient.complete` 通过 `typedCatalog` 每轮取用。
 - `AgentTraceFormatter`：只生成可展示、可记录的脱敏摘要。
 - `AgentProviderClient`：OpenAI-compatible、Anthropic 等协议边界。
 - `AgentRunController`：取消、暂停和 steering 队列。
@@ -212,9 +212,7 @@ App 恢复时以 `checkpoint + outbox + active session` 统一对账，不再用
 - `AgentRuntimeSessionTest`
 - `AgentRunCheckpointStoreTest`
 - `AgentRunMessageProjectorTest`
-- `AgentToolCatalogTest`
 - `McpProtocolValidationTest`
-- `McpRunContextTest`
 - `AgentMemoryStoreTest`
 - `AgentMemoryContextBuilderTest`
 - `MovoDatabaseMigrationTest`

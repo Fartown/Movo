@@ -22,7 +22,7 @@ import java.security.MessageDigest
  * 文件领域的真实后端实现。
  *
  * - App 可读写的路径（工作区、共享存储、content URI）走 java.io / ContentResolver / MediaStore。
- * - Root 才能访问的路径走 [BoundedRootCommandExecutor]（固定命令 + shell 引用，复用 AgentImageTools 的写法）。
+ * - Root 才能访问的路径走 [BoundedRootCommandExecutor]（固定命令 + shell 引用）。
  * - 没有实现的：Root 任意内容写入（file_write 回 UNSUPPORTED）、PDF/视频/音频读取（file_read 回 UNSUPPORTED）。
  */
 
@@ -71,7 +71,7 @@ private fun sha256Hex(bytes: ByteArray): String =
     MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
 /**
- * Root 把图片复制到 App 预先建好的缓存文件（移植旧 AgentImageTools.imageCopyCommand）。
+ * Root 把图片复制到 App 预先建好的缓存文件（沿用工具重构前的写法）。
  * 退出码：21 源文件不存在或不可读，22 超过大小上限，23 复制失败。
  */
 internal fun rootImageCopyCommand(source: String, destination: File): String {
@@ -397,7 +397,7 @@ internal data class ChatImageRow(
 )
 
 /**
- * 微信/QQ 聊天图片缓存的位置与扫描命令（目录、路径过滤沿用重构前 AgentPersonalDataTools）。
+ * 微信/QQ 聊天图片缓存的位置与扫描命令（目录、路径过滤沿用工具重构前的实现）。
  * 微信的聊天图片常见在 image2 目录，过滤里与旧实现的 image 一起匹配（目录结构待真机确认）。
  */
 internal enum class ChatImageSource(
@@ -589,7 +589,7 @@ internal class RealFileReadBackend(
 
     override fun readImage(file: String): ImageRead {
         val bytes = imageBytes(file)
-        // 与重构前 read_image 同一编码：统一转成 JPEG、不缩放（AgentImageCodec.fromToolFile）。
+        // 与重构前 read_image 同一编码：统一转成 JPEG、不缩放。
         val image = AgentModelImageEncoder.toolVision(bytes, source = "file_read")
             ?: fail(ToolErrorCode.UNSUPPORTED, "文件不是可识别的图片", detail = "image_decode_failed")
         return ImageRead(width = image.width ?: 0, height = image.height ?: 0, image = image)
@@ -612,7 +612,7 @@ internal class RealFileReadBackend(
     }
 
     /**
-     * Root 复制到 Movo 缓存再读（移植旧 AgentImageTools.readImage）：目标文件由 App 先建好，
+     * Root 复制到 Movo 缓存再读（沿用工具重构前的写法）：目标文件由 App 先建好，
      * cp 写入已有文件不改属主，App 随后能读；读完即删。
      */
     private fun rootImageBytes(path: String): ByteArray {
@@ -754,7 +754,7 @@ internal class RealFileWriteBackend(
         val parent = file.parentFile
         if (parent != null && !parent.exists() && !parent.mkdirs() && !parent.isDirectory) {
             // App 建不出父目录：共享存储里多半是缺「所有文件访问」，其余多半是 Root 才能写的位置。
-            // TODO：Root 任意内容写入（现码 RootShellTerminalController.writeFile 走 su + stdin）。
+            // TODO：Root 任意内容写入（重构前的写法是 su + stdin）。
             writeDenied(file)
         }
         if (file.exists() && !file.isFile) {

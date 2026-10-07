@@ -28,7 +28,7 @@ import org.json.JSONObject
 
 /**
  * device_read 的真实后端：组合 deviceStatus / networkInfo / deviceEnvironment / currentLocation 的读法。
- * 迁移自 AgentStructuredDeviceTools（SDT:211-270）与 AgentPersonalContextTools（PCT:106-145）。
+ * 迁移自工具重构前的设备读取工具与 AgentPersonalContextTools（PCT:106-145）。
  */
 internal class AndroidDeviceReadBackend(
     private val context: Context,

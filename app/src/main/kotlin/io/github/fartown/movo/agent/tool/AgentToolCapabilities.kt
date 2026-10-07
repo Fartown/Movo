@@ -10,7 +10,6 @@ import io.github.fartown.movo.agent.accessibility.AccessibilityProtectionClient
 import io.github.fartown.movo.agent.device.AgentNotificationHistoryService
 import io.github.fartown.movo.agent.device.RootAccess
 import java.util.Locale
-import org.json.JSONArray
 
 /** 每轮冻结的运行条件；不包含用户开关，也不触发授权请求。 */
 internal data class AgentToolCapabilities(
@@ -41,17 +40,6 @@ internal data class AgentToolCapabilities(
             ) null else "NOTIFICATION_ACCESS_REQUIRED"
             ToolSystemAccess.USAGE -> if (usageAllowed) null else "APP_USAGE_ACCESS_REQUIRED"
             ToolSystemAccess.LOCATION -> if (locationAllowed) null else "LOCATION_PERMISSION_REQUIRED"
-        }
-    }
-
-    fun project(tools: JSONArray): JSONArray {
-        val rootProjected = AgentToolRequirements.project(tools, rootAvailable)
-        return JSONArray().also { visible ->
-            for (index in 0 until rootProjected.length()) {
-                val tool = rootProjected.getJSONObject(index)
-                val name = tool.getJSONObject("function").getString("name")
-                if (unavailableCode(name) == null) visible.put(tool)
-            }
         }
     }
 

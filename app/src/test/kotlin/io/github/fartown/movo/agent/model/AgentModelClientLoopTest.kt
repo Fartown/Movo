@@ -40,6 +40,7 @@ class AgentModelClientLoopTest {
         ))
         AgentModelClient.complete(
             config = modelConfig().copy(terminalTools = true, deviceSensitiveActionTools = true),
+            typedCatalog = TestToolCatalog::build,
             prompt = "开始",
             provider = provider,
             capabilitiesProvider = {
@@ -64,6 +65,7 @@ class AgentModelClientLoopTest {
 
         val result = AgentModelClient.complete(
             config = modelConfig(),
+            typedCatalog = TestToolCatalog::build,
             prompt = "当前问题",
             history = listOf(
                 AgentModelClient.ConversationMessage(role = "user", content = "旧问题"),
@@ -97,6 +99,7 @@ class AgentModelClientLoopTest {
 
         val result = AgentModelClient.complete(
             config = modelConfig(),
+            typedCatalog = TestToolCatalog::build,
             prompt = "开始",
             toolExecutor = AgentModelClient.ToolExecutor { call ->
                 executed += call.id
@@ -143,6 +146,7 @@ class AgentModelClientLoopTest {
 
         val result = AgentModelClient.complete(
             config = modelConfig(),
+            typedCatalog = TestToolCatalog::build,
             prompt = "开始",
             toolExecutor = AgentModelClient.ToolExecutor { call ->
                 executed += call.id
@@ -184,6 +188,7 @@ class AgentModelClientLoopTest {
 
         val result = AgentModelClient.complete(
             config = modelConfig(),
+            typedCatalog = TestToolCatalog::build,
             prompt = "开始",
             toolExecutor = AgentModelClient.ToolExecutor { error("不应调用工具") },
             provider = provider,
@@ -213,6 +218,7 @@ class AgentModelClientLoopTest {
 
             val result = AgentModelClient.complete(
                 config = modelConfig(),
+                typedCatalog = TestToolCatalog::build,
                 prompt = "执行任务",
                 toolExecutor = AgentModelClient.ToolExecutor {
                     executed = true
@@ -248,6 +254,7 @@ class AgentModelClientLoopTest {
 
         AgentModelClient.complete(
             config = modelConfig(),
+            typedCatalog = TestToolCatalog::build,
             prompt = "开始",
             toolExecutor = AgentModelClient.ToolExecutor { call ->
                 executed += call.id to call.name
@@ -294,6 +301,7 @@ class AgentModelClientLoopTest {
 
         val result = AgentModelClient.complete(
             config = modelConfig(),
+            typedCatalog = TestToolCatalog::build,
             prompt = "观察",
             toolExecutor = AgentModelClient.ToolExecutor { call ->
                 AgentModelClient.ToolResult(
@@ -339,6 +347,7 @@ class AgentModelClientLoopTest {
 
         val result = AgentModelClient.complete(
             config = modelConfig(),
+            typedCatalog = TestToolCatalog::build,
             prompt = "观察后点击",
             toolExecutor = AgentModelClient.ToolExecutor { call ->
                 AgentModelClient.ToolResult(
@@ -385,6 +394,7 @@ class AgentModelClientLoopTest {
 
         AgentModelClient.complete(
             config = modelConfig(),
+            typedCatalog = TestToolCatalog::build,
             prompt = "连续观察",
             toolExecutor = AgentModelClient.ToolExecutor {
                 val reference = if (observationIndex++ == 0) firstImage else secondImage
@@ -421,6 +431,7 @@ class AgentModelClientLoopTest {
 
         AgentModelClient.complete(
             config = modelConfig(),
+            typedCatalog = TestToolCatalog::build,
             prompt = "点击",
             toolExecutor = AgentModelClient.ToolExecutor {
                 executed = true
@@ -452,6 +463,7 @@ class AgentModelClientLoopTest {
 
             AgentModelClient.complete(
                 config = modelConfig(),
+                typedCatalog = TestToolCatalog::build,
                 prompt = "开始",
                 toolExecutor = AgentModelClient.ToolExecutor {
                     executed = true
@@ -484,6 +496,7 @@ class AgentModelClientLoopTest {
 
             AgentModelClient.complete(
                 config = modelConfig(),
+                typedCatalog = TestToolCatalog::build,
                 prompt = "开始",
                 toolExecutor = AgentModelClient.ToolExecutor {
                     executions += 1
@@ -516,6 +529,7 @@ class AgentModelClientLoopTest {
         val failure = assertThrows(AgentModelExecutionException::class.java) {
             AgentModelClient.complete(
                 config = modelConfig(),
+                typedCatalog = TestToolCatalog::build,
                 prompt = "开始",
                 toolExecutor = AgentModelClient.ToolExecutor {
                     AgentModelClient.ToolResult("{\"ok\":true}")
@@ -548,7 +562,7 @@ class AgentModelClientLoopTest {
         val result = AgentLoop(
             config = modelConfig(),
             messages = messages,
-            tools = AgentToolCatalog.build(terminalTools = false, browserTools = false),
+            tools = TestToolCatalog.build(),
             provider = provider,
             toolExecutor = AgentModelClient.ToolExecutor {
                 executions += 1
@@ -598,7 +612,7 @@ class AgentModelClientLoopTest {
         val messages = JSONArray().put(AgentConversationCodec.userTextMessage("开始"))
         val loop = AgentLoop(
             config = modelConfig(), messages = messages,
-            tools = AgentToolCatalog.build(terminalTools = false, browserTools = false),
+            tools = TestToolCatalog.build(),
             provider = provider,
             toolExecutor = AgentModelClient.ToolExecutor {
                 executions++
@@ -636,6 +650,7 @@ class AgentModelClientLoopTest {
         )
         val result = AgentModelClient.complete(
             config = modelConfig(),
+            typedCatalog = TestToolCatalog::build,
             prompt = "开始",
             operationId = "run-m",
             toolExecutor = AgentModelClient.ToolExecutor {
@@ -682,6 +697,7 @@ class AgentModelClientLoopTest {
         )
         val result = AgentModelClient.complete(
             config = modelConfig(),
+            typedCatalog = TestToolCatalog::build,
             prompt = "开始",
             toolExecutor = AgentModelClient.ToolExecutor { error("不应调用工具") },
             provider = provider,
@@ -710,6 +726,7 @@ class AgentModelClientLoopTest {
         )
         val result = AgentModelClient.complete(
             config = modelConfig(),
+            typedCatalog = TestToolCatalog::build,
             prompt = "开始",
             operationId = "run-limit",
             toolExecutor = AgentModelClient.ToolExecutor {

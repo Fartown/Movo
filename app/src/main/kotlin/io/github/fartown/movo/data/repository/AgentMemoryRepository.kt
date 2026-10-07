@@ -294,7 +294,6 @@ internal class AgentMemoryStore(
         const val DEFAULT_READ_CHARS = 12_000
         const val MAX_READ_CHARS = 32_000
         const val MIN_READ_CHARS = 1
-        const val MAX_WRITE_CONTENT_CHARS = 3_500
         private const val DIRECTORY_NAME = "memory"
         private const val FILE_NAME = "MEMORY.md"
         private const val DEFAULT_START_LINE = 1

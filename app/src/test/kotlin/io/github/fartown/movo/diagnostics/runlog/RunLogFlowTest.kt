@@ -9,6 +9,7 @@ import io.github.fartown.movo.agent.model.ProviderEvent
 import io.github.fartown.movo.agent.model.ProviderRawPart
 import io.github.fartown.movo.agent.model.ProviderRequest
 import io.github.fartown.movo.agent.model.ProviderResponse
+import io.github.fartown.movo.agent.model.TestToolCatalog
 import io.github.fartown.movo.agent.runtime.AgentRunController
 import io.github.fartown.movo.agent.runtime.AgentTokenUsage
 import io.github.fartown.movo.diagnostics.DiagnosticContext
@@ -59,6 +60,7 @@ class RunLogFlowTest {
             MemoryDiagnostics.record("environment", "screen.off", context = DiagnosticContext(), fields = mapOf("screen_on" to false))
             AgentModelClient.complete(
                 config = config(),
+                typedCatalog = TestToolCatalog::build,
                 prompt = "帮我写个评价",
                 provider = ScriptedProvider(),
                 toolExecutor = AgentModelClient.ToolExecutor { AgentModelClient.ToolResult("{\"ok\":true,\"text\":\"订单 3 个\"}") },
@@ -145,6 +147,7 @@ class RunLogFlowTest {
             MemoryDiagnostics.withRun(onStart = { run -> RunLog.open(run, emptyMap()) }) {
                 AgentModelClient.complete(
                     config = config(),
+                    typedCatalog = TestToolCatalog::build,
                     prompt = "开始",
                     provider = ScriptedProvider(),
                     capabilitiesProvider = {

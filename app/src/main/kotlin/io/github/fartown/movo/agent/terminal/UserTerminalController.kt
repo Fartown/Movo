@@ -6,7 +6,7 @@ import kotlin.concurrent.thread
 /**
  * 用户手动终端的会话控制器：多个常驻 shell 会话并存，每个会话的 cwd 与环境变量跨命令保持。
  *
- * 与面向模型的 [RootShellTerminalController] 分层独立：
+ * 与面向模型的终端工具（agent/tools/terminal）分层独立：
  * - 无执行超时——命令何时结束由用户决定（“停止”终止对应会话）；
  * - 输出经 onDelta 流式回调，不走模型工具的 JSON 合同与截断策略；
  * - 生命周期归属 App 级 UI 状态，不随单次 run 回收。
