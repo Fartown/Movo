@@ -202,10 +202,41 @@ internal object TvVoicePanel {
         if (voice.channel == VoiceChannel.Speaking && lastChannel != VoiceChannel.Speaking) speakingSince = SystemClock.elapsedRealtime()
         lastChannel = voice.channel
         val service = AgentAccessibilityService.current()
-        if (screenshotSuppressed || TvAppSurfaces.visible || TvConversationOverlay.expanded || service == null) { choices = null; removeNow(); return }
+        val hiddenBy = when {
+            screenshotSuppressed -> "screenshot"
+            TvAppSurfaces.visible -> "app_visible"
+            TvConversationOverlay.expanded -> "overlay_expanded"
+            service == null -> "no_accessibility"
+            else -> null
+        }
+        if (hiddenBy != null || service == null) {
+            if (root != null) record("removed", "reason" to hiddenBy)
+            choices = null; removeNow(); return
+        }
         val model = model(voice)
-        if (model == null) { choices = null; collapse(); return }
+        if (model == null) {
+            if (root != null && views?.collapsing != true) record("collapsed", "channel" to voice.channel.name)
+            choices = null; collapse(); return
+        }
+        if (root == null || owner !== service) record("window.added", "rebuilt" to (root != null))
+        recordShown(model, voice)
         show(service, model)
+    }
+
+    // 胶囊实际显示了什么（诊断）：换了一种显示（key）或同一种的字变了才记；你在说时字逐字变，只记开头那次。
+    private var shownKey: String? = null
+    private var shownText: String? = null
+
+    private fun recordShown(model: Model, voice: VoiceSessionUiState) {
+        if (model.key == shownKey && (model.text == shownText || model.key == "you")) return
+        shownKey = model.key; shownText = model.text
+        record("shown", "key" to model.key, "text" to model.text.take(80), "channel" to voice.channel.name,
+            "busy" to (app?.voiceRuntimeBusy == true), "session_messages" to sessionMessages().size)
+    }
+
+    private fun record(event: String, vararg fields: Pair<String, Any?>) {
+        if (event != "shown") { shownKey = null; shownText = null }
+        MemoryDiagnostics.record("tv.capsule", event, fields = mapOf(*fields))
     }
 
     private fun observeApp() {
