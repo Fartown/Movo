@@ -28,7 +28,7 @@ import io.github.fartown.movo.agent.tools.core.ApprovalPreview
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** app_open 的三选一目标。 */
+/** app_open 的目标：包名（与应用名一起给时以包名为准）、应用名或 URI。 */
 internal sealed interface AppOpenTarget {
     data class ByPackage(val packageName: String) : AppOpenTarget
     data class ByName(val name: String) : AppOpenTarget
@@ -41,6 +41,8 @@ internal data class AppOpenOutput(
     val targetPackage: String?,
     val foregroundPackage: String?,
     val foreground: Boolean,
+    /** 读得到前台应用；false 时只知道请求已发出。 */
+    val foregroundReadable: Boolean = true,
 ) : ToolOutput
 
 /** URI 派发结果。 */
@@ -59,6 +61,8 @@ internal data class ForegroundOutcome(
     val resolverShown: Boolean = false,
     /** 疑似后台启动被静默拦截（小米等，无异常抛出）。 */
     val backgroundBlocked: Boolean = false,
+    /** 读得到前台应用（有无障碍或 Root）；读不到时不等，直接按已发出报。 */
+    val readable: Boolean = true,
 )
 
 /**
@@ -70,13 +74,18 @@ internal interface AppOpenBackend {
     /** 启动应用主入口；false 表示不可启动或未安装。 */
     fun launchPackage(packageName: String): Boolean
     fun launchUri(uri: String): UriDispatch
-    /** 轮询前台包名直到匹配或超时；[targetPackage] 为 null 时无法判定匹配。 */
+    /**
+     * 轮询前台包名直到匹配或超时；[targetPackage] 为 null 时无法判定匹配。
+     * 读不到前台（没有无障碍也没有 Root）时立即返回 readable=false，不白等。
+     */
     fun awaitForeground(targetPackage: String?, waitMs: Long): ForegroundOutcome
 }
 
 /**
  * app_open（回读型，local）：打开应用或把 URI 交给对应应用，并确认是否到前台。
- * 前台匹配 → Done(ReadBack)；出现选择器 / 后台启动被拦 / 未确认到前台 → Unknown；不用于读网页。
+ * 前台匹配 → Done(ReadBack)；读不到前台（没开无障碍、没有 Root）→ Dispatched（已发出，和重构前一样不白等）；
+ * 出现选择器 / 后台启动被拦 / 未确认到前台 → Unknown；不用于读网页。
+ * package 和 name 可以一起给（以 package 为准，name 只当显示名，和重构前的 launch_app 一样）；uri 单独给。
  */
 internal class AppOpenTool(
     private val backend: AppOpenBackend,
@@ -85,12 +94,12 @@ internal class AppOpenTool(
     override val domain = ToolDomain.APP
     override val summary =
         "打开应用或把 URI（https、tel、geo、deep link）交给对应应用，并确认是否到前台。" +
-            "package／name／uri 三选一；wait_ms 1000–10000 默认 3000。读网页用 browser_*。"
+            "给 package 或 name（都给以 package 为准），或单独给 uri；wait_ms 1000–10000 默认 3000。读网页用 browser_*。"
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
-        string("package", "精确包名（三选一）")
-        string("name", "应用名（三选一；匹配多个会返回候选）")
-        string("uri", "要交给应用的 URI（三选一；须含 scheme，如 https:// tel: geo:）")
+        string("package", "精确包名；和 name 一起给时以它为准")
+        string("name", "应用名（匹配多个会返回候选）")
+        string("uri", "要交给应用的 URI（不能和 package、name 一起给；须含 scheme，如 https:// tel: geo:）")
         integer("wait_ms", "确认前台的最长等待毫秒，1000–10000，默认 3000", min = 1000, max = 10000)
     }
 
@@ -98,8 +107,8 @@ internal class AppOpenTool(
         val pkg = args.stringOrNull("package")?.trim()?.takeIf { it.isNotEmpty() }
         val name = args.stringOrNull("name")?.trim()?.takeIf { it.isNotEmpty() }
         val uri = args.stringOrNull("uri")?.trim()?.takeIf { it.isNotEmpty() }
-        val provided = listOfNotNull(pkg, name, uri)
-        if (provided.size != 1) invalidArgs("package、name、uri 必须且只能三选一")
+        if (pkg == null && name == null && uri == null) invalidArgs("需要 package、name 或 uri")
+        if (uri != null && (pkg != null || name != null)) invalidArgs("uri 不能和 package、name 一起给", "打开应用给 package 或 name，打开链接只给 uri")
         val target = when {
             pkg != null -> AppOpenTarget.ByPackage(pkg)
             name != null -> AppOpenTarget.ByName(name)
@@ -193,6 +202,8 @@ internal class AppOpenTool(
         )
         return when {
             outcome.matched -> Verdict.Done(output, Evidence.ReadBack("foreground=${outcome.foregroundPackage}"))
+            // 读不到前台：只能确认请求已经发出（effect_verified=false），不白等，也不叫模型去观察（同样用不了）。
+            !outcome.readable -> Verdict.Dispatched(output.copy(foregroundReadable = false))
             outcome.resolverShown -> Verdict.Unknown(
                 reason = "出现应用选择器，尚未进入目标应用",
                 next = "用 ui_observe 看选择器并点选，或改用 package 精确打开",
@@ -230,6 +241,7 @@ internal class AppOpenTool(
             summary = when {
                 output.foreground && app != null -> "已打开「$app」"
                 output.foreground -> "已打开"
+                !output.foregroundReadable -> "已发出打开请求"
                 else -> "已发出打开请求，前台还不是它"
             },
         )
@@ -240,6 +252,11 @@ internal class AppOpenTool(
             JSONObject()
                 .put("target_package", output.targetPackage ?: JSONObject.NULL)
                 .put("foreground_package", output.foregroundPackage ?: JSONObject.NULL)
-                .put("foreground", output.foreground),
+                .put("foreground", output.foreground)
+                .apply {
+                    if (!output.foregroundReadable) {
+                        put("note", "没开无障碍，读不到前台应用，只确认打开请求已发出；需要确认时请用户看一眼")
+                    }
+                },
         )
 }

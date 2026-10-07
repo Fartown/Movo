@@ -13,6 +13,7 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.location.Location
 import android.location.LocationManager
+import android.media.AudioDeviceInfo
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -35,7 +36,9 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
 import org.robolectric.shadows.ShadowCameraCharacteristics
+import org.robolectric.shadows.AudioDeviceInfoBuilder
 import org.robolectric.shadows.ShadowCameraManager
+import org.robolectric.shadows.ShadowDisplayManager
 
 /**
  * 设备领域真实后端（Robolectric）：手电筒回读、位置读不到的原因、设置没权限读、预装应用识别。
@@ -196,6 +199,35 @@ class DeviceBackendsTest {
         val backend = AndroidSettingBackend(context, noRoot, rootAvailable = { false })
         assertEquals(SettingValue.Value("2147483647"), backend.readValue(SettingNamespace.SYSTEM, "screen_off_timeout"))
         assertEquals("2147483647", backend.read(SettingNamespace.SYSTEM, "screen_off_timeout"))
+    }
+
+    // ---- device_read：环境（音频输出可读名、外接显示器数）----
+
+    @Test
+    fun environment_audioOutputsReadableAndExternalDisplaysCounted() {
+        val audio = context.getSystemService(android.media.AudioManager::class.java)
+        shadowOf(audio).setOutputDevices(
+            listOf(
+                AudioDeviceInfoBuilder.newBuilder().setType(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER).build(),
+                AudioDeviceInfoBuilder.newBuilder().setType(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP).build(),
+            ),
+        )
+        ShadowDisplayManager.addDisplay("w1080dp-h1920dp")
+        val env = AndroidDeviceReadBackend(context, noRoot) { false }.read(DeviceSection.ENVIRONMENT, ToolEnvironment())!!
+        val outputs = env.getJSONArray("audio_outputs")
+        assertEquals(listOf("speaker", "bluetooth_audio"), (0 until outputs.length()).map { outputs.getJSONObject(it).getString("type") })
+        assertTrue((0 until outputs.length()).all { outputs.getJSONObject(it).has("is_sink") })
+        assertEquals(2, env.getInt("display_count"))
+        assertEquals(1, env.getInt("external_display_count"))
+    }
+
+    @Test
+    fun audioDeviceType_namesLikeBeforeTheRefactor() {
+        assertEquals("wired_headset", AndroidDeviceReadBackend.audioDeviceType(AudioDeviceInfo.TYPE_WIRED_HEADPHONES))
+        assertEquals("usb_audio", AndroidDeviceReadBackend.audioDeviceType(AudioDeviceInfo.TYPE_USB_HEADSET))
+        assertEquals("hdmi", AndroidDeviceReadBackend.audioDeviceType(AudioDeviceInfo.TYPE_HDMI_ARC))
+        assertEquals("bluetooth_le_audio", AndroidDeviceReadBackend.audioDeviceType(AudioDeviceInfo.TYPE_BLE_HEADSET))
+        assertEquals("other_${AudioDeviceInfo.TYPE_TELEPHONY}", AndroidDeviceReadBackend.audioDeviceType(AudioDeviceInfo.TYPE_TELEPHONY))
     }
 
     // ---- app_search：厂商可卸载预装算系统应用 ----
