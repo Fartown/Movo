@@ -4,6 +4,7 @@ import android.content.Context
 import io.github.fartown.movo.data.datastore.SettingsDataStore
 import io.github.fartown.movo.data.db.MovoDatabase
 import io.github.fartown.movo.data.model.OpenAiEndpointMode
+import io.github.fartown.movo.data.model.ReasoningEffort
 import io.github.fartown.movo.data.model.withModels
 import io.github.fartown.movo.data.provider.BuiltinProviders
 import io.github.fartown.movo.data.provider.PackagedModelDefaults
@@ -179,6 +180,35 @@ class PackagedModelDefaultsTest {
         kotlinx.coroutines.delay(300)
         watcher.cancel()
         assertEquals(before, emissions.get())
+    }
+
+    @Test
+    fun agentPlanModelsOfferTheThinkingSwitchWithDefaultUnset() = runBlocking {
+        // 输入框的「思考」按钮按运行配置里的思考能力显示：Agent Plan 的模型要能选，默认不传档位。
+        val plan = requireNotNull(
+            PackagedModelDefaults.createProvider(
+                name = "Ark",
+                baseUrl = "https://ark.cn-beijing.volces.com/api/plan/v3",
+                apiKey = "plan-key",
+                modelId = "deepseek-v4-1-flash-260910",
+            )
+        )
+        ProviderRepository.packagedProvider = { plan }
+        ProviderRepository.ensureBuiltInsMerged()
+
+        val config = RuntimeConfigRepository.currentRuntimeConfig()!!
+        assertEquals(
+            listOf(ReasoningEffort.OFF, ReasoningEffort.DEFAULT, ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH),
+            config.reasoningCapabilities?.selectableEfforts,
+        )
+        assertEquals(ReasoningEffort.DEFAULT, config.reasoningEffort)
+
+        // GLM-5.3 不接受关闭思考：没有「关」。
+        val glm = plan.models.first { it.modelId == "glm-5.3" }
+        val glmCaps = io.github.fartown.movo.data.provider.ArkAgentPlanModels.reasoning(plan.baseUrl, glm)!!
+        assertFalse(ReasoningEffort.OFF in glmCaps.selectableEfforts)
+        // 别的地址不按套餐算。
+        assertNull(io.github.fartown.movo.data.provider.ArkAgentPlanModels.reasoning("https://ark.cn-beijing.volces.com/api/v3", glm))
     }
 
     @Test
