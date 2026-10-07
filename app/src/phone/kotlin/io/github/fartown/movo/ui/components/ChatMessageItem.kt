@@ -755,6 +755,16 @@ internal fun AgentWorkProcess(
         }
         autoCollapsing = false
     }
+    // 回答开始、这张卡收成摘要条：告诉列表正在收起，紧跟的回答等收完（剩不到 2dp）再在最终位置出现（[LocalEntrySettling]）。
+    // 不自动收起时（手动展开过、减少动画等）直接报已收完，回答不必等。
+    val settlingEntries = LocalEntrySettling.current
+    if (settlingEntries != null && answerStarted) {
+        val settledPx = with(androidx.compose.ui.platform.LocalDensity.current) { 2.dp.toPx() }
+        val farFromCollapsed by remember { androidx.compose.runtime.derivedStateOf { footerCollapse.value > settledPx } }
+        val collapsing = autoCollapseStarting || (autoCollapsing && (!footerCollapsing || farFromCollapsed))
+        androidx.compose.runtime.SideEffect { settlingEntries[id] = collapsing }
+    }
+    if (settlingEntries != null) androidx.compose.runtime.DisposableEffect(id) { onDispose { settlingEntries.remove(id) } }
     // 执行中卡片高度只增不减（多出的留白在卡片下方、列表末尾）：较早步骤收进「前面 N 步」时新步骤往往还很矮，
     // 卡片先变矮、列表退回，等新步骤长出来又滚回去（真机 stepfold2：先下移约 65px 再回来）。留白由新内容先填上；
     // 执行结束时把剩下的留白原样交给列表末尾留白（[ChatBottomReserve]），由回答接着填，不在结束那一下退回。
@@ -1306,10 +1316,10 @@ private fun ThinkingTicker(
 private const val THINKING_TICKER_CHARS = 240
 
 /**
- * 步骤里的滚动预览换成全文前几行（思考结束、说明定稿）：旧的先淡出 `fastExit`，淡完新的再淡入 `fast`。
- * 两段是不同的字，同时交叉淡化会叠在一起（10-07 真机）。
+ * 原地换成另一段字（规范 9.3「文字替换」）：旧的先淡出 `fastExit`，淡完新的再淡入 `fast`，两段不同时可见。
+ * 不同的字同时交叉淡化会叠在一起（10-07 真机：卡头「正在执行·第 1 步」与「已完成 1 个步骤」叠约 13 帧）。
  */
-private fun androidx.compose.animation.AnimatedContentTransitionScope<Boolean>.stepPreviewFadeThrough(): androidx.compose.animation.ContentTransform =
+internal fun textFadeThrough(): androidx.compose.animation.ContentTransform =
     fadeIn(
         tween(
             io.github.fartown.movo.ui.theme.MovoMotion.FAST,
@@ -1317,6 +1327,10 @@ private fun androidx.compose.animation.AnimatedContentTransitionScope<Boolean>.s
             easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard,
         ),
     ).togetherWith(fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()))
+
+/** 步骤里的滚动预览换成全文前几行（思考结束、说明定稿）：先淡出再淡入（[textFadeThrough]）。 */
+private fun androidx.compose.animation.AnimatedContentTransitionScope<Boolean>.stepPreviewFadeThrough(): androidx.compose.animation.ContentTransform =
+    textFadeThrough()
         .using(androidx.compose.animation.SizeTransform(clip = false) { _, _ -> io.github.fartown.movo.ui.theme.MovoMotion.standard() })
 
 /**
@@ -1378,16 +1392,16 @@ private fun ThinkingOnlyRow(
         val previewVisible = streaming && !expanded && latest != null
         val previewState = remember(id) { androidx.compose.animation.core.MutableTransitionState(previewVisible) }
         previewState.targetState = previewVisible
-        // 预览正在收起：告诉列表，紧跟的回答等收完再出现（见 [LocalThinkingPreviewCollapsing]）。`standard` 前快后慢，
+        // 预览正在收起：告诉列表，紧跟的回答等收完再出现（见 [LocalEntrySettling]）。`standard` 前快后慢，
         // 剩下不到 2dp 时就放行，不等曲线尾巴（本地逐帧：等整段过渡结束，回答要晚约 160ms 才出现）。
         var previewHeight by remember(id) { androidx.compose.runtime.mutableIntStateOf(0) }
         val settledPx = with(androidx.compose.ui.platform.LocalDensity.current) { 2.dp.roundToPx() }
         val previewCollapsing = !previewState.targetState && (previewState.currentState || !previewState.isIdle) &&
             previewHeight > settledPx
-        val collapsingKeys = LocalThinkingPreviewCollapsing.current
-        if (collapsingKeys != null) {
-            androidx.compose.runtime.SideEffect { if (previewCollapsing) collapsingKeys[id] = true else collapsingKeys.remove(id) }
-            androidx.compose.runtime.DisposableEffect(id) { onDispose { collapsingKeys.remove(id) } }
+        val settlingEntries = LocalEntrySettling.current
+        if (settlingEntries != null) {
+            androidx.compose.runtime.SideEffect { settlingEntries[id] = previewCollapsing }
+            androidx.compose.runtime.DisposableEffect(id) { onDispose { settlingEntries.remove(id) } }
         }
         AnimatedVisibility(
             visibleState = previewState,
@@ -1550,9 +1564,9 @@ internal fun WorkPhaseCrossfade(
         targetState = phase,
         modifier = modifier,
         contentAlignment = Alignment.CenterStart,
+        // 先淡出旧的、淡完再淡入新的（[textFadeThrough]）：「正在执行·第 N 步」和「已完成 N 个步骤」同时交叉淡化会叠字。
         transitionSpec = {
-            fadeIn(io.github.fartown.movo.ui.theme.MovoMotion.fast())
-                .togetherWith(fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()))
+            textFadeThrough()
                 .using(androidx.compose.animation.SizeTransform(clip = false) { _, _ -> io.github.fartown.movo.ui.theme.MovoMotion.standard() })
         },
         label = "workPhase",
@@ -1731,15 +1745,14 @@ internal fun StatusWithTimer(
     timerKind: Any? = null,
 ) {
     val timerStyle = io.github.fartown.movo.ui.theme.MovoTypography.numericLabel
-    // 计时写法换了（执行中「00:51」→ 结束「用时 51 秒」）时与状态文字一起交叉淡化；同一写法里数字变化直接换。
+    // 计时写法换了（执行中「00:51」→ 结束「用时 51 秒」）时与状态文字一起先淡出再淡入（[textFadeThrough]，不叠字）；同一写法里数字变化直接换。
     val timerText: @Composable (String) -> Unit = { text ->
         androidx.compose.animation.AnimatedContent(
             targetState = timerKind to text,
             contentKey = { it.first },
             transitionSpec = {
                 // 宽度一次到位、只做淡变：计时靠右摆放，宽度过渡会让文字往左漂（真机 reserve3）。
-                fadeIn(io.github.fartown.movo.ui.theme.MovoMotion.fast())
-                    .togetherWith(fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()))
+                textFadeThrough()
                     .using(androidx.compose.animation.SizeTransform(clip = false) { _, _ -> androidx.compose.animation.core.snap() })
             },
             contentAlignment = Alignment.CenterEnd,
