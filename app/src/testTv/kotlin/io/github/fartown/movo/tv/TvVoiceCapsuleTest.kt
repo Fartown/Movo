@@ -31,6 +31,14 @@ class TvVoiceCapsuleTest {
     }
 
     @Test
+    fun stepTitlesReadAsWhatMovoIsDoingWithoutAStepCount() {
+        assertEquals("正在打开「哔哩哔哩」", TvVoicePanel.doing("打开「哔哩哔哩」"))
+        assertEquals("正在输入「罗翔」", TvVoicePanel.doing("输入「罗翔」"))
+        assertEquals("正在屏幕上找「搜索」", TvVoicePanel.doing("在屏幕上找「搜索」"))
+        assertEquals("正在验证悬浮层", TvVoicePanel.doing("正在验证悬浮层"))
+    }
+
+    @Test
     fun capsuleShowsOneLineAndOffersFullTextForLongAnswers() {
         assertEquals("宫保鸡丁的做法一共 6 步", TvVoicePanel.summaryOf("## 宫保鸡丁的做法一共 6 步\n1. 鸡腿肉切丁\n2. 调碗汁"))
         assertEquals("说「看全文」", TvVoicePanel.longHintOf("第一句\n第二句"))

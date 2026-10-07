@@ -740,7 +740,7 @@ internal class RootShellDeviceController(
             }
         }
         val deviceCapture = io.github.fartown.movo.flavor.FlavorModule.screenCapture
-        if (excludedPackages.isEmpty() && deviceCapture?.available == true) {
+        if (deviceCapture?.available == true && (excludedPackages.isEmpty() || deviceCapture.excludes(excludedPackages))) {
             val result = deviceCapture.capture()
             val bitmap = result.bitmap
             if (bitmap != null) {

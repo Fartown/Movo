@@ -10,6 +10,8 @@ internal class VoiceTurnCoordinator(
     data class Turn(val id: Long, val text: String)
     sealed interface Action {
         data class Submit(val turn: Turn) : Action
+        /** 任务在跑：这句话立即交给它作为补充；运行时不接收时宿主回调 [supplementRejected]，再排队。 */
+        data class Supplement(val turn: Turn) : Action
         data class Speak(val turn: Turn) : Action
         data object PauseSpeech : Action
         data object DiscardSpeech : Action
@@ -129,20 +131,27 @@ internal class VoiceTurnCoordinator(
     private fun submit(turn: Turn): List<Action> {
         speaking = null
         deferredAnswer = null
-        if (running != null) {
-            responseOwner = null
-            if (pending != null) {
-                // Keep the accepted pending request; leave the extra utterance visible, never overwrite it.
-                heldDraft = listOf(heldDraft, turn.text).filter(String::isNotBlank).joinToString("\n")
-                transcript = turn.text
-                return listOf(Action.Notice("已经记下一句待处理的话，请等当前任务结束后再补充"))
-            }
-            pending = turn
-            return listOf(Action.Notice("听到了，当前任务完成后接着处理"))
-        }
+        // 任务在跑：先交给它（和打字补充一样，模型下一轮就能看到，比如“算了，不用了”）。
+        // 10-07 电视实测：以前一律排队，任务卡住时用户说什么都要等它自己结束。
+        if (running != null) return listOf(Action.Supplement(turn))
         running = turn
         responseOwner = turn.id
         return listOf(Action.Submit(turn))
+    }
+
+    /** 运行时没接收补充（正在收尾等）：退回排队，当前任务结束后再发。 */
+    fun supplementRejected(turn: Turn): List<Action> {
+        if (!active) return emptyList()
+        if (running == null) return submit(turn)
+        responseOwner = null
+        if (pending != null) {
+            // Keep the accepted pending request; leave the extra utterance visible, never overwrite it.
+            heldDraft = listOf(heldDraft, turn.text).filter(String::isNotBlank).joinToString("\n")
+            transcript = turn.text
+            return listOf(Action.Notice("已经记下一句待处理的话，请等当前任务结束后再补充"))
+        }
+        pending = turn
+        return listOf(Action.Notice("听到了，当前任务完成后接着处理"))
     }
 
     fun runtimeFinished(id: Long, answer: String): List<Action> {

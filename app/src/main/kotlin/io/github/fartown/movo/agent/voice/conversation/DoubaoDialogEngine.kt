@@ -45,9 +45,14 @@ internal class DoubaoDialogEngine(
     interface PcmInput {
         /** Inputs without AEC are muted during playback to avoid transcribing our own answers. */
         val acousticEchoCancellation: Boolean get() = true
-        /** Raw far-field noise cannot use the near-field energy veto; use cloud ASR plus grace. */
+        /** Raw far-field noise cannot use the near-field energy veto; rely on cloud ASR endpointing. */
         val localActivityDetection: Boolean get() = true
         val yieldToMediaPlayback: Boolean get() = false
+        /**
+         * 会话期间让正在播放的节目压低音量继续放，而不是暂停。输入能用扬声器参考消掉残余节目声时才用
+         * （Alexa 电视、Google Nest 的做法；docs/solutions/tv-voice-app/语音时节目声音与断句时延方案.md）。
+         */
+        val duckMediaDuringSession: Boolean get() = false
         val captureWhileConnecting: Boolean get() = false
         fun setOutputSuppressed(suppressed: Boolean) = Unit
         fun start(feed: (ByteArray) -> Unit)
@@ -64,7 +69,8 @@ internal class DoubaoDialogEngine(
     private var focus: AudioFocusRequest? = null
     private var input: PcmInput? = null
     private val warmup = PcmWarmupBuffer(4 * 16000 * 2)
-    val submissionGraceMs: Long get() = if (input?.localActivityDetection == false) 1500L else VoiceCommitGate.AUTO_SEND_WAIT_MS
+    /** 服务端判定说完之后只再等这一小段，不叠加更长的固定等待（各家默认总等待 0.4–0.6 秒，见上述方案 §2）。 */
+    val submissionGraceMs: Long get() = VoiceCommitGate.AUTO_SEND_WAIT_MS
     val supportsAcousticBargeIn: Boolean get() = input?.acousticEchoCancellation != false
     private var ready = false
     private var ownsAudio = false
@@ -84,6 +90,8 @@ internal class DoubaoDialogEngine(
     private var pausedAt = 0L
     private var inputMutedUntil = 0L
     private var mediaHasAudioFocus = false
+    /** 压低模式下是否还握着焦点：播放应用拿走后，回答前重新申请，让节目在回答期间压低。 */
+    private var focusHeld = false
     private val inputActivity = VoiceInputActivity()
 
     fun start(credentials: DoubaoSpeechCredentials) = execute {
@@ -92,24 +100,38 @@ internal class DoubaoDialogEngine(
         val normalized = credentials.normalized()
         check(normalized.hasUsableAuth()) { "请先配置豆包语音凭据" }
         val audio = app.getSystemService(AudioManager::class.java)
-        focus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
-            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
+        input = if (sourceFactory != null) sourceFactory.invoke() else
+            io.github.fartown.movo.flavor.FlavorModule.voiceInput(app) { message -> execute { fail(message) } }
+        // 节目压低继续放（MAY_DUCK）或请对方暂停（TRANSIENT）。压低时对方自己决定压低还是暂停，Android 9 系统压到约 0.2。
+        val duck = input?.duckMediaDuringSession == true
+        log("audio.focus", mapOf("duck" to duck))
+        focus = AudioFocusRequest.Builder(
+            if (duck) AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK else AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            .setAudioAttributes(AudioAttributes.Builder()
+                .setUsage(if (duck) AudioAttributes.USAGE_ASSISTANT else AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
             .setOnAudioFocusChangeListener({ change ->
                 if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
                     execute {
-                        if (input?.yieldToMediaPlayback == true) {
-                            mediaHasAudioFocus = true
-                            emit { onMediaPlaybackStarted() }
-                        } else fail("语音对话被来电或其他音频中断，请点麦克风继续")
+                        when {
+                            // 能消掉节目声的输入：播放应用拿走焦点（任务里开始放视频等）后照常收音，
+                            // 不静音、不结束会话（10-07 实测：静音后任务进行中说什么都听不到）。
+                            duck -> { focusHeld = false; log("audio.focus_lost", mapOf("change" to change)) }
+                            input?.yieldToMediaPlayback == true -> {
+                                mediaHasAudioFocus = true
+                                emit { onMediaPlaybackStarted() }
+                            }
+                            else -> fail("语音对话被来电或其他音频中断，请点麦克风继续")
+                        }
                     }
                 } else if (change == AudioManager.AUDIOFOCUS_GAIN) {
-                    execute { mediaHasAudioFocus = false }
+                    execute { mediaHasAudioFocus = false; focusHeld = true }
                 }
             }, main).build()
         check(audio.requestAudioFocus(focus!!) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
             "暂时无法使用声音，请结束其他通话后重试"
         }
+        focusHeld = true
         synchronized(environmentLock) {
             if (!environmentPrepared) {
                 SpeechEngineGenerator.PrepareEnvironment(app, app as Application)
@@ -139,8 +161,6 @@ internal class DoubaoDialogEngine(
         sdk.setOptionString(D.PARAMS_KEY_DIALOG_ADDRESS_STRING, "wss://openspeech.bytedance.com")
         sdk.setOptionString(D.PARAMS_KEY_DIALOG_URI_STRING, "/api/v3/realtime/dialogue")
         sdk.setOptionInt(D.PARAMS_KEY_DIALOG_WORK_MODE_INT, D.DIALOG_WORK_MODE_DELEGATE_CHAT_TTS_TEXT)
-        input = if (sourceFactory != null) sourceFactory.invoke() else
-            io.github.fartown.movo.flavor.FlavorModule.voiceInput(app) { message -> execute { fail(message) } }
         sdk.setOptionString(D.PARAMS_KEY_RECORDER_TYPE_STRING,
             if (input == null) D.RECORDER_TYPE_RECORDER else D.RECORDER_TYPE_STREAM)
         sdk.setOptionBoolean(D.PARAMS_KEY_DIALOG_ENABLE_PLAYER_BOOL, true)
@@ -298,6 +318,12 @@ internal class DoubaoDialogEngine(
         if (mediaHasAudioFocus) {
             fail(MEDIA_HANDOFF_NOTICE)
             return@execute
+        }
+        // 压低模式：焦点被播放应用拿走过，回答前重新申请，节目在回答期间压低。
+        if (input?.duckMediaDuringSession == true && !focusHeld) {
+            focusHeld = focus?.let { app.getSystemService(AudioManager::class.java).requestAudioFocus(it) } ==
+                AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            log("audio.focus_again", mapOf("granted" to focusHeld))
         }
         outputTurn = id
         outputReplyId = ""

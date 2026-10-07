@@ -45,6 +45,13 @@ internal object TvAssistantScreenCapture : DeviceScreenCapture {
     override val available: Boolean
         get() = service?.let { isSelected(it) && screenContentAllowed(it) } == true
 
+    /**
+     * 截图前先等前台换成别的应用（[prepareObservation]），并隐藏语音胶囊、撤下展开的对话浮层。
+     * 所以要求排除 Movo 自己时也能用。语音发起的任务第一张截图会要求排除 Movo；
+     * 原来因此绕开这条路线、走电视上没有的无障碍截图，10-07 语音任务里截图全部失败。
+     */
+    override fun excludes(packages: Set<String>): Boolean = packages.all { it == io.github.fartown.movo.BuildConfig.APPLICATION_ID }
+
     fun isSelected(context: Context): Boolean = VoiceInteractionService.isActiveService(
         context, ComponentName(context, TvScreenAssistantService::class.java),
     )
@@ -110,9 +117,11 @@ internal object TvAssistantScreenCapture : DeviceScreenCapture {
                 val active = service
                 if (active == null) complete(request.id, DeviceScreenCapture.Result(failure = "ASSISTANT_DISCONNECTED"))
                 else runCatching {
-                    TvVoicePanel.suppressForScreenshot(true)
+                    // 展开的对话浮层要撤窗口，多等一会儿；只藏胶囊（切可见性）等两三帧就够。
+                    val settleMs = if (TvConversationOverlay.expanded) 100L else 50L
+                    TvVoicePanel.hideForScreenshot(true)
                     TvConversationOverlay.suppressForScreenshot(true)
-                    // Let the removed overlay surface disappear before the system samples a frame.
+                    // Let the hidden surfaces disappear before the system samples a frame.
                     main.postDelayed({
                         if (synchronized(stateLock) { pending !== request }) return@postDelayed
                         runCatching {
@@ -121,7 +130,7 @@ internal object TvAssistantScreenCapture : DeviceScreenCapture {
                         }.onFailure {
                             complete(request.id, DeviceScreenCapture.Result(failure = "ASSISTANT_REQUEST_REJECTED"))
                         }
-                    }, 100)
+                    }, settleMs)
                 }.onFailure {
                     complete(request.id, DeviceScreenCapture.Result(failure = "ASSISTANT_REQUEST_REJECTED"))
                 }
@@ -141,7 +150,7 @@ internal object TvAssistantScreenCapture : DeviceScreenCapture {
             }
             main.post {
                 TvConversationOverlay.suppressForScreenshot(false)
-                TvVoicePanel.suppressForScreenshot(false)
+                TvVoicePanel.hideForScreenshot(false)
             }
             MemoryDiagnostics.record("tv.capture", if (result.bitmap == null) "failed" else "completed",
                 fields = mapOf("source" to "system_assistant", "request" to request.id,

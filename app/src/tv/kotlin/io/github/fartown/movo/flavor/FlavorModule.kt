@@ -35,18 +35,25 @@ internal object FlavorModule : Flavor {
     /** P2 接入：本轮进行中按返回取消（§5.8）。 */
     override val keyInterceptor: KeyInterceptor = io.github.fartown.movo.tv.TvBackHandler
 
+    /**
+     * 电视也记完整运行日志：电视上的问题最难现场排查（10-07 一次任务卡了 36 轮，只能从对话库里拼）。
+     * 上限同手机（200 MB、20 次）；暂无导出页，debug 包用 adb 读 files/run-log。
+     */
+    override val fullRunLog: Boolean = true
+
     override val screenCapture: io.github.fartown.movo.platform.DeviceScreenCapture
         get() = io.github.fartown.movo.tv.TvAssistantScreenCapture
 
     override fun startExecutionService(context: Context, intent: android.content.Intent) {
-        // TCL Android 9 silently rejects startForegroundService from its bound assistant
-        // (default_borbid), even with APP_AUTO_START allowed, then kills it for an FGS ANR.
-        // A system-bound accessibility service can start an ordinary service; onCreate
-        // still attempts foreground promotion. The bound-service lifetime avoids that FGS
-        // timeout when the OEM rejects promotion; task leases still stop it when work ends.
+        // TCL Android 9 blocks every foreground promotion from Movo (TclAppBoot: start_foreground,
+        // isAllow=false, default_borbid), so startForegroundService always ends in an FGS ANR kill
+        // 10 s later. On 10-07 a run started while the accessibility service was reconnecting took
+        // that path and the whole process was killed mid-task. Only start an ordinary service here:
+        // the process is kept bound by system services (accessibility, voice, wake); onCreate still
+        // attempts promotion. If background limits refuse it, the caller reports a failed start
+        // instead of an ANR; task leases still stop the service when work ends.
         if (android.os.Build.VERSION.SDK_INT == 28 &&
-            android.os.Build.MANUFACTURER.startsWith("TCL", ignoreCase = true) &&
-            io.github.fartown.movo.agent.accessibility.AgentAccessibilityService.current() != null) {
+            android.os.Build.MANUFACTURER.startsWith("TCL", ignoreCase = true)) {
             checkNotNull(context.startService(intent))
         } else super.startExecutionService(context, intent)
     }

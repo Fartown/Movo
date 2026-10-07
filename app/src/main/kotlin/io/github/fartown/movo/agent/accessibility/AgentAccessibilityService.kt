@@ -98,6 +98,7 @@ open class AgentAccessibilityService : AccessibilityService() {
     private val serviceToken = SERVICE_TOKENS.incrementAndGet()
 
     override fun onServiceConnected() {
+        io.github.fartown.movo.diagnostics.MemoryDiagnostics.record("accessibility", "connected", fields = mapOf("instance" to System.identityHashCode(this)))
         instance = this
         // 断开期间收不到窗口事件：重连后一律当作窗口变过，旧观察上的坐标重新观察再用。
         WINDOW_FRAME_GENERATION.incrementAndGet()
@@ -108,11 +109,13 @@ open class AgentAccessibilityService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        io.github.fartown.movo.diagnostics.MemoryDiagnostics.record("accessibility", "unbound", fields = mapOf("instance" to System.identityHashCode(this)))
         clearCurrentInstance()
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
+        io.github.fartown.movo.diagnostics.MemoryDiagnostics.record("accessibility", "destroyed", fields = mapOf("instance" to System.identityHashCode(this)))
         clearCurrentInstance()
         scrollEventExecutor.shutdownNow()
         super.onDestroy()

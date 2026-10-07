@@ -17,6 +17,8 @@ internal interface VoiceConversationSession {
     fun start()
     fun end(message: String = "语音对话已结束")
     fun stopSpeaking()
+    /** 补充没被正在跑的任务接收，退回排队。 */
+    fun supplementRejected(turn: VoiceTurnCoordinator.Turn)
     fun result(turn: Long, answer: String, confirmed: Boolean = true, failure: String? = null)
     fun runtimeEvent(turn: Long, event: io.github.fartown.movo.agent.runtime.AgentEvent)
 }
@@ -31,6 +33,8 @@ internal class VoiceConversationController(
         /** event 是控制器的稳定事件名；界面据此派生通道状态，不解析状态文案。 */
         fun onState(event: String, active: Boolean, status: String, transcript: String)
         fun submit(turn: VoiceTurnCoordinator.Turn, sessionId: String)
+        /** 把这句话作为补充交给正在跑的任务；不接收时回调 [VoiceConversationSession.supplementRejected]。 */
+        fun supplement(turn: VoiceTurnCoordinator.Turn, sessionId: String)
         fun cancelTask()
         fun onClosed()
         /** 这次语音所在的对话还有后台监听在跑（「结束任务」要连它们一起结束）。 */
@@ -165,6 +169,12 @@ internal class VoiceConversationController(
         }
     }
 
+    override fun supplementRejected(turn: VoiceTurnCoordinator.Turn) {
+        if (!turns.active) return
+        apply(turns.supplementRejected(turn))
+        publish("queued", turn.id)
+    }
+
     /** 停止当前播报，不结束语音通道、不取消任务。 */
     override fun stopSpeaking() {
         if (!turns.active) return
@@ -188,6 +198,10 @@ internal class VoiceConversationController(
                 observer?.invoke("request", action.turn.id, action.turn.text, status)
                 publish("dispatch", action.turn.id)
                 host.submit(action.turn, sessionId)
+            }
+            is VoiceTurnCoordinator.Action.Supplement -> {
+                observer?.invoke("supplement", action.turn.id, action.turn.text, status)
+                host.supplement(action.turn, sessionId)
             }
             is VoiceTurnCoordinator.Action.Speak -> {
                 status = "正在准备播报…"

@@ -47,6 +47,23 @@ class TvEchoCancellerTest {
     }
 
     @Test
+    fun aKeptFilterCancelsFromTheStartOfTheNextSession() {
+        // 10-07 实测：每次会话从零收敛约 2 秒，第 1 秒里节目声被识别成话。电视位置不变，回声路径跨会话保留。
+        val shared = TvEchoCanceller()
+        val first = speechLike(rate * 8, seed = 8, level = 0.3f)
+        cancel(roomEcho(first), first, shared)
+        shared.resetStreams()
+
+        val next = speechLike(rate * 2, seed = 9, level = 0.3f)
+        val mic = roomEcho(next)
+        val opening = block until (rate / 2)
+        val kept = db(mic, opening) - db(cancel(mic, next, shared), opening)
+        val fresh = db(mic, opening) - db(cancel(mic, next), opening)
+        assertTrue("保留的回声路径开头就应压掉至少 15 dB，实际 $kept", kept >= 15)
+        assertTrue("对照：从零开始时开头压不下去（$fresh dB），保留后应明显更好（$kept dB）", kept - fresh >= 6)
+    }
+
+    @Test
     fun silentReferenceLeavesTheMicrophoneAlone() {
         val n = rate * 2
         val mic = speechLike(n, seed = 5, level = 0.2f)
@@ -86,8 +103,7 @@ class TvEchoCancellerTest {
         assertEquals(false, pipeline.echoCancelling)
     }
 
-    private fun cancel(mic: FloatArray, ref: FloatArray): FloatArray {
-        val canceller = TvEchoCanceller()
+    private fun cancel(mic: FloatArray, ref: FloatArray, canceller: TvEchoCanceller = TvEchoCanceller()): FloatArray {
         val out = FloatArray(mic.size)
         var i = 0
         while (i + block <= mic.size) {

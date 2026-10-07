@@ -66,6 +66,8 @@ internal object TvVoicePanel {
     private const val LINGER_MS = 2_500L
     private const val DONE_MS = 1_500L
     private const val YIELD_MS = 2_000L
+    /** 你说完后完整一句至少停这么久，再轮播到在做什么（v5 定稿）。 */
+    private const val HEARD_HOLD_MS = 1_500L
     /** 普通话朗读约 5 字/秒；略慢一点，宁可字幕晚半拍也不抢在声音前面。 */
     private const val CHARS_PER_SECOND = 4.6
     private const val BALL = 56f
@@ -83,7 +85,6 @@ internal object TvVoicePanel {
     private var owner: AgentAccessibilityService? = null
     private var root: FrameLayout? = null
     private var views: Views? = null
-    private var screenshotSuppressed = false
     private var lastActive = false
     private var lingerUntil = 0L
     private var linger: Model? = null
@@ -93,8 +94,14 @@ internal object TvVoicePanel {
     /** 本次语音会话开始前的最后一条消息；只显示它之后的回答，新会话不带出上一个会话的旧回答。 */
     private var sessionBaseline: String? = null
     private var choiceFocus = 0
+    /** 最近一次识别出的你说的话，以及它最后一次变化的时刻（用来让完整一句停够 [HEARD_HOLD_MS]）。 */
+    private var heardText = ""
+    private var heardAt = 0L
     private var choices: Choices? = null
     private val dimTask = Runnable { root?.animate()?.alpha(0.5f)?.setDuration(DIM_WINDOW_MS)?.start() }
+    private val heardHoldEnd = Runnable { refresh() }
+    private var hiddenForScreenshot = false
+    private var hiddenAt = 0L
 
     internal enum class Indicator { None, BarsLive, BarsIdle, Speaker }
     internal enum class OrbMotion { Still, Working, Speaking }
@@ -132,9 +139,18 @@ internal object TvVoicePanel {
         refresh()
     }
 
-    fun suppressForScreenshot(suppress: Boolean) {
-        screenshotSuppressed = suppress
-        refresh()
+    /**
+     * 截图时胶囊瞬间隐藏、截完立刻恢复（v5）：电视 Android 9 只能截整屏，没有手机那种按窗口排除浮层的截图（Android 14 起才有）。
+     * 只切可见性，窗口不撤、不重新长出来，隐藏时长 ≈ 截图耗时。
+     */
+    fun hideForScreenshot(hide: Boolean) {
+        if (Looper.myLooper() != Looper.getMainLooper()) { main.post { hideForScreenshot(hide) }; return }
+        if (hide == hiddenForScreenshot) return
+        hiddenForScreenshot = hide
+        val view = root ?: return
+        view.visibility = if (hide) View.INVISIBLE else View.VISIBLE
+        if (hide) hiddenAt = SystemClock.elapsedRealtime()
+        else record("screenshot.hidden", "duration_ms" to SystemClock.elapsedRealtime() - hiddenAt)
     }
 
     /** 反问小卡正显示着（这时要先看方向键、数字键和确认键）。 */
@@ -202,10 +218,44 @@ internal object TvVoicePanel {
         if (voice.channel == VoiceChannel.Speaking && lastChannel != VoiceChannel.Speaking) speakingSince = SystemClock.elapsedRealtime()
         lastChannel = voice.channel
         val service = AgentAccessibilityService.current()
-        if (screenshotSuppressed || TvAppSurfaces.visible || TvConversationOverlay.expanded || service == null) { choices = null; removeNow(); return }
+        val hiddenBy = when {
+            TvAppSurfaces.visible -> "app_visible"
+            TvConversationOverlay.expanded -> "overlay_expanded"
+            service == null -> "no_accessibility"
+            else -> null
+        }
+        if (hiddenBy != null || service == null) {
+            if (root != null) record("removed", "reason" to hiddenBy)
+            choices = null; removeNow(); return
+        }
         val model = model(voice)
-        if (model == null) { choices = null; collapse(); return }
+        if (model == null) {
+            if (root != null && views?.collapsing != true) record("collapsed", "channel" to voice.channel.name)
+            choices = null; collapse(); return
+        }
+        if (root == null || owner !== service) record("window.added", "rebuilt" to (root != null))
+        recordShown(model, voice)
         show(service, model)
+    }
+
+    // 胶囊实际显示了什么（诊断）：换了一种显示（key）或同一种的字变了才记；你在说时字逐字变，只记开头那次。
+    private var shownKey: String? = null
+    private var shownText: String? = null
+
+    private fun recordShown(model: Model, voice: VoiceSessionUiState) {
+        if (model.key == shownKey && model.text == shownText) return
+        // 你在说时字逐字变，不逐次记；换走时记下最后显示的那一句。
+        if (model.key == "you" && shownKey == "you") { shownText = model.text; return }
+        val heard = shownText.takeIf { shownKey == "you" }
+        shownKey = model.key; shownText = model.text
+        record("shown", "key" to model.key, "text" to model.text.take(80), "channel" to voice.channel.name,
+            "busy" to (app?.voiceRuntimeBusy == true), "session_messages" to sessionMessages().size,
+            "after_heard" to heard?.take(80))
+    }
+
+    private fun record(event: String, vararg fields: Pair<String, Any?>) {
+        if (event != "shown") { shownKey = null; shownText = null }
+        MemoryDiagnostics.record("tv.capsule", event, fields = mapOf(*fields))
     }
 
     private fun observeApp() {
@@ -250,15 +300,17 @@ internal object TvVoicePanel {
             return null
         }
         val hearing = { text: String -> Model(text.trim(), indicator = Indicator.BarsLive, key = "you", scroll = Scroll.Tail) }
+        val transcript = voice.transcript.trim()
+        if (transcript.isNotEmpty() && transcript != heardText) { heardText = transcript; heardAt = SystemClock.elapsedRealtime() }
         return when (voice.channel) {
             VoiceChannel.Connecting -> Model("正在连接…", SECONDARY, key = "idle")
             VoiceChannel.Hearing -> hearing(voice.transcript.ifBlank { "…" })
-            VoiceChannel.Thinking -> if (busy && tools.isNotEmpty()) working(tools) else Model("正在想…", motion = OrbMotion.Working, key = "work")
+            VoiceChannel.Thinking -> progress(tools)
             VoiceChannel.Speaking -> answer?.let(::speaking) ?: Model("", indicator = Indicator.Speaker, movo = true, motion = OrbMotion.Speaking)
             VoiceChannel.Listening, VoiceChannel.Off -> when {
                 voice.transcript.isNotBlank() -> hearing(voice.transcript)
                 // 任务在跑时会话仍可继续听；环境声音会把通道拉回「听」，此时优先显示在做什么。
-                busy -> working(tools)
+                busy -> progress(tools)
                 answer != null -> parseChoices(answer.content)?.let { card ->
                     Model(card.header, indicator = Indicator.Speaker, choices = card, key = "choice")
                 } ?: Model(flatten(answer.content), indicator = Indicator.BarsIdle, movo = true, key = answer.id, scroll = Scroll.End)
@@ -271,11 +323,31 @@ internal object TvVoicePanel {
     private fun speaking(answer: AgentMessageUi): Model =
         Model(flatten(answer.content), indicator = Indicator.Speaker, movo = true, motion = OrbMotion.Speaking, key = answer.id, scroll = Scroll.Speech)
 
+    /** 说完后先让完整一句停够 1.5 秒，再轮播到在做什么（v5 定稿）。 */
+    private fun progress(tools: List<ToolActivityMessageUi>): Model {
+        val left = heardAt + HEARD_HOLD_MS - SystemClock.elapsedRealtime()
+        if (heardText.isNotEmpty() && left > 0) {
+            main.removeCallbacks(heardHoldEnd)
+            main.postDelayed(heardHoldEnd, left + 20)
+            return Model(heardText, indicator = Indicator.BarsIdle, key = "you", scroll = Scroll.End)
+        }
+        return working(tools)
+    }
+
+    /** 在做什么：「正在」+ 最近一步的标题（与手机执行卡同一个标题）· 第几步；还没有动作时「正在想…」。 */
     private fun working(tools: List<ToolActivityMessageUi>): Model {
         val latest = tools.firstOrNull()
-        val label = latest?.toolName?.let { name -> toolDisplayNameResource(name)?.let { context?.getString(it) } ?: name }
+        val title = latest?.argumentsSummary?.trim()?.takeIf { it.isNotEmpty() && !it.startsWith("{") }
+            ?: latest?.toolName?.let { name -> toolDisplayNameResource(name)?.let { context?.getString(it) } ?: name }
         val step = tools.size.takeIf { it > 0 }?.let { "第 $it 步" }
-        return Model(listOfNotNull(label?.let { "正在$it" } ?: "正在处理", step).joinToString(" · "), motion = OrbMotion.Working, key = "work")
+        return Model(listOfNotNull(title?.let(::doing) ?: "正在想…", step).joinToString(" · "), motion = OrbMotion.Working, key = "work")
+    }
+
+    /** 步骤标题读成正在做的事：打开「哔哩哔哩」→ 正在打开「哔哩哔哩」；在屏幕上找… → 正在屏幕上找…。 */
+    internal fun doing(title: String): String = when {
+        title.startsWith("正在") -> title
+        title.startsWith("在") -> "正$title"
+        else -> "正在$title"
     }
 
     private fun latestAnswer(): AgentMessageUi? = sessionMessages().asReversed()
@@ -397,6 +469,7 @@ internal object TvVoicePanel {
             return null
         }
         root = container; owner = service
+        if (hiddenForScreenshot) container.visibility = View.INVISIBLE
         views = Views(column, capsule, orb, slot, text, background, width = start)
         // 出现：先是一个球淡入。
         capsule.alpha = 0f; capsule.animate().alpha(1f).setDuration(150).start()

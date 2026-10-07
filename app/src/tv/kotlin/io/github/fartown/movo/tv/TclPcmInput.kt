@@ -28,6 +28,8 @@ internal class TclPcmInput(
     // energy-only detection repeatedly vetoed a correctly recognized cloud endpoint.
     override val localActivityDetection: Boolean = false
     override val yieldToMediaPlayback: Boolean = true
+    /** 有扬声器参考做回声消除：会话期间节目压低继续放，残余节目声由回声消除处理。 */
+    override val duckMediaDuringSession: Boolean = true
     override val captureWhileConnecting: Boolean = true
     @Volatile private var outputSuppressed = false
     override fun setOutputSuppressed(suppressed: Boolean) { outputSuppressed = suppressed }
@@ -43,7 +45,10 @@ internal class TclPcmInput(
         }
         check(owner.compareAndSet(false, true)) { "内置麦克风正在使用，请稍后重试" }
         running.set(true)
-        echo = TclEchoPipeline(gain = MIC_GAIN)
+        // 电视和音箱的位置不变，学到的回声路径跨会话保留；只清上一段的信号，免得每次唤醒都从零收敛约 2 秒
+        // （10-07 实测：从零收敛的第 1 秒里节目声被识别成话）。
+        sharedCanceller.resetStreams()
+        echo = TclEchoPipeline(gain = MIC_GAIN, canceller = sharedCanceller)
         try {
             worker = thread(name = "movo-tcl-pcm", isDaemon = true) {
                 try {
@@ -167,6 +172,8 @@ internal class TclPcmInput(
 
         /** 内置麦克风电平很低：消完回声后放大 16 倍再送去识别（与之前只取第 0 路时相同）。 */
         private const val MIC_GAIN = 16
+        /** 一次只有一个采音（[owner]），跨会话共用。 */
+        private val sharedCanceller = TvEchoCanceller()
         private const val WAV_NAME = "original_0.wav"
         private val source = File("/sdcard/walleve/cae_record")
         private val owner = AtomicBoolean(false)
