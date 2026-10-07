@@ -27,6 +27,7 @@ import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -46,7 +47,14 @@ class MovoBackupRepositoryTest {
         SettingsDataStore.init(context)
         runBlocking { SettingsDataStore.setSelection(null, null) }
         ProviderRepository.init(context)
+        // 恢复后会补齐默认数据：不受本机 .env 打包的默认模型影响。
+        ProviderRepository.packagedProvider = { null }
         AgentMemoryRepository.init(context)
+    }
+
+    @After
+    fun tearDown() {
+        ProviderRepository.packagedProvider = io.github.fartown.movo.data.provider.PackagedModelDefaults::provider
     }
 
     @Test

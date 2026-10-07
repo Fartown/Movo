@@ -578,7 +578,8 @@ private fun ProviderConfigTab(
             }
         }
 
-        if (!isNew) {
+        // 预置服务商（.env 打包）跟着安装包走、启动时会补回来：不给删除入口，与列表里不能长按删除一致。
+        if (!isNew && !io.github.fartown.movo.data.provider.ProviderCatalog.isPackaged(provider)) {
             item(key = "danger_zone") {
                 // 内置预设已改为模板：添加过的预设（ChatGPT 除外）也能删除，删除后回到「可以添加」。
                 val removablePreset = provider.isBuiltIn && !isChatGpt

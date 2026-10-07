@@ -10,6 +10,7 @@ import io.github.fartown.movo.data.provider.PackagedModelDefaults
 import io.github.fartown.movo.data.provider.ProviderCatalog
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -93,67 +94,21 @@ class PackagedModelDefaultsTest {
     }
 
     @Test
-    fun presetFollowsANewPackageAfterUpgrade() = runBlocking {
-        // 2026-10-07 定：预置的跟着包走。旧包写入的预置（旧地址 / Key / 模型）在装了新包后换成新包的值，选择不变。
-        val old = preset()
-        ProviderRepository.ensureBuiltInsMerged(old)
-        ProviderRepository.updateProvider(old.copy(baseUrl = "https://edited.example/v1", apiKey = "edited-key"))
+    fun editedPresetIsKeptOverANewPackage() = runBlocking {
+        // 2026-10-07 定：已有的预置不动，改过的以改过的为准。
+        val preset = preset()
+        ProviderRepository.ensureBuiltInsMerged(preset)
+        ProviderRepository.updateProvider(preset.copy(baseUrl = "https://edited.example/v1", apiKey = "edited-key"))
         MovoDatabase.closeForTests()
         MovoDatabase.get(context)
 
-        val next = requireNotNull(
-            PackagedModelDefaults.createProvider(
-                name = "Ark Plan",
-                baseUrl = "https://ark.example/api/plan/v3",
-                apiKey = "plan-key",
-                modelId = "plan-model",
-                contextWindow = 1_048_576,
-                hostedWebSearchEnabled = true,
-            )
-        )
+        val next = preset.copy(baseUrl = "https://ark.example/api/plan/v3", apiKey = "new-build-key")
         ProviderRepository.packagedProvider = { next }
         ProviderRepository.ensureBuiltInsMerged(next)
 
         val config = RuntimeConfigRepository.currentRuntimeConfig()!!
-        assertEquals("https://ark.example/api/plan/v3", config.baseUrl)
-        assertEquals("plan-key", config.apiKey)
-        assertEquals("plan-model", config.model)
-        assertEquals("Ark Plan", ProviderRepository.providerById(old.id)!!.name)
-        assertEquals(old.id, SettingsDataStore.settings().selectedProviderId)
-        assertEquals(old.models.single().id, SettingsDataStore.settings().selectedModelId)
-    }
-
-    @Test
-    fun followingThePackageKeepsPersonalSettingsAndIsIdempotent() = runBlocking {
-        val preset = preset()
-        ProviderRepository.ensureBuiltInsMerged(preset)
-        val stored = ProviderRepository.providerById(preset.id) as io.github.fartown.movo.data.model.OpenAiCompatibleProviderSetting
-        ProviderRepository.updateProvider(stored.copy(sortOrder = 7, apiKey = "edited-key"))
-        ModelRepository.saveModel(preset.id, stored.models.single().copy(reasoningOverride = false, contextWindowOverride = 65_536))
-
-        ProviderRepository.ensureBuiltInsMerged(preset)
-
-        val synced = ProviderRepository.providerById(preset.id)!!
-        assertEquals("test-key", synced.apiKey)
-        assertEquals(7, synced.sortOrder)
-        assertEquals(false, synced.models.single().reasoningOverride)
-        assertEquals(65_536, synced.models.single().contextWindowOverride)
-        // 已经一致：不再写库。
-        assertNull(PackagedModelDefaults.followPackage(synced, preset))
-    }
-
-    @Test
-    fun modelsAddedToThePresetSurviveFollowingThePackage() = runBlocking {
-        val preset = preset()
-        ProviderRepository.ensureBuiltInsMerged(preset)
-        val extra = io.github.fartown.movo.data.model.Model(id = "ark-plan-kimi-k3", modelId = "kimi-k3", displayName = "Kimi K3")
-        ModelRepository.saveModel(preset.id, extra)
-
-        ProviderRepository.ensureBuiltInsMerged(preset.copy(apiKey = "new-key"))
-
-        val synced = ProviderRepository.providerById(preset.id)!!
-        assertEquals("new-key", synced.apiKey)
-        assertEquals(listOf("test-model", "kimi-k3"), synced.models.map { it.modelId })
+        assertEquals("https://edited.example/v1", config.baseUrl)
+        assertEquals("edited-key", config.apiKey)
     }
 
     @Test
@@ -171,33 +126,75 @@ class PackagedModelDefaultsTest {
     }
 
     @Test
-    fun clearedKeyComesBackFromThePackageButADeletedPresetStaysDeleted() = runBlocking {
+    fun aDeletedPresetComesBackButAClearedKeyStaysCleared() = runBlocking {
         val preset = preset()
         ProviderRepository.ensureBuiltInsMerged(preset)
         ProviderRepository.updateProvider(preset.copy(apiKey = ""))
         ProviderRepository.ensureBuiltInsMerged(preset)
-        assertEquals("test-key", ProviderRepository.providerById(preset.id)?.apiKey)
+        assertEquals("", ProviderRepository.providerById(preset.id)?.apiKey)
 
         ProviderRepository.deleteProvider(preset.id)
         ProviderRepository.ensureBuiltInsMerged(preset)
 
-        assertNull(ProviderRepository.providerById(preset.id))
-        assertNull(SettingsDataStore.settings().selectedProviderId)
+        assertEquals("test-key", ProviderRepository.providerById(preset.id)?.apiKey)
     }
 
     @Test
-    fun upgradePreservesExistingProviderAndSelection() = runBlocking {
+    fun aDeviceWithoutThePresetGetsItAndKeepsItsSelection() = runBlocking {
+        // 用户手机（10-07）：只有自建的旧服务商。装了带默认模型的包：预置那条加上，自建的和当前选择不动。
         val existing = preset().copy(id = "user-provider", name = "User", apiKey = "user-key")
             .withModels(preset().models.map { it.copy(id = "user-model") })
         val added = ProviderRepository.addProvider(existing)
-        val selection = SettingsDataStore.settings()
+        SettingsDataStore.setSelection(existing.id, "user-model")
 
         ProviderRepository.ensureBuiltInsMerged(preset())
 
-        assertNull(ProviderRepository.providerById(preset().id))
+        assertEquals("test-key", ProviderRepository.providerById(preset().id)?.apiKey)
         assertEquals(added, ProviderRepository.providerById(existing.id))
-        assertEquals(selection.selectedProviderId, SettingsDataStore.settings().selectedProviderId)
-        assertEquals(selection.selectedModelId, SettingsDataStore.settings().selectedModelId)
+        assertEquals(existing.id, SettingsDataStore.settings().selectedProviderId)
+    }
+
+    @Test
+    fun anUnchangedPresetIsNotWrittenAgain() = runBlocking {
+        // 读模型配置的地方在监听服务商表：已有预置时不能再写，否则写库 → 表变化 → 再读配置 → 再写，一直循环。
+        val plan = requireNotNull(
+            PackagedModelDefaults.createProvider(
+                name = "Ark",
+                baseUrl = "https://ark.cn-beijing.volces.com/api/plan/v3",
+                apiKey = "plan-key",
+                modelId = "deepseek-v4-1-flash-260910",
+            )
+        )
+        ProviderRepository.packagedProvider = { plan }
+        ProviderRepository.ensureBuiltInsMerged()
+        assertEquals(plan.models.map { it.modelId }, ProviderRepository.providerById(plan.id)!!.models.map { it.modelId })
+
+        val emissions = java.util.concurrent.atomic.AtomicInteger()
+        val watcher = launch(kotlinx.coroutines.Dispatchers.IO) {
+            ProviderRepository.providersFlow().collect { emissions.incrementAndGet() }
+        }
+        kotlinx.coroutines.delay(300)
+        val before = emissions.get()
+        repeat(3) { RuntimeConfigRepository.currentRuntimeConfig() }
+        kotlinx.coroutines.delay(300)
+        watcher.cancel()
+        assertEquals(before, emissions.get())
+    }
+
+    @Test
+    fun agentPlanPresetComesWithThePlanModels() {
+        val plan = requireNotNull(
+            PackagedModelDefaults.createProvider(
+                name = "Ark",
+                baseUrl = "https://ark.cn-beijing.volces.com/api/plan/v3",
+                apiKey = "plan-key",
+                modelId = "deepseek-v4-1-flash-260910",
+            )
+        )
+        assertEquals("deepseek-v4-1-flash-260910", plan.models.first().modelId)
+        assertTrue(plan.models.any { it.modelId == "kimi-k3" })
+        assertEquals(plan.models.map { it.modelId }.distinct(), plan.models.map { it.modelId })
+        assertEquals(1, preset().models.size)
     }
 
     @Test
