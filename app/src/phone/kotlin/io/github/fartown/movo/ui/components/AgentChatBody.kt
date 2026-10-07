@@ -609,6 +609,16 @@ internal fun AgentConversationMessages(
     val lastWorkKey = timelineEntries.lastOrNull { it is AgentTimelineEntry.WorkProcess }?.key
     // 上方条目正在收起（「已思考」一行的预览、任务结束时收成摘要条的执行卡），按条目 key 记录；紧跟其后的回答等它收完再出现。
     val entrySettling = remember { androidx.compose.runtime.mutableStateMapOf<String, Boolean>() }
+    // 这次新出现的条目（同一对话里刚加上的；切换对话、载入历史时整批出现的不算）：只有它们需要等上方条目收完再出现。
+    val seenEntryKeys = remember { HashSet<Any>() }
+    val freshEntryKeys = remember(timelineEntries) {
+        val keys = timelineEntries.map { it.key }
+        val sameConversation = seenEntryKeys.isNotEmpty() && keys.any { it in seenEntryKeys }
+        val fresh: Set<Any> = if (sameConversation) keys.filterTo(HashSet()) { it !in seenEntryKeys } else emptySet()
+        seenEntryKeys.clear()
+        seenEntryKeys.addAll(keys)
+        fresh
+    }
     val previousEntryKeys = remember(timelineEntries) {
         timelineEntries.zipWithNext().associate { (previous, entry) -> entry.key to previous.key }
     }
@@ -937,10 +947,12 @@ internal fun AgentConversationMessages(
                         // 回答紧跟的上方条目还在收起：先占位不显示，收完再在最终位置淡入，不随之上移（9.4「回答不位移」）。
                         // 纯问答：「已思考」下的预览还在收起，回答随之上滑 22dp；带工具：任务结束时回答比执行卡早两帧出现，
                         // 随后跟着卡片收成摘要条上滑 88～259px（10-07 真机）。执行卡要到下一帧才报「正在收起」，
-                        // 所以回答出现时上方是刚被这条回答收尾的执行卡、执行卡还没报状态，也先等着；最多等 2 个 `standard`。
+                        // 所以新出现的回答上方是刚被它收尾的执行卡、执行卡还没报状态时也先等着；最多等 2 个 `standard`。
+                        // 不看是否仍在执行：最后一段移出与任务结束常落在同一帧（真机 v2 七次里四次）。
                         val previousKey = previousEntryKeys[entry.key]
                         val expectAboveCollapse = remember(entry.key) {
-                            isStreaming && message is AgentMessageUi && previousKey != null && previousKey in answeredWorkKeys
+                            message is AgentMessageUi && entry.key in freshEntryKeys &&
+                                previousKey != null && previousKey in answeredWorkKeys
                         }
                         var aboveWaitOver by remember(entry.key) { mutableStateOf(false) }
                         if (expectAboveCollapse) {

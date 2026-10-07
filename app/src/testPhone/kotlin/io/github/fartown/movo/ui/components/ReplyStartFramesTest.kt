@@ -51,8 +51,16 @@ class ReplyStartFramesTest {
     private val t = System.currentTimeMillis() - 30_000
     private val chunks = listOf("杭州是浙江省的省会，", "位于中国东南沿海。", "它以西湖闻名，", "风景秀丽、人文荟萃。", "\n\n杭州也是", "数字经济的重镇，", "阿里巴巴等企业总部都在这里。")
 
-    private fun run(name: String, start: List<AgentChatMessageUi>, thinkingDone: List<AgentChatMessageUi>, answer: (String) -> List<AgentChatMessageUi>) {
+    private fun run(
+        name: String,
+        start: List<AgentChatMessageUi>,
+        thinkingDone: List<AgentChatMessageUi>,
+        answer: (String) -> List<AgentChatMessageUi>,
+        /** 回答出现的同一帧任务就结束（真机 v2 失败的 4 次：最后一段移出卡片与任务结束落在同一帧）。 */
+        runEndsWithAnswer: Boolean = false,
+    ) {
         var messages by mutableStateOf(start)
+        var streaming by mutableStateOf(true)
         compose.mainClock.autoAdvance = false
         compose.setContent {
             AgentAppTheme(appearance = AppearanceSettings(), applyInterfaceScale = false) {
@@ -62,7 +70,7 @@ class ReplyStartFramesTest {
                     visibleMessages = messages,
                     scrollState = state,
                     bottomReserve = remember { ChatBottomReserve() },
-                    isStreaming = true,
+                    isStreaming = streaming,
                     bottomInset = 120.dp,
                     keepBottomAnchored = anchored,
                     onBottomAnchorChanged = { anchored = it },
@@ -88,6 +96,7 @@ class ReplyStartFramesTest {
         chunks.forEachIndexed { i, c ->
             text += c
             messages = answer(text)
+            if (runEndsWithAnswer) streaming = false
             repeat(4) { compose.mainClock.advanceTimeByFrame(); capture(frame++, "chunk$i") }
         }
         repeat(20) { compose.mainClock.advanceTimeByFrame(); capture(frame++, "tail") }
@@ -127,6 +136,20 @@ class ReplyStartFramesTest {
         val before = listOf(user, th1, tool, th2)
         val after = before + AgentMessageUi("assistant-run-2-1", "杭州是浙江省的省会，电量 100%，正在充电。", isStreaming = false, renderMarkdown = true)
         run("run-end", start = before, thinkingDone = before, answer = { after })
+    }
+
+    /** 同上，但回答移到卡后的同一帧任务就结束：卡片走普通的收起过渡，回答同样不能跟着上滑（真机 v2：上滑 375～832px）。 */
+    @Test
+    fun shortAnswerAsRunEnds() {
+        val th1 = ThinkingMessageUi("run-thinking-1-0", "Need the battery level.", isStreaming = false, elapsedSeconds = 1, collapsed = true)
+        val tool = ToolActivityMessageUi(
+            "run-tool-1-c1", "device_read", ToolActivityStatusUi.Success, "查看设备状态 · 电池",
+            resultSummary = "电量 100%（充电中）", startedAtMillis = t + 1000, finishedAtMillis = t + 1300,
+        )
+        val th2 = ThinkingMessageUi("run-thinking-2-0", "Report it.", isStreaming = false, elapsedSeconds = 1, collapsed = true)
+        val before = listOf(user, th1, tool, th2, AgentMessageUi("assistant-run-2-1", "杭州是浙江省的省会，电量 100%，正在充电。", isStreaming = false, provisional = true))
+        val after = listOf(user, th1, tool, th2, AgentMessageUi("assistant-run-2-1", "杭州是浙江省的省会，电量 100%，正在充电。", isStreaming = false, renderMarkdown = true))
+        run("run-ends", start = before, thinkingDone = before, answer = { after }, runEndsWithAnswer = true)
     }
 
     /** 带工具：执行卡里工具已完成、第二轮思考中 → 思考结束 → 最后一段开始写（先在卡里预览）。 */

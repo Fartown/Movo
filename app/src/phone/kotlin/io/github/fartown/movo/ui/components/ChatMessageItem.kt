@@ -755,13 +755,22 @@ internal fun AgentWorkProcess(
         }
         autoCollapsing = false
     }
+    // 步骤区的显隐过渡（展开 / 收起）：自己持有状态，收起进行到哪一步要报给列表（见下）。
+    val stepsVisibility = remember(id) {
+        androidx.compose.animation.core.MutableTransitionState(shownExpanded || autoCollapsing || autoCollapseStarting)
+    }
+    stepsVisibility.targetState = shownExpanded || autoCollapsing || autoCollapseStarting
+    var stepsHeight by remember(id) { androidx.compose.runtime.mutableIntStateOf(0) }
     // 回答开始、这张卡收成摘要条：告诉列表正在收起，紧跟的回答等收完（剩不到 2dp）再在最终位置出现（[LocalEntrySettling]）。
-    // 不自动收起时（手动展开过、减少动画等）直接报已收完，回答不必等。
+    // 两条收起路径都要报：执行中由下面逐帧驱动（autoCollapsing）；最后一段移出与任务结束落在同一帧时不算执行中，
+    // 走步骤区的普通收起过渡（10-07 真机 v2：这种情况回答照样跟着上滑 375～832px）。不收起时直接报已收完，回答不必等。
     val settlingEntries = LocalEntrySettling.current
     if (settlingEntries != null && answerStarted) {
         val settledPx = with(androidx.compose.ui.platform.LocalDensity.current) { 2.dp.toPx() }
         val farFromCollapsed by remember { androidx.compose.runtime.derivedStateOf { footerCollapse.value > settledPx } }
-        val collapsing = autoCollapseStarting || (autoCollapsing && (!footerCollapsing || farFromCollapsed))
+        val stepsTall by remember { androidx.compose.runtime.derivedStateOf { stepsHeight > settledPx } }
+        val stepsShrinking = !stepsVisibility.targetState && (stepsVisibility.currentState || !stepsVisibility.isIdle) && stepsTall
+        val collapsing = autoCollapseStarting || (autoCollapsing && (!footerCollapsing || farFromCollapsed)) || stepsShrinking
         androidx.compose.runtime.SideEffect { settlingEntries[id] = collapsing }
     }
     if (settlingEntries != null) androidx.compose.runtime.DisposableEffect(id) { onDispose { settlingEntries.remove(id) } }
@@ -955,9 +964,10 @@ internal fun AgentWorkProcess(
 
         // 展开：高度 `standard`，内容与高度同时开始淡入 `fast`（不等待，第一帧就有内容）（规范 9.3「展开 / 收起」）。
         AnimatedVisibility(
-            visible = shownExpanded || autoCollapsing || autoCollapseStarting,
+            visibleState = stepsVisibility,
             modifier = Modifier
                 .trackVisibleHeightCap(stepsCap)
+                .onSizeChanged { stepsHeight = it.height }
                 // 刚从「已思考」一行换成卡片：步骤区已在场，由 grow 从 0 长到全高（见上）。
                 .graphicsLayer {
                     clip = grow.value < 1f
