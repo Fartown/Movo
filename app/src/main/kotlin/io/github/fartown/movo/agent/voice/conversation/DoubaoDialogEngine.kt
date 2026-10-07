@@ -90,6 +90,8 @@ internal class DoubaoDialogEngine(
     private var pausedAt = 0L
     private var inputMutedUntil = 0L
     private var mediaHasAudioFocus = false
+    /** 压低模式下是否还握着焦点：播放应用拿走后，回答前重新申请，让节目在回答期间压低。 */
+    private var focusHeld = false
     private val inputActivity = VoiceInputActivity()
 
     fun start(credentials: DoubaoSpeechCredentials) = execute {
@@ -111,18 +113,25 @@ internal class DoubaoDialogEngine(
             .setOnAudioFocusChangeListener({ change ->
                 if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
                     execute {
-                        if (input?.yieldToMediaPlayback == true) {
-                            mediaHasAudioFocus = true
-                            emit { onMediaPlaybackStarted() }
-                        } else fail("语音对话被来电或其他音频中断，请点麦克风继续")
+                        when {
+                            // 能消掉节目声的输入：播放应用拿走焦点（任务里开始放视频等）后照常收音，
+                            // 不静音、不结束会话（10-07 实测：静音后任务进行中说什么都听不到）。
+                            duck -> { focusHeld = false; log("audio.focus_lost", mapOf("change" to change)) }
+                            input?.yieldToMediaPlayback == true -> {
+                                mediaHasAudioFocus = true
+                                emit { onMediaPlaybackStarted() }
+                            }
+                            else -> fail("语音对话被来电或其他音频中断，请点麦克风继续")
+                        }
                     }
                 } else if (change == AudioManager.AUDIOFOCUS_GAIN) {
-                    execute { mediaHasAudioFocus = false }
+                    execute { mediaHasAudioFocus = false; focusHeld = true }
                 }
             }, main).build()
         check(audio.requestAudioFocus(focus!!) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
             "暂时无法使用声音，请结束其他通话后重试"
         }
+        focusHeld = true
         synchronized(environmentLock) {
             if (!environmentPrepared) {
                 SpeechEngineGenerator.PrepareEnvironment(app, app as Application)
@@ -309,6 +318,12 @@ internal class DoubaoDialogEngine(
         if (mediaHasAudioFocus) {
             fail(MEDIA_HANDOFF_NOTICE)
             return@execute
+        }
+        // 压低模式：焦点被播放应用拿走过，回答前重新申请，节目在回答期间压低。
+        if (input?.duckMediaDuringSession == true && !focusHeld) {
+            focusHeld = focus?.let { app.getSystemService(AudioManager::class.java).requestAudioFocus(it) } ==
+                AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            log("audio.focus_again", mapOf("granted" to focusHeld))
         }
         outputTurn = id
         outputReplyId = ""
