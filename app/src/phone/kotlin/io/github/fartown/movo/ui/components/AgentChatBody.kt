@@ -111,6 +111,7 @@ import io.github.fartown.movo.ui.model.latestContextUsage
 import io.github.fartown.movo.ui.screens.chat.ChatLatestPositionRequests
 import kotlin.math.exp
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
@@ -204,7 +205,7 @@ internal fun AgentChatBody(
     val timelineMessages = remember(messages, isStreaming) {
         messages.filterNot { message ->
             message is AgentMessageUi && message.content.isBlank()
-        }.let(::markLegacyNarration).let { AgentFollowUpSuggestions.visible(it, isStreaming) }
+        }.let { AgentFollowUpSuggestions.visible(it, isStreaming) }
     }
     val editHiddenIds = remember(messages, editHiddenTargetId) {
         val kept = AgentConversationRevisionReducer.visibleMessagesForEdit(messages, editHiddenTargetId)
@@ -590,7 +591,12 @@ internal fun AgentConversationMessages(
     editHiddenIds: Set<String> = emptySet(),
     modifier: Modifier = Modifier,
 ) {
-    val timelineEntries = remember(visibleMessages) { visibleMessages.toTimelineEntries() }
+    // 回答写完后先照「回答完成」收尾——显现完、操作行出来、列表跟到底——再把上面的过程收成摘要条（定稿 24）：一次只动一件事。
+    // 写完立刻收的话，收起期间不跟底，回答最后几行和操作行还压在输入框后面，收完再补滚一大段（真机 10-07 P2：276px）。
+    var isBottomSettling by remember { mutableStateOf(isStreaming) }
+    val turnEndHold = remember { TurnEndHold(isStreaming) }
+    val turnLive = turnEndHold.live(isStreaming, isBottomSettling, keepBottomAnchored)
+    val timelineEntries = remember(visibleMessages, turnLive) { visibleMessages.toTimelineEntries(turnLive) }
     // 任务进行中有条目被移除（如「模型请求重试」提示在重试成功后去掉）：按它上一帧的高度在末尾补留白，
     // 列表停在底部时不会往回退、露出上一轮（真机 reserve：一次性下跳 183px 再滚回）。只在组合里写留白，排版阶段才读。
     val lastEntryKeys = remember { arrayOf<Set<Any>>(emptySet()) }
@@ -607,10 +613,55 @@ internal fun AgentConversationMessages(
         keys
     }
     val lastWorkKey = timelineEntries.lastOrNull { it is AgentTimelineEntry.WorkProcess }?.key
-    // 上方条目正在收起（「已思考」一行的预览、任务结束时收成摘要条的执行卡），按条目 key 记录；紧跟其后的回答等它收完再出现。
-    val entrySettling = remember { androidx.compose.runtime.mutableStateMapOf<String, Boolean>() }
-    val previousEntryKeys = remember(timelineEntries) {
-        timelineEntries.zipWithNext().associate { (previous, entry) -> entry.key to previous.key }
+    // 一轮结束后，回答上方的过程收成摘要条（定稿 24）。点开过的轮次按摘要条 key 记，同一会话里保持。
+    val expandedTurns = androidx.compose.runtime.saveable.rememberSaveable(
+        saver = androidx.compose.runtime.saveable.listSaver(
+            save = { it.toList() },
+            restore = { androidx.compose.runtime.mutableStateListOf<String>().apply { addAll(it) } },
+        ),
+    ) { androidx.compose.runtime.mutableStateListOf<String>() }
+    // 用户点过摘要条的轮次：之后再收起以摘要条为锚（往上收），不再做结束那一下「以回答为锚」的收起。
+    val userToggledTurns = remember { HashSet<String>() }
+    // 这次界面里新出现的摘要条（同一会话里刚结束的一轮）：等上面的内容淡完再淡入。
+    // 载入历史、切换会话时整批出现的不算，直接显示。
+    val seenEntryKeys = remember { HashSet<Any>() }
+    val freshSummaryKeys = remember(timelineEntries) {
+        val keys = timelineEntries.map { it.key }
+        val sameConversation = seenEntryKeys.isNotEmpty() && keys.any { it in seenEntryKeys }
+        val fresh: Set<String> = if (!sameConversation) emptySet() else timelineEntries
+            .filter { it is AgentTimelineEntry.TurnSummary && it.key !in seenEntryKeys }
+            .mapTo(HashSet()) { it.key }
+        seenEntryKeys.clear()
+        seenEntryKeys.addAll(keys)
+        fresh
+    }
+    // 仍在进行的这一轮里的执行卡：卡尾的起止时间与「日志」「收起」一行等这一轮结束再出现，执行中不在卡尾插一行把下面的正文推下去。
+    val activeTurnWorkKeys = remember(timelineEntries, turnLive) {
+        if (turnLive) currentTurnWorkKeys(timelineEntries) else emptySet()
+    }
+    val viewport = remember { ChatViewport() }
+    val foldActivity = remember { ChatFoldActivity() }
+    // 看着一轮结束：列表层统一驱动这一轮的收起（[TurnFoldMotion]），不跟着某一条的组合走。
+    val turnFolds = remember { ChatTurnFolds() }
+    val startedFolds = remember { HashSet<String>() }
+    val foldScope = rememberCoroutineScope()
+    val foldReducedMotion = io.github.fartown.movo.ui.theme.LocalReducedMotion.current
+    androidx.compose.runtime.SideEffect {
+        if (foldReducedMotion) return@SideEffect
+        freshSummaryKeys.forEach { key ->
+            val answerKey = (timelineEntries.firstOrNull { it.key == key } as? AgentTimelineEntry.TurnSummary)?.anchorKey ?: return@forEach
+            // 钉住的那条下面也要收起的条目（停止时最后一段卡在留下的那句话下面）。
+            val anchorIndex = timelineEntries.indexOfFirst { it.key == answerKey }
+            val belowKeys = timelineEntries.drop(anchorIndex + 1).filter { it.foldGroup == key }.mapTo(HashSet<Any>()) { it.key }
+            val motion = turnFolds.begin(key, startedFolds) ?: return@forEach
+            foldScope.launch {
+                try {
+                    foldActivity.during { motion.play(scrollState, answerKey, belowKeys, bottomReserve) }
+                } finally {
+                    turnFolds.end(key)
+                }
+            }
+        }
     }
     val workOutcomes = remember(timelineEntries) { workOutcomes(timelineEntries) }
     val workTurnSpans = remember(timelineEntries) { workTurnSpans(timelineEntries) }
@@ -684,15 +735,12 @@ internal fun AgentConversationMessages(
         }
     }
 
-    // 写在执行卡里的话（定稿 21）不按回答显现，不参与末尾显现判断。
-    val tailMessage = (visibleMessages.lastOrNull() as? AgentMessageUi)?.takeUnless { it.inWorkCard }
+    val tailMessage = visibleMessages.lastOrNull() as? AgentMessageUi
     val isTailRendering = tailMessage?.let { message ->
         streamingMarkdownStates[message.id]?.let { state ->
             state.revealedContent != message.content
         }
     } == true
-    var isBottomSettling by remember { mutableStateOf(isStreaming) }
-
     LaunchedEffect(isStreaming, isTailRendering, keepBottomAnchored, isUserDragging) {
         if (!keepBottomAnchored || isUserDragging) {
             isBottomSettling = false
@@ -702,18 +750,22 @@ internal fun AgentConversationMessages(
             // 显现完成后还会切换稳定排版并插入操作行，等其完成测量再收口跟底。
             withFrameNanos { }
             withFrameNanos { }
-            snapshotFlow { !scrollState.canScrollForward }.first { it }
+            // 一轮的收起等着它：万一到不了底（不该发生），最多等这么久，不能让过程一直不收。
+            kotlinx.coroutines.withTimeoutOrNull(BOTTOM_SETTLE_MAX_MS) {
+                snapshotFlow { !scrollState.canScrollForward }.first { it }
+            }
             isBottomSettling = false
         }
     }
 
+    // 一轮结束、过程收成摘要条的那 240ms 里不跟底：位置由收起的逐帧滚动补偿负责，跟底再滚会把回答带走（本地逐帧：多滚 106px）。
     val shouldFollowBottom by rememberUpdatedState(
         resolveBottomFollowEnabled(
             isStreaming = isStreaming || keepLatestOnResize,
             keepBottomAnchored = keepBottomAnchored,
             isUserDragging = isUserDragging,
             isBottomSettling = isBottomSettling,
-        )
+        ) && foldActivity.active == 0
     )
     // 流式输出与收尾期间：内容怎么变都跟底。
     val followsAnyGrowth by rememberUpdatedState(
@@ -728,6 +780,8 @@ internal fun AgentConversationMessages(
     val bottomFollowDecisions = remember(scrollState) {
         Channel<BottomFollowDecision>(Channel.CONFLATED)
     }
+    // 正在往底部滑（还没到）：期间列表因为这次滑动本身发生的变化，不能当成「不该跟」把剩下的距离取消。
+    val followGliding = remember(scrollState) { booleanArrayOf(false) }
 
     LaunchedEffect(
         bottomItemIndex,
@@ -778,8 +832,14 @@ internal fun AgentConversationMessages(
             .collect { layout ->
                 // 只为「保持最新」（对话浮层、打开已有对话）跟底时，不是什么变化都跟：用户点开上面的执行卡、思考，
                 // 回答被整体往下推，跟底会把刚展开的内容滚到顶栏后面（真机：展开执行卡跳一下、卡片上半截被裁掉）。
+                // 正在滑的这一段也照常更新目标：「保持最新」时末尾新加一条（如推荐问题）开始滑，下一帧最后一条只是被滑上去
+                // （没变高），不算「该跟」的变化，原来会把剩下的距离清零——推荐问题一帧跳 36px 就停、下半截压在输入框后面
+                // （真机 10-07 第 2 轮 I2）。
+                // 跟底刚从暂停里恢复（一轮结束合并的那 240ms 不跟底）：重新看一次。暂停期间末尾新加的条目（如推荐问题）
+                // 那次跟底已经被丢掉，不补的话它就一直压在输入框后面。
+                val resumed = layout.enabled && previousFollowLayout?.enabled == false
                 val enabled = layout.enabled && (
-                    layout.followsAnyGrowth ||
+                    layout.followsAnyGrowth || followGliding[0] || resumed ||
                         followsLatestOnLayoutChange(previousFollowLayout?.viewportEnd, layout.viewportEnd, previousFollowLayout?.tail, layout.tail)
                     )
                 previousFollowLayout = layout
@@ -805,6 +865,7 @@ internal fun AgentConversationMessages(
         fun accept(decision: BottomFollowDecision) {
             remainingDistancePx = decision.scrollByPx.toFloat()
             requestIndex = decision.requestIndex
+            followGliding[0] = remainingDistancePx > 0f
         }
 
         while (currentCoroutineContext().isActive) {
@@ -820,6 +881,7 @@ internal fun AgentConversationMessages(
             if (!shouldFollowBottom) {
                 remainingDistancePx = 0f
                 requestIndex = null
+                followGliding[0] = false
                 continue
             }
 
@@ -829,16 +891,19 @@ internal fun AgentConversationMessages(
                 scrollState.requestScrollToItem(targetIndex)
                 requestIndex = null
                 remainingDistancePx = 0f
+                followGliding[0] = false
                 return@let
             }
             if (remainingDistancePx <= 0f) continue
 
             val frameNanos = withFrameNanos { it }
-            val elapsedSeconds = if (previousFrameNanos == 0L) {
-                1f / 60f
-            } else {
-                ((frameNanos - previousFrameNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
+            // 起步那一帧只记时间，从下一帧起按实际帧间隔走：按 1/60 秒估的话，120Hz 屏上第一步是后面每步的两倍
+            // （真机 10-07 第 3 轮：推荐问题滑上来时先跳 40px）。
+            if (previousFrameNanos == 0L) {
+                previousFrameNanos = frameNanos
+                continue
             }
+            val elapsedSeconds = ((frameNanos - previousFrameNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
             previousFrameNanos = frameNanos
 
             while (true) {
@@ -867,6 +932,7 @@ internal fun AgentConversationMessages(
                 if (!currentCoroutineContext().isActive) throw cancelled
                 remainingDistancePx = 0f
             }
+            followGliding[0] = remainingDistancePx > 0f
         }
     }
 
@@ -901,14 +967,20 @@ internal fun AgentConversationMessages(
             LocalChatListScroll provides chatListScroll,
             LocalChatBottomReserve provides bottomReserve,
             LocalMonitorRowSpacings provides monitorRowSpacings,
-            LocalEntrySettling provides entrySettling,
+            LocalChatViewport provides viewport,
+            LocalChatTurnFolds provides turnFolds,
         ) {
         LazyColumn(
             state = scrollState,
             verticalArrangement = Arrangement.Top,
             modifier = Modifier
                 .fillMaxSize()
-                .onGloballyPositioned { listBottomPx[0] = it.boundsInWindow().bottom.toInt() }
+                .onGloballyPositioned {
+                    val bounds = it.boundsInWindow()
+                    listBottomPx[0] = bounds.bottom.toInt()
+                    viewport.top = bounds.top
+                    viewport.bottom = bounds.bottom
+                }
                 .scrollEndHaptic()
                 .overScrollVertical(),
             contentPadding = PaddingValues(
@@ -917,44 +989,25 @@ internal fun AgentConversationMessages(
             ),
             overscrollEffect = null,
         ) {
-            val lastEntryKey = timelineEntries.lastOrNull()?.key
             val entryItem: @Composable androidx.compose.foundation.lazy.LazyItemScope.(AgentTimelineEntry) -> Unit = { entry ->
-                // 执行中排在最后的正文随后可能被收进执行卡成为说明（模型接着调工具，定稿 21）：它离场时淡出 120ms，不硬切。
-                val absorbable = isStreaming && entry.key == lastEntryKey &&
-                    (entry as? AgentTimelineEntry.Message)?.message is AgentMessageUi
                 val itemModifier = Modifier.animateItem(
                     fadeInSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
                     placementSpec = null,
                     // 历史轮次被编辑、删除或重新生成时必须立即退出；退出动画会让已从
                     // 状态中裁掉的旧消息继续绘制，并与同位置的新流式消息短暂重叠。
-                    fadeOutSpec = if (absorbable) io.github.fartown.movo.ui.theme.MovoMotion.fastExit() else null,
+                    fadeOutSpec = null,
                 )
+                // 属于已结束一轮的过程（定稿 24）：跟着本轮摘要条收起 / 展开。
+                val folded = entry.foldGroup != null && entry.foldGroup !in expandedTurns
+                val foldAnchoredBelow = entry.foldGroup != null && entry.foldGroup !in userToggledTurns
                 when (entry) {
                     is AgentTimelineEntry.Message -> {
                         val message = entry.message
                         // 删除 / 重新生成：内容先淡出 120ms，随后高度收起 `standard`，下方各行跟随上移（规范 9.3「列表增删」、9.4），
                         // 播完才真正改动列表，避免旧消息的退场与同位置的新流式消息重叠。
-                        // 回答紧跟的上方条目还在收起：先占位不显示，收完再在最终位置淡入，不随之上移（9.4「回答不位移」）。
-                        // 纯问答：「已思考」下的预览还在收起，回答随之上滑 22dp；带工具：任务结束时回答比执行卡早两帧出现，
-                        // 随后跟着卡片收成摘要条上滑 88～259px（10-07 真机）。执行卡要到下一帧才报「正在收起」，
-                        // 所以回答出现时上方是刚被这条回答收尾的执行卡、执行卡还没报状态，也先等着；最多等 2 个 `standard`。
-                        val previousKey = previousEntryKeys[entry.key]
-                        val expectAboveCollapse = remember(entry.key) {
-                            isStreaming && message is AgentMessageUi && previousKey != null && previousKey in answeredWorkKeys
-                        }
-                        var aboveWaitOver by remember(entry.key) { mutableStateOf(false) }
-                        if (expectAboveCollapse) {
-                            LaunchedEffect(entry.key) {
-                                kotlinx.coroutines.delay(io.github.fartown.movo.ui.theme.MovoMotion.STANDARD * 2L)
-                                aboveWaitOver = true
-                            }
-                        }
-                        val aboveState = previousKey?.let { entrySettling[it] }
-                        val holdBehindPreview = message is AgentMessageUi &&
-                            (aboveState == true || (expectAboveCollapse && aboveState == null && !aboveWaitOver))
                         EditHiddenItem(hidden = message.id in editHiddenIds, modifier = itemModifier) {
+                          FoldableEntry(entryKey = entry.key, folded = folded, anchoredBelow = foldAnchoredBelow, foldGroup = entry.foldGroup) {
                             LeavingItem(leaving = message.id in LocalLeavingMessages.current) {
-                              RevealAfterHold(hold = holdBehindPreview) {
                                 ChatMessageItem(
                                     message = message,
                                     retainedStreamingState = (message as? AgentMessageUi)
@@ -984,15 +1037,14 @@ internal fun AgentConversationMessages(
                                     noticeActive = message.id == activeNoticeId,
                                     stoppedWithoutWork = message.id in stoppedWithoutWork,
                                 )
-                              }
                             }
+                          }
                         }
                     }
 
                     is AgentTimelineEntry.WorkProcess -> {
                         entry.messages.forEach { message ->
-                            // 卡里正在写的那段（定稿 21）也由列表持有解析会话：任务结束它移出卡片成为回答时，直接用解析好的结果，不先露原文（真机）。
-                            if (message is ThinkingMessageUi && message.isStreaming || message is AgentMessageUi && message.provisional) {
+                            if (message is ThinkingMessageUi && message.isStreaming) {
                                 streamingMarkdownStates.getOrPut(message.id) {
                                     StreamingMarkdownState()
                                 }
@@ -1002,6 +1054,7 @@ internal fun AgentConversationMessages(
                             hidden = editHiddenIds.isNotEmpty() && entry.messages.all { it.id in editHiddenIds },
                             modifier = itemModifier,
                         ) {
+                          FoldableEntry(entryKey = entry.key, folded = folded, anchoredBelow = foldAnchoredBelow, foldGroup = entry.foldGroup) {
                             AgentWorkProcess(
                                 id = entry.key,
                                 messages = entry.messages,
@@ -1012,6 +1065,8 @@ internal fun AgentConversationMessages(
                                 stepOffset = workStepOffsets[entry.key] ?: 0,
                                 outcome = workOutcomes[entry.key],
                                 turnSpan = workTurnSpans[entry.key],
+                                turnActive = entry.key in activeTurnWorkKeys,
+                                inFoldedTurn = folded,
                                 onOpenBrowser = onOpenBrowser,
                                 currentBrowserMessageId = currentBrowserMessageId,
                                 retainedStreamingStates = streamingMarkdownStates,
@@ -1019,7 +1074,21 @@ internal fun AgentConversationMessages(
                                 onEditMessage = onEditMessage,
                                 onDeleteMessage = onDeleteMessage,
                             )
+                          }
                         }
+                    }
+
+                    is AgentTimelineEntry.TurnSummary -> {
+                        TurnSummaryBar(
+                            summary = entry,
+                            expanded = entry.key in expandedTurns,
+                            appearAfterFold = entry.key in freshSummaryKeys,
+                            onToggle = {
+                                userToggledTurns += entry.key
+                                if (entry.key in expandedTurns) expandedTurns.remove(entry.key) else expandedTurns.add(entry.key)
+                            },
+                            modifier = itemModifier,
+                        )
                     }
                 }
             }
@@ -1171,6 +1240,25 @@ internal fun resolveBottomFollowDecision(
     }
 }
 
+/**
+ * 一轮还算不算在进行（决定收不收成摘要条，定稿 24）：运行中算；运行结束后，等用户在底部（跟着最新内容）、照「回答完成」
+ * 收尾（跟底、显现）完才收起——看着它结束才合并。用户往上滑开时结束，先不合并：这时回答不在眼前，收起只会把正在看的
+ * 内容推来推去（真机 10-07 第 3c 轮 N5：先往下、再往上），等回到底部再合并。
+ * 只等这一次：收起之后，除非开始新一轮运行，什么都不让它再展开（第 3 轮 N1：收起后又闪回展开、再收一次）。
+ * 在组合里按输入推导，同样的输入结果相同。
+ */
+internal class TurnEndHold(streaming: Boolean) {
+    private var holding = streaming
+
+    fun live(isStreaming: Boolean, isSettling: Boolean, isAnchored: Boolean): Boolean {
+        if (isStreaming) holding = true else if (isAnchored && !isSettling) holding = false
+        return isStreaming || holding
+    }
+}
+
+/** 回答写完后跟底收尾最多等多久（之后本轮过程收成摘要条）。 */
+private const val BOTTOM_SETTLE_MAX_MS = 1_500L
+
 internal fun smoothBottomFollowStep(
     distancePx: Float,
     elapsedSeconds: Float,
@@ -1200,6 +1288,7 @@ internal fun workStepOffsets(entries: List<AgentTimelineEntry>): Map<String, Int
                 offsets[entry.key] = steps
                 steps += entry.messages.count { it is ToolActivityMessageUi }
             }
+            is AgentTimelineEntry.TurnSummary -> Unit
         }
     }
     return offsets
@@ -1222,6 +1311,7 @@ internal fun currentTurnCompletedSteps(entries: List<AgentTimelineEntry>): Int {
 internal fun timelineContentType(entry: AgentTimelineEntry): Any = when (entry) {
     is AgentTimelineEntry.Message -> entry.message::class
     is AgentTimelineEntry.WorkProcess -> AgentTimelineEntry.WorkProcess::class
+    is AgentTimelineEntry.TurnSummary -> AgentTimelineEntry.TurnSummary::class
 }
 
 /** 每一轮（用户消息或唤醒事件之后）的最后一张执行卡。 */
@@ -1235,6 +1325,7 @@ internal fun lastWorkKeysPerTurn(entries: List<AgentTimelineEntry>): Set<String>
                 last = null
             }
             is AgentTimelineEntry.WorkProcess -> last = entry.key
+            is AgentTimelineEntry.TurnSummary -> Unit
         }
     }
     last?.let(keys::add)
@@ -1299,6 +1390,7 @@ internal fun workOutcomes(entries: List<AgentTimelineEntry>): Map<String, WorkOu
                 }
                 else -> Unit
             }
+            is AgentTimelineEntry.TurnSummary -> Unit
         }
     }
     return outcomes
@@ -1325,6 +1417,7 @@ internal fun workTurnSpans(entries: List<AgentTimelineEntry>): Map<String, WorkT
                     span = message.runStartedAtMillis?.let { WorkTurnSpan(it, message.runFinishedAtMillis) }
                 }
             }
+            is AgentTimelineEntry.TurnSummary -> Unit
         }
     }
     return spans
@@ -1342,6 +1435,7 @@ internal fun stoppedNoticesWithoutWork(entries: List<AgentTimelineEntry>): Set<S
                 is SystemNoticeMessageUi -> if (message.code == SystemNoticeCode.Stopped && !turnHasWork) result += message.id
                 else -> Unit
             }
+            is AgentTimelineEntry.TurnSummary -> Unit
         }
     }
     return result
@@ -1350,8 +1444,12 @@ internal fun stoppedNoticesWithoutWork(entries: List<AgentTimelineEntry>): Set<S
 internal sealed interface AgentTimelineEntry {
     val key: String
 
+    /** 属于一轮已结束的过程（最终回答上方的卡片、中间说的话、补充、提示）：本轮摘要条的 key，跟着它收起 / 展开（定稿 24）。 */
+    val foldGroup: String? get() = null
+
     data class Message(
         val message: AgentChatMessageUi,
+        override val foldGroup: String? = null,
     ) : AgentTimelineEntry {
         override val key: String = message.id
     }
@@ -1359,10 +1457,38 @@ internal sealed interface AgentTimelineEntry {
     data class WorkProcess(
         override val key: String,
         val messages: List<AgentChatMessageUi>,
+        override val foldGroup: String? = null,
+    ) : AgentTimelineEntry
+
+    /**
+     * 一轮结束后，最终回答上方的过程收成的一行（定稿 24），排在这一轮开头那条消息后面。
+     * [toolCount] 为 0 时写「已思考 N 秒」，否则「已完成 N 个步骤 · 用时」。
+     */
+    data class TurnSummary(
+        override val key: String,
+        val toolCount: Int,
+        /** 收起的过程里有思考：没有工具时摘要条写「已思考（N 秒）」，与收起前卡头一致。 */
+        val hasThinking: Boolean,
+        val thinkingSeconds: Int,
+        val span: WorkTurnSpan?,
+        val toolStartedAt: Long?,
+        val toolFinishedAt: Long?,
+        /** 这一轮怎么结束的：停止 / 没完成；正常完成为 null。 */
+        val ending: WorkOutcome.Kind? = null,
+        /** 收起时钉住不动的那一条（留下的那段正文，或收起部分后面的第一条）。 */
+        val anchorKey: Any? = null,
     ) : AgentTimelineEntry
 }
 
-internal fun List<AgentChatMessageUi>.toTimelineEntries(): List<AgentTimelineEntry> = buildList {
+/**
+ * 时间线（定稿 24）：思考与工具按出现顺序连成一段执行卡，模型说的话各自一条、一律在卡外；执行中只往后追加，
+ * 已有条目的 key 与所属都不变。一轮结束、最后一条是正文时，它就是最终回答，上方的过程跟着本轮摘要条收起
+ * （仍在时间线上，只标 [AgentTimelineEntry.foldGroup]）。[isStreaming] 时最后一轮还没结束，不收。
+ */
+internal fun List<AgentChatMessageUi>.toTimelineEntries(isStreaming: Boolean = false): List<AgentTimelineEntry> =
+    foldFinishedTurns(groupTimelineEntries(), isStreaming)
+
+private fun List<AgentChatMessageUi>.groupTimelineEntries(): List<AgentTimelineEntry> = buildList {
     val workMessages = mutableListOf<AgentChatMessageUi>()
 
     fun flushWorkProcess() {
@@ -1376,7 +1502,7 @@ internal fun List<AgentChatMessageUi>.toTimelineEntries(): List<AgentTimelineEnt
         workMessages.clear()
     }
 
-    arrangeTurnsForTimeline(this@toTimelineEntries).forEach { message ->
+    arrangeTurnsForTimeline(this@groupTimelineEntries).forEach { message ->
         // 执行中的补充紧跟在工作过程之后时，作为「你的补充」步骤留在同一张执行卡里（规范 8.1、8.4）。
         if (message.isWorkProcessMessage() || (message.isRunSupplement() && workMessages.isNotEmpty())) {
             workMessages += message
@@ -1386,6 +1512,112 @@ internal fun List<AgentChatMessageUi>.toTimelineEntries(): List<AgentTimelineEnt
         }
     }
     flushWorkProcess()
+}
+
+private fun AgentTimelineEntry.isTurnStartEntry(): Boolean =
+    this is AgentTimelineEntry.Message && message.isTurnStart()
+
+/**
+ * 每轮结束后把最终回答上方的过程标成收起，并在这一轮开头那条消息后面放摘要条。
+ * 最终回答 = 这一轮最后一条正文，它后面只能跟推荐追问。停止、失败、没有正文收尾时不收。
+ * 过程里至少要有一张执行卡或一段话，才值得收。
+ */
+internal fun foldFinishedTurns(entries: List<AgentTimelineEntry>, isStreaming: Boolean): List<AgentTimelineEntry> {
+    val starts = entries.indices.filter { entries[it].isTurnStartEntry() }
+    if (starts.isEmpty()) return entries
+    val result = ArrayList<AgentTimelineEntry>(entries.size + starts.size)
+    result.addAll(entries.subList(0, starts.first()))
+    starts.forEachIndexed { n, startIndex ->
+        val endIndex = if (n + 1 < starts.size) starts[n + 1] else entries.size
+        val start = entries[startIndex]
+        val body = entries.subList(startIndex + 1, endIndex)
+        result += start
+        if (isStreaming && n == starts.lastIndex) {
+            result.addAll(body)
+            return@forEachIndexed
+        }
+        // 结束了（完成、停止、失败都算）：只留最后一段正文，其余过程（前后各段卡、中间说的话、补充、重试提示）都收进摘要条。
+        // 结束提示（已停止、未完成的原因与「重试」）和推荐问题照常留在外面。
+        val keptIndex = body.indexOfLast { entry ->
+            val message = (entry as? AgentTimelineEntry.Message)?.message
+            message is AgentMessageUi && message.content.isNotBlank()
+        }
+        val folds = body.indices.filter { it != keptIndex && body[it].foldsAtTurnEnd() }
+        val worthFolding = folds.any { body[it] is AgentTimelineEntry.WorkProcess || (body[it] as? AgentTimelineEntry.Message)?.message is AgentMessageUi }
+        if (!worthFolding) {
+            result.addAll(body)
+            return@forEachIndexed
+        }
+        val process = folds.map { body[it] }
+        val summaryKey = "summary-${start.key}"
+        val tools = process.flatMap { (it as? AgentTimelineEntry.WorkProcess)?.messages.orEmpty() }.filterIsInstance<ToolActivityMessageUi>()
+        val thinking = process.flatMap { (it as? AgentTimelineEntry.WorkProcess)?.messages.orEmpty() }.filterIsInstance<ThinkingMessageUi>()
+        val thinkingSeconds = thinking.sumOf { it.elapsedSeconds ?: 0 }
+        val startMessage = (start as AgentTimelineEntry.Message).message
+        val span = when (startMessage) {
+            is UserMessageUi -> startMessage.runStartedAtMillis?.let { WorkTurnSpan(it, startMessage.runFinishedAtMillis) }
+            is MonitorEventMessageUi -> startMessage.runStartedAtMillis?.let { WorkTurnSpan(it, startMessage.runFinishedAtMillis) }
+            else -> null
+        }
+        val ending = body.firstNotNullOfOrNull { entry ->
+            when (((entry as? AgentTimelineEntry.Message)?.message as? SystemNoticeMessageUi)?.code) {
+                SystemNoticeCode.Stopped -> WorkOutcome.Kind.Stopped
+                SystemNoticeCode.RuntimeFailed, SystemNoticeCode.Interrupted -> WorkOutcome.Kind.Unfinished
+                else -> null
+            }
+        }
+        // 收起时钉住不动的那一条：留下的那段正文；没有正文时是收起部分后面的第一条（如「已停止」）。
+        val anchorKey = body.getOrNull(keptIndex)?.key
+            ?: body.drop(folds.last() + 1).firstOrNull { (it as? AgentTimelineEntry.Message)?.message !is SuggestionChipsMessageUi }?.key
+        result += AgentTimelineEntry.TurnSummary(
+            key = summaryKey,
+            toolCount = tools.size,
+            hasThinking = thinking.isNotEmpty(),
+            thinkingSeconds = thinkingSeconds,
+            span = span,
+            toolStartedAt = tools.mapNotNull { it.startedAtMillis }.minOrNull(),
+            toolFinishedAt = tools.mapNotNull { it.finishedAtMillis }.maxOrNull(),
+            ending = ending,
+            anchorKey = anchorKey,
+        )
+        body.forEachIndexed { index, entry ->
+            result += if (index in folds) {
+                when (entry) {
+                    is AgentTimelineEntry.Message -> entry.copy(foldGroup = summaryKey)
+                    is AgentTimelineEntry.WorkProcess -> entry.copy(foldGroup = summaryKey)
+                    is AgentTimelineEntry.TurnSummary -> entry
+                }
+            } else {
+                entry
+            }
+        }
+    }
+    return result
+}
+
+/** 一轮结束时跟着摘要条收起的条目：结束提示（停止、失败的原因与「重试」）和推荐问题不收。 */
+private fun AgentTimelineEntry.foldsAtTurnEnd(): Boolean = when (this) {
+    is AgentTimelineEntry.WorkProcess -> true
+    is AgentTimelineEntry.TurnSummary -> false
+    is AgentTimelineEntry.Message -> when (val message = message) {
+        is SuggestionChipsMessageUi -> false
+        is SystemNoticeMessageUi -> message.code !in TURN_ENDING_NOTICES
+        else -> true
+    }
+}
+
+private val TURN_ENDING_NOTICES = setOf(
+    SystemNoticeCode.Stopped,
+    SystemNoticeCode.RuntimeFailed,
+    SystemNoticeCode.Interrupted,
+    SystemNoticeCode.EmptyResult,
+)
+
+
+/** 最后一轮（最后一条用户消息或唤醒事件之后）里的执行卡。 */
+internal fun currentTurnWorkKeys(entries: List<AgentTimelineEntry>): Set<String> {
+    val start = entries.indexOfLast { it.isTurnStartEntry() }
+    return entries.drop(start + 1).filterIsInstance<AgentTimelineEntry.WorkProcess>().mapTo(HashSet()) { it.key }
 }
 
 private val RETRY_NOTICE_ID = Regex("^assistant-(.+)-retry-(\\d+)$")
@@ -1436,39 +1668,7 @@ private fun AgentChatMessageUi.isTurnEnding(): Boolean =
     )
 
 private fun AgentChatMessageUi.isWorkProcessMessage(): Boolean =
-    this is ThinkingMessageUi || this is ToolActivityMessageUi || this is ToolSummaryMessageUi ||
-        this is AgentMessageUi && inWorkCard
-
-/** 写在执行卡里的话：说明，或执行卡出现后正在写、任务结束前还不知道是不是回答的那段（定稿 21）。 */
-internal val AgentMessageUi.inWorkCard: Boolean get() = narration || provisional
-
-private val ASSISTANT_BLOCK_ID = Regex("^assistant-(.+)-(\\d+)-(\\d+)$")
-private val TOOL_STEP_ID = Regex("^(.+?)-tool-(\\d+)-")
-
-/**
- * 旧记录没有「工具前说明」标记（定稿 21 之前存的）：同一轮里后面有工具步骤的正文就是说明，按这条补上，
- * 历史记录与新记录同样分组。新记录在投影时已标好（含不显示的 tool_search 那一轮）。
- */
-internal fun markLegacyNarration(messages: List<AgentChatMessageUi>): List<AgentChatMessageUi> {
-    if (messages.none { it is AgentMessageUi && !it.narration }) return messages
-    val laterToolRounds = HashSet<String>()
-    var changed = false
-    val result = arrayOfNulls<AgentChatMessageUi>(messages.size)
-    for (index in messages.indices.reversed()) {
-        val message = messages[index]
-        if (message is ToolActivityMessageUi) {
-            TOOL_STEP_ID.find(message.id)?.let { laterToolRounds += "${it.groupValues[1]}#${it.groupValues[2]}" }
-        }
-        result[index] = if (message is AgentMessageUi && !message.narration) {
-            val block = ASSISTANT_BLOCK_ID.find(message.id)
-            if (block != null && "${block.groupValues[1]}#${block.groupValues[2]}" in laterToolRounds) {
-                changed = true
-                message.copy(narration = true)
-            } else message
-        } else message
-    }
-    return if (changed) result.map { it!! } else messages
-}
+    this is ThinkingMessageUi || this is ToolActivityMessageUi || this is ToolSummaryMessageUi
 
 /**
  * 一轮对话（两条用户消息之间）里最后一条 Agent 正文视为最终结果，其余为中间步骤。
@@ -1491,7 +1691,7 @@ internal fun resolveFinalResultMessageIds(
                 lastAgentMessageId?.let(ids::add)
                 lastAgentMessageId = null
             }
-            is AgentMessageUi -> if (!message.inWorkCard) lastAgentMessageId = message.id
+            is AgentMessageUi -> lastAgentMessageId = message.id
             else -> Unit
         }
     }
@@ -1755,25 +1955,189 @@ internal class ChatBottomReserve {
 
 internal val LocalChatBottomReserve = androidx.compose.runtime.staticCompositionLocalOf<ChatBottomReserve?> { null }
 
-/**
- * 条目是否正在收起（true 收起中 / false 已收完 / 没有记录 = 还没报）：「已思考」一行的预览（[ThinkingOnlyRow]）、
- * 任务结束收成摘要条的执行卡（[AgentWorkProcess]）写入，列表据此让紧跟的回答等它收完再出现。
- */
-internal val LocalEntrySettling =
-    androidx.compose.runtime.staticCompositionLocalOf<MutableMap<String, Boolean>?> { null }
+/** 对话列表在窗口里的上下沿（排版后更新，不是状态）：判断一条是否在屏幕上。 */
+internal class ChatViewport {
+    var top = Float.NaN
+    var bottom = Float.NaN
+}
+
+internal val LocalChatViewport = androidx.compose.runtime.staticCompositionLocalOf<ChatViewport?> { null }
+
+/** 正在播「一轮结束收起」的个数（定稿 24）：大于 0 时列表不跟底，回答由 [TurnFoldMotion] 钉住。 */
+@androidx.compose.runtime.Stable
+internal class ChatFoldActivity {
+    var active by androidx.compose.runtime.mutableIntStateOf(0)
+
+    suspend fun <T> during(block: suspend () -> T): T {
+        active++
+        try {
+            return block()
+        } finally {
+            active--
+        }
+    }
+}
 
 /**
- * 首次出现时被挡着（[hold]）就先不显示、照常占位；放开后在原位淡入 `fast`。首次出现时没被挡着则不起作用，
- * 已经显示的内容不会因为之后的 hold 再隐藏。
+ * 跟着本轮摘要条收起的过程条目（定稿 24）。首次组合就是收起的（载入历史、切会话回来）直接不显示，不播动画。
+ * - 看着这一轮结束（[anchoredBelow]）：由本轮的 [TurnFoldMotion] 统一驱动——以底边为锚收起，高度 `standard` 收到 0，
+ *   上沿往下走，收掉的部分裁掉；透明度跟着高度走，收掉六成时淡完（摘要条从长到四成开始显现，两边交叠一小段）。
+ *   不按时间单独淡出：`fastExit` 前慢后快，高度却前快后慢，卡片收成一条时还没淡完，露出几帧没有字的白条（真机 10-07 P5）。
+ *   回答不动由 [TurnFoldMotion] 负责（每帧把回答钉在原位置），这里只管自己的高度和透明度。
+ * - 点摘要条收起 / 展开：以摘要条为锚，从上往下收 / 长，不补偿。
+ * - 收起时不在屏幕上的条目一次到位：列表保持看得见的内容不动。
  */
 @Composable
-private fun RevealAfterHold(hold: Boolean, content: @Composable () -> Unit) {
-    val alpha = remember { androidx.compose.animation.core.Animatable(if (hold) 0f else 1f) }
-    LaunchedEffect(hold) {
-        if (!hold && alpha.value < 1f) alpha.animateTo(1f, io.github.fartown.movo.ui.theme.MovoMotion.fast())
+private fun FoldableEntry(entryKey: Any, folded: Boolean, anchoredBelow: Boolean, foldGroup: String?, content: @Composable () -> Unit) {
+    val reduced = io.github.fartown.movo.ui.theme.LocalReducedMotion.current
+    val shown = remember { androidx.compose.animation.core.Animatable(if (folded) 0f else 1f) }
+    val alpha = remember { androidx.compose.animation.core.Animatable(if (folded) 0f else 1f) }
+    val viewport = LocalChatViewport.current
+    val turnFolds = LocalChatTurnFolds.current
+    val bounds = remember { floatArrayOf(Float.NaN, Float.NaN) }
+    val fullHeight = remember { intArrayOf(0) }
+    // 正在跟着这一轮的结束收起：高度、透明度按它的进度算。
+    var driven by remember { mutableStateOf<TurnFoldMotion?>(null) }
+    LaunchedEffect(folded) {
+        driven?.let { motion ->
+            // 收到一半被点开：从当前高度接着长回来。
+            shown.snapTo(1f - motion.progress.value)
+            alpha.snapTo(foldContentAlpha(shown.value))
+            driven = null
+        }
+        val target = if (folded) 0f else 1f
+        if (shown.value == target && !shown.isRunning) return@LaunchedEffect
+        if (reduced) {
+            shown.snapTo(target)
+            alpha.snapTo(target)
+            return@LaunchedEffect
+        }
+        if (folded) {
+            val onScreen = viewport != null && !bounds[0].isNaN() && bounds[1] > viewport.top && bounds[0] < viewport.bottom
+            val motion = foldGroup?.takeIf { anchoredBelow }?.let { turnFolds?.playing(it) }
+            if (!onScreen || anchoredBelow && motion == null) {
+                shown.snapTo(0f)
+                alpha.snapTo(0f)
+                return@LaunchedEffect
+            }
+            if (motion != null) {
+                motion.heights[entryKey] = fullHeight[0]
+                driven = motion
+                snapshotFlow { motion.progress.value >= 1f }.first { it }
+                shown.snapTo(0f)
+                alpha.snapTo(0f)
+                driven = null
+                return@LaunchedEffect
+            }
+            kotlinx.coroutines.coroutineScope {
+                launch { alpha.animateTo(0f, io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) }
+                shown.animateTo(0f, io.github.fartown.movo.ui.theme.MovoMotion.standard())
+            }
+        } else {
+            kotlinx.coroutines.coroutineScope {
+                launch { alpha.animateTo(1f, io.github.fartown.movo.ui.theme.MovoMotion.fast()) }
+                shown.animateTo(1f, io.github.fartown.movo.ui.theme.MovoMotion.standard())
+            }
+        }
     }
-    Box(Modifier.graphicsLayer { this.alpha = alpha.value }) { content() }
+    val hidden by remember { derivedStateOf { driven == null && shown.value == 0f } }
+    if (folded && hidden) return
+    Box(
+        Modifier
+            .onGloballyPositioned { coordinates ->
+                val rect = coordinates.boundsInWindow()
+                bounds[0] = rect.top
+                bounds[1] = rect.bottom
+            }
+            .graphicsLayer {
+                val motion = driven
+                clip = motion != null || shown.value < 1f
+                this.alpha = if (motion != null) foldContentAlpha(1f - motion.progress.value) else alpha.value
+            }
+            .layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints)
+                fullHeight[0] = placeable.height
+                val motion = driven
+                if (motion != null) {
+                    motion.heights[entryKey] = placeable.height
+                    val height = foldingHeight(placeable.height, motion.progress.value)
+                    // 贴底：上沿往下走，收掉的是上面那部分。
+                    layout(placeable.width, height) { placeable.place(0, height - placeable.height) }
+                } else {
+                    val height = (placeable.height * shown.value).roundToInt()
+                    layout(placeable.width, height) { placeable.place(0, 0) }
+                }
+            },
+    ) { content() }
 }
+
+/** 结束收起进度为 [progress] 时过程条目的排版高度（整数，补偿按同一取整算）。 */
+internal fun foldingHeight(full: Int, progress: Float): Int = (full * (1f - progress)).roundToInt()
+
+/** 结束收起进度为 [progress] 时摘要条的排版高度。 */
+internal fun summaryGrowHeight(full: Int, progress: Float): Int = (full * progress).roundToInt()
+
+/**
+ * 一轮结束时「过程收成摘要条」的那一下（定稿 24）：摘要条长高、上面各条收起都按同一个进度走（`standard`），
+ * 由列表层一个协程驱动——摘要条可能已滚出屏幕、不在组合里，不能靠它驱动。
+ * 每帧请求列表把最终回答放在上一帧的位置（`requestScrollToItem(回答, −偏移)`），列表从回答往上按新的高度排：
+ * 上面还有内容可以往下补（对话长、已经滚动过）时回答一像素不动；补到第一条、到顶了，列表照常从顶部排，回答跟着
+ * 收起往上走，不在上方留空白（定稿 24-11 修订：内容短时用户消息留在顶部，回答跟着上移）。
+ * 不用逐帧滚动补偿：补偿时列表按旧高度重排、摘要条却在之后才长高，以上面的条目为锚多出来的高度会把回答往下推
+ * （本地逐帧：+41px）。
+ */
+@androidx.compose.runtime.Stable
+internal class TurnFoldMotion {
+    val progress = androidx.compose.animation.core.Animatable(0f)
+    /** 跟着这一轮收起的条目的完整高度（按条目 key，排版时写入）。 */
+    val heights = HashMap<Any, Int>()
+
+    /**
+     * [belowKeys]：钉住的那条下面也要收起的条目（停止时最后一段卡在留下的那句话下面）。列表停在底部时它们变矮，
+     * 列表只能整体往下补，钉住的那句话会被带下去（真机 10-07 第 4 轮：先往下掉 130～264px 再往上收）；
+     * 每帧把它们收掉的高度补到列表末尾的留白（[ChatBottomReserve]），那句话不动，下面的「已停止」往上靠。
+     */
+    suspend fun play(list: LazyListState, answerKey: Any, belowKeys: Set<Any>, bottomReserve: ChatBottomReserve) {
+        var previous = 0f
+        progress.animateTo(1f, io.github.fartown.movo.ui.theme.MovoMotion.standard()) {
+            val now = value
+            var shrunkBelow = 0
+            belowKeys.forEach { key -> heights[key]?.let { full -> shrunkBelow += foldingHeight(full, previous) - foldingHeight(full, now) } }
+            previous = now
+            if (shrunkBelow > 0) bottomReserve.px += shrunkBelow
+            val answer = list.layoutInfo.visibleItemsInfo.firstOrNull { it.key == answerKey }
+            if (answer != null && !list.isScrollInProgress) list.requestScrollToItem(answer.index, -answer.offset)
+        }
+    }
+}
+
+/** 本次界面里正在播的「一轮结束收起」，按摘要条 key 记。 */
+internal class ChatTurnFolds {
+    private val motions = HashMap<String, TurnFoldMotion>()
+
+    fun playing(key: String): TurnFoldMotion? = motions[key]
+
+    /** 第一次看到这一轮结束时登记；已登记过（正在播或播过）返回 null。 */
+    fun begin(key: String, started: MutableSet<String>): TurnFoldMotion? {
+        if (!started.add(key)) return null
+        return TurnFoldMotion().also { motions[key] = it }
+    }
+
+    fun end(key: String) {
+        motions.remove(key)
+    }
+}
+
+internal val LocalChatTurnFolds = androidx.compose.runtime.staticCompositionLocalOf<ChatTurnFolds?> { null }
+
+/** 结束收起时过程条目的透明度：随高度走，收掉六成时淡完。 */
+internal fun foldContentAlpha(shown: Float): Float = ((shown - 0.4f) / 0.6f).coerceIn(0f, 1f)
+
+/**
+ * 结束收起时摘要条的透明度：长到四成开始显现，和上面内容淡完交叠一小段——正好在一半处交接的话那一帧两边都透明，
+ * 中间空一下（本地逐帧）。两者位置不重合，不会叠字。
+ */
+internal fun summaryAppearAlpha(grown: Float): Float = ((grown - 0.4f) / 0.6f).coerceIn(0f, 1f)
 
 /** 直接滚动对话列表（像素，正数向后）：执行卡从末尾收起时逐帧补偿高度变化，见 [AgentWorkProcess]。 */
 internal val LocalChatListScroll = androidx.compose.runtime.staticCompositionLocalOf<((Float) -> Float)?> { null }

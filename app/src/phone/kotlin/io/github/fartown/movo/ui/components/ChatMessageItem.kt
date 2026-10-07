@@ -431,9 +431,7 @@ internal fun ChatMessageItem(
             onDelete = { onDeleteMessage(message.id) },
             modifier = modifier,
         )
-        is AgentMessageUi -> if (compact && message.inWorkCard) {
-            WorkNarrationStep(message = message, sharedMarkdown = retainedStreamingState, modifier = modifier)
-        } else AgentMessageBlock(
+        is AgentMessageUi -> AgentMessageBlock(
             message = message,
             retainedStreamingState = retainedStreamingState,
             showCopyAction = showCopyAction,
@@ -522,8 +520,9 @@ internal fun ChatMessageItem(
  * 完整记录在对话里原地展开，没有底部栏、执行条和执行详情页。
  * 展开：圆角 28、白底 + 发丝描边、无阴影；头部 48（执行中 16 小光球 +「正在执行·第 N 步」Q3 光带 + 收起箭头）
  * → 0.5 分隔线（左右内缩 16）→ 步骤时间线（上下 6）。执行中自动展开，超过 6 步时只显示最近 4 步，上面一行「前面 N 步」；
- * 回答开始（[answerStarted]）或本轮结束时收成 48 高的摘要条一次（✓ +「已完成 N 个步骤」+ 用时 + ⌄），之后不再自动变化；
- * 点摘要条原地展开全部步骤，末尾一行起止时间。暂停时的「结束任务」在输入框上方的提示条里（`Composer/Notice`）。
+ * 后面出现正文（[answerStarted]）或下一段时这一段做完：卡头换成完成态，卡片不收起、高度不变（定稿 24）。
+ * 一轮结束后整轮过程跟着摘要条收起（[TurnSummaryBar]）；没收起的（停止、失败）末尾一行起止时间。
+ * 暂停时的「结束任务」在输入框上方的提示条里（`Composer/Notice`）。
  */
 @Composable
 internal fun AgentWorkProcess(
@@ -543,53 +542,13 @@ internal fun AgentWorkProcess(
     stepOffset: Int = 0,
     outcome: WorkOutcome? = null,
     turnSpan: WorkTurnSpan? = null,
+    /** 所在这一轮还在执行（定稿 24）：卡尾一行等这一轮结束再出现，已结束的段卡头写这一段自己的用时。 */
+    turnActive: Boolean = false,
+    /** 这张卡跟着本轮摘要条收着（定稿 24）：不出卡尾一行——结束那一下插这一行会把下面的回答推下去（本地逐帧：132px）。 */
+    inFoldedTurn: Boolean = false,
 ) {
-    // 只有思考、没有执行步骤（纯问答）：不出执行卡，一行「✦ 已思考 N 秒 ⌄」（2026-09-27 定稿方案 2）。
-    // 之后出现工具步骤时换成执行卡，思考成为卡里第一步。
-    // 这一段先是「已思考」一行，开始调工具时原地换成执行卡：卡片从收起开始长开，不一帧铺满（真机：先是一帧空白卡体）。
-    var grewFromThinkingRow by rememberSaveable(id) { mutableStateOf(false) }
-    var cardReady by rememberSaveable(id) { mutableStateOf(false) }
-    val allThinking = messages.isNotEmpty() && messages.all { it is ThinkingMessageUi }
-    if (allThinking) grewFromThinkingRow = true
-    // 第一轮（定稿 21，方案 2）：模型先在卡外说了话、随后调工具时，那段话先在原位淡出 120ms（列表增删 9.3），
-    // 这期间仍是「已思考」一行；淡完再原地换成执行卡并向下展开。同时换的话卡片标题会压住还在淡出的那段话（真机）。
-    val holdThinkingRow = !allThinking && grewFromThinkingRow && !cardReady
-    // 本次界面里刚从「已思考」一行换过来（旋转屏幕等重建后不再当成刚换，不重播展开）。
-    var justGrew by remember(id) { mutableStateOf(false) }
-    // 换成卡片时步骤区从 0 长到全高（`standard`）、内容同时淡入（`fast`）；「已思考」一行上下各留 4，执行卡各留 8，
-    // 顶边同时从 4 过渡到 8（真机：卡顶下移 9px）。三个过渡与换卡片在同一个协程里开始：卡片出现的那一帧是第 0 帧，
-    // 下一帧就开始长高。等卡片出现后再由 AnimatedVisibility / LaunchedEffect 开始，要先停两三帧（真机约 50ms）。
-    val grow = remember(id) { androidx.compose.animation.core.Animatable(1f) }
-    val growAlpha = remember(id) { androidx.compose.animation.core.Animatable(1f) }
-    val topPadding = remember(id) { androidx.compose.animation.core.Animatable(8f) }
-    val growScope = androidx.compose.runtime.rememberCoroutineScope()
-    if (holdThinkingRow) {
-        justGrew = true
-        LaunchedEffect(Unit) {
-            kotlinx.coroutines.delay(io.github.fartown.movo.ui.theme.MovoMotion.FAST_EXIT.toLong())
-            grow.snapTo(0f)
-            growAlpha.snapTo(0f)
-            topPadding.snapTo(4f)
-            growScope.launch { grow.animateTo(1f, io.github.fartown.movo.ui.theme.MovoMotion.standard()) }
-            growScope.launch {
-                growAlpha.animateTo(
-                    1f,
-                    tween(io.github.fartown.movo.ui.theme.MovoMotion.FAST, easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard),
-                )
-            }
-            growScope.launch { topPadding.animateTo(8f, io.github.fartown.movo.ui.theme.MovoMotion.standard()) }
-            cardReady = true
-        }
-    }
-    if (allThinking || holdThinkingRow) {
-        ThinkingOnlyRow(
-            id = id,
-            messages = messages.filterIsInstance<ThinkingMessageUi>(),
-            retainedStreamingStates = retainedStreamingStates,
-            modifier = modifier,
-        )
-        return
-    }
+    // 定稿 24：思考与工具都在卡里（只有思考也是一张卡，开始时不知道是不是纯问答）；卡片执行中展开、显示最近几步，
+    // 不因为后面出现正文而收起（正文在卡外按顺序往下排）；一轮结束后整轮过程由列表收成摘要条（见 AgentChatBody）。
     val runUnfinished = outcome?.kind == WorkOutcome.Kind.Unfinished
     val runStopped = outcome?.kind == WorkOutcome.Kind.Stopped
     val turnSteps = outcome?.steps ?: 0
@@ -604,39 +563,23 @@ internal fun AgentWorkProcess(
     // 计时每秒重组一次卡片：步骤列表只在消息变化时重算。
     val tools = remember(messages) { messages.filterIsInstance<ToolActivityMessageUi>() }
     val toolCount = tools.size
+    val thinkingSeconds = remember(messages) { messages.sumOf { (it as? ThinkingMessageUi)?.elapsedSeconds ?: 0 } }
+    // 这一段自己的用时：各步工具的耗时加上思考秒数（定稿 24：一轮被正文分成几段卡时，每段卡头写自己的）。
+    val segmentMillis = remember(messages) {
+        tools.sumOf { tool ->
+            val start = tool.startedAtMillis
+            val end = tool.finishedAtMillis
+            if (start != null && end != null && end >= start) end - start else 0L
+        } + thinkingSeconds * 1_000L
+    }
     // 一轮里回答把执行分成几张卡时，中间那张后面接着过渡回答、后面还有步骤：它的失败已被绕过，按完成显示（该步自己仍是 ✕）。
     // 这一轮的最后一张卡照设计「看最后一步」：最后一步失败就是「第 N 步未完成」，后面的回答只是在解释做不了
     // （真机：无障碍关着，各步 ✕，卡片头却显示绿色「已完成」）。
     val failedIndex = if (answerStarted && outcome == null && !lastCardOfTurn) -1 else unrecoveredFailedStep(tools)
-    var expanded by rememberSaveable(id) { mutableStateOf(running) }
-    // 从「已思考」一行长出来的这一次展开由里层步骤区（grow）负责：这段时间外层不做高度过渡，直接是里层的高度。
-    // 外层就算用 snap 也要晚一帧才跟上（测量时先报旧高度），卡片出现后多停一帧（本地逐帧）。
-    val appearing by remember(id) { androidx.compose.runtime.derivedStateOf { grow.value < 1f } }
+    // 执行中、执行完都展开显示最近几步（定稿 24），只随用户点卡头收起 / 展开；后面出现正文不收起。
+    var expanded by rememberSaveable(id) { mutableStateOf(true) }
     var manuallyExpanded by rememberSaveable(id) { mutableStateOf(false) }
 
-    // 执行中自动展开；回答开始时立即收成摘要条，没有回答（失败、停止）时在本轮结束后停留 600ms 再收起
-    // （9.4「执行卡 · 完成 → 摘要条」）。只自动收起这一次，之后高度固定；用户手动操作过则不动。
-    var autoCollapsed by rememberSaveable(id) { mutableStateOf(false) }
-    LaunchedEffect(running, paused, answerStarted) {
-        if (manuallyExpanded) return@LaunchedEffect
-        // 回答出来时收起过一次，之后这一轮又在执行（例如回答后收到补充、接着调工具）：
-        // 原地展开回「正在执行」，之后回答出来时再照常收一次。
-        if (autoCollapsed && (running || paused) && !answerStarted) {
-            autoCollapsed = false
-            expanded = true
-            return@LaunchedEffect
-        }
-        if (autoCollapsed) return@LaunchedEffect
-        if (running || paused) {
-            expanded = true
-        } else if (expanded) {
-            if (!answerStarted) kotlinx.coroutines.delay(io.github.fartown.movo.ui.theme.MovoMotion.WORK_CARD_COLLAPSE_DELAY.toLong())
-            if (!manuallyExpanded) {
-                expanded = false
-                autoCollapsed = true
-            }
-        }
-    }
     // 步骤多时（> 6）执行中只显示最近 4 步；点「前面 N 步」或完成后手动展开时显示全部。
     var showAllSteps by rememberSaveable(id) { mutableStateOf(false) }
     // 从摘要条一次铺开几十步（真机 63 步）要 50ms+ 组合与测量：展开第一帧掉帧、直接画出终态，看起来是一帧展开。
@@ -647,8 +590,7 @@ internal fun AgentWorkProcess(
         kotlinx.coroutines.delay(io.github.fartown.movo.ui.theme.MovoMotion.STANDARD.toLong() + WORK_CARD_RESIZE_SLACK_MS)
         stepLimit = Int.MAX_VALUE
     }
-    // 回答开始的这一帧就按收起显示：等上面的副作用下一帧再收，会先把全部步骤展开一下再收（真机跳一下）。
-    val shownExpanded = expanded && !(answerStarted && !manuallyExpanded)
+    val shownExpanded = expanded
 
     val collapsedSummary = !shownExpanded && !running && !paused
     // 圆角只在绘制阶段读取（graphicsLayer 裁剪 + drawWithContent 画底色与描边）：收成摘要条的圆角过渡期间不重组整张卡。
@@ -715,56 +657,7 @@ internal fun AgentWorkProcess(
             footerFade.snapTo(1f)
         }
     }
-    // 回答开始、本轮执行卡自动收起（8.1「回答开始后收成一行」）：同样由这里逐帧驱动高度（内容贴顶、从下往上收），
-    // 每帧收起多少就在列表末尾补多少留白（[ChatBottomReserve]）。列表停在底部时内容总高不变，
-    // 不会先退回露出上一轮、再随回答往下滚（真机 turntime case4）。
     val bottomReserve = LocalChatBottomReserve.current
-    val lastShownExpanded = remember { booleanArrayOf(shownExpanded) }
-    val autoCollapseStarting = lastShownExpanded[0] && !shownExpanded && answerStarted && !manuallyExpanded &&
-        runActive && bottomReserve != null && !reducedMotion && !footerCollapsing
-    var autoCollapsing by remember { mutableStateOf(false) }
-    SideEffect {
-        if (autoCollapseStarting) autoCollapsing = true
-        lastShownExpanded[0] = shownExpanded
-    }
-    LaunchedEffect(autoCollapsing) {
-        if (!autoCollapsing || bottomReserve == null) return@LaunchedEffect
-        val full = stepsFullHeight[0].toFloat()
-        if (full <= 0f) {
-            autoCollapsing = false
-            return@LaunchedEffect
-        }
-        // 可见区以外那段先一次收掉（看不见），留白同步补上；可见的部分再按 `standard` 收。
-        val start = minOf(full, stepsCap.remainingPx().toFloat())
-        clampAlignBottom = false
-        footerCollapse.snapTo(start)
-        footerFade.snapTo(1f)
-        footerCollapsing = true
-        bottomReserve.px += (full - start).toInt()
-        launch { footerFade.animateTo(0f, io.github.fartown.movo.ui.theme.MovoMotion.fastExit()) }
-        var previous = start
-        footerCollapse.animateTo(
-            0f,
-            tween(io.github.fartown.movo.ui.theme.MovoMotion.STANDARD, easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard),
-        ) {
-            val shrunk = (previous - value).toInt()
-            if (shrunk > 0) {
-                bottomReserve.px += shrunk
-                previous -= shrunk
-            }
-        }
-        autoCollapsing = false
-    }
-    // 回答开始、这张卡收成摘要条：告诉列表正在收起，紧跟的回答等收完（剩不到 2dp）再在最终位置出现（[LocalEntrySettling]）。
-    // 不自动收起时（手动展开过、减少动画等）直接报已收完，回答不必等。
-    val settlingEntries = LocalEntrySettling.current
-    if (settlingEntries != null && answerStarted) {
-        val settledPx = with(androidx.compose.ui.platform.LocalDensity.current) { 2.dp.toPx() }
-        val farFromCollapsed by remember { androidx.compose.runtime.derivedStateOf { footerCollapse.value > settledPx } }
-        val collapsing = autoCollapseStarting || (autoCollapsing && (!footerCollapsing || farFromCollapsed))
-        androidx.compose.runtime.SideEffect { settlingEntries[id] = collapsing }
-    }
-    if (settlingEntries != null) androidx.compose.runtime.DisposableEffect(id) { onDispose { settlingEntries.remove(id) } }
     // 执行中卡片高度只增不减（多出的留白在卡片下方、列表末尾）：较早步骤收进「前面 N 步」时新步骤往往还很矮，
     // 卡片先变矮、列表退回，等新步骤长出来又滚回去（真机 stepfold2：先下移约 65px 再回来）。留白由新内容先填上；
     // 执行结束时把剩下的留白原样交给列表末尾留白（[ChatBottomReserve]），由回答接着填，不在结束那一下退回。
@@ -790,13 +683,7 @@ internal fun AgentWorkProcess(
                 layout(placeable.width, height) { placeable.place(0, 0) }
             }
             .fillMaxWidth()
-            .padding(start = 20.dp, end = 20.dp, bottom = 8.dp)
-            // 顶边在布局阶段读：过渡的 240ms 里不必每帧重组整张卡。
-            .layout { measurable, constraints ->
-                val top = topPadding.value.dp.roundToPx()
-                val placeable = measurable.measure(constraints.offset(vertical = -top))
-                layout(placeable.width, placeable.height + top) { placeable.place(0, top) }
-            }
+            .padding(horizontal = 20.dp, vertical = 8.dp)
             .completionGlint(glint) { corner.value }
             .workCardSurface { corner.value }
             // 只在执行中（步骤不断增加）时让卡片高度跟着过渡；收起 / 展开由下面的 AnimatedVisibility 直接驱动高度，
@@ -804,7 +691,7 @@ internal fun AgentWorkProcess(
             // 卡里有一层自己在做高度过渡（点开步骤结果、思考步骤展开、执行中手动收起卡片）时，外层不再叠一层过渡：
             // 直接跟着里层每帧的高度走（snap），整张卡只有一层高度动画，也不会每帧两层都重新测量、外层落后半拍。
             .then(
-                if ((running || paused) && !appearing) {
+                if (running || paused) {
                     Modifier.animateContentSize(
                         if (innerResize.active) androidx.compose.animation.core.snap() else io.github.fartown.movo.ui.theme.MovoMotion.standard(),
                     )
@@ -882,9 +769,14 @@ internal fun AgentWorkProcess(
                     io.github.fartown.movo.agent.monitor.MonitorTime.clock(androidx.compose.ui.platform.LocalContext.current, deadline),
                 )
             }
-            val timerText = if (monitoring) monitorUntil else elapsed?.let { if (running) formatClock(it) else formatElapsed(it) }
+            // 已结束、后面还接着有内容的一段（定稿 24）：卡头写这一段自己的用时（只有思考的段不写，标题已是「已思考 N 秒」），
+            // 整轮用时写在本轮摘要条上；一轮的最后一张卡在这一轮结束、没有收起（停止、失败、点开摘要条）时写整轮用时。
+            // 正在跟着摘要条收起的卡不换卡头：收起那一下换字是多余的变化（真机 10-07：收起前冒出「用时 2 秒」）。
+            val segmentDone = !running && !paused && (!lastCardOfTurn || turnActive || inFoldedTurn)
+            val shownElapsed = if (segmentDone) segmentMillis.takeIf { toolCount > 0 && it > 0L } else elapsed
+            val timerText = if (monitoring) monitorUntil else shownElapsed?.let { if (running) formatClock(it) else formatElapsed(it) }
             // 放不下完整计时时退成「1:06」，状态文字不让位（规范：摘要条状态优先完整显示）。
-            val compactTimer = if (monitoring) monitorUntil else elapsed?.takeIf { !running }?.let(::formatCompactElapsed)
+            val compactTimer = if (monitoring) monitorUntil else shownElapsed?.takeIf { !running }?.let(::formatCompactElapsed)
             val phase = when {
                 paused -> WorkPhase.Paused
                 running -> WorkPhase.Running
@@ -907,7 +799,14 @@ internal fun AgentWorkProcess(
                     WorkPhase.Stopped -> stringResource(R.string.movo_work_stopped_steps, turnSteps)
                     WorkPhase.Failed -> stringResource(R.string.movo_work_failed_step, failedIndex + 1)
                     WorkPhase.Unfinished -> stringResource(R.string.movo_work_unfinished_steps, turnSteps)
-                    WorkPhase.Done -> if (toolCount > 0) stringResource(R.string.movo_work_done_steps, toolCount) else stringResource(R.string.movo_work_done)
+                    // 定稿 24：一轮被正文分成几段卡，每段写自己是第几步；只有思考的一段写「已思考 N 秒」。
+                    WorkPhase.Done -> when {
+                        toolCount == 1 -> stringResource(R.string.movo_work_done_step, stepOffset + 1)
+                        toolCount > 1 -> stringResource(R.string.movo_work_done_step_range, stepOffset + 1, stepOffset + toolCount)
+                        thinkingSeconds > 0 -> stringResource(R.string.movo_thought_seconds, thinkingSeconds)
+                        messages.any { it is ThinkingMessageUi } -> stringResource(R.string.movo_thought)
+                        else -> stringResource(R.string.movo_work_done)
+                    }
                 }
             }
             val targetPhaseText = phaseText(phase)
@@ -955,19 +854,8 @@ internal fun AgentWorkProcess(
 
         // 展开：高度 `standard`，内容与高度同时开始淡入 `fast`（不等待，第一帧就有内容）（规范 9.3「展开 / 收起」）。
         AnimatedVisibility(
-            visible = shownExpanded || autoCollapsing || autoCollapseStarting,
-            modifier = Modifier
-                .trackVisibleHeightCap(stepsCap)
-                // 刚从「已思考」一行换成卡片：步骤区已在场，由 grow 从 0 长到全高（见上）。
-                .graphicsLayer {
-                    clip = grow.value < 1f
-                    alpha = growAlpha.value
-                }
-                .layout { measurable, constraints ->
-                    val placeable = measurable.measure(constraints)
-                    val height = (placeable.height * grow.value).roundToInt()
-                    layout(placeable.width, height) { placeable.place(0, 0) }
-                },
+            visible = shownExpanded,
+            modifier = Modifier.trackVisibleHeightCap(stepsCap),
             enter = fadeIn(
                 tween(
                     io.github.fartown.movo.ui.theme.MovoMotion.FAST,
@@ -1005,12 +893,7 @@ internal fun AgentWorkProcess(
                         .height(io.github.fartown.movo.ui.theme.MovoSize.hairline)
                         .background(io.github.fartown.movo.ui.theme.MovoColors.borderHairline),
                 )
-                // 不看是否执行中：自动收起的过程中仍保持折叠，不在收起前把全部步骤铺开。
-                // 任务结束、最后一段刚移出卡片、正要收成摘要条（定稿 21，方案 2）：卡里保持移出前的样子，整张卡淡出并收起——
-                // 不重排步骤（少一行会解开「前面 N 步」、上面一行当新行进场）、不在收起前补上底部那一行，否则卡片先变长再收（本地逐帧）。
-                val collapsingToSummary = answerStarted && !manuallyExpanded
-                val lastStepMessages = remember { arrayOf(messages) }
-                val stepMessages = if (collapsingToSummary) lastStepMessages[0] else messages.also { lastStepMessages[0] = it }
+                val stepMessages = messages
                 val folded = !showAllSteps && stepMessages.size > WORK_FOLD_THRESHOLD
                 // 「前面 N 步」第一次出现（步骤刚超过阈值）时从顶部展开并淡入，与被收进去的行同时进行；
                 // 直接插在顶部会把下面的步骤一帧往下推一行（真机 stepfold3：106px）。
@@ -1049,7 +932,8 @@ internal fun AgentWorkProcess(
                 )
                 // 结束后点开：末尾一行，左侧起止时间「15:02 开始·15:03 结束」（Figma「05e」），右侧「日志」「收起 ⌃」
                 // （2026-09-27 定稿方案 1）：长记录滑到末尾不用回到头部就能收起；执行中不出这一行（头部即可收起）。
-                if (!running && !paused && !collapsingToSummary) {
+                // 只放在一轮的最后一张卡上，并等这一轮结束（定稿 24）：执行中一段刚结束时插这一行，会把下面正在写的正文推下去。
+                if (!running && !paused && !turnActive && lastCardOfTurn && !inFoldedTurn) {
                     WorkCardFooter(
                         span = workTimeSpan(tools, outcome, turnSpan),
                         logMessageId = tools.firstOrNull()?.id ?: messages.firstOrNull()?.id,
@@ -1062,6 +946,103 @@ internal fun AgentWorkProcess(
     }
 }
 
+
+/**
+ * 一轮结束后，最终回答上方的过程收成的一行（定稿 24），样式同执行卡收起后的摘要条：48 高胶囊、✓、文字、用时、⌄。
+ * 有工具时写「已完成 N 个步骤」+「用时」（整轮）；只有思考时写「已思考 N 秒」，不另写用时。
+ * 整行可点，原地展开 / 收起这一轮的过程（列表里那些条目，见 AgentChatBody 的 FoldableEntry）。
+ * [appearAfterFold]：在本次界面里看着这一轮结束时，等上面的内容淡完（`fastExit`）再淡入 `fast`，不叠在淡出的内容上。
+ */
+@Composable
+internal fun TurnSummaryBar(
+    summary: AgentTimelineEntry.TurnSummary,
+    expanded: Boolean,
+    appearAfterFold: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // 看着这一轮结束：摘要条的高度和上面过程的收起按同一个进度（[TurnFoldMotion]）从 0 长到全高，列表每帧把最终回答
+    // 钉在原位置（到顶了才跟着往上走）；一插进来就是全高会把下面整体往下推一个摘要条（本地逐帧：回答下移 324px）。
+    // 透明度跟着长高走：长到一半开始显现，正好接上上面内容淡完（[summaryAppearAlpha]）。
+    val motion = LocalChatTurnFolds.current?.playing(summary.key)?.takeIf { appearAfterFold }
+    // 与收起前最后那张卡的卡头同一写法：只有思考时「已思考 N 秒」，秒数为 0（思考很快写完）时「已思考」。
+    val status = when {
+        summary.ending == WorkOutcome.Kind.Stopped -> stringResource(R.string.movo_work_stopped_steps, summary.toolCount)
+        summary.ending == WorkOutcome.Kind.Unfinished -> stringResource(R.string.movo_work_unfinished_steps, summary.toolCount)
+        summary.toolCount > 0 -> stringResource(R.string.movo_work_done_steps, summary.toolCount)
+        summary.hasThinking && summary.thinkingSeconds > 0 -> stringResource(R.string.movo_thought_seconds, summary.thinkingSeconds)
+        summary.hasThinking -> stringResource(R.string.movo_thought)
+        else -> stringResource(R.string.movo_work_done)
+    }
+    val elapsed = summary.takeIf { it.toolCount > 0 || it.ending != null }?.let { turn ->
+        val start = turn.span?.startedAt ?: turn.toolStartedAt
+        val end = turn.span?.finishedAt ?: turn.toolFinishedAt
+        if (start != null && end != null && end >= start) end - start else null
+    }
+    val rotation = androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
+        label = "turnSummaryChevron",
+    )
+    Box(
+        modifier = modifier
+            .clipToBounds()
+            .then(
+                if (motion == null) Modifier else Modifier
+                    .layout { measurable, constraints ->
+                        val placeable = measurable.measure(constraints)
+                        val height = summaryGrowHeight(placeable.height, motion.progress.value)
+                        // 贴底：长高时摘要条从回答这一侧露出来。
+                        layout(placeable.width, height) { placeable.place(0, height - placeable.height) }
+                    }
+                    .graphicsLayer { alpha = summaryAppearAlpha(motion.progress.value) },
+            )
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 8.dp)
+            .workCardSurface { io.github.fartown.movo.ui.theme.MovoRadius.pillLg },
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .movoClickableRow(onToggle)
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 与执行卡头同一套图标：完成 Green ✓、停止次要色方块、没完成 Rose ✕。
+            WorkStatusIcon(
+                kind = when (summary.ending) {
+                    WorkOutcome.Kind.Stopped -> WorkStatusIconKind.Stopped
+                    WorkOutcome.Kind.Unfinished -> WorkStatusIconKind.Failed
+                    null -> WorkStatusIconKind.Done
+                },
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            StatusWithTimer(
+                status = {
+                    Text(
+                        text = status,
+                        style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
+                        color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                },
+                timer = elapsed?.let { formatElapsed(it) },
+                compactTimer = elapsed?.let { formatCompactElapsed(it) },
+                timerColor = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
+                modifier = Modifier.weight(1f),
+            )
+            io.github.fartown.movo.ui.theme.MovoIcon(
+                io.github.fartown.movo.ui.theme.MovoIcons.ChevronDown,
+                contentDescription = stringResource(if (expanded) R.string.movo_collapse else R.string.movo_expand),
+                size = 16.dp,
+                tint = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
+                modifier = Modifier.graphicsLayer { rotationZ = rotation.value },
+            )
+        }
+    }
+}
 
 /** 执行中步骤超过这个数时折叠较早的步骤（规范 8.1「工作过程 · 展开」）。 */
 private const val WORK_FOLD_THRESHOLD = 6
@@ -1333,140 +1314,6 @@ private fun androidx.compose.animation.AnimatedContentTransitionScope<Boolean>.s
     textFadeThrough()
         .using(androidx.compose.animation.SizeTransform(clip = false) { _, _ -> io.github.fartown.movo.ui.theme.MovoMotion.standard() })
 
-/**
- * 只有思考的一轮（规范 8.1「思考 · 行内」，Figma「14」）：没有卡片与描边，左对齐 20 的一行 sparkle 14 次要色 +
- *「思考中」（Q3 光带）/「已思考 N 秒」`Label/Medium` 次要色 + ⌄，高 32；点开在下面展开思考内容：左侧 1 宽
- * `border/strong` 竖线，文字三级色（思考正文字号）。默认收起。
- */
-@Composable
-private fun ThinkingOnlyRow(
-    id: String,
-    messages: List<ThinkingMessageUi>,
-    retainedStreamingStates: Map<String, StreamingMarkdownState>,
-    modifier: Modifier = Modifier,
-) {
-    var expanded by rememberSaveable(id) { mutableStateOf(false) }
-    val streaming = messages.any { it.isStreaming }
-    val seconds = messages.sumOf { it.elapsedSeconds ?: 0 }
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 4.dp),
-    ) {
-        Row(
-            modifier = Modifier
-                .height(32.dp)
-                .movoClickable(io.github.fartown.movo.ui.components.movo.PressKind.Link) { expanded = !expanded },
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            ThinkingStatusIcon(streaming = streaming, size = 14.dp)
-            Spacer(Modifier.width(6.dp))
-            io.github.fartown.movo.ui.components.movo.MovoShimmerText(
-                text = when {
-                    streaming -> stringResource(R.string.movo_thinking_in_progress)
-                    seconds > 0 -> stringResource(R.string.movo_thought_seconds, seconds)
-                    else -> stringResource(R.string.movo_thought)
-                },
-                style = io.github.fartown.movo.ui.theme.MovoTypography.labelMedium,
-                color = io.github.fartown.movo.ui.theme.MovoColors.textSecondary,
-                active = streaming,
-            )
-            if (streaming) ThinkingLiveSeconds(key = id)
-            Spacer(Modifier.width(4.dp))
-            val rotation = androidx.compose.animation.core.animateFloatAsState(
-                targetValue = if (expanded) 180f else 0f,
-                animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
-                label = "thinkingOnlyChevron",
-            )
-            io.github.fartown.movo.ui.theme.MovoIcon(
-                io.github.fartown.movo.ui.theme.MovoIcons.ChevronDown,
-                contentDescription = stringResource(if (expanded) R.string.movo_collapse else R.string.movo_expand),
-                size = 14.dp,
-                tint = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
-                modifier = Modifier.graphicsLayer { rotationZ = rotation.value },
-            )
-        }
-        // 思考中（没点开）：行下方固定两行的滚动预览，左缩进 20 与文字对齐；思考结束后收起一次，只剩这一行。
-        val latest = messages.lastOrNull { it.content.isNotBlank() }?.content
-        val tickerCap = io.github.fartown.movo.ui.components.movo.rememberVisibleHeightCap()
-        val previewVisible = streaming && !expanded && latest != null
-        val previewState = remember(id) { androidx.compose.animation.core.MutableTransitionState(previewVisible) }
-        previewState.targetState = previewVisible
-        // 预览正在收起：告诉列表，紧跟的回答等收完再出现（见 [LocalEntrySettling]）。`standard` 前快后慢，
-        // 剩下不到 2dp 时就放行，不等曲线尾巴（本地逐帧：等整段过渡结束，回答要晚约 160ms 才出现）。
-        var previewHeight by remember(id) { androidx.compose.runtime.mutableIntStateOf(0) }
-        val settledPx = with(androidx.compose.ui.platform.LocalDensity.current) { 2.dp.roundToPx() }
-        val previewCollapsing = !previewState.targetState && (previewState.currentState || !previewState.isIdle) &&
-            previewHeight > settledPx
-        val settlingEntries = LocalEntrySettling.current
-        if (settlingEntries != null) {
-            androidx.compose.runtime.SideEffect { settlingEntries[id] = previewCollapsing }
-            androidx.compose.runtime.DisposableEffect(id) { onDispose { settlingEntries.remove(id) } }
-        }
-        AnimatedVisibility(
-            visibleState = previewState,
-            modifier = Modifier
-                .trackVisibleHeightCap(tickerCap)
-                .onSizeChanged { previewHeight = it.height },
-            enter = expandContentEnter(tickerCap),
-            exit = expandContentExit(tickerCap),
-        ) {
-            ThinkingTicker(latest.orEmpty(), modifier = Modifier.fillMaxWidth().padding(start = 20.dp, bottom = 4.dp))
-        }
-        // 思考正文在折叠时就开始解析：展开过渡开始时高度已是最终值。展开时才解析的话，Markdown 在过渡途中解析完、
-        // 高度改变，过渡被打断改用默认弹簧，按全高直冲出可见区（真机 verify4：3 帧就把回答推出屏幕）。
-        val parsedBodies = messages.filter { it.content.isNotBlank() && !it.isStreaming }.associate { message ->
-            message.id to androidx.compose.runtime.key(message.id) {
-                rememberMarkdownState(
-                    content = io.github.fartown.movo.ui.markdown.CjkEmphasis.normalize(message.content),
-                    retainState = true,
-                )
-            }
-        }
-        val bodyCap = io.github.fartown.movo.ui.components.movo.rememberVisibleHeightCap()
-        AnimatedVisibility(
-            visible = expanded,
-            modifier = Modifier.trackVisibleHeightCap(bodyCap),
-            enter = expandContentEnter(bodyCap),
-            exit = expandContentExit(bodyCap),
-        ) {
-            // 左侧竖线画在绘制阶段：不用固有高度测量（展开动画与流式思考时每帧都要对 Markdown 做一次固有测量）。
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 6.dp, top = 4.dp, bottom = 4.dp)
-                    .drawBehind {
-                        drawLine(
-                            color = io.github.fartown.movo.ui.theme.MovoColors.borderStrong,
-                            start = Offset(0.5.dp.toPx(), 0f),
-                            end = Offset(0.5.dp.toPx(), size.height),
-                            strokeWidth = 1.dp.toPx(),
-                        )
-                    }
-                    .padding(start = 13.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                run {
-                    messages.filter { it.content.isNotBlank() }.forEach { message ->
-                        val streamingState = retainedStreamingStates[message.id]
-                        if (message.isStreaming && streamingState != null) {
-                            StreamingMarkdown(
-                                state = streamingState,
-                                content = message.content,
-                                isStreaming = true,
-                                onRevealCompleteChange = {},
-                                tone = ChatMarkdownTone.Thinking,
-                            )
-                        } else {
-                            StableMarkdown(content = message.content, tone = ChatMarkdownTone.Thinking, markdownState = parsedBodies[message.id])
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 /** 执行卡 / 执行条 / 执行详情概要卡的状态图标（规范 8.1、8.8；监听中见 8.12「执行卡头」）。 */
 internal enum class WorkStatusIconKind { Running, Paused, Monitoring, Stopped, Failed, Done }
 
@@ -1656,7 +1503,10 @@ internal fun WorkSteps(
                 shrinkVertically(io.github.fartown.movo.ui.theme.MovoMotion.standard(), shrinkTowards = Alignment.Top),
         ) { message ->
             val index = messages.indexOfFirst { it.id == message.id }
-            val playEntrance = remember { running && message.id !in seenSteps }            // 正在离场的行（已不在列表里）下面仍有行。
+            val playEntrance = remember { running && message.id !in seenSteps }
+            // 出现过就记下：卡片被重建（滚出再滚回、过程收起后再展开）时不再重播入场（梳理 P2：之前从没写入）。
+            androidx.compose.runtime.SideEffect { seenSteps += message.id }
+            // 正在离场的行（已不在列表里）下面仍有行。
             val hasNext = index < 0 || index < messages.lastIndex
             val connector = remember { androidx.compose.animation.core.Animatable(if (hasNext || !playEntrance && !running) 1f else 0f) }
             LaunchedEffect(hasNext) {
@@ -2627,8 +2477,6 @@ internal fun streamingMarkdownBatchEnd(
 private enum class ChatMarkdownTone {
     Answer,
     Thinking,
-    /** 执行卡里的工具前说明（定稿 21）：与思考同一排版，主色。 */
-    Narration,
 }
 
 @Composable
@@ -2704,8 +2552,6 @@ private fun chatMarkdownBodyStyle(tone: ChatMarkdownTone) =
 private fun chatMarkdownTextColor(tone: ChatMarkdownTone): Color =
     if (tone == ChatMarkdownTone.Answer) {
         MiuixTheme.colorScheme.onSurface
-    } else if (tone == ChatMarkdownTone.Narration) {
-        io.github.fartown.movo.ui.theme.MovoColors.textPrimary
     } else {
         // 思考正文三级色（规范 8.1「思考」；折叠态两行与展开后全文同一份排版，C3）。
         io.github.fartown.movo.ui.theme.MovoColors.textTertiary
@@ -4027,83 +3873,6 @@ private fun SupplementStep(
 }
 
 /**
- * 执行卡里的「说明」一步（定稿 21）：执行中模型写的话。16 图标位居中一个 6 的三级色小圆点，
- * 正文与思考同一排版（13 号）但用主色。正在写、以及写完还没定是说明还是回答时是最多 3 行的滚动预览（同思考），
- * 定为说明后换成全文前 3 行（底部渐隐，交叉淡化 `fast`），点这一步展开全文，同时只展开一步。没有用时、不算步数。任务结束时最后一个工具之后的那段移出卡片成为回答。
- */
-@Composable
-private fun WorkNarrationStep(
-    message: AgentMessageUi,
-    /** 列表按消息持有的解析会话（还不知道是不是回答的那段才有）：在卡里就解析好，移出卡片时直接用。 */
-    sharedMarkdown: StreamingMarkdownState? = null,
-    modifier: Modifier = Modifier,
-) {
-    val (expanded, toggle) = rememberStepExpansion(message.id)
-    if (sharedMarkdown != null) {
-        LaunchedEffect(sharedMarkdown) { sharedMarkdown.parseUpdates() }
-        LaunchedEffect(sharedMarkdown, message.content, message.isStreaming) {
-            sharedMarkdown.parseTargets.trySend(StreamingMarkdownTarget(message.content, message.isStreaming))
-        }
-    }
-    val parsed = sharedMarkdown?.snapshot?.completedStateFor(message.content)
-    // 正文在折叠时就解析好：展开过渡开始时高度已是最终值（同思考步骤）。
-    val markdownState = rememberMarkdownState(
-        content = io.github.fartown.movo.ui.markdown.CjkEmphasis.normalize(message.content),
-        retainState = true,
-    )
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .movoClickableRow(toggle)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Box(
-            modifier = Modifier.size(width = 16.dp, height = THINKING_BODY_LINE_HEIGHT_DP),
-            contentAlignment = Alignment.Center,
-        ) {
-            Box(
-                Modifier
-                    .size(6.dp)
-                    .background(io.github.fartown.movo.ui.theme.MovoColors.textTertiary, CircleShape),
-            )
-        }
-        Spacer(Modifier.width(12.dp))
-        // 写完但还没定是说明还是回答（provisional）时仍是滚动预览：任务结束时这段马上移出卡片，此时再换成排版好的前 3 行，
-        // 两种排版交叉淡化会叠字 2～3 帧、紧接着又移出（真机 v5）。又调工具、定为说明时才换。
-        val tickerMode = (message.isStreaming || message.provisional) && !expanded
-        var tickerShown by remember(message.id) { mutableStateOf(false) }
-        if (tickerMode) tickerShown = true
-        androidx.compose.animation.AnimatedContent(
-            targetState = tickerMode,
-            transitionSpec = { stepPreviewFadeThrough() },
-            modifier = Modifier.weight(1f),
-            contentAlignment = Alignment.TopStart,
-            label = "narrationStepMode",
-        ) { ticker ->
-            if (ticker) {
-                ThinkingTicker(
-                    content = message.content,
-                    modifier = Modifier.fillMaxWidth(),
-                    lines = 3,
-                    color = io.github.fartown.movo.ui.theme.MovoColors.textPrimary,
-                    hugShortContent = true,
-                )
-            } else {
-                ThinkingFoldableBody(
-                    expanded = expanded,
-                    startCollapsed = tickerShown,
-                    collapsedLines = 3,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    StableMarkdown(content = message.content, tone = ChatMarkdownTone.Narration, markdownState = markdownState, parsedState = parsed)
-                }
-            }
-        }
-    }
-}
-
-/**
  * `Work/Step` 思考行：sparkle 16 次要色 →「思考中」（Q3 光带）/「思考·N 秒」→ 收起时两行摘要；
  * 整行可点展开完整思考内容（规范 8.1、8.8）。
  */
@@ -4156,7 +3925,9 @@ private fun WorkThinkingStep(
                 label = "thinkingStepMode",
             ) { ticker ->
                 if (ticker) {
-                    ThinkingTicker(message.content, modifier = contentModifier)
+                    // 不足两行时按实际行数（定稿 24）：思考结束换成全文前两行时高度不变——固定两行高的话，一行的思考结束时
+                    // 卡片会变矮，下面刚开始写的正文被往上带（本地逐帧：10px）。
+                    ThinkingTicker(message.content, modifier = contentModifier, hugShortContent = true)
                 } else {
                     ThinkingFoldableBody(
                         expanded = expanded,

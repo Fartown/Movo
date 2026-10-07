@@ -28,7 +28,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.github.fartown.movo.data.model.ReasoningEffort
 import io.github.fartown.movo.ui.app.AgentAppShell
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import io.github.fartown.movo.ui.components.AgentChatInputBar
+import io.github.fartown.movo.ui.components.AgentConversationMessages
+import io.github.fartown.movo.ui.components.ChatBottomReserve
 import io.github.fartown.movo.ui.components.AgentWorkProcess
 import io.github.fartown.movo.ui.components.ChatMessageItem
 import io.github.fartown.movo.ui.components.MovoHomeContent
@@ -352,65 +356,45 @@ class DesignShotsTest {
         )
     }
 
-    /** 定稿 21 修订：执行卡出现后写的话边写边显示在卡里（3 行滚动预览），任务结束时最后一段才移出卡片。 */
+    /** 定稿 24：正文一律在卡外，思考与工具按顺序成卡（执行中）；一轮结束后回答上方的过程收成摘要条。文案取自 10-07 方舟真实运行。 */
     @Test
-    fun narrationStreamingInCard() {
-        val t = System.currentTimeMillis() - 20_000
+    fun turnSegmentsAndFold() {
+        val t = System.currentTimeMillis() - 30_000
+        fun step(id: String, title: String, summary: String, at: Long) =
+            ToolActivityMessageUi(id, "device_read", ToolActivityStatusUi.Success, title, resultSummary = summary, startedAtMillis = t + at, finishedAtMillis = t + at + 300)
         val messages = listOf(
-            ThinkingMessageUi(id = "run-thinking-1-0", content = "The user wants me to open settings, check which Wi-Fi network is connected, then turn on Bluetooth.", isStreaming = false, elapsedSeconds = 12, collapsed = true),
-            io.github.fartown.movo.ui.model.AgentMessageUi(id = "assistant-run-1-1", content = "我先查一下网络状态，同时试着打开蓝牙。", isStreaming = false, narration = true),
-            ToolActivityMessageUi("run-tool-1-a", "device_toggle", ToolActivityStatusUi.Success, "打开蓝牙", resultSummary = "蓝牙已打开", startedAtMillis = t, finishedAtMillis = t + 600),
-            io.github.fartown.movo.ui.model.AgentMessageUi(id = "assistant-run-2-1", content = "查询结果如下：\n\n**北京 · 明天天气**\n- 天气：小雨转阴\n- 降水概率：70%\n- 气温：14~21℃\n\n结论：建议带伞。降水概率 70%，且白天有小雨", isStreaming = true, provisional = true),
+            io.github.fartown.movo.ui.model.UserMessageUi("u1", "查一下电量和存储空间，分两次查", runStartedAtMillis = t, runFinishedAtMillis = t + 18_000),
+            ThinkingMessageUi(id = "run-thinking-1-0", content = "Two separate checks: battery first, then storage.", isStreaming = false, elapsedSeconds = 2, collapsed = true),
+            io.github.fartown.movo.ui.model.AgentMessageUi(id = "assistant-run-1-1", content = "我先查一下当前电量。", isStreaming = false),
+            step("run-tool-1-a", "查看设备状态 · 电池", "电量 100%（充电中）", 3_000),
+            ThinkingMessageUi(id = "run-thinking-2-0", content = "Battery done. Now storage.", isStreaming = false, elapsedSeconds = 1, collapsed = true),
+            io.github.fartown.movo.ui.model.AgentMessageUi(id = "assistant-run-2-1", content = "电量是 100%，正在充电。接下来查存储。", isStreaming = false),
+            step("run-tool-2-a", "查看设备状态 · 存储", "可用约 201 GB，共 256 GB", 6_000),
+            ThinkingMessageUi(id = "run-thinking-3-0", content = "Both done. Summarise for the user.", isStreaming = false, elapsedSeconds = 1, collapsed = true),
+            io.github.fartown.movo.ui.model.AgentMessageUi(id = "assistant-run-3-1", content = "两项都查好了：\n\n- **电量**：100%，正在充电\n- **存储**：可用约 201 GB（共 256 GB）", isStreaming = false),
         )
+        var streaming by androidx.compose.runtime.mutableStateOf(true)
         compose.setContent {
             AgentAppTheme(appearance = AppearanceSettings(), applyInterfaceScale = false) {
-                Column(Modifier.fillMaxSize().background(MovoColors.bgCanvas).padding(top = 24.dp)) {
-                    AgentWorkProcess(id = "w-live", messages = messages, onOpenBrowser = {}, currentBrowserMessageId = null, retainedStreamingStates = emptyMap(), runActive = true)
-                }
+                AgentConversationMessages(
+                    visibleMessages = messages,
+                    scrollState = androidx.compose.foundation.lazy.rememberLazyListState(),
+                    bottomReserve = androidx.compose.runtime.remember { ChatBottomReserve() },
+                    isStreaming = streaming,
+                    bottomInset = 24.dp,
+                    keepBottomAnchored = false,
+                    onBottomAnchorChanged = {},
+                    modifier = Modifier.fillMaxSize().background(MovoColors.bgCanvas),
+                )
             }
         }
         compose.mainClock.advanceTimeBy(2_000)
         compose.waitForIdle()
-        capture("21-03-streaming-in-card")
-    }
-
-    /** 定稿 21：工具前说明进执行卡（文案取自 10-06 方舟真实运行）。 */
-    @Test
-    fun narrationSteps() {
-        val t = System.currentTimeMillis() - 60_000
-        fun thinking(id: String, text: String, sec: Int) = ThinkingMessageUi(id = id, content = text, isStreaming = false, elapsedSeconds = sec, collapsed = true)
-        fun narration(id: String, text: String) = io.github.fartown.movo.ui.model.AgentMessageUi(id = id, content = text, isStreaming = false, narration = true)
-        fun step(id: String, title: String, summary: String, at: Long, ms: Long) =
-            ToolActivityMessageUi(id, "device_read", ToolActivityStatusUi.Success, title, resultSummary = summary, startedAtMillis = t + at, finishedAtMillis = t + at + ms)
-        val messages = listOf(
-            thinking("run-thinking-1-0", "The user wants me to open settings, check which Wi-Fi network is connected, then turn on Bluetooth.\n\nLet me start by reading device network info — actually, the user asked to open settings and look.", 12),
-            narration("assistant-run-1-1", "我先查一下网络状态，同时试着打开蓝牙。"),
-            step("run-tool-1-a", "查看设备状态 · 网络", "没有读到网络信息", 12_000, 200),
-            step("run-tool-1-b", "打开蓝牙", "蓝牙已打开", 12_300, 600),
-            thinking("run-thinking-2-0", "Bluetooth is now on (before false, after true). Network section didn't return — odd. Maybe network requires location permission.", 6),
-            narration("assistant-run-2-1", "蓝牙已经打开（之前是关闭状态，现在是开启）。网络那项没返回，我直接打开设置里的 Wi‑Fi 页面看一下。"),
-            step("run-tool-2-a", "打开「设置」", "已打开「设置」", 19_000, 1400),
-            thinking("run-thinking-3-0", "Now observe the screen.", 1),
-            step("run-tool-3-a", "查看屏幕", "「设置」 · 24 个元素", 21_500, 400),
-            thinking("run-thinking-4-0", "The settings main page shows WLAN \"已连接 Xiaomi_5G\" and 蓝牙 \"已关闭\" — that's stale.", 8),
-            narration("assistant-run-4-1", "我先理一下思路：\n1. 你要的是明天北京天气，用来判断带不带伞。\n2. 判断带伞的核心依据是：降水概率 / 是否有雨雪、风力。\n3. 查询需要两个参数：城市（北京）和日期（明天）。\n现在调用工具查询："),
-            step("run-tool-4-a", "网页搜索", "北京 明天 天气", 30_000, 2300),
-        )
-        compose.setContent {
-            AgentAppTheme(appearance = AppearanceSettings(), applyInterfaceScale = false) {
-                Column(Modifier.fillMaxSize().background(MovoColors.bgCanvas).padding(top = 24.dp)) {
-                    AgentWorkProcess(id = "w-narr", messages = messages, onOpenBrowser = {}, currentBrowserMessageId = null, retainedStreamingStates = emptyMap())
-                }
-            }
-        }
+        capture("24-04-running-segments")
+        streaming = false
         compose.mainClock.advanceTimeBy(2_000)
         compose.waitForIdle()
-        compose.onAllNodes(androidx.compose.ui.test.hasText("已完成", substring = true))[0].performClick()
-        compose.mainClock.advanceTimeBy(2_000)
-        capture("21-01-narration-steps")
-        compose.onAllNodes(androidx.compose.ui.test.hasText("我先理一下思路", substring = true))[0].performClick()
-        compose.mainClock.advanceTimeBy(2_000)
-        capture("21-02-long-narration-expanded")
+        capture("24-05-folded")
     }
 
     @Test

@@ -74,7 +74,8 @@ class WorkSummaryOutcomeTest {
             SystemNoticeMessageUi("r1", SystemNoticeCode.ModelRetry),
             tool("t2", ToolActivityStatusUi.Success),
         )
-        val entries = messages.toTimelineEntries()
+        // 一轮结束会多一条摘要条（定稿 24），这里只看分组。
+        val entries = messages.toTimelineEntries().filterNot { it is AgentTimelineEntry.TurnSummary }
         assertEquals(2, entries.size)
         assertEquals(listOf("t1", "t2"), (entries[1] as AgentTimelineEntry.WorkProcess).messages.map { it.id })
     }
@@ -111,7 +112,7 @@ class WorkSummaryOutcomeTest {
             SystemNoticeMessageUi("n1", SystemNoticeCode.Stopped),
             tool("t2", ToolActivityStatusUi.Failed),
         )
-        val entries = messages.toTimelineEntries()
+        val entries = messages.toTimelineEntries().filterNot { it is AgentTimelineEntry.TurnSummary }
         assertEquals(listOf("u1", "work-t1", "n1"), entries.map { it.key })
         assertEquals(listOf("t1", "t2"), (entries[1] as AgentTimelineEntry.WorkProcess).messages.map { it.id })
     }
@@ -135,7 +136,7 @@ class WorkSummaryOutcomeTest {
             SystemNoticeMessageUi("assistant-run-retry-1", SystemNoticeCode.ModelRetry),
             tool("t1", ToolActivityStatusUi.Success),
         )
-        val entries = messages.toTimelineEntries()
+        val entries = messages.toTimelineEntries().filterNot { it is AgentTimelineEntry.TurnSummary }
         assertEquals(listOf("u1", "work-run-thinking-1-0"), entries.map { it.key })
         assertEquals(2, (entries[1] as AgentTimelineEntry.WorkProcess).messages.size)
     }
