@@ -171,7 +171,9 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         assistantMode = intent.action == ACTION_ASSISTANT
-        autoListen = intent.getBooleanExtra(io.github.fartown.movo.agent.voice.MovoAssistantVoiceService.EXTRA_AUTO_LISTEN, false)
+        // 重建（进程被杀、配置变化）时 intent 还是最初那次的：自动听只在全新创建时生效，不能重建一次就开一次麦。
+        autoListen = savedInstanceState == null &&
+            intent.getBooleanExtra(io.github.fartown.movo.agent.voice.MovoAssistantVoiceService.EXTRA_AUTO_LISTEN, false)
         request = AgentConversationHandoff.from(intent)
         if (intent.action == ACTION_SHARE) {
             sharedContent = io.github.fartown.movo.ui.share.SharedContent.fromExtras(intent)

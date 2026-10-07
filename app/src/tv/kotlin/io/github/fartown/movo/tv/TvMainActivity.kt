@@ -26,15 +26,18 @@ class TvMainActivity : ComponentActivity() {
         else notice = "权限未授予，暂时不能录音。可以重新点击开始语音授权。"
     }
     override fun onCreate(savedInstanceState: Bundle?) {
-        debugProfile(intent)
+        // 进程被杀后重建时，intent 仍是这个任务最初那次启动的：一次性的启动参数只在全新创建时处理。
+        // 10-07 电视上，别人再拉起 Movo 时重放了几十分钟前的调试文字，自己跑了 32 轮任务。
+        val fresh = savedInstanceState == null
+        if (fresh) debugProfile(intent)
         val createdAt = android.os.SystemClock.elapsedRealtime()
         super.onCreate(savedInstanceState)
         TvAppSurfaces.attach(this)
         TvBackHandler.init(this)
-        autoListen = intent.getBooleanExtra(MovoAssistantVoiceService.EXTRA_AUTO_LISTEN, false)
-        requestedPage = intent.getStringExtra(EXTRA_PAGE)
+        autoListen = fresh && intent.getBooleanExtra(MovoAssistantVoiceService.EXTRA_AUTO_LISTEN, false)
+        requestedPage = if (fresh) intent.getStringExtra(EXTRA_PAGE) else null
         val app = AgentAppSession.get(this)
-        debugText(intent)
+        if (fresh) debugText(intent)
         setContent { TvTheme { TvHome(app, notice, { notice = it }, requestedPage) { requestedPage = null } } }
         // 打开 App 到画出第一帧（黑屏时长）。
         val decor = window.decorView
