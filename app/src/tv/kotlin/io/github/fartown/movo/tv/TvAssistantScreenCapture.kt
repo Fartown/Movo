@@ -45,6 +45,13 @@ internal object TvAssistantScreenCapture : DeviceScreenCapture {
     override val available: Boolean
         get() = service?.let { isSelected(it) && screenContentAllowed(it) } == true
 
+    /**
+     * 截图前先撤下胶囊和对话浮层（[TvVoicePanel.suppressForScreenshot]），并等前台换成别的应用（[prepareObservation]），
+     * 所以要求排除 Movo 自己时也能用。语音发起的任务第一张截图会要求排除 Movo；
+     * 原来因此绕开这条路线、走电视上没有的无障碍截图，10-07 语音任务里截图全部失败。
+     */
+    override fun excludes(packages: Set<String>): Boolean = packages.all { it == io.github.fartown.movo.BuildConfig.APPLICATION_ID }
+
     fun isSelected(context: Context): Boolean = VoiceInteractionService.isActiveService(
         context, ComponentName(context, TvScreenAssistantService::class.java),
     )
