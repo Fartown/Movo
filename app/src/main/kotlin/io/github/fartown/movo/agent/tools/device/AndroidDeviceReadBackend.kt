@@ -164,6 +164,14 @@ internal class AndroidDeviceReadBackend(
             AudioDeviceInfo.TYPE_HDMI, AudioDeviceInfo.TYPE_HDMI_ARC, AudioDeviceInfo.TYPE_HDMI_EARC -> "hdmi"
             AudioDeviceInfo.TYPE_HEARING_AID -> "hearing_aid"
             AudioDeviceInfo.TYPE_BLE_HEADSET, AudioDeviceInfo.TYPE_BLE_SPEAKER -> "bluetooth_le_audio"
+            // 下面这些是系统内部通路（通话、收音、系统提示音等），不是用户插拔的设备；给出名字免得模型猜。
+            AudioDeviceInfo.TYPE_TELEPHONY -> "telephony"
+            AudioDeviceInfo.TYPE_FM -> "fm"
+            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE -> "speaker_safe"
+            AudioDeviceInfo.TYPE_REMOTE_SUBMIX -> "remote_submix"
+            AudioDeviceInfo.TYPE_BUS -> "bus"
+            AudioDeviceInfo.TYPE_LINE_ANALOG, AudioDeviceInfo.TYPE_LINE_DIGITAL, AudioDeviceInfo.TYPE_AUX_LINE -> "line_out"
+            AudioDeviceInfo.TYPE_DOCK -> "dock"
             else -> "other_$type"
         }
 

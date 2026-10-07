@@ -25,9 +25,8 @@ import io.github.fartown.movo.agent.tools.core.invalidArgs
 import io.github.fartown.movo.agent.tools.core.objectSchema
 import org.json.JSONArray
 import org.json.JSONObject
-import java.time.LocalDate
-import java.time.OffsetDateTime
-import java.time.ZoneOffset
+import io.github.fartown.movo.agent.tools.core.parseToolTime
+import io.github.fartown.movo.agent.tools.core.TOOL_TIME_FORMATS
 
 /** 查找类型。把第二版的 kind 拆成 type + location，一个下载的 PDF 可同时命中。 */
 internal enum class FileType { IMAGE, VIDEO, AUDIO, DOCUMENT, ANY }
@@ -101,8 +100,8 @@ internal class FileSearchTool(
         val chatNote = if (env.rootAvailable) "；wechat/qq 是聊天图片缓存，只能配 type=image 或 any，query 匹配路径" else ""
         string("location", "查找位置，默认 any$chatNote", enum = locations.map { it.name.lowercase() })
         string("query", "文件名关键词", maxLength = 200)
-        string("since", "起始时间，ISO 8601（含时区）或日期")
-        string("until", "截止时间，ISO 8601（含时区）或日期")
+        string("since", "起始时间（$TOOL_TIME_FORMATS）")
+        string("until", "截止时间（写法同 since；只给日期时包含这一天）")
         integer("limit", "返回条数，1–30，默认 10", min = 1, max = 30)
         string("cursor", "续页游标")
     }
@@ -211,8 +210,7 @@ internal class FileSearchTool(
 
     private fun parseTime(value: String?, field: String): Long? {
         val raw = value?.trim()?.ifEmpty { null } ?: return null
-        return runCatching { OffsetDateTime.parse(raw).toInstant().toEpochMilli() }
-            .recoverCatching { LocalDate.parse(raw).atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli() }
-            .getOrElse { fail(ToolErrorCode.INVALID_ARGUMENTS, "参数 $field 不是有效的时间：$raw", hint = "用 ISO 8601，如 2026-10-04 或 2026-10-04T12:00:00+08:00") }
+        return parseToolTime(raw, endOfDay = field == "until")
+            ?: fail(ToolErrorCode.INVALID_ARGUMENTS, "参数 $field 不是有效的时间：$raw", hint = TOOL_TIME_FORMATS)
     }
 }

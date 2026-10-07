@@ -28,6 +28,8 @@ import io.github.fartown.movo.agent.tools.core.objectSchema
 import io.github.fartown.movo.data.repository.NotificationHistoryRepository.Companion.RETENTION_DAYS
 import org.json.JSONArray
 import org.json.JSONObject
+import io.github.fartown.movo.agent.tools.core.parseToolTime
+import io.github.fartown.movo.agent.tools.core.TOOL_TIME_FORMATS
 
 /**
  * 个人数据来源。每个来源声明：是否支持时间过滤、是否 secret、以及在当前环境是否可用
@@ -157,8 +159,8 @@ internal class PersonalSearchTool(
                 required = true, enum = sources.map { it.wire },
             )
             string("query", "关键词，匹配标题/正文，最长 200", maxLength = MAX_QUERY)
-            string("since", "起始时间（ISO 8601 或毫秒），仅这些来源可用：$timed。不给时 notifications 查最近 24 小时、orders 查最近 7 天")
-            string("until", "结束时间（ISO 8601 或毫秒），仅这些来源可用：$timed")
+            string("since", "起始时间（$TOOL_TIME_FORMATS），仅这些来源可用：$timed。不给时 notifications 查最近 24 小时、orders 查最近 7 天")
+            string("until", "结束时间（写法同 since；只给日期时包含这一天），仅这些来源可用：$timed")
             string("app", "按应用过滤：包名或应用名，如 com.tencent.mm 或 微信（仅 notifications、notification_bar、orders）")
             integer("limit", "返回条数，1–30，默认 $DEFAULT_LIMIT", min = 1, max = MAX_LIMIT.toLong())
             string("cursor", "翻页游标，来自上一次返回的 next_cursor")
@@ -180,10 +182,10 @@ internal class PersonalSearchTool(
         if (query != null && query.length > MAX_QUERY) invalidArgs("query 最长 $MAX_QUERY 字")
 
         val since = args.stringOrNull("since")?.let {
-            parseIsoOrMillis(it) ?: invalidArgs("since 不是有效的时间：$it")
+            parseToolTime(it) ?: invalidArgs("since 不是有效的时间：$it", TOOL_TIME_FORMATS)
         }
         val until = args.stringOrNull("until")?.let {
-            parseIsoOrMillis(it) ?: invalidArgs("until 不是有效的时间：$it")
+            parseToolTime(it, endOfDay = true) ?: invalidArgs("until 不是有效的时间：$it", TOOL_TIME_FORMATS)
         }
         if ((since != null || until != null) && !source.supportsTimeFilter) {
             invalidArgs(

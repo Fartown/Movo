@@ -227,7 +227,10 @@ class DeviceBackendsTest {
         assertEquals("usb_audio", AndroidDeviceReadBackend.audioDeviceType(AudioDeviceInfo.TYPE_USB_HEADSET))
         assertEquals("hdmi", AndroidDeviceReadBackend.audioDeviceType(AudioDeviceInfo.TYPE_HDMI_ARC))
         assertEquals("bluetooth_le_audio", AndroidDeviceReadBackend.audioDeviceType(AudioDeviceInfo.TYPE_BLE_HEADSET))
-        assertEquals("other_${AudioDeviceInfo.TYPE_TELEPHONY}", AndroidDeviceReadBackend.audioDeviceType(AudioDeviceInfo.TYPE_TELEPHONY))
+        // 小米真机上会出现的系统内部通路也给可读名，不再是 other_18 / other_14。
+        assertEquals("telephony", AndroidDeviceReadBackend.audioDeviceType(AudioDeviceInfo.TYPE_TELEPHONY))
+        assertEquals("fm", AndroidDeviceReadBackend.audioDeviceType(AudioDeviceInfo.TYPE_FM))
+        assertEquals("other_9999", AndroidDeviceReadBackend.audioDeviceType(9999))
     }
 
     // ---- app_search：厂商可卸载预装算系统应用 ----

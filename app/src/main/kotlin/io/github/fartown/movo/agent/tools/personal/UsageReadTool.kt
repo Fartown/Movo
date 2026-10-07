@@ -25,6 +25,8 @@ import io.github.fartown.movo.agent.tools.core.invalidArgs
 import io.github.fartown.movo.agent.tools.core.objectSchema
 import org.json.JSONArray
 import org.json.JSONObject
+import io.github.fartown.movo.agent.tools.core.parseToolTime
+import io.github.fartown.movo.agent.tools.core.TOOL_TIME_FORMATS
 
 internal enum class UsageView { RECENT, SUMMARY }
 
@@ -86,8 +88,8 @@ internal class UsageReadTool(
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
         string("view", "recent 或 summary", required = true, enum = UsageView.entries.map { it.name.lowercase() })
-        string("since", "起始时间（ISO 8601 或毫秒），默认 24 小时前")
-        string("until", "结束时间（ISO 8601 或毫秒），默认现在")
+        string("since", "起始时间（$TOOL_TIME_FORMATS），默认 24 小时前")
+        string("until", "结束时间（写法同 since；只给日期时包含这一天），默认现在")
         string("package", "只看某个应用的包名")
         integer("limit", "返回条数，1–50，默认 20", min = 1, max = MAX_LIMIT.toLong())
     }
@@ -95,10 +97,10 @@ internal class UsageReadTool(
     override fun parse(args: ToolArgs, env: ToolEnvironment): UsageReadInput {
         val now = System.currentTimeMillis()
         val since = args.stringOrNull("since")?.let {
-            parseIsoOrMillis(it) ?: invalidArgs("since 不是有效的时间：$it")
+            parseToolTime(it) ?: invalidArgs("since 不是有效的时间：$it", TOOL_TIME_FORMATS)
         } ?: (now - DEFAULT_WINDOW_MS)
         val until = args.stringOrNull("until")?.let {
-            parseIsoOrMillis(it) ?: invalidArgs("until 不是有效的时间：$it")
+            parseToolTime(it, endOfDay = true) ?: invalidArgs("until 不是有效的时间：$it", TOOL_TIME_FORMATS)
         } ?: now
         if (since >= until) invalidArgs("since 必须早于 until")
         return UsageReadInput(
