@@ -1,6 +1,7 @@
 package io.github.fartown.movo.agent.tools.skill
 
 import android.content.Context
+import io.github.fartown.movo.agent.model.AgentHttpClient
 import io.github.fartown.movo.agent.skill.GitHubSkillRepositoryParser
 import io.github.fartown.movo.agent.skill.GitHubSkillSourceException
 import io.github.fartown.movo.agent.skill.PublicGitHubSkillSource
@@ -10,13 +11,13 @@ import io.github.fartown.movo.agent.skill.SkillIndexService
 import io.github.fartown.movo.agent.skill.SkillInstallErrorCode
 import io.github.fartown.movo.agent.skill.SkillInstallResult
 import io.github.fartown.movo.agent.skill.SkillLoader
+import io.github.fartown.movo.agent.skill.SkillParser
 import io.github.fartown.movo.agent.skill.SkillResourceErrorCode
 import io.github.fartown.movo.agent.skill.SkillResourceError
 import io.github.fartown.movo.agent.skill.SkillResourceListResult
 import io.github.fartown.movo.agent.skill.SkillResourceReadResult
 import io.github.fartown.movo.agent.skill.SkillRuntime
 import io.github.fartown.movo.agent.tools.core.ToolErrorCode
-import okhttp3.OkHttpClient
 
 /**
  * 真实 skill_read 后端：复用 SkillRuntime 的索引、加载器与资源读取器。
@@ -39,7 +40,15 @@ internal class AndroidSkillReadBackend(context: Context) : SkillReadBackend {
                 is SkillResourceListResult.Success -> r.resources.map { it.relativePath }
                 is SkillResourceListResult.Failure -> emptyList()
             }
-            return SkillReadResult.Body(entry.id, entry.rootPath, resolved.bodyMarkdown, files)
+            return SkillReadResult.Body(
+                skill = entry.id,
+                rootPath = entry.rootPath,
+                content = resolved.bodyMarkdown,
+                files = files,
+                name = entry.name,
+                description = entry.description,
+                frontmatter = resolved.frontmatter,
+            )
         }
 
         return when (val r = resourceReader.readText(entry, path)) {
@@ -63,18 +72,33 @@ internal class AndroidSkillReadBackend(context: Context) : SkillReadBackend {
 }
 
 /**
+ * curated / inspect 的候选（名字, 路径）对上已安装技能：和重构前一样按规范化后的 id、名称比较，
+ * 停用的也算已安装（enabled=false），免得模型当成没装再去装、撞同名冲突。
+ */
+internal fun skillCatalogItems(candidates: List<Pair<String, String>>, entries: List<SkillIndexEntry>): List<SkillCatalogItem> {
+    val installed = entries.filter { it.installed }
+    return candidates.map { (name, path) ->
+        val key = SkillParser.normalizeSkillLookup(name)
+        val match = installed.firstOrNull { SkillParser.normalizeSkillLookup(it.id) == key }
+            ?: installed.firstOrNull { SkillParser.normalizeSkillLookup(it.name) == key }
+        SkillCatalogItem(name, path, installed = match != null, enabled = match?.enabled ?: true)
+    }
+}
+
+/**
  * 真实 skill_install 后端：curated/inspect 走 GitHub 只读发现，install 下载归档后交 SkillPackageInstaller。
  *
  * 注意：
- * - PublicGitHubSkillSource 需要一个 OkHttpClient；这里用默认实例（无自定义缓存/代理），由 Provider 关闭。
+ * - PublicGitHubSkillSource 用共享的 AgentHttpClient.client（连接 15 秒、读 60 秒，和重构前一样）；
+ *   Provider 关闭时只取消本次任务里进行中的请求，不关共享客户端。
+ * - 列表里的 installed 按「已安装」判断，不看是否启用：停用的技能也算装了（另标 enabled=false）。
  * - replace=true 时 installRepositoryZip 要求 expectedReplacementIds 等于所选全部技能 id；这里从归档
  *   二次 inspect 推导 id，与所选路径匹配后传入。
  * - install 的 ref 是 SkillInstallTool 核对过的、检查时的 commitSha（下载时 GitHub 返回的 commit 不一致会报错）。
  */
 internal class AndroidSkillInstallBackend(context: Context) : SkillInstallBackend, AutoCloseable {
     private val appContext = context.applicationContext
-    private val httpClient = OkHttpClient()
-    private val source = PublicGitHubSkillSource(appContext.cacheDir, httpClient)
+    private val source = PublicGitHubSkillSource(appContext.cacheDir, AgentHttpClient.client)
     private val installer = SkillRuntime.createPackageInstaller(appContext)
     private val indexService = SkillRuntime.createIndexService(appContext)
 
@@ -84,12 +108,13 @@ internal class AndroidSkillInstallBackend(context: Context) : SkillInstallBacken
             repository = insp.repository,
             ref = insp.ref,
             commitSha = insp.commitSha,
-            items = insp.candidates.map {
-                SkillCatalogItem(it.name, it.path, installed = indexService.findInstalledSkill(it.name) != null)
-            },
+            items = catalogItems(insp.candidates.map { it.name to it.path }),
             prefix = insp.prefix,
         )
     }.getOrElse { mapGithubFailure(it) }
+
+    private fun catalogItems(candidates: List<Pair<String, String>>): List<SkillCatalogItem> =
+        skillCatalogItems(candidates, indexService.listSkillsForManagement())
 
     override fun inspect(repository: String, ref: String?, path: String?): SkillDiscoverResult = runCatching {
         val repo = GitHubSkillRepositoryParser.resolve(repository, ref, path)
@@ -98,9 +123,7 @@ internal class AndroidSkillInstallBackend(context: Context) : SkillInstallBacken
             repository = insp.repository,
             ref = insp.ref,
             commitSha = insp.commitSha,
-            items = insp.candidates.map {
-                SkillCatalogItem(it.name, it.path, installed = indexService.findInstalledSkill(it.name) != null)
-            },
+            items = catalogItems(insp.candidates.map { it.name to it.path }),
             prefix = insp.prefix,
         )
     }.getOrElse { mapGithubFailure(it) }
@@ -145,7 +168,7 @@ internal class AndroidSkillInstallBackend(context: Context) : SkillInstallBacken
             result.installed.map { InstalledSkillView(it.id, it.name) },
         )
         is SkillInstallResult.Conflict -> SkillInstallOutcome.Conflict(
-            result.conflicts.map { SkillConflictView(it.id, it.name, it.existingSource) },
+            result.conflicts.map { SkillConflictView(it.id, it.name, it.existingSource, it.replaceAllowed) },
         )
         is SkillInstallResult.Failure ->
             if (result.error.code == SkillInstallErrorCode.COMMIT_FAILED) {

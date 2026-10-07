@@ -25,12 +25,16 @@ import org.json.JSONObject
 
 /** skill_read 的后端读取结果。 */
 internal sealed interface SkillReadResult {
-    /** 不带 path：SKILL.md 正文 + 技能根路径 + 资源文件清单（脚本靠 terminal_run 执行需要路径）。 */
+    /** 不带 path：SKILL.md 头部信息与正文 + 技能根路径 + 资源文件清单（脚本靠 terminal_run 执行需要路径）。 */
     data class Body(
         val skill: String,
         val rootPath: String,
         val content: String,
         val files: List<String>,
+        val name: String = skill,
+        val description: String = "",
+        /** SKILL.md 开头 --- 之间的字段（name、description、compatibility 等）。 */
+        val frontmatter: Map<String, String> = emptyMap(),
     ) : SkillReadResult
 
     /** 带 path：技能目录内某个文本资源。 */
@@ -66,11 +70,15 @@ internal data class SkillReadOutput(
     val content: String,
     val files: List<String>,
     val nextCursor: Int?,
+    /** 读 SKILL.md 时才有：名称、描述与 frontmatter。 */
+    val header: SkillHeader? = null,
 ) : ToolOutput
 
+internal data class SkillHeader(val name: String, val description: String, val frontmatter: Map<String, String>)
+
 /**
- * skill_read（只读，§38）：读已安装技能。不带 path 读 SKILL.md 正文；带 path 读技能目录内文本资源。
- * 技能索引已在系统提示里，这里不做列表检索。返回 skill、path、content、root_path、files[]。
+ * skill_read（只读，§38）：读已安装技能。不带 path 读 SKILL.md 正文（另给 name、description、frontmatter）；
+ * 带 path 读技能目录内文本资源。技能索引已在系统提示里，这里不做列表检索。返回 skill、path、content、root_path、files[]。
  */
 internal class SkillReadTool(
     private val backend: SkillReadBackend,
@@ -78,7 +86,7 @@ internal class SkillReadTool(
     override val name = "skill_read"
     override val domain = ToolDomain.SKILL
     override val summary =
-        "读已安装技能。不带 path 读 SKILL.md 正文，带 path 读技能目录内文本资源。" +
+        "读已安装技能。不带 path 读 SKILL.md（name、description、frontmatter 和正文），带 path 读技能目录内文本资源。" +
             "返回 content、root_path、files[]（脚本用 terminal_run 执行需要路径）。"
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
@@ -102,7 +110,10 @@ internal class SkillReadTool(
         ctx: ToolContext,
     ): Verdict<SkillReadOutput> = when (val result = backend.read(input.skill, input.path)) {
         is SkillReadResult.Body -> page(
-            SkillReadOutput(result.skill, null, result.rootPath, result.content, result.files, null),
+            SkillReadOutput(
+                result.skill, null, result.rootPath, result.content, result.files, null,
+                header = SkillHeader(result.name, result.description, result.frontmatter),
+            ),
             input.cursor,
         )
         is SkillReadResult.Resource -> page(
@@ -145,6 +156,13 @@ internal class SkillReadTool(
     override fun renderForModel(output: SkillReadOutput): ModelContent = ModelContent.Json(
         JSONObject()
             .put("skill", output.skill)
+            .apply {
+                output.header?.let { header ->
+                    put("name", header.name)
+                    put("description", header.description)
+                    put("frontmatter", JSONObject().apply { header.frontmatter.forEach { (k, v) -> put(k, v) } })
+                }
+            }
             .put("path", output.path ?: JSONObject.NULL)
             .put("root_path", output.rootPath)
             .put("content", output.content)

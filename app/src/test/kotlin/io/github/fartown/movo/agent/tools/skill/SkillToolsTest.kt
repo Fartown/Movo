@@ -204,6 +204,90 @@ class SkillToolsTest {
     }
 
     @Test
+    fun read_body_returnsNameDescriptionFrontmatter() {
+        val body = SkillReadResult.Body(
+            "pdf", "/root/pdf", "# 正文", emptyList(),
+            name = "PDF 工具", description = "处理 PDF",
+            frontmatter = mapOf("name" to "PDF 工具", "description" to "处理 PDF", "compatibility" to "需要终端"),
+        )
+        val data = JSONObject(pipeline(readBackend = FakeRead(body)).execute(call("skill_read", """{"skill":"pdf"}""")).content)
+            .getJSONObject("data")
+        assertEquals("PDF 工具", data.getString("name"))
+        assertEquals("处理 PDF", data.getString("description"))
+        assertEquals("需要终端", data.getJSONObject("frontmatter").getString("compatibility"))
+    }
+
+    @Test
+    fun read_resource_hasNoHeader() {
+        val p = pipeline(readBackend = FakeRead(SkillReadResult.Resource("pdf", "docs/a.md", "/root/pdf", "资源")))
+        val data = JSONObject(p.execute(call("skill_read", """{"skill":"pdf","path":"docs/a.md"}""")).content).getJSONObject("data")
+        assertFalse(data.has("frontmatter"))
+    }
+
+    @Test
+    fun install_conflict_saysIdAndWhetherReplaceable() {
+        val backend = FakeInstall(
+            SkillInstallOutcome.Conflict(listOf(SkillConflictView("alpha", "Alpha", "builtin", replaceAllowed = false))),
+        )
+        val p = pipeline(installBackend = backend, interaction = approve)
+        p.inspect()
+        val json = JSONObject(p.install().content)
+        assertEquals("CONFLICT", json.getString("code"))
+        assertTrue(json.getString("message").contains("id alpha"))
+        assertTrue(json.getString("message").contains("内置技能"))
+        assertTrue(json.getString("message").contains("不能替换"))
+        assertTrue(json.getString("hint").contains("带 replace=true 也装不上"))
+    }
+
+    @Test
+    fun install_conflict_userSkill_canReplace() {
+        val backend = FakeInstall(SkillInstallOutcome.Conflict(listOf(SkillConflictView("alpha", "alpha", "user", replaceAllowed = true))))
+        val p = pipeline(installBackend = backend, interaction = approve)
+        p.inspect()
+        val json = JSONObject(p.install().content)
+        assertTrue(json.getString("message").contains("可以替换"))
+        assertTrue(json.getString("hint").contains("replace=true 重试"))
+    }
+
+    @Test
+    fun catalogItems_disabledSkillCountsAsInstalled() {
+        fun entry(id: String, name: String, enabled: Boolean, installed: Boolean = true) =
+            io.github.fartown.movo.agent.skill.SkillIndexEntry(
+                id = id, name = name, description = "", rootPath = "/s/$id", skillFilePath = "/s/$id/SKILL.md",
+                hasScripts = false, hasReferences = false, hasAssets = false, hasEvals = false,
+                enabled = enabled, installed = installed,
+            )
+        val items = skillCatalogItems(
+            listOf("alpha" to "skills/alpha", "Beta" to "skills/beta", "gamma" to "skills/gamma", "delta" to "skills/delta"),
+            listOf(
+                entry("alpha", "alpha", enabled = false),
+                entry("beta", "Beta", enabled = true),
+                entry("delta", "delta", enabled = true, installed = false),
+            ),
+        )
+        assertEquals(listOf(true, true, false, false), items.map { it.installed })
+        assertEquals(false, items[0].enabled)
+        assertEquals(true, items[1].enabled)
+    }
+
+    @Test
+    fun inspect_rendersDisabledFlag() {
+        val backend = object : SkillInstallBackend {
+            override fun curated() = SkillDiscoverResult.Failed(io.github.fartown.movo.agent.tools.core.ToolErrorCode.NOT_FOUND, "")
+            override fun inspect(repository: String, ref: String?, path: String?) = SkillDiscoverResult.Items(
+                "o/r", "main", "sha1",
+                listOf(SkillCatalogItem("alpha", "skills/alpha", installed = true, enabled = false)),
+            )
+            override fun install(repository: String, ref: String?, paths: List<String>, replace: Boolean, cancelled: () -> Boolean) =
+                SkillInstallOutcome.Installed(emptyList())
+        }
+        val item = JSONObject(pipeline(installBackend = backend).inspect().content)
+            .getJSONObject("data").getJSONArray("items").getJSONObject(0)
+        assertTrue(item.getBoolean("installed"))
+        assertFalse(item.getBoolean("enabled"))
+    }
+
+    @Test
     fun install_commitUncertain_unknown() {
         val p = pipeline(installBackend = FakeInstall(SkillInstallOutcome.CommitUncertain), interaction = approve)
         p.inspect()
