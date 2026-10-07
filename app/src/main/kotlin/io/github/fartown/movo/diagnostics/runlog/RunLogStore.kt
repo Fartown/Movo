@@ -605,8 +605,8 @@ internal class RunLogStore(
     }
 
     /**
-     * 启动检查（方案 §5.5）：删掉没有 run_end 的任务目录（进程被杀）和残留的临时文件，
-     * 按目录重建账本，再按条数和总量淘汰最旧的。
+     * 启动检查（方案 §5.5，10-07 改）：进程被杀的任务没有 run_end，补一条 `interrupted` 后保留；
+     * 一条完整记录都没有的目录和残留的临时文件删掉；按目录重建账本，再按条数和总量淘汰最旧的。
      */
     private fun startup() {
         if (!root.isDirectory) {
@@ -618,7 +618,8 @@ internal class RunLogStore(
         val found = ArrayList<DirInfo>()
         root.listFiles()?.filter { it.isDirectory }?.forEach { dir ->
             val match = DIR_NAME.matchEntire(dir.name)
-            if (match == null || !endsWithRunEnd(File(dir, LOG_FILE))) {
+            val log = File(dir, LOG_FILE)
+            if (match == null || !(endsWithRunEnd(log) || closeInterrupted(log))) {
                 dir.deleteRecursively()
                 return@forEach
             }
@@ -661,6 +662,47 @@ internal class RunLogStore(
                 String(buffer, Charsets.UTF_8).trimEnd('\n').substringAfterLast('\n').contains("\"t\":\"run_end\"")
             }
         }.getOrDefault(false)
+    }
+
+    /**
+     * 被杀的任务收尾：去掉写了一半的最后一行，补一条 run_end（`status=interrupted`，时刻沿用最后一条记录）。
+     * 一条完整记录都没有时返回 false。
+     */
+    private fun closeInterrupted(log: File): Boolean = runCatching {
+        if (!log.isFile) return false
+        RandomAccessFile(log, "rw").use { file ->
+            val cut = lastNewlineBefore(file, file.length())
+            if (cut < 0) return false
+            if (file.length() > cut + 1) file.setLength(cut + 1)
+            val start = lastNewlineBefore(file, cut) + 1
+            val head = ByteArray(minOf(cut - start, HEAD_BYTES).toInt())
+            file.seek(start)
+            file.readFully(head)
+            val text = String(head, Charsets.UTF_8)
+            if (text.contains("\"t\":\"run_end\"")) return true
+            fun number(name: String) = Regex("\"$name\":(\\d+)").find(text)?.groupValues?.get(1)?.toLongOrNull()
+            val line = linkedMapOf<String, Any?>(
+                "seq" to number("seq")?.plus(1), "t" to "run_end", "at" to number("at"), "el" to number("el"),
+                "status" to "interrupted",
+            ).filterValues { it != null }
+            file.seek(file.length())
+            file.write((RunLogJson.write(line) + "\n").toByteArray(Charsets.UTF_8))
+        }
+        true
+    }.getOrDefault(false)
+
+    /** [before] 之前最后一个换行符的位置；没有返回 -1。 */
+    private fun lastNewlineBefore(file: RandomAccessFile, before: Long): Long {
+        var end = before
+        val buffer = ByteArray(SCAN_BYTES)
+        while (end > 0) {
+            val size = minOf(end, SCAN_BYTES.toLong()).toInt()
+            file.seek(end - size)
+            file.readFully(buffer, 0, size)
+            for (index in size - 1 downTo 0) if (buffer[index] == '\n'.code.toByte()) return end - size + index
+            end -= size
+        }
+        return -1
     }
 
     private fun dirSize(dir: File): Long = dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
@@ -725,6 +767,9 @@ internal class RunLogStore(
         const val INDEX_FILE = "index.json"
         const val TEMP_SUFFIX = ".tmp"
         private const val TAIL_BYTES = 64L * 1024
+        private const val SCAN_BYTES = 64 * 1024
+        /** 读最后一行开头这么多字节，够取出 seq、t、at、el。 */
+        private const val HEAD_BYTES = 256L
         /** 短于这个长度的 data URL 不值得抽出去。 */
         private const val MIN_DATA_URL_CHARS = 64
         private val DIR_NAME = Regex("""(R\d+)-(\d{8}-\d{6})""")

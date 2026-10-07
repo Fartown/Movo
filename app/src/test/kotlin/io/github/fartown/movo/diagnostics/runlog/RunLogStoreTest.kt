@@ -162,11 +162,18 @@ class RunLogStoreTest {
     }
 
     @Test
-    fun startupDeletesKilledRunsAndTemporaryFiles() {
+    fun startupKeepsKilledRunsAsInterruptedAndDeletesTemporaryFiles() {
         val root = File(temp.root, "run-log")
+        // 进程在写第 3 行时被杀：这一行只写了一半。
         val killed = File(root, "R1-20261006-100000").apply { mkdirs() }
-        File(killed, RunLogStore.LOG_FILE).writeText("""{"seq":1,"t":"run_start"}""" + "\n")
-        val ended = File(root, "R2-20261006-100100").apply { mkdirs() }
+        File(killed, RunLogStore.LOG_FILE).writeText(
+            """{"seq":1,"t":"run_start","at":1790000000000,"el":0}""" + "\n" +
+                """{"seq":2,"t":"tool_start","at":1790000001000,"el":1000,"name":"ui_tap"}""" + "\n" +
+                """{"seq":3,"t":"tool_end","at":17900""",
+        )
+        val nothing = File(root, "R2-20261006-100030").apply { mkdirs() }
+        File(nothing, RunLogStore.LOG_FILE).writeText("""{"seq":1,"t":"run_st""")
+        val ended = File(root, "R3-20261006-100100").apply { mkdirs() }
         File(ended, RunLogStore.LOG_FILE).writeText(
             """{"seq":1,"t":"run_start"}""" + "\n" + """{"seq":2,"t":"run_end","status":"completed"}""" + "\n",
         )
@@ -175,10 +182,24 @@ class RunLogStoreTest {
         val store = store(root = root)
         assertTrue(store.awaitIdle())
 
-        assertFalse(killed.exists())
+        val lines = File(killed, RunLogStore.LOG_FILE).readLines()
+        assertEquals(
+            listOf(
+                """{"seq":1,"t":"run_start","at":1790000000000,"el":0}""",
+                """{"seq":2,"t":"tool_start","at":1790000001000,"el":1000,"name":"ui_tap"}""",
+                """{"seq":3,"t":"run_end","at":1790000001000,"el":1000,"status":"interrupted"}""",
+            ),
+            lines,
+        )
+        assertFalse(nothing.exists())
         assertTrue(ended.isDirectory)
         assertFalse(leftover.exists())
-        assertEquals(listOf("R2-20261006-100100"), store.dirInfos().map { it.dir })
+        assertEquals(listOf("R1-20261006-100000", "R3-20261006-100100"), store.dirInfos().map { it.dir })
+        assertNull(RunLogExporter.refusal(store.dirInfo("R1-20261006-100000")))
+
+        // 再启动一次：已经补过的不再补。
+        assertTrue(store(root = root).awaitIdle())
+        assertEquals(lines, File(killed, RunLogStore.LOG_FILE).readLines())
     }
 
     @Test
