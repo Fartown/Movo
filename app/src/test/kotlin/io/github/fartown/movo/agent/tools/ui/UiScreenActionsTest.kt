@@ -287,6 +287,16 @@ class UiScreenActionsTest {
     }
 
     @Test
+    fun scrollUntil_withIndex_onlyTheFirstScrollUsesIt() {
+        // 滚一下 index 就失效：之后改滚页面上最主要的可滚动区域。
+        val fake = Fake().apply { textVisibleAfter = 3 }
+        run(fake, scroll(fake), """{"direction":"down","index":2,"observation_id":"obs1","until_text":"设置"}""")
+        assertEquals(3, fake.scrollRequests.size)
+        assertEquals(2, fake.scrollRequests[0].element?.index)
+        assertTrue(fake.scrollRequests.drop(1).all { it.element == null })
+    }
+
+    @Test
     fun scrollUntil_unconfirmedScrollAtTheEnd_reportsNotFoundInsteadOfUnknown() {
         // 真机：设置首页找不存在的「关于手机」，滚到底时那一下确认不了动没动，原来整次报 unknown。
         val fake = Fake().apply {
@@ -556,6 +566,7 @@ class UiScreenActionsTest {
         var textVisibleAfter: Int? = null
         var scrollCalls = 0
         var unknownScrollMoves = false
+        val scrollRequests = mutableListOf<UiScrollRequest>()
         private var moves = 0
         val scrollScript = ArrayDeque<UiScrollResult>()
         var tapResult: UiInjectResult = UiInjectResult.Dispatched("gesture", APP, false, touch = UiTouch.Press(540, 1200, 800))
@@ -610,6 +621,7 @@ class UiScreenActionsTest {
 
         override fun scroll(request: UiScrollRequest, env: ToolEnvironment): UiScrollResult {
             scrollCalls++
+            scrollRequests += request
             val result = scrollScript.removeFirstOrNull() ?: UiScrollResult.Finished(true, false, APP)
             if (result is UiScrollResult.Finished && result.moved) moves++
             // 确认不了动没动的一下，实际上可能动了。

@@ -64,7 +64,7 @@ internal class UiScrollTool(
     override val domain = ToolDomain.UI
     override val summary =
         "按想看到的内容方向滚动：up、down、left、right。方向明确的滑动/翻页（“往下滑/往上翻”）直接用它，不必先 ui_observe。" +
-            "可用 index（需 observation_id）指定可滚动节点；until_text 一直滚到该文字出现（最多 $MAX_UNTIL_SCROLLS 次）。" +
+            "可用 index（需 observation_id）指定可滚动节点；until_text 一直滚到该文字出现（最多 $MAX_UNTIL_SCROLLS 次；带 index 时只有第一下滚它，之后滚页面上主要的可滚动区域）。" +
             "返回是否移动、是否到边界。"
 
     override fun availability(env: ToolEnvironment): ToolAvailability =
@@ -177,9 +177,14 @@ internal class UiScrollTool(
         var atBoundary: Boolean? = null
         var packageName: String? = null
         var stopped: String? = null
+        var attempts = 0
         while (hit == null && scrolls < MAX_UNTIL_SCROLLS) {
             ctx.checkCancelled()
-            val step = backend.scroll(UiScrollRequest(input.direction, input.element, resolution.backend), ctx.env)
+            // index 绑定它那次观察，滚一下内容就变了、index 随之失效（真机：设置页第二下报「窗口内容已经变化」）。
+            // 第一下按 index 滚，之后改滚页面上最主要的可滚动区域。
+            val element = input.element.takeIf { attempts == 0 }
+            attempts++
+            val step = backend.scroll(UiScrollRequest(input.direction, element, resolution.backend), ctx.env)
             if (step !is UiScrollResult.Finished) {
                 if (step is UiScrollResult.DirectionMismatch || step is UiScrollResult.OutcomeUnknown) {
                     // 这一下确认不了动没动（真机：设置页滚到底时就这样）。滚动不改数据，直接再看一眼：
