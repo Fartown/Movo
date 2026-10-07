@@ -453,9 +453,10 @@ class BrowserToolsTest {
         assertEquals(null, element.href)
         assertEquals(null, element.type)
         assertEquals(null, element.ariaLabel)
-        assertEquals(20, element.bounds!!.getInt("x"))
-        assertEquals(200, element.bounds!!.getInt("width"))
-        assertEquals(120, element.bounds!!.getInt("center_x"))
+        val bounds = element.bounds!!
+        assertEquals(20, bounds.getInt("x"))
+        assertEquals(200, bounds.getInt("width"))
+        assertEquals(120, bounds.getInt("center_x"))
         assertTrue(read.truncated)
         assertEquals(40, read.matchCount)
 
