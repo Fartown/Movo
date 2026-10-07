@@ -187,7 +187,9 @@ internal class MemoryReadTool(
         for (i in included) {
             val joins = text != null && i == previous + 1
             val piece = if (joins) "\n" + lines[i] else lines[i]
-            if (!budget.fits(piece)) {
+            // 新起一段还要算上 {"start_line":…,"text":""} 这些字。
+            val overhead = if (joins) 0 else SEGMENT_OVERHEAD
+            if (!budget.fits(piece, overhead)) {
                 if (segments.isEmpty() && text == null) {
                     // 第一行就超出预算：截短给出，下次从下一行接着找。
                     segments += MemorySegment(i + 1, budget.clip(lines[i]) + LONG_LINE_MARK)
@@ -197,7 +199,7 @@ internal class MemoryReadTool(
                 }
                 break
             }
-            budget.take(piece)
+            budget.take(piece, overhead)
             if (!joins) {
                 closeSegment()
                 text = StringBuilder()
@@ -261,12 +263,13 @@ internal class MemoryReadTool(
         private var chars = 0
         private var escaped = 0
 
-        fun fits(piece: String): Boolean =
-            chars + piece.length <= maxChars && escaped + escapedLength(piece) <= ESCAPED_LIMIT
+        /** [overhead]：这段文字之外在结果里额外占的字（检索时每段的字段名和行号）。 */
+        fun fits(piece: String, overhead: Int = 0): Boolean =
+            chars + piece.length <= maxChars && escaped + escapedLength(piece) + overhead <= ESCAPED_LIMIT
 
-        fun take(piece: String) {
+        fun take(piece: String, overhead: Int = 0) {
             chars += piece.length
-            escaped += escapedLength(piece)
+            escaped += escapedLength(piece) + overhead
         }
 
         /** 把放不下的单行截到剩余预算内。 */
@@ -291,5 +294,8 @@ internal class MemoryReadTool(
         private const val ESCAPED_LIMIT = 22_000
 
         private const val LONG_LINE_MARK = "…（这一行太长，后面省略）"
+
+        /** 检索结果每段在 JSON 里的固定开销：{"start_line":123456,"text":""}, */
+        private const val SEGMENT_OVERHEAD = 32
     }
 }

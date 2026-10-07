@@ -177,6 +177,16 @@ class MemoryToolsTest {
     }
 
     @Test
+    fun read_query_manySmallSegments_staysUnderResultLimit() {
+        // 命中行彼此隔开：每段只有一两行，段数很多时字段开销也要算进去。
+        val lines = (1..6000).map { if (it % 4 == 0) "咖啡$it" else "x" }
+        val p = pipeline(FakeMemory(lines.joinToString("\n")))
+        val r = p.execute(call("memory_read", """{"query":"咖啡","max_chars":20000}"""))
+        assertTrue(r.content.length <= io.github.fartown.movo.agent.tools.core.ToolProjection.MAX_MODEL_CHARS)
+        assertTrue(JSONObject(r.content).getJSONObject("data").getBoolean("has_more"))
+    }
+
+    @Test
     fun read_longSingleLine_isClipped() {
         val p = pipeline(FakeMemory("a".repeat(30_000) + "\n第二行"))
         val data = JSONObject(p.execute(call("memory_read", "{}")).content).getJSONObject("data")
