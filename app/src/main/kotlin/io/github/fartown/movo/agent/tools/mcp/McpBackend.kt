@@ -27,7 +27,8 @@ internal interface McpBackend : AutoCloseable {
 internal sealed interface McpCallOutcome {
     data class Success(
         val content: List<String>,
-        val structured: JSONObject?,
+        /** structuredContent：对象或数组（任意 JSON 值都保留，和重构前一样）。 */
+        val structured: Any?,
         val images: List<AgentModelClient.ModelImage>,
         val truncated: Boolean,
         /** 非空表示 MCP 工具自身返回了 isError（取对方原文），由调用方映射成 EXTERNAL_ERROR。 */
@@ -114,7 +115,7 @@ internal class RealMcpBackend(
             }
         }
         return try {
-            adapt(client.callTool(entry.definition, arguments))
+            McpResultAdapter.adapt(entry, client.callTool(entry.definition, arguments))
         } catch (throwable: Throwable) {
             McpCallOutcome.Failure(McpErrorMapping.fromThrowable(throwable))
         }
@@ -128,8 +129,35 @@ internal class RealMcpBackend(
         }
         closing.forEach { runCatching { it.close() } }
     }
+}
 
-    private fun adapt(result: JSONObject): McpCallOutcome {
+/**
+ * 把 tools/call 的原始结果规范化为 [McpCallOutcome]（沿用旧 McpRunContext.adaptResult 的抽取与大小上限）：
+ * 文本 64KB、结构化 64KB、图片 2MB；input_required 与新协议下未完成的结果按不支持返回。
+ */
+internal object McpResultAdapter {
+    fun adapt(entry: McpToolEntry, result: JSONObject): McpCallOutcome {
+        // 执行中要求补充输入（elicitation）、或新协议下没完成：不能当成功，否则模型拿个空结果以为做完了。
+        val resultType = result.optString("resultType")
+        if (resultType == "input_required") {
+            return McpCallOutcome.Failure(
+                ToolError(
+                    ToolErrorCode.UNSUPPORTED,
+                    "这个 MCP 工具在执行中要求补充输入，Movo 暂不支持",
+                    hint = "换个参数把信息一次给全，或告诉用户需要在别处完成",
+                    detail = "input_required",
+                ),
+            )
+        }
+        if (entry.server.lastProtocolVersion == McpProtocolMode.LATEST && resultType != "complete") {
+            return McpCallOutcome.Failure(
+                ToolError(
+                    ToolErrorCode.UNSUPPORTED,
+                    "MCP 工具返回了不支持的结果类型（没有完成）",
+                    detail = "resultType=${resultType.ifBlank { "缺失" }}",
+                ),
+            )
+        }
         val content = result.optJSONArray("content") ?: JSONArray()
         val textItems = mutableListOf<String>()
         val images = mutableListOf<AgentModelClient.ModelImage>()
@@ -188,8 +216,7 @@ internal class RealMcpBackend(
             }
         }
 
-        val structured = result.opt("structuredContent")
-            ?.takeUnless { it == JSONObject.NULL } as? JSONObject
+        val structured = result.opt("structuredContent")?.takeUnless { it == JSONObject.NULL }
         val boundedStructured = structured?.let {
             if (it.toString().toByteArray().size <= MAX_STRUCTURED_BYTES) {
                 it
@@ -201,7 +228,8 @@ internal class RealMcpBackend(
 
         val isError = result.optBoolean("isError", false)
         val remoteError = if (isError) {
-            textItems.joinToString("\n").ifBlank { "MCP 工具返回了错误但未附说明" }
+            // 对方原文进 detail：截到 4000 字，免得错误结果本身超长、连错误码都给不到模型。
+            textItems.joinToString("\n").ifBlank { "MCP 工具返回了错误但未附说明" }.take(MAX_REMOTE_ERROR_CHARS)
         } else {
             null
         }
@@ -226,11 +254,10 @@ internal class RealMcpBackend(
         return substring(0, low)
     }
 
-    private companion object {
-        const val MAX_TEXT_BYTES = 64 * 1024
-        const val MAX_STRUCTURED_BYTES = 64 * 1024
-        const val MAX_IMAGE_BYTES = 2 * 1024 * 1024
-    }
+    private const val MAX_TEXT_BYTES = 64 * 1024
+    private const val MAX_STRUCTURED_BYTES = 64 * 1024
+    private const val MAX_IMAGE_BYTES = 2 * 1024 * 1024
+    private const val MAX_REMOTE_ERROR_CHARS = 4_000
 }
 
 /**

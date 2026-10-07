@@ -19,14 +19,27 @@ class BrowserDomScriptsTest {
     }
 
     @Test
-    fun `target resolution does not apply visibility or hit target guards`() {
+    fun `target resolution prefers the visible match like inspect, without hit target guards`() {
         val script = BrowserDomScripts.wrap(
             BrowserDomScripts.click(selector = "#submit", x = null, y = null)
         )
 
-        assertTrue(script.contains("document.querySelector(selector);"))
+        // 执行和动作前的检查取同一个元素：第一个可见的，都不可见再取第一个（不拒绝看不见的）。
+        val resolve = script.substringAfter("function resolveTarget(").substringBefore("function markdownEscape(")
+        assertTrue(resolve.contains("if (visible(matches[index])) { target = matches[index]; break; }"))
+        assertTrue(resolve.contains("if (!target && matches.length) target = matches[0];"))
+        val inspect = BrowserDomScripts.inspectTarget("#submit", null, null)
+        assertTrue(inspect.contains("if (visible(matches[i])) { target = matches[i]; break; }"))
+        assertTrue(inspect.contains("if (!target && matches.length) target = matches[0];"))
         assertFalse(script.contains("requireHitTarget"))
         assertFalse(script.contains("TARGET_OCCLUDED"))
+    }
+
+    @Test
+    fun `find elements reports how many matched`() {
+        val script = BrowserDomScripts.findElements(null)
+        assertTrue(script.contains("match_count: matches.length"))
+        assertTrue(script.contains("truncated: scanned < matches.length"))
     }
 
     @Test

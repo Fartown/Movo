@@ -235,7 +235,14 @@ internal class AgentRuntimeRunExecutor(
                 ),
                 cancelled = { runController.isCancelled },
                 characterId = { roleplayContext?.characterId },
-                conversationLoader = { request.history },
+                // conversation_read 读这个对话的完整记录（数据库里没压缩过的 journal，已含这一轮用户的话）
+                // 加上本轮到目前为止的步骤；和重构前的 conversation_history 同一个数据源。
+                conversationLoader = {
+                    val journal = conversationId?.let { id ->
+                        runBlocking { io.github.fartown.movo.ui.app.ConversationRepository.get(appContext).journal(id) }
+                    }.orEmpty()
+                    journal.ifEmpty { request.history } + session.transcript
+                },
                 // GUI 就绪守卫：UI 工具执行前关入口窗口 + 保活无障碍。
                 guards = listOf(GuiReadinessGuard(appContext) { entrySurfaceGuard }),
                 refreshSwitches = { env -> env.copy(switches = liveSwitches(), memoryScope = liveMemoryScope()) },

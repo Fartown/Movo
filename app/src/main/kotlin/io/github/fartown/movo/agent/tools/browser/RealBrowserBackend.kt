@@ -69,22 +69,22 @@ internal class RealBrowserBackend(
         return page(json)
     }
 
-    override fun readReadable(maxChars: Int, cursor: String?): BrowserTextRead {
+    override fun readReadable(maxChars: Int, cursor: String?, offset: Int?, call: BrowserCall): BrowserTextRead {
         val generation = AgentBrowserSession.navigationGeneration()
-        val offset = decodeCursor(cursor, generation)
+        val start = offset ?: decodeCursor(cursor, generation)
         val json = run(
-            JSONObject().put("action", "get_readable").put("max_chars", maxChars).put("offset", offset),
-            NO_CALL,
+            JSONObject().put("action", "get_readable").put("max_chars", maxChars).put("offset", start),
+            call,
         )
-        return textRead(json, generation, defaultFormat = "markdown")
+        return BrowserResultParser.textRead(json, generation, defaultFormat = "markdown")
     }
 
-    override fun readText(selector: String?, maxChars: Int, cursor: String?): BrowserTextRead {
+    override fun readText(selector: String?, maxChars: Int, cursor: String?, offset: Int?, call: BrowserCall): BrowserTextRead {
         val generation = AgentBrowserSession.navigationGeneration()
-        val offset = decodeCursor(cursor, generation)
-        val args = JSONObject().put("action", "get_text").put("max_chars", maxChars).put("offset", offset)
+        val start = offset ?: decodeCursor(cursor, generation)
+        val args = JSONObject().put("action", "get_text").put("max_chars", maxChars).put("offset", start)
         selector?.let { args.put("selector", it) }
-        return textRead(run(args, NO_CALL), generation, defaultFormat = "text")
+        return BrowserResultParser.textRead(run(args, call), generation, defaultFormat = "text")
     }
 
     /** 解析续读游标（绑 navigationGeneration）；代际不符即 STALE_OBSERVATION。 */
@@ -98,39 +98,26 @@ internal class RealBrowserBackend(
             )
         }
 
-    override fun readElements(selector: String?, cursor: String?): BrowserElementsRead {
+    override fun readElements(selector: String?, cursor: String?, call: BrowserCall): BrowserElementsRead {
         val args = JSONObject().put("action", "find_elements")
         selector?.let { args.put("selector", it) }
-        val json = run(args, NO_CALL)
+        val json = run(args, call)
         val array = json.optJSONArray("elements") ?: JSONArray()
-        val elements = (0 until array.length()).map { index ->
-            val item = array.optJSONObject(index) ?: JSONObject()
-            val sel = item.optString("selector")
-            BrowserElement(
-                // TODO(browser)：旧脚本未写 data-movo-ref，用 selector 充当 ref（browser_act 按 selector 使用）。
-                ref = sel,
-                role = item.optString("role").ifBlank { item.optString("tag", "element") },
-                text = item.optString("text"),
-                selector = sel,
-                editable = isEditable(item),
-                href = item.optString("href").ifBlank { null },
-                bounds = item.optJSONObject("bounds"),
-            )
-        }
-        // find_elements 旧实现不分页（≤16 条），无续读游标。
-        return BrowserElementsRead(elements = elements, nextCursor = null)
+        // 元素位置换成截图像素，和 browser_act 的 x/y 同一单位。
+        val scale = if (array.length() > 0) currentActScale() else 1.0
+        return BrowserResultParser.elements(json, scale)
     }
 
-    override fun screenshot(): BrowserScreenshot {
+    override fun screenshot(call: BrowserCall): BrowserScreenshot {
         val args = JSONObject().put("action", "screenshot").put("read_image", true)
-        val result = AgentBrowserSession.execute(context, args, runId, "")
+        val result = AgentBrowserSession.execute(context, args, call.runId, call.toolCallId)
         val json = parse(result.content)
         throwIfError(json) { false }
         val image = result.images.firstOrNull()
             ?: throw BrowserException(ToolErrorCode.SOURCE_UNAVAILABLE, "截图失败")
         // 缩放比 = 截图像素宽 / 视口 CSS 宽（= captureScale × devicePixelRatio）。
         // 另取一次 page_info 拿 CSS 视口宽；两次调用串行，离屏视口不变，值稳定。
-        val viewportCssWidth = runCatching { pageInfo().optDouble("viewport_width", 0.0) }.getOrDefault(0.0)
+        val viewportCssWidth = runCatching { pageInfo(NO_CALL).optDouble("viewport_width", 0.0) }.getOrDefault(0.0)
         val scale = BrowserCoordinates.scale(image.width, viewportCssWidth)
         lastScreenshotScale = scale
         return BrowserScreenshot(
@@ -143,11 +130,9 @@ internal class RealBrowserBackend(
         )
     }
 
-    override fun pageInfo(): JSONObject {
-        val json = run(JSONObject().put("action", "get_page_info"), NO_CALL)
-        val info = JSONObject()
-        json.keys().forEach { key -> if (key !in ENVELOPE_KEYS) info.put(key, json.get(key)) }
-        return info
+    override fun pageInfo(call: BrowserCall): JSONObject {
+        val json = run(JSONObject().put("action", "get_page_info"), call)
+        return BrowserResultParser.pageInfo(json)
     }
 
     override fun waitForSelector(selector: String, timeoutMs: Long): Boolean {
@@ -205,6 +190,8 @@ internal class RealBrowserBackend(
             summary = json.optString("summary").ifBlank { fallbackSummary },
             submitPoint = classification.submitPoint,
             searchRole = classification.searchRole,
+            tag = json.optString("tag"),
+            type = json.optString("type"),
         )
     }
 
@@ -212,7 +199,7 @@ internal class RealBrowserBackend(
     private fun currentActScale(): Double {
         lastScreenshotScale.takeIf { it > 0.0 }?.let { return it }
         // 无截图在先：退化为 devicePixelRatio（captureScale≈1 时成立），并记录供下次复用。
-        val dpr = runCatching { pageInfo().optDouble("device_pixel_ratio", 1.0) }.getOrDefault(1.0)
+        val dpr = runCatching { pageInfo(NO_CALL).optDouble("device_pixel_ratio", 1.0) }.getOrDefault(1.0)
         return dpr.takeIf { it > 0.0 } ?: 1.0
     }
 
@@ -264,7 +251,7 @@ internal class RealBrowserBackend(
             throw toException(json)
         }
         val matched = json.optJSONObject("matched_element")
-        val summary = matched?.let { it.optString("text").ifBlank { it.optString("selector") } }
+        val summary = matched?.let { with(BrowserResultParser) { it.text("text") ?: it.text("aria_label") ?: it.text("selector") } }
             ?: selector.orEmpty()
         val navigation = BrowserNavigation.detect(
             beforeUrl = before.url,
@@ -272,12 +259,15 @@ internal class RealBrowserBackend(
             afterUrl = json.optString("url"),
             afterTitle = json.optString("title"),
         )
-        return BrowserActResult(
-            navigated = navigation.navigated,
-            url = navigation.url,
-            title = navigation.title,
-            targetSummary = summary,
-            loadTimedOut = false,
+        return BrowserResultParser.actDetails(
+            json,
+            BrowserActResult(
+                navigated = navigation.navigated,
+                url = navigation.url,
+                title = navigation.title,
+                targetSummary = summary,
+                loadTimedOut = false,
+            ),
         )
     }
 
@@ -335,40 +325,104 @@ internal class RealBrowserBackend(
         canGoForward = json.optBoolean("can_go_forward", false),
     )
 
-    private fun textRead(json: JSONObject, generation: Long, defaultFormat: String): BrowserTextRead {
+    private fun parse(content: String): JSONObject =
+        runCatching { JSONObject(content) }.getOrElse {
+            JSONObject().put("ok", false).put("code", "BROWSER_ERROR").put("message", "浏览器结果无法解析")
+        }
+}
+
+/**
+ * 把 AgentBrowserSession 的旧 JSON 信封解析成类型化结果（纯函数，便于单测）。
+ * 脚本里的空值是 JSON null：org.json 的 optString 会把它读成字符串 "null"，这里一律当没有。
+ */
+internal object BrowserResultParser {
+    private val ENVELOPE_KEYS = setOf(
+        "ok", "tool", "action", "status", "code", "message",
+        "url", "display_url", "host", "title", "is_loading", "can_go_back", "can_go_forward", "http_status",
+    )
+
+    /** 信封里 info 模式要带给模型的页面状态（重构前 get_page_info 都有）。 */
+    private val INFO_STATE_KEYS = setOf("is_loading", "can_go_back", "can_go_forward", "http_status")
+
+    /** 字符串字段：JSON null 和空串都当没有。 */
+    fun JSONObject.text(key: String): String? =
+        if (!has(key) || isNull(key)) null else optString(key).takeIf { it.isNotBlank() }
+
+    fun JSONObject.intOrNull(key: String): Int? =
+        if (!has(key) || isNull(key)) null else (opt(key) as? Number)?.toInt()
+
+    /** find_elements：元素带 tag/type/aria_label/placeholder，位置换成截图像素（[scale]）；不分页，匹配更多时 truncated。 */
+    fun elements(json: JSONObject, scale: Double): BrowserElementsRead {
+        val array = json.optJSONArray("elements") ?: JSONArray()
+        val elements = (0 until array.length()).map { index ->
+            val item = array.optJSONObject(index) ?: JSONObject()
+            val sel = item.optString("selector")
+            val tag = item.text("tag")
+            BrowserElement(
+                // TODO(browser)：旧脚本未写 data-movo-ref，用 selector 充当 ref（browser_act 按 selector 使用）。
+                ref = sel,
+                role = item.text("role") ?: tag ?: "element",
+                text = item.text("text").orEmpty(),
+                selector = sel,
+                editable = isEditable(item),
+                href = item.text("href"),
+                bounds = item.optJSONObject("bounds")?.let { BrowserCoordinates.toScreenshotBounds(it, scale) },
+                tag = tag,
+                type = item.text("type"),
+                ariaLabel = item.text("aria_label"),
+                placeholder = item.text("placeholder"),
+            )
+        }
+        return BrowserElementsRead(
+            elements = elements,
+            nextCursor = null,
+            truncated = json.optBoolean("truncated", false),
+            matchCount = json.intOrNull("match_count"),
+        )
+    }
+
+    /** get_page_info：页面脚本给的尺寸、滚动、语言等，加上会话给的加载状态与前进后退；空值不给。 */
+    fun pageInfo(json: JSONObject): JSONObject {
+        val info = JSONObject()
+        json.keys().forEach { key ->
+            if ((key !in ENVELOPE_KEYS || key in INFO_STATE_KEYS) && !json.isNull(key)) info.put(key, json.get(key))
+        }
+        return info
+    }
+
+    fun textRead(json: JSONObject, generation: Long, defaultFormat: String): BrowserTextRead {
         val text = json.optString("text")
         val truncated = json.optBoolean("truncated", false)
         // next_offset 可能为 null（JS 已读完）：没有下一段就不发游标。
         val hasNext = truncated && !json.isNull("next_offset")
         return BrowserTextRead(
             text = text,
-            format = json.optString("content_format", defaultFormat),
-            language = json.optString("language").ifBlank { null },
-            canonicalUrl = json.optString("canonical_url").ifBlank { null },
+            format = json.text("content_format") ?: defaultFormat,
+            language = json.text("language"),
+            canonicalUrl = json.text("canonical_url"),
             returnedChars = json.optInt("returned_chars", text.length),
             nextCursor = if (hasNext) BrowserReadCursor.encode(generation, json.optInt("next_offset")) else null,
+            textLength = json.intOrNull("text_length"),
+            offset = json.optInt("offset", 0),
+            sourceTruncated = json.optBoolean("source_truncated", false),
         )
     }
+
+    /** click/type/scroll 脚本的细节：滚动前后位置、输入字数、是否提交。 */
+    fun actDetails(json: JSONObject, base: BrowserActResult): BrowserActResult = base.copy(
+        scrollBefore = json.intOrNull("before"),
+        scrollAfter = json.intOrNull("after"),
+        typedChars = json.intOrNull("typed_chars"),
+        submitted = if (json.has("submitted") && !json.isNull("submitted")) json.optBoolean("submitted") else null,
+    )
 
     private fun isEditable(item: JSONObject): Boolean {
-        val tag = item.optString("tag").lowercase()
+        val tag = item.text("tag")?.lowercase()
         if (tag == "textarea" || tag == "select") return true
         if (tag == "input") {
-            val type = item.optString("type").lowercase()
+            val type = item.text("type")?.lowercase().orEmpty()
             return type !in setOf("button", "submit", "reset", "checkbox", "radio", "range", "file", "hidden")
         }
-        return item.optString("role") == "textbox"
-    }
-
-    private fun parse(content: String): JSONObject =
-        runCatching { JSONObject(content) }.getOrElse {
-            JSONObject().put("ok", false).put("code", "BROWSER_ERROR").put("message", "浏览器结果无法解析")
-        }
-
-    private companion object {
-        val ENVELOPE_KEYS = setOf(
-            "ok", "tool", "action", "status", "code", "message",
-            "url", "display_url", "host", "title", "is_loading", "can_go_back", "can_go_forward", "http_status",
-        )
+        return item.text("role") == "textbox"
     }
 }

@@ -172,6 +172,32 @@ class ConversationRepositoryTest {
     }
 
     @Test
+    fun journalIsTheUncompressedRecordNotTheCompressedHistory() = runBlocking {
+        // conversation_read 读的是完整记录：压缩后的历史只剩摘要，journal 里原文和工具调用都还在。
+        val u1 = message("user", "查一下北京到上海的高铁")
+        val call = message("assistant", "我查一下").copy(
+            toolCallsJson = """[{"id":"call_1","type":"function","function":{"name":"browser_open","arguments":"{}"}}]""",
+        )
+        val result = message("tool", "G1 08:00 发车").copy(toolCallId = "call_1")
+        val summary = message("user", "此前对话摘要", contextSummary = true)
+        repository.saveConversation("c1", state(emptyList()), "", updatedAt = 1).await()
+        repository.syncModelLog("c1", ConversationModelMessageEntity.LOG_HISTORY, emptyList(), listOf(summary)).await()
+        repository.syncModelLog("c1", ConversationModelMessageEntity.LOG_JOURNAL, emptyList(), listOf(u1, call, result)).await()
+
+        assertEquals(listOf(u1, call, result), repository.journal("c1"))
+    }
+
+    @Test
+    fun journalFallsBackToHistoryWhenThereIsNoJournalYet() = runBlocking {
+        val u1 = message("user", "旧对话")
+        repository.saveConversation("c1", state(emptyList()), "", updatedAt = 1).await()
+        repository.syncModelLog("c1", ConversationModelMessageEntity.LOG_HISTORY, emptyList(), listOf(u1)).await()
+
+        assertEquals(listOf(u1), repository.journal("c1"))
+        assertEquals(emptyList<AgentModelClient.ConversationMessage>(), repository.journal("missing"))
+    }
+
+    @Test
     fun summariesListNewestFirstWithTheirLastMessage() = runBlocking {
         repository.saveConversation("old", state(emptyList()), "旧的", updatedAt = 1).await()
         repository.syncMessages("old", emptyList(), listOf(user("o1", "今天天气"))).await()

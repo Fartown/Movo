@@ -21,6 +21,7 @@ import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.fail
 import io.github.fartown.movo.agent.tools.core.objectSchema
+import org.json.JSONArray
 import org.json.JSONObject
 
 internal data class MemoryReadInput(
@@ -28,7 +29,11 @@ internal data class MemoryReadInput(
     val scope: MemoryScopeArg,
     val offset: Int,
     val limit: Int?,
+    val maxChars: Int = MemoryReadTool.DEFAULT_CHARS,
 ) : ToolInput
+
+/** 检索结果里一段连续的行：[startLine] 是这段第一行的行号。 */
+internal data class MemorySegment(val startLine: Int, val text: String)
 
 internal data class MemoryReadOutput(
     val scope: MemoryScopeArg,
@@ -38,12 +43,19 @@ internal data class MemoryReadOutput(
     val lineCount: Int,
     val matchedLines: Int?,
     val hasMore: Boolean,
+    /** 检索时命中的各段（带行号）；按行读时为空。 */
+    val segments: List<MemorySegment> = emptyList(),
+    /** 还有没给的内容时，下一次从第几行读（检索时是从第几行接着找）。 */
+    val nextOffset: Int? = null,
 ) : ToolOutput
 
 /**
  * memory_read（只读，§36）：读长期记忆。可按关键词检索或按行读。
- * 返回 revision（clear 时需要）与正文：正文渲染成纯文本并带「起始行号」，不逐行塞行号——
+ * 返回 revision（clear 时需要）与正文：按行读时正文渲染成纯文本并带「起始行号」，不逐行塞行号——
  * 逐行行号会诱导模型把 "N: " 写进 memory_write 的 old_text，破坏唯一匹配。
+ * 检索结果分成若干连续段，每段带起始行号（重构前每行带行号），据此可以再按 offset 读附近。
+ * 单次字符预算 max_chars 默认 12000，最多 20000：一次工具结果给模型的总上限是 24000 字（含转义），
+ * 重构前的 32000 放不下；读不完的给 next_offset 接着读。
  */
 internal class MemoryReadTool(
     private val backend: MemoryBackend,
@@ -51,8 +63,8 @@ internal class MemoryReadTool(
     override val name = "memory_read"
     override val domain = ToolDomain.MEMORY
     override val summary =
-        "读长期记忆。可按关键词 query 检索，或用 offset/limit 按行读。返回 revision（clear 时需要）与正文。" +
-            "角色会话用 scope 区分 user、character。"
+        "读长期记忆。可按关键词 query 检索（返回命中段和行号），或用 offset/limit 按行读；没读完时给 next_offset。" +
+            "返回 revision（clear 时需要）与正文。角色会话用 scope 区分 user、character。"
 
     /** 记忆未开启时整体不进目录。 */
     override fun availability(env: ToolEnvironment): ToolAvailability =
@@ -67,8 +79,9 @@ internal class MemoryReadTool(
         // 仅角色会话暴露 character；普通会话只有 user。
         val scopes = if (env.memoryScope == MemoryScope.CHARACTER) listOf("user", "character") else listOf("user")
         string("scope", "记忆作用域", enum = scopes)
-        integer("offset", "按行读的起始行号（从 1 开始）", min = 1)
-        integer("limit", "最多读取的行数", min = 1)
+        integer("offset", "起始行号（从 1 开始）；检索时表示从这一行往后找", min = 1)
+        integer("limit", "按行读时最多读取的行数", min = 1)
+        integer("max_chars", "本次正文的字符预算，1–$MAX_CHARS，默认 $DEFAULT_CHARS", min = 1, max = MAX_CHARS.toLong())
     }
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): MemoryReadInput {
@@ -85,6 +98,7 @@ internal class MemoryReadTool(
             scope = scope,
             offset = args.int("offset", default = 1, range = 1..Int.MAX_VALUE),
             limit = args.intOrNull("limit")?.also { if (it < 1) fail(ToolErrorCode.INVALID_ARGUMENTS, "limit 至少 1") },
+            maxChars = args.int("max_chars", default = DEFAULT_CHARS, range = 1..MAX_CHARS),
         )
     }
 
@@ -112,26 +126,33 @@ internal class MemoryReadTool(
         return Verdict.Read(output)
     }
 
-    /** 按行分页：从 offset 行起，受行数与字符预算双重限制。 */
+    /** 按行分页：从 offset 行起，受行数与字符预算双重限制；比预算还长的单行截短。 */
     private fun renderPage(input: MemoryReadInput, load: MemoryLoad.Ok, lines: List<String>): MemoryReadOutput {
         if (lines.isEmpty()) {
             return MemoryReadOutput(input.scope, load.revision, 1, "", 0, null, hasMore = false)
         }
         val startIndex = (input.offset - 1).coerceIn(0, lines.size)
+        val budget = Budget(input.maxChars)
         val builder = StringBuilder()
         var index = startIndex
         var emitted = 0
         while (index < lines.size) {
             if (input.limit != null && emitted >= input.limit) break
             val line = lines[index]
-            val extra = if (builder.isEmpty()) line.length else line.length + 1
-            if (builder.isNotEmpty() && builder.length + extra > MAX_CHARS) break
-            if (builder.isNotEmpty()) builder.append('\n')
-            builder.append(line)
+            val separator = if (builder.isEmpty()) "" else "\n"
+            if (!budget.fits(separator + line)) {
+                if (builder.isEmpty()) {
+                    builder.append(budget.clip(line)).append(LONG_LINE_MARK)
+                    index++
+                }
+                break
+            }
+            budget.take(separator + line)
+            builder.append(separator).append(line)
             index++
             emitted++
-            if (builder.length >= MAX_CHARS) break
         }
+        val hasMore = index < lines.size
         return MemoryReadOutput(
             scope = input.scope,
             revision = load.revision,
@@ -139,42 +160,65 @@ internal class MemoryReadTool(
             content = builder.toString(),
             lineCount = load.lineCount,
             matchedLines = null,
-            hasMore = index < lines.size,
+            hasMore = hasMore,
+            nextOffset = if (hasMore) index + 1 else null,
         )
     }
 
-    /** 关键词检索：命中行 ±1 行上下文，非连续段之间用「…」分隔；整体受字符预算限制。 */
+    /** 关键词检索：从 offset 行往后找，命中行 ±1 行上下文，连续的行合成一段并带起始行号；整体受字符预算限制。 */
     private fun renderSearch(input: MemoryReadInput, load: MemoryLoad.Ok, lines: List<String>): MemoryReadOutput {
         val query = input.query!!
-        val matched = lines.indices.filter { lines[it].contains(query, ignoreCase = true) }
-        val included = linkedSetOf<Int>()
+        val from = (input.offset - 1).coerceIn(0, lines.size)
+        val matched = (from until lines.size).filter { lines[it].contains(query, ignoreCase = true) }
+        val included = sortedSetOf<Int>()
         matched.forEach { i ->
-            for (c in (i - 1)..(i + 1)) if (c in lines.indices) included += c
+            for (c in (i - 1)..(i + 1)) if (c in from until lines.size) included += c
         }
-        val builder = StringBuilder()
-        var last: Int? = null
-        var rendered = 0
+        val budget = Budget(input.maxChars)
+        val segments = mutableListOf<MemorySegment>()
+        var text: StringBuilder? = null
+        var segmentStart = 0
+        var previous = -2
+        var nextOffset: Int? = null
+        fun closeSegment() {
+            text?.let { segments += MemorySegment(segmentStart, it.toString()) }
+            text = null
+        }
         for (i in included) {
-            val gap = when {
-                builder.isEmpty() -> ""
-                last != null && i > last!! + 1 -> "\n…\n"
-                else -> "\n"
+            val joins = text != null && i == previous + 1
+            val piece = if (joins) "\n" + lines[i] else lines[i]
+            // 新起一段还要算上 {"start_line":…,"text":""} 这些字。
+            val overhead = if (joins) 0 else SEGMENT_OVERHEAD
+            if (!budget.fits(piece, overhead)) {
+                if (segments.isEmpty() && text == null) {
+                    // 第一行就超出预算：截短给出，下次从下一行接着找。
+                    segments += MemorySegment(i + 1, budget.clip(lines[i]) + LONG_LINE_MARK)
+                    nextOffset = (i + 2).takeIf { it <= lines.size }
+                } else {
+                    nextOffset = i + 1
+                }
+                break
             }
-            val line = lines[i]
-            if (builder.isNotEmpty() && builder.length + gap.length + line.length > MAX_CHARS) break
-            builder.append(gap).append(line)
-            last = i
-            rendered++
-            if (builder.length >= MAX_CHARS) break
+            budget.take(piece, overhead)
+            if (!joins) {
+                closeSegment()
+                text = StringBuilder()
+                segmentStart = i + 1
+            }
+            text!!.append(piece)
+            previous = i
         }
+        closeSegment()
         return MemoryReadOutput(
             scope = input.scope,
             revision = load.revision,
-            startLine = (included.firstOrNull() ?: 0) + 1,
-            content = builder.toString(),
+            startLine = segments.firstOrNull()?.startLine ?: (from + 1),
+            content = segments.joinToString("\n…\n") { it.text },
             lineCount = load.lineCount,
             matchedLines = matched.size,
-            hasMore = rendered < included.size,
+            hasMore = nextOffset != null,
+            segments = segments,
+            nextOffset = nextOffset,
         )
     }
 
@@ -195,15 +239,63 @@ internal class MemoryReadTool(
         JSONObject()
             .put("scope", output.scope.name.lowercase())
             .put("revision", output.revision)
-            .put("start_line", output.startLine)
             .put("line_count", output.lineCount)
-            .put("content", output.content)
+            .apply {
+                if (output.matchedLines != null) {
+                    put("matched_lines", output.matchedLines)
+                    put("segments", JSONArray().apply {
+                        output.segments.forEach { put(JSONObject().put("start_line", it.startLine).put("text", it.text)) }
+                    })
+                } else {
+                    put("start_line", output.startLine)
+                    put("content", output.content)
+                }
+            }
             .put("has_more", output.hasMore)
-            .apply { output.matchedLines?.let { put("matched_lines", it) } },
+            .apply { output.nextOffset?.let { put("next_offset", it) } },
     )
 
-    private companion object {
-        /** 单次返回正文的字符上限，与旧实现 12000 字对齐。 */
-        const val MAX_CHARS = 12_000
+    /**
+     * 正文预算：按字数算 [maxChars]，同时按 JSON 转义后的长度不超过 [ESCAPED_LIMIT]
+     * （换行、引号、斜杠转义后变两个字符），保证整份结果放得进一次工具结果的上限。
+     */
+    private class Budget(private val maxChars: Int) {
+        private var chars = 0
+        private var escaped = 0
+
+        /** [overhead]：这段文字之外在结果里额外占的字（检索时每段的字段名和行号）。 */
+        fun fits(piece: String, overhead: Int = 0): Boolean =
+            chars + piece.length <= maxChars && escaped + escapedLength(piece) + overhead <= ESCAPED_LIMIT
+
+        fun take(piece: String, overhead: Int = 0) {
+            chars += piece.length
+            escaped += escapedLength(piece) + overhead
+        }
+
+        /** 把放不下的单行截到剩余预算内。 */
+        fun clip(line: String): String {
+            var end = minOf(line.length, maxChars - chars)
+            while (end > 0 && escaped + escapedLength(line.substring(0, end)) > ESCAPED_LIMIT) end -= maxOf(1, end / 8)
+            if (end in 1 until line.length && line[end - 1].isHighSurrogate()) end--
+            return line.substring(0, end.coerceAtLeast(0))
+        }
+
+        private fun escapedLength(text: String): Int = JSONObject.quote(text).length - 2
+    }
+
+    internal companion object {
+        /** 单次返回正文的默认字符预算，与重构前默认 12000 字一致。 */
+        const val DEFAULT_CHARS = 12_000
+
+        /** 单次字符预算上限（见类注释：重构前 32000，受一次工具结果 24000 字的总上限限制）。 */
+        const val MAX_CHARS = 20_000
+
+        /** 正文转义后的长度上限：留出 revision、行号等字段的余量。 */
+        private const val ESCAPED_LIMIT = 22_000
+
+        private const val LONG_LINE_MARK = "…（这一行太长，后面省略）"
+
+        /** 检索结果每段在 JSON 里的固定开销：{"start_line":123456,"text":""}, */
+        private const val SEGMENT_OVERHEAD = 32
     }
 }

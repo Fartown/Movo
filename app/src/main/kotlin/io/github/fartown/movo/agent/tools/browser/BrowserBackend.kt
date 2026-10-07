@@ -23,16 +23,21 @@ internal interface BrowserBackend {
     /** 历史导航：back / forward / reload。无可后退/前进时抛 NOT_FOUND。 */
     fun navigate(nav: BrowserNav, call: BrowserCall): BrowserPage
 
-    fun readReadable(maxChars: Int, cursor: String?): BrowserTextRead
+    /**
+     * 读取类方法也带 [BrowserCall]：成功后聊天里「去浏览器」入口挂到这一步，按停止时也能打断这一步。
+     * [offset] 非空时从正文第 offset 个字读起（跳读），否则按 [cursor] 续读。
+     */
+    fun readReadable(maxChars: Int, cursor: String?, offset: Int?, call: BrowserCall): BrowserTextRead
 
     /** selector 为空时读整页纯文本。 */
-    fun readText(selector: String?, maxChars: Int, cursor: String?): BrowserTextRead
+    fun readText(selector: String?, maxChars: Int, cursor: String?, offset: Int?, call: BrowserCall): BrowserTextRead
 
-    fun readElements(selector: String?, cursor: String?): BrowserElementsRead
+    fun readElements(selector: String?, cursor: String?, call: BrowserCall): BrowserElementsRead
 
-    fun screenshot(): BrowserScreenshot
+    fun screenshot(call: BrowserCall): BrowserScreenshot
 
-    fun pageInfo(): JSONObject
+    /** 页面信息：视口与内容尺寸、滚动位置、语言等，另含 is_loading、can_go_back、can_go_forward、http_status。 */
+    fun pageInfo(call: BrowserCall): JSONObject
 
     /** 轮询等待 selector 出现；返回是否出现。 */
     fun waitForSelector(selector: String, timeoutMs: Long): Boolean
@@ -92,9 +97,15 @@ internal data class BrowserTextRead(
     val returnedChars: Int,
     /** 续读游标（绑 navigationGeneration）；无更多为 null。 */
     val nextCursor: String?,
+    /** 抽到的正文总长度（字）。 */
+    val textLength: Int? = null,
+    /** 这一段从正文第几个字开始。 */
+    val offset: Int = 0,
+    /** 页面太大或太慢，抽正文时就截断了：text_length 只是抽到的那部分。 */
+    val sourceTruncated: Boolean = false,
 )
 
-/** 可交互元素。bounds 为页面 CSS 像素坐标。 */
+/** 可交互元素。bounds 与 browser_act 的 x/y 同一单位：截图像素。 */
 internal data class BrowserElement(
     val ref: String,
     val role: String,
@@ -103,11 +114,19 @@ internal data class BrowserElement(
     val editable: Boolean,
     val href: String?,
     val bounds: JSONObject?,
+    val tag: String? = null,
+    val type: String? = null,
+    val ariaLabel: String? = null,
+    val placeholder: String? = null,
 )
 
 internal data class BrowserElementsRead(
     val elements: List<BrowserElement>,
     val nextCursor: String?,
+    /** 匹配的元素比列出的多（最多列 16 个）。 */
+    val truncated: Boolean = false,
+    /** 选择器匹配到的元素总数。 */
+    val matchCount: Int? = null,
 )
 
 /**
@@ -160,6 +179,8 @@ internal data class BrowserActTarget(
     val submitPoint: Boolean,
     /** role=search 或 GET 表单：不确认。 */
     val searchRole: Boolean,
+    val tag: String = "",
+    val type: String = "",
 )
 
 /** 动作结果（送达型）。 */
@@ -171,6 +192,12 @@ internal data class BrowserActResult(
     val targetSummary: String,
     /** 动作后页面加载超时：结果无法确认 → OUTCOME_UNKNOWN。 */
     val loadTimedOut: Boolean,
+    /** scroll：滚动前后的位置（CSS 像素）；两者相等说明没滚动（到底或到顶了）。 */
+    val scrollBefore: Int? = null,
+    val scrollAfter: Int? = null,
+    /** type：输入了几个字、是否提交了。 */
+    val typedChars: Int? = null,
+    val submitted: Boolean? = null,
 )
 
 /** 后端失败：携带已映射的统一错误码。 */

@@ -336,6 +336,12 @@ internal object AgentMemoryRepository {
         return store.replaceAll(content)
     }
 
+    /** 版本对得上才整体写入（记忆工具用）；和设置页的保存共用同一个存储与锁。 */
+    fun replaceAllIfRevision(content: String, revision: String): AgentMemoryWriteResult {
+        ensureInitialized()
+        return store.replaceAllIfRevision(content, revision)
+    }
+
     fun enabledFlow(): Flow<Boolean> = SettingsDataStore.memoryEnabledFlow()
 
     suspend fun isEnabled(): Boolean = SettingsDataStore.settings().memoryEnabled
