@@ -276,6 +276,25 @@ class VoiceSessionLifecycleTest {
         assertTrue(owner.state.value.active)
     }
 
+    @Test fun speechDuringAVoiceTaskIsHandedToThatTask() {
+        // 10-07 电视：语音发起的任务在跑时说「算了，不用了」，以前被排队到任务结束，现在交给这个任务。
+        val host = FakeConversations().apply { running = true; steerAccepts = true }
+        begin(host)
+        audio.host.supplement(VoiceTurnCoordinator.Turn(2, "算了，不用了"), "session")
+        assertEquals(listOf("算了，不用了"), host.steered)
+        assertEquals(1, owner.state.value.supplements)
+        assertEquals(0, audio.rejected)
+        assertTrue(host.sent.isEmpty())
+    }
+
+    @Test fun aRefusedSupplementGoesBackToTheVoiceQueue() {
+        val host = FakeConversations().apply { running = true; steerAccepts = false }
+        begin(host)
+        audio.host.supplement(VoiceTurnCoordinator.Turn(2, "算了"), "session")
+        assertEquals(1, audio.rejected)
+        assertTrue(host.sent.isEmpty())
+    }
+
     @Test fun sendingWhileAMessageIsQueuedShowsAComposerNoticeInsteadOfAToast() {
         // 规范 8.11「不用 Toast」：被拦下的发送在输入框上方用 `Composer/Notice` 说明，新内容留在输入框。
         ComposerNotices.clear()
@@ -445,6 +464,8 @@ class VoiceSessionLifecycleTest {
         override fun start() { active = true; host.onState("listening", true, "我在听", "") }
         override fun end(message: String) { ends++; active = false; host.onState("ended", false, message, transcript) }
         override fun stopSpeaking() = Unit
+        var rejected = 0
+        override fun supplementRejected(turn: VoiceTurnCoordinator.Turn) { rejected++ }
         override fun result(turn: Long, answer: String, confirmed: Boolean, failure: String?) { results++ }
         override fun runtimeEvent(turn: Long, event: AgentEvent) = Unit
     }

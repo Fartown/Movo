@@ -273,6 +273,23 @@ internal open class VoiceSessionOwner(
         dispatch(next, queuedSessionId, generation)
     }
 
+    /** 任务在跑时说的话：交给正在跑的任务作为补充；不接收时退回控制器排队，会话已结束则留作草稿。 */
+    private fun supplement(turn: VoiceTurnCoordinator.Turn, generation: Long) {
+        if (!valid(generation)) return
+        val conversations = app ?: return
+        val id = conversationId ?: return
+        conversations.steerVoiceTurn(id, turn.text) { accepted ->
+            if (!valid(generation)) {
+                if (!accepted) conversations.retainVoiceDraft(id, turn.text)
+                return@steerVoiceTurn
+            }
+            if (accepted) {
+                mutableState.value = state.value.copy(supplements = state.value.supplements + 1)
+                publish("listening", true, "已补充到当前任务", "")
+            } else controller?.supplementRejected(turn)
+        }
+    }
+
     private fun dispatch(turn: VoiceTurnCoordinator.Turn, session: String, generation: Long) {
         if (!valid(generation)) return
         val conversations = app ?: return
@@ -344,6 +361,7 @@ internal open class VoiceSessionOwner(
             publish(event, active && accepting, status, transcript, notice)
         }
         override fun submit(turn: VoiceTurnCoordinator.Turn, sessionId: String) = dispatch(turn, sessionId, generation)
+        override fun supplement(turn: VoiceTurnCoordinator.Turn, sessionId: String) = supplement(turn, generation)
         override fun cancelTask() { if (valid(generation)) this@VoiceSessionOwner.cancelTask() }
         override fun hasBackgroundTask(): Boolean = generation == epoch && this@VoiceSessionOwner.hasBackgroundTask()
         override fun onClosed() {
@@ -380,6 +398,7 @@ internal open class VoiceSessionOwner(
         }
 
         override fun stopSpeaking() = Unit
+        override fun supplementRejected(turn: VoiceTurnCoordinator.Turn) = Unit
         override fun result(turn: Long, answer: String, confirmed: Boolean, failure: String?) = Unit
         override fun runtimeEvent(turn: Long, event: AgentEvent) = Unit
     }

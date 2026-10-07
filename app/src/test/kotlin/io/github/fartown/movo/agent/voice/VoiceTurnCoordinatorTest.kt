@@ -7,6 +7,11 @@ import org.junit.Test
 
 class VoiceTurnCoordinatorTest {
     private fun session() = VoiceTurnCoordinator().apply { start() }
+    /** 任务在跑时说话：先交给任务；模拟运行时拒收，退回排队（旧的排队路径）。 */
+    private fun VoiceTurnCoordinator.sayRefused(id: Long, text: String): List<Action> {
+        val supplement = say(id, text).single() as Action.Supplement
+        return supplementRejected(supplement.turn)
+    }
     private fun VoiceTurnCoordinator.say(id: Long, text: String): List<Action> {
         speechStarted(id); partial(id, text); speechEnded(id)
         return commit(id)
@@ -80,14 +85,21 @@ class VoiceTurnCoordinatorTest {
         assertEquals(listOf(Action.ResumeSpeech), s.speechEnded(2))
         assertTrue(s.commit(2).isEmpty())
     }
+    @Test fun speechWhileBusyGoesToTheRunningTaskWhoseAnswerIsStillSpoken() {
+        val s = session(); s.say(1, "打开哔哩哔哩搜索罗翔")
+        assertEquals(listOf(Action.Supplement(VoiceTurnCoordinator.Turn(2, "算了，不用了"))), s.say(2, "算了，不用了"))
+        assertEquals(1L, s.running?.id); assertNull(s.pending)
+        val speak = s.runtimeFinished(1, "好的，不搜了").single() as Action.Speak
+        assertEquals("好的，不搜了", speak.turn.text)
+    }
     @Test fun ordinarySpeechWhileBusyQueuesAndDoesNotCancel() {
         val s = session(); s.say(1, "任务甲")
-        assertTrue(s.say(2, "任务乙").all { it is Action.Notice })
+        assertTrue(s.sayRefused(2, "任务乙").all { it is Action.Notice })
         assertEquals(1L, s.running?.id); assertEquals(2L, s.pending?.id)
         assertEquals(listOf(Action.Submit(VoiceTurnCoordinator.Turn(2, "任务乙"))), s.runtimeFinished(1, "甲完成"))
     }
     @Test fun thirdUtteranceDoesNotOverwriteAcceptedPending() {
-        val s = session(); s.say(1, "甲"); s.say(2, "乙"); s.say(3, "丙")
+        val s = session(); s.say(1, "甲"); s.sayRefused(2, "乙"); s.sayRefused(3, "丙")
         assertEquals("乙", s.pending?.text); assertEquals("丙", s.transcript)
     }
     @Test fun finishDuringNewSpeechDoesNotSpeakStaleAnswer() {
@@ -96,7 +108,7 @@ class VoiceTurnCoordinatorTest {
         s.speechEnded(2); assertTrue(s.commit(2).single() is Action.Submit)
     }
     @Test fun endVoiceDoesNotCancelRunningTaskOrDispatchPendingLater() {
-        val s = session(); s.say(1, "甲"); s.say(2, "乙")
+        val s = session(); s.say(1, "甲"); s.sayRefused(2, "乙")
         val actions = s.end()
         assertFalse(s.active); assertEquals("乙", s.transcript)
         assertEquals(1L, s.running?.id); assertNull(s.pending)
@@ -108,7 +120,7 @@ class VoiceTurnCoordinatorTest {
         val s = session(); s.say(1, "甲")
         assertTrue(s.say(2, "取消任务。").contains(Action.CancelTask))
         assertEquals(1L, s.running?.id)
-        s.say(3, "乙"); assertEquals(3L, s.pending?.id)
+        s.sayRefused(3, "乙"); assertEquals(3L, s.pending?.id)
         assertTrue(s.runtimeFinished(1, "已停止").single() is Action.Submit)
     }
     @Test fun endTaskAlsoEndsBackgroundMonitorsWhenNothingIsRunning() {
@@ -138,9 +150,9 @@ class VoiceTurnCoordinatorTest {
         }
     }
     @Test fun pendingCanStartAtTerminalWhileNextSegmentIsBeingCaptured() {
-        val s = session(); s.say(1,"甲"); s.say(2,"乙"); s.speechStarted(3); s.partial(3,"丙")
+        val s = session(); s.say(1,"甲"); s.sayRefused(2,"乙"); s.speechStarted(3); s.partial(3,"丙")
         assertTrue(s.runtimeFinished(1,"甲答案").single() is Action.Submit)
-        s.speechEnded(3); s.commit(3)
+        s.speechEnded(3); s.supplementRejected((s.commit(3).single() as Action.Supplement).turn)
         assertEquals("乙", s.running?.text); assertEquals("丙", s.pending?.text)
     }
     @Test fun startRefusesUnreconciledRunningTask() {
@@ -149,7 +161,7 @@ class VoiceTurnCoordinatorTest {
         s.runtimeFinished(1,"完成"); s.start(); assertTrue(s.active)
     }
     @Test fun endingPreservesBothPendingAndExtraDraftWithoutDispatchingEither() {
-        val s = session(); s.say(1, "甲"); s.say(2, "乙"); s.say(3, "丙")
+        val s = session(); s.say(1, "甲"); s.sayRefused(2, "乙"); s.sayRefused(3, "丙")
         s.say(4, "结束对话")
         assertFalse(s.active)
         assertEquals("乙\n丙", s.transcript)
