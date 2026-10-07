@@ -1,7 +1,9 @@
 package io.github.fartown.movo.data.provider
 
 import io.github.fartown.movo.data.model.Model
+import io.github.fartown.movo.data.model.ModelReasoningCapabilities
 import io.github.fartown.movo.data.model.ModelSource
+import io.github.fartown.movo.data.model.ReasoningEffort
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
@@ -18,6 +20,20 @@ internal object ArkAgentPlanModels {
         val url = baseUrl.trim().toHttpUrlOrNull() ?: return false
         return url.host.endsWith("volces.com") && url.encodedPath.startsWith("/api/plan/")
     }
+
+    /**
+     * 套餐模型的思考档位（2026-10-07 接口实测）：都接受低 / 中 / 高；GLM-5.3、Kimi K2.7 Code 不接受关闭。
+     * 默认档位不传，由模型自己决定。按地址和模型名现算，已存的服务商不用改；用户在模型设置里改过思考的以用户为准。
+     */
+    fun reasoning(baseUrl: String, model: Model): ModelReasoningCapabilities? {
+        if (!matches(baseUrl) || model.reasoningOverride != null) return null
+        return ModelReasoningCapabilities(
+            supportedEfforts = listOf(ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH),
+            canDisable = model.modelId.trim() !in CANNOT_DISABLE,
+        )
+    }
+
+    private val CANNOT_DISABLE = setOf("glm-5.3", "glm-5-3-260801", "kimi-k2.7-code", "kimi-k2-7-code-260601")
 
     fun models(): List<Model> = CATALOG.mapIndexed { index, (modelId, displayName, contextWindow) ->
         Model(

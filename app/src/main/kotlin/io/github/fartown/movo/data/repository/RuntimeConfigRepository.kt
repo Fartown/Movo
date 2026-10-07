@@ -101,7 +101,8 @@ internal object RuntimeConfigRepository {
         }
         val inferOpenAiCatalog = sourceType == io.github.fartown.movo.data.model.ProviderSourceTypes.CUSTOM &&
             endpointMode == OpenAiEndpointMode.RESPONSES
-        val reasoningCapabilities = ReasoningCapabilityResolver.resolve(
+        val reasoningCapabilities = io.github.fartown.movo.data.provider.ArkAgentPlanModels.reasoning(provider.baseUrl, model)
+            ?: ReasoningCapabilityResolver.resolve(
             sourceType = if (inferOpenAiCatalog) {
                 io.github.fartown.movo.data.model.ProviderSourceTypes.OPENAI
             } else {
