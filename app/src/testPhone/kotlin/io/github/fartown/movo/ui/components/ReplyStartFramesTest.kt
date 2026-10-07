@@ -112,6 +112,23 @@ class ReplyStartFramesTest {
         )
     }
 
+    /**
+     * 带工具、任务结束（10-07 真机 S3）：执行卡展开着、工具已完成，最后一段短回答一次到齐并移到卡后，卡片收成摘要条。
+     * 回答不能跟着卡片收起往上滑（旧版本真机上滑 88～259px）。
+     */
+    @Test
+    fun shortAnswerAtRunEnd() {
+        val th1 = ThinkingMessageUi("run-thinking-1-0", "Need the battery level.", isStreaming = false, elapsedSeconds = 1, collapsed = true)
+        val tool = ToolActivityMessageUi(
+            "run-tool-1-c1", "device_read", ToolActivityStatusUi.Success, "查看设备状态 · 电池",
+            resultSummary = "电量 100%（充电中）", startedAtMillis = t + 1000, finishedAtMillis = t + 1300,
+        )
+        val th2 = ThinkingMessageUi("run-thinking-2-0", "Report it.", isStreaming = false, elapsedSeconds = 1, collapsed = true)
+        val before = listOf(user, th1, tool, th2)
+        val after = before + AgentMessageUi("assistant-run-2-1", "杭州是浙江省的省会，电量 100%，正在充电。", isStreaming = false, renderMarkdown = true)
+        run("run-end", start = before, thinkingDone = before, answer = { after })
+    }
+
     /** 带工具：执行卡里工具已完成、第二轮思考中 → 思考结束 → 最后一段开始写（先在卡里预览）。 */
     @Test
     fun answerAfterTool() {

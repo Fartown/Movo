@@ -607,8 +607,8 @@ internal fun AgentConversationMessages(
         keys
     }
     val lastWorkKey = timelineEntries.lastOrNull { it is AgentTimelineEntry.WorkProcess }?.key
-    // 「已思考」一行的两行预览正在收起（见 [ThinkingOnlyRow]），按条目 key 记录；紧跟其后的回答等它收完再出现。
-    val thinkingPreviewCollapsing = remember { androidx.compose.runtime.mutableStateMapOf<String, Boolean>() }
+    // 上方条目正在收起（「已思考」一行的预览、任务结束时收成摘要条的执行卡），按条目 key 记录；紧跟其后的回答等它收完再出现。
+    val entrySettling = remember { androidx.compose.runtime.mutableStateMapOf<String, Boolean>() }
     val previousEntryKeys = remember(timelineEntries) {
         timelineEntries.zipWithNext().associate { (previous, entry) -> entry.key to previous.key }
     }
@@ -901,7 +901,7 @@ internal fun AgentConversationMessages(
             LocalChatListScroll provides chatListScroll,
             LocalChatBottomReserve provides bottomReserve,
             LocalMonitorRowSpacings provides monitorRowSpacings,
-            LocalThinkingPreviewCollapsing provides thinkingPreviewCollapsing,
+            LocalEntrySettling provides entrySettling,
         ) {
         LazyColumn(
             state = scrollState,
@@ -934,10 +934,24 @@ internal fun AgentConversationMessages(
                         val message = entry.message
                         // 删除 / 重新生成：内容先淡出 120ms，随后高度收起 `standard`，下方各行跟随上移（规范 9.3「列表增删」、9.4），
                         // 播完才真正改动列表，避免旧消息的退场与同位置的新流式消息重叠。
-                        // 回答紧跟在「已思考」一行后面、而那行的预览还在收起：先占位不显示，收完再在最终位置淡入。
-                        // 一起出现的话回答会随预览收起往上滑 22dp（本地逐帧 / 真机：回复一出来先跳一下），违反「回答不位移」（9.4）。
-                        val holdBehindPreview = message is AgentMessageUi && message.isStreaming &&
-                            thinkingPreviewCollapsing[previousEntryKeys[entry.key]] == true
+                        // 回答紧跟的上方条目还在收起：先占位不显示，收完再在最终位置淡入，不随之上移（9.4「回答不位移」）。
+                        // 纯问答：「已思考」下的预览还在收起，回答随之上滑 22dp；带工具：任务结束时回答比执行卡早两帧出现，
+                        // 随后跟着卡片收成摘要条上滑 88～259px（10-07 真机）。执行卡要到下一帧才报「正在收起」，
+                        // 所以回答出现时上方是刚被这条回答收尾的执行卡、执行卡还没报状态，也先等着；最多等 2 个 `standard`。
+                        val previousKey = previousEntryKeys[entry.key]
+                        val expectAboveCollapse = remember(entry.key) {
+                            isStreaming && message is AgentMessageUi && previousKey != null && previousKey in answeredWorkKeys
+                        }
+                        var aboveWaitOver by remember(entry.key) { mutableStateOf(false) }
+                        if (expectAboveCollapse) {
+                            LaunchedEffect(entry.key) {
+                                kotlinx.coroutines.delay(io.github.fartown.movo.ui.theme.MovoMotion.STANDARD * 2L)
+                                aboveWaitOver = true
+                            }
+                        }
+                        val aboveState = previousKey?.let { entrySettling[it] }
+                        val holdBehindPreview = message is AgentMessageUi &&
+                            (aboveState == true || (expectAboveCollapse && aboveState == null && !aboveWaitOver))
                         EditHiddenItem(hidden = message.id in editHiddenIds, modifier = itemModifier) {
                             LeavingItem(leaving = message.id in LocalLeavingMessages.current) {
                               RevealAfterHold(hold = holdBehindPreview) {
@@ -1741,8 +1755,11 @@ internal class ChatBottomReserve {
 
 internal val LocalChatBottomReserve = androidx.compose.runtime.staticCompositionLocalOf<ChatBottomReserve?> { null }
 
-/** 「已思考」一行的两行预览正在收起的条目 key（[ThinkingOnlyRow] 写入，列表据此让紧跟的回答等它收完）。 */
-internal val LocalThinkingPreviewCollapsing =
+/**
+ * 条目是否正在收起（true 收起中 / false 已收完 / 没有记录 = 还没报）：「已思考」一行的预览（[ThinkingOnlyRow]）、
+ * 任务结束收成摘要条的执行卡（[AgentWorkProcess]）写入，列表据此让紧跟的回答等它收完再出现。
+ */
+internal val LocalEntrySettling =
     androidx.compose.runtime.staticCompositionLocalOf<MutableMap<String, Boolean>?> { null }
 
 /**
