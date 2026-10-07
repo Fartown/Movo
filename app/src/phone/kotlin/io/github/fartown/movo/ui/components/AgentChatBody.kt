@@ -607,6 +607,11 @@ internal fun AgentConversationMessages(
         keys
     }
     val lastWorkKey = timelineEntries.lastOrNull { it is AgentTimelineEntry.WorkProcess }?.key
+    // 「已思考」一行的两行预览正在收起（见 [ThinkingOnlyRow]），按条目 key 记录；紧跟其后的回答等它收完再出现。
+    val thinkingPreviewCollapsing = remember { androidx.compose.runtime.mutableStateMapOf<String, Boolean>() }
+    val previousEntryKeys = remember(timelineEntries) {
+        timelineEntries.zipWithNext().associate { (previous, entry) -> entry.key to previous.key }
+    }
     val workOutcomes = remember(timelineEntries) { workOutcomes(timelineEntries) }
     val workTurnSpans = remember(timelineEntries) { workTurnSpans(timelineEntries) }
     // 执行卡后面紧接着出现了有正文的回答：这张卡的步骤已经结束，收成摘要条（方案 B，只收一次）。
@@ -896,6 +901,7 @@ internal fun AgentConversationMessages(
             LocalChatListScroll provides chatListScroll,
             LocalChatBottomReserve provides bottomReserve,
             LocalMonitorRowSpacings provides monitorRowSpacings,
+            LocalThinkingPreviewCollapsing provides thinkingPreviewCollapsing,
         ) {
         LazyColumn(
             state = scrollState,
@@ -928,8 +934,13 @@ internal fun AgentConversationMessages(
                         val message = entry.message
                         // 删除 / 重新生成：内容先淡出 120ms，随后高度收起 `standard`，下方各行跟随上移（规范 9.3「列表增删」、9.4），
                         // 播完才真正改动列表，避免旧消息的退场与同位置的新流式消息重叠。
+                        // 回答紧跟在「已思考」一行后面、而那行的预览还在收起：先占位不显示，收完再在最终位置淡入。
+                        // 一起出现的话回答会随预览收起往上滑 22dp（本地逐帧 / 真机：回复一出来先跳一下），违反「回答不位移」（9.4）。
+                        val holdBehindPreview = message is AgentMessageUi && message.isStreaming &&
+                            thinkingPreviewCollapsing[previousEntryKeys[entry.key]] == true
                         EditHiddenItem(hidden = message.id in editHiddenIds, modifier = itemModifier) {
                             LeavingItem(leaving = message.id in LocalLeavingMessages.current) {
+                              RevealAfterHold(hold = holdBehindPreview) {
                                 ChatMessageItem(
                                     message = message,
                                     retainedStreamingState = (message as? AgentMessageUi)
@@ -959,6 +970,7 @@ internal fun AgentConversationMessages(
                                     noticeActive = message.id == activeNoticeId,
                                     stoppedWithoutWork = message.id in stoppedWithoutWork,
                                 )
+                              }
                             }
                         }
                     }
@@ -1728,6 +1740,23 @@ internal class ChatBottomReserve {
 }
 
 internal val LocalChatBottomReserve = androidx.compose.runtime.staticCompositionLocalOf<ChatBottomReserve?> { null }
+
+/** 「已思考」一行的两行预览正在收起的条目 key（[ThinkingOnlyRow] 写入，列表据此让紧跟的回答等它收完）。 */
+internal val LocalThinkingPreviewCollapsing =
+    androidx.compose.runtime.staticCompositionLocalOf<MutableMap<String, Boolean>?> { null }
+
+/**
+ * 首次出现时被挡着（[hold]）就先不显示、照常占位；放开后在原位淡入 `fast`。首次出现时没被挡着则不起作用，
+ * 已经显示的内容不会因为之后的 hold 再隐藏。
+ */
+@Composable
+private fun RevealAfterHold(hold: Boolean, content: @Composable () -> Unit) {
+    val alpha = remember { androidx.compose.animation.core.Animatable(if (hold) 0f else 1f) }
+    LaunchedEffect(hold) {
+        if (!hold && alpha.value < 1f) alpha.animateTo(1f, io.github.fartown.movo.ui.theme.MovoMotion.fast())
+    }
+    Box(Modifier.graphicsLayer { this.alpha = alpha.value }) { content() }
+}
 
 /** 直接滚动对话列表（像素，正数向后）：执行卡从末尾收起时逐帧补偿高度变化，见 [AgentWorkProcess]。 */
 internal val LocalChatListScroll = androidx.compose.runtime.staticCompositionLocalOf<((Float) -> Float)?> { null }

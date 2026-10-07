@@ -92,6 +92,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
@@ -1277,19 +1278,46 @@ private fun ThinkingTicker(
                 )
             },
     ) {
+        // 按基线对齐，露出的第一行与思考结束后全文前几行的第一行在同一位置（换的时候不跳）：
+        // 底对齐时末行下方的行距被裁掉，整段比正文低 4.8dp（本地逐帧：预览换成全文时字上移 14px）。
+        // 行数不超过可见行数时顶对齐，同正文。
+        val lineHeightPx = with(androidx.compose.ui.platform.LocalDensity.current) { style.lineHeight.toPx() }
         Text(
             text = tail,
             style = style,
             color = color,
             onTextLayout = { if (hugShortContent) overflows[0] = it.lineCount > lines },
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .wrapContentHeight(align = Alignment.Bottom, unbounded = true),
+            modifier = Modifier.layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints.copy(minHeight = 0, maxHeight = androidx.compose.ui.unit.Constraints.Infinity))
+                val first = placeable[androidx.compose.ui.layout.FirstBaseline]
+                val last = placeable[androidx.compose.ui.layout.LastBaseline]
+                val y = if (first == androidx.compose.ui.layout.AlignmentLine.Unspecified || last == androidx.compose.ui.layout.AlignmentLine.Unspecified) {
+                    0
+                } else {
+                    minOf(0, (first + (lines - 1) * lineHeightPx - last).roundToInt())
+                }
+                val height = placeable.height.coerceAtMost(constraints.maxHeight)
+                layout(placeable.width, height) { placeable.place(0, y) }
+            },
         )
     }
 }
 
 private const val THINKING_TICKER_CHARS = 240
+
+/**
+ * 步骤里的滚动预览换成全文前几行（思考结束、说明定稿）：旧的先淡出 `fastExit`，淡完新的再淡入 `fast`。
+ * 两段是不同的字，同时交叉淡化会叠在一起（10-07 真机）。
+ */
+private fun androidx.compose.animation.AnimatedContentTransitionScope<Boolean>.stepPreviewFadeThrough(): androidx.compose.animation.ContentTransform =
+    fadeIn(
+        tween(
+            io.github.fartown.movo.ui.theme.MovoMotion.FAST,
+            delayMillis = io.github.fartown.movo.ui.theme.MovoMotion.FAST_EXIT,
+            easing = io.github.fartown.movo.ui.theme.MovoMotion.EasingStandard,
+        ),
+    ).togetherWith(fadeOut(io.github.fartown.movo.ui.theme.MovoMotion.fastExit()))
+        .using(androidx.compose.animation.SizeTransform(clip = false) { _, _ -> io.github.fartown.movo.ui.theme.MovoMotion.standard() })
 
 /**
  * 只有思考的一轮（规范 8.1「思考 · 行内」，Figma「14」）：没有卡片与描边，左对齐 20 的一行 sparkle 14 次要色 +
@@ -1347,9 +1375,25 @@ private fun ThinkingOnlyRow(
         // 思考中（没点开）：行下方固定两行的滚动预览，左缩进 20 与文字对齐；思考结束后收起一次，只剩这一行。
         val latest = messages.lastOrNull { it.content.isNotBlank() }?.content
         val tickerCap = io.github.fartown.movo.ui.components.movo.rememberVisibleHeightCap()
+        val previewVisible = streaming && !expanded && latest != null
+        val previewState = remember(id) { androidx.compose.animation.core.MutableTransitionState(previewVisible) }
+        previewState.targetState = previewVisible
+        // 预览正在收起：告诉列表，紧跟的回答等收完再出现（见 [LocalThinkingPreviewCollapsing]）。`standard` 前快后慢，
+        // 剩下不到 2dp 时就放行，不等曲线尾巴（本地逐帧：等整段过渡结束，回答要晚约 160ms 才出现）。
+        var previewHeight by remember(id) { androidx.compose.runtime.mutableIntStateOf(0) }
+        val settledPx = with(androidx.compose.ui.platform.LocalDensity.current) { 2.dp.roundToPx() }
+        val previewCollapsing = !previewState.targetState && (previewState.currentState || !previewState.isIdle) &&
+            previewHeight > settledPx
+        val collapsingKeys = LocalThinkingPreviewCollapsing.current
+        if (collapsingKeys != null) {
+            androidx.compose.runtime.SideEffect { if (previewCollapsing) collapsingKeys[id] = true else collapsingKeys.remove(id) }
+            androidx.compose.runtime.DisposableEffect(id) { onDispose { collapsingKeys.remove(id) } }
+        }
         AnimatedVisibility(
-            visible = streaming && !expanded && latest != null,
-            modifier = Modifier.trackVisibleHeightCap(tickerCap),
+            visibleState = previewState,
+            modifier = Modifier
+                .trackVisibleHeightCap(tickerCap)
+                .onSizeChanged { previewHeight = it.height },
             enter = expandContentEnter(tickerCap),
             exit = expandContentExit(tickerCap),
         ) {
@@ -4017,10 +4061,11 @@ private fun WorkNarrationStep(
         val tickerMode = (message.isStreaming || message.provisional) && !expanded
         var tickerShown by remember(message.id) { mutableStateOf(false) }
         if (tickerMode) tickerShown = true
-        androidx.compose.animation.Crossfade(
+        androidx.compose.animation.AnimatedContent(
             targetState = tickerMode,
-            animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
+            transitionSpec = { stepPreviewFadeThrough() },
             modifier = Modifier.weight(1f),
+            contentAlignment = Alignment.TopStart,
             label = "narrationStepMode",
         ) { ticker ->
             if (ticker) {
@@ -4085,14 +4130,16 @@ private fun WorkThinkingStep(
         if (message.content.isNotBlank()) {
             // 思考中且没点开：固定两行高的滚动预览（最新写出的内容，2026-09-27 定）。
             // 其余情况（思考完、或思考中点开）用同一段思考正文，只裁切可见高度（C3，见 [ThinkingFoldableBody]）；
-            // 思考结束时预览换成全文前两行一次（交叉淡化 `fast`，两者同为两行高、同字号，不跳）。
+            // 思考结束时预览换成全文前两行一次：预览先淡出、全文再淡入（[stepPreviewFadeThrough]），两者同为两行高、
+            // 同字号、行位置对齐，不叠字也不跳（10-07 真机：同时交叉淡化时两段字叠在一起，且错开 14px，像卡片跳了一下）。
             val tickerMode = message.isStreaming && !expanded
             var tickerShown by remember(message.id) { mutableStateOf(false) }
             if (tickerMode) tickerShown = true
             val contentModifier = Modifier.fillMaxWidth().padding(start = 28.dp, top = 2.dp)
-            androidx.compose.animation.Crossfade(
+            androidx.compose.animation.AnimatedContent(
                 targetState = tickerMode,
-                animationSpec = io.github.fartown.movo.ui.theme.MovoMotion.fast(),
+                transitionSpec = { stepPreviewFadeThrough() },
+                contentAlignment = Alignment.TopStart,
                 label = "thinkingStepMode",
             ) { ticker ->
                 if (ticker) {
