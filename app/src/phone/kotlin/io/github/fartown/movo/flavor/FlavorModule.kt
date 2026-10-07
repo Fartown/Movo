@@ -59,7 +59,7 @@ internal object FlavorModule : Flavor {
             PersonalToolProvider(context, root, rootAvailable),
             FileToolProvider(context, root, rootAvailable),
             TerminalToolProvider(logger),
-            BrowserToolProvider(context),
+            BrowserToolProvider(context, services.runId),
             MemoryToolProvider(context, inputs.characterId),
             SkillToolProvider(context),
             ConversationToolProvider(inputs.conversationLoader),

@@ -166,6 +166,18 @@ internal class AgentRuntimeRunExecutor(
                     McpCatalog.EMPTY
                 }
             }
+            // 「设置 → 工具」的开关和记忆开关在运行中现读，和任务开始时的配置取与：中途关掉的，下一次调用就拦下
+            // （重构前的行为）；中途打开的，这次任务不生效。
+            val liveSwitches = { liveToolSwitches(request.config, currentPermissions()) }
+            val liveMemoryScope = {
+                val enabledNow = memoryEnabled &&
+                    runCatching { runBlocking { AgentMemoryRepository.isEnabled() } }.getOrDefault(true)
+                when {
+                    !enabledNow -> MemoryScope.DISABLED
+                    roleplayContext != null -> MemoryScope.CHARACTER
+                    else -> MemoryScope.REAL
+                }
+            }
             val typedSubsystem = AgentToolSubsystem(
                 services = ToolServices(
                     appContext,
@@ -177,19 +189,9 @@ internal class AgentRuntimeRunExecutor(
                 mcpCatalog = mcpCatalog,
                 environment = {
                     AgentToolCapabilities.capture(appContext).toToolEnvironment(
-                        switches = ToolSwitches(
-                            browser = request.config.browserTools,
-                            deviceDirect = request.config.deviceDirectTools,
-                            terminal = request.config.terminalTools,
-                            sensitiveRead = request.config.deviceSensitiveReadTools,
-                            sensitiveAction = request.config.deviceSensitiveActionTools,
-                        ),
+                        switches = liveSwitches(),
                         linuxReady = linuxEnvironmentReady(appContext),
-                        memoryScope = when {
-                            !memoryEnabled -> MemoryScope.DISABLED
-                            roleplayContext != null -> MemoryScope.CHARACTER
-                            else -> MemoryScope.REAL
-                        },
+                        memoryScope = liveMemoryScope(),
                         conversationBound = conversationId != null,
                         conversationId = conversationId,
                         // 后台监听唤醒的一轮在屏幕关着时没人能作答：不给 ask_user，审批立即返回「无法确认」。
@@ -236,11 +238,14 @@ internal class AgentRuntimeRunExecutor(
                 conversationLoader = { request.history },
                 // GUI 就绪守卫：UI 工具执行前关入口窗口 + 保活无障碍。
                 guards = listOf(GuiReadinessGuard(appContext) { entrySurfaceGuard }),
+                refreshSwitches = { env -> env.copy(switches = liveSwitches(), memoryScope = liveMemoryScope()) },
             ).also { built ->
                 toolExecutor = AutoCloseable {
                     AgentInteractionRegistry.unregister(request.runId)
                     built.close()
                 }
+                // 按停止时立刻关掉工具（重构前的行为）；正常结束时在 finally 里关。
+                toolsBinding = runController.closeOnStop(built)
             }
             val effectiveExecutor = typedSubsystem.pipeline
             val typedCatalog: (AgentToolCapabilities) -> org.json.JSONArray = { _ -> typedSubsystem.pipeline.catalog() }
@@ -276,7 +281,12 @@ internal class AgentRuntimeRunExecutor(
                 toolExecutor = effectiveExecutor,
                 typedCatalog = typedCatalog,
                 toolGuide = {
-                    (typedSubsystem.pipeline.promptSections().map { it.text.trim() } + switchNotes(request.config))
+                    val switches = liveSwitches()
+                    val liveConfig = request.config.copy(
+                        deviceSensitiveReadTools = switches.sensitiveRead,
+                        deviceSensitiveActionTools = switches.sensitiveAction,
+                    )
+                    (typedSubsystem.pipeline.promptSections().map { it.text.trim() } + switchNotes(liveConfig))
                         .filter { it.isNotBlank() }
                         .joinToString("\n\n")
                 },
@@ -474,6 +484,22 @@ internal fun userCanAnswer(isMonitorOrigin: Boolean, screenOn: () -> Boolean): B
 
 private fun userCanAnswer(request: AgentRuntimeWire.RunRequest, context: android.content.Context): Boolean =
     userCanAnswer(request.isMonitorOrigin) { screenInteractive(context) }
+
+/** 任务开始时的配置和现在的「设置 → 工具」开关取与：运行中只能关、不能开。 */
+internal fun liveToolSwitches(
+    config: io.github.fartown.movo.agent.model.AgentModelClient.ModelConfig,
+    now: AgentRuntimePolicy.Permissions,
+): ToolSwitches = ToolSwitches(
+    browser = config.browserTools && now.browserTools,
+    deviceDirect = config.deviceDirectTools && now.deviceDirectTools,
+    terminal = config.terminalTools && now.terminalTools,
+    sensitiveRead = config.deviceSensitiveReadTools && now.deviceSensitiveReadTools,
+    sensitiveAction = config.deviceSensitiveActionTools && now.deviceSensitiveActionTools,
+)
+
+/** 按停止时立刻关掉这次运行的工具：打断网页加载、MCP 请求、技能下载和前台命令，不等它们自己超时。 */
+internal fun AgentRunController.closeOnStop(tools: AutoCloseable): AgentRunController.ResourceBinding =
+    register { runCatching { tools.close() } }
 
 /**
  * 用户在「设置 → 工具」里关掉的能力：工具已经不进目录，这里再告诉模型不要换个办法（打开对应应用看屏幕、跑命令）绕过去。

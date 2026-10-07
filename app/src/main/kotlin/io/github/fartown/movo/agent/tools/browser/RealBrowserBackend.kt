@@ -24,7 +24,12 @@ import org.json.JSONObject
  */
 internal class RealBrowserBackend(
     private val context: Context,
+    /** 这次运行的 id：每次浏览器动作都带上，按停止时才能按它打断（空 id 打断不到）。 */
+    private val runId: String = "",
 ) : BrowserBackend {
+
+    /** 读取类调用不带 toolCallId（不改工具卡上「去浏览器」入口的归属），但带运行 id。 */
+    private val NO_CALL = BrowserCall(runId, "")
 
     /** 最近一次截图得出的「截图像素 / CSS 像素」缩放比；用于把 browser_act 的坐标换算回 CSS 像素。 */
     @Volatile
@@ -118,7 +123,7 @@ internal class RealBrowserBackend(
 
     override fun screenshot(): BrowserScreenshot {
         val args = JSONObject().put("action", "screenshot").put("read_image", true)
-        val result = AgentBrowserSession.execute(context, args, "", "")
+        val result = AgentBrowserSession.execute(context, args, runId, "")
         val json = parse(result.content)
         throwIfError(json) { false }
         val image = result.images.firstOrNull()
@@ -291,7 +296,7 @@ internal class RealBrowserBackend(
         val result = AgentBrowserSession.execute(
             context,
             JSONObject().put("action", "wait_for_selector").put("selector", selector).put("timeout_ms", timeoutMs),
-            "", "",
+            runId, "",
         )
         // not_found 时 ok=false 但仍带 found/visible 字段，直接读取，不抛错。
         return parse(result.content)
@@ -361,7 +366,6 @@ internal class RealBrowserBackend(
         }
 
     private companion object {
-        val NO_CALL = BrowserCall("", "")
         val ENVELOPE_KEYS = setOf(
             "ok", "tool", "action", "status", "code", "message",
             "url", "display_url", "host", "title", "is_loading", "can_go_back", "can_go_forward", "http_status",

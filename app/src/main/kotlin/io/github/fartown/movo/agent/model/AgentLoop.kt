@@ -324,7 +324,7 @@ internal class AgentLoop(
         modelToolCall: AgentModelClient.ToolCall,
     ): ToolOutcome {
         runController.throwIfCancelled()
-        val toolCall = toolCallValidator.normalize(modelToolCall)
+        val toolCall = toolExecutor.normalize(toolCallValidator.normalize(modelToolCall))
         toolCallValidator.validate(toolCall)?.let { validationError ->
             return rejectedToolOutcome(
                 round = round,

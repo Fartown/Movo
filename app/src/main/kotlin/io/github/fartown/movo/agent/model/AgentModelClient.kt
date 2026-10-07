@@ -321,6 +321,9 @@ internal object AgentModelClient {
 
         /** 执行卡这一步的标题（动作 + 对象，工具可视化方案 §5.1）；为空时由 [AgentTraceFormatter] 兜底。 */
         fun stepTitle(toolCall: ToolCall): String? = null
+
+        /** 合同校验前整理参数（例如上限类参数越界按边界处理），返回实际执行的调用。 */
+        fun normalize(toolCall: ToolCall): ToolCall = toolCall
     }
 
     data class ToolCall(
