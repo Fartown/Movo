@@ -54,18 +54,65 @@ class ClockMediaToolsTest {
         assertTrue(json.getJSONObject("data").has("matched_trigger_at"))
     }
 
+    /**
+     * 已有更早的闹钟时新闹钟成不了「下一个」，无 Root 核实不到：按已交给时钟应用报（effect_verified=false），
+     * 说明里写清只是已提交；没有 clock_read 时不叫模型去调它。
+     */
     @Test
-    fun clockCreate_notAttributed_returnsUnknown() {
+    fun clockCreate_notAttributed_isDispatchedAndSaysSoHonestly() {
         val backend = object : ClockCreateBackend {
             override fun createAndVerify(input: ClockCreateInput, env: ToolEnvironment) =
                 ClockCreateResult.NotAttributed
         }
-        val p = pipeline(provider(ContractTool(ClockCreateTool(backend))), ToolEnvironment())
-        val result = p.execute(call("clock_create", """{"type":"timer","duration_seconds":300}"""))
+        val noRoot = pipeline(provider(ContractTool(ClockCreateTool(backend))), ToolEnvironment())
+        val result = noRoot.execute(call("clock_create", """{"type":"alarm","hour":7,"minute":30}"""))
         val json = JSONObject(result.content)
-        assertEquals("unknown", json.getString("status"))
-        assertEquals("OUTCOME_UNKNOWN", json.getString("code"))
-        assertFalse(json.has("effect_verified"))
+        assertEquals("ok", json.getString("status"))
+        assertFalse(json.getBoolean("effect_verified"))
+        val note = json.getJSONObject("data").getString("note")
+        assertTrue(note, note.contains("没核实到") && note.contains("不要重复创建") && note.contains("在时钟里看一眼"))
+        assertFalse(note, note.contains("clock_read"))
+        assertEquals("已交给时钟，没能核实", result.outcome!!.view!!.summary)
+
+        val root = pipeline(provider(ContractTool(ClockCreateTool(backend))), ToolEnvironment(rootAvailable = true))
+        val rootNote = JSONObject(root.execute(call("clock_create", """{"type":"timer","duration_seconds":300}""")).content)
+            .getJSONObject("data").getString("note")
+        assertTrue(rootNote, rootNote.contains("clock_read"))
+    }
+
+    @Test
+    fun clockCreate_launchFailed_isNotReportedAsNoClockApp() {
+        fun run(pageOpened: Boolean): JSONObject {
+            val backend = object : ClockCreateBackend {
+                override fun createAndVerify(input: ClockCreateInput, env: ToolEnvironment) =
+                    ClockCreateResult.LaunchFailed(clockPageOpened = pageOpened)
+            }
+            val p = pipeline(provider(ContractTool(ClockCreateTool(backend))), ToolEnvironment())
+            return JSONObject(p.execute(call("clock_create", """{"type":"alarm","hour":7,"minute":30}""")).content)
+        }
+        val opened = run(pageOpened = true)
+        assertEquals("SYSTEM_REJECTED", opened.getString("code"))
+        assertEquals("user", opened.getString("retry"))
+        assertTrue(opened.getString("message").contains("已打开时钟的闹钟页"))
+        assertTrue(opened.getString("hint"), opened.getString("hint").contains("07:30 的闹钟"))
+        val blocked = run(pageOpened = false)
+        assertEquals("SYSTEM_REJECTED", blocked.getString("code"))
+        assertTrue(blocked.getString("message").contains("时钟应用没能启动"))
+        assertFalse(blocked.getString("message").contains("没有可处理"))
+        assertTrue(blocked.getString("hint").contains("后台弹出界面"))
+    }
+
+    @Test
+    fun clockPrompt_mentionsClockReadOnlyWhenItCanBeUsed() {
+        val provider = ClockMediaToolProvider(
+            ApplicationProvider.getApplicationContext(), AndroidAgentLogger,
+            io.github.fartown.movo.agent.device.BoundedRootCommandExecutor(AndroidAgentLogger, rootAvailable = { false }),
+            rootAvailable = { false },
+        )
+        val noRoot = provider.promptSection(ToolEnvironment())!!.text
+        assertFalse(noRoot, noRoot.contains("clock_read"))
+        assertTrue(noRoot.contains("effect_verified=true"))
+        assertTrue(provider.promptSection(ToolEnvironment(rootAvailable = true))!!.text.contains("clock_read"))
     }
 
     @Test
@@ -191,13 +238,28 @@ class ClockMediaToolsTest {
     /** 真机复现：没通知使用权、没 Root 看不到会话，也没有声音在响——pause 以前回 ok/dispatched，模型说「已停住」。 */
     @Test
     fun mediaControl_sessionsHiddenAndSilent_pauseFailsClearly() {
-        for (action in listOf("pause", "stop", "next", "previous", "fast_forward", "rewind")) {
+        for (action in listOf("pause", "stop")) {
             val backend = FakeMedia(listOf(MediaSessionState.Unknown), audio = listOf(false))
             val json = runMedia(backend, action)
             assertEquals(action, "error", json.getString("status"))
             assertEquals(action, "NOT_FOUND", json.getString("code"))
             assertEquals(action, "no_music_active", json.getString("detail"))
             assertTrue(action, backend.dispatched.isEmpty())
+        }
+    }
+
+    /**
+     * 看不到会话又没声音：可能是播放器暂停着。切歌、快进快退照发媒体键（重构前的做法），结果只算送达，
+     * 不报「没有在播」（暂停中的歌切不了）。
+     */
+    @Test
+    fun mediaControl_sessionsHiddenAndSilent_skipStillSendsTheMediaKey() {
+        for (action in listOf("next", "previous", "fast_forward", "rewind")) {
+            val backend = FakeMedia(listOf(MediaSessionState.Unknown), audio = listOf(false))
+            val json = runMedia(backend, action)
+            assertEquals(action, "ok", json.getString("status"))
+            assertFalse(action, json.getBoolean("effect_verified"))
+            assertEquals(action, listOf(MediaAction.valueOf(action.uppercase())), backend.dispatched)
         }
     }
 
