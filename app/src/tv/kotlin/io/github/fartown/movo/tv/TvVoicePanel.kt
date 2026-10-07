@@ -100,6 +100,8 @@ internal object TvVoicePanel {
     private var choices: Choices? = null
     private val dimTask = Runnable { root?.animate()?.alpha(0.5f)?.setDuration(DIM_WINDOW_MS)?.start() }
     private val heardHoldEnd = Runnable { refresh() }
+    private var hiddenForScreenshot = false
+    private var hiddenAt = 0L
 
     internal enum class Indicator { None, BarsLive, BarsIdle, Speaker }
     internal enum class OrbMotion { Still, Working, Speaking }
@@ -135,6 +137,20 @@ internal object TvVoicePanel {
         yieldUntil = SystemClock.elapsedRealtime() + YIELD_MS
         main.postDelayed(::refresh, YIELD_MS + 50)
         refresh()
+    }
+
+    /**
+     * 截图时胶囊瞬间隐藏、截完立刻恢复（v5）：电视 Android 9 只能截整屏，没有手机那种按窗口排除浮层的截图（Android 14 起才有）。
+     * 只切可见性，窗口不撤、不重新长出来，隐藏时长 ≈ 截图耗时。
+     */
+    fun hideForScreenshot(hide: Boolean) {
+        if (Looper.myLooper() != Looper.getMainLooper()) { main.post { hideForScreenshot(hide) }; return }
+        if (hide == hiddenForScreenshot) return
+        hiddenForScreenshot = hide
+        val view = root ?: return
+        view.visibility = if (hide) View.INVISIBLE else View.VISIBLE
+        if (hide) hiddenAt = SystemClock.elapsedRealtime()
+        else record("screenshot.hidden", "duration_ms" to SystemClock.elapsedRealtime() - hiddenAt)
     }
 
     /** 反问小卡正显示着（这时要先看方向键、数字键和确认键）。 */
@@ -318,12 +334,13 @@ internal object TvVoicePanel {
         return working(tools)
     }
 
-    /** 在做什么：「正在」+ 最近一步的标题（与手机执行卡同一个标题）；还没有动作时「正在想…」。不显示第几步。 */
+    /** 在做什么：「正在」+ 最近一步的标题（与手机执行卡同一个标题）· 第几步；还没有动作时「正在想…」。 */
     private fun working(tools: List<ToolActivityMessageUi>): Model {
         val latest = tools.firstOrNull()
         val title = latest?.argumentsSummary?.trim()?.takeIf { it.isNotEmpty() && !it.startsWith("{") }
             ?: latest?.toolName?.let { name -> toolDisplayNameResource(name)?.let { context?.getString(it) } ?: name }
-        return Model(title?.let(::doing) ?: "正在想…", motion = OrbMotion.Working, key = "work")
+        val step = tools.size.takeIf { it > 0 }?.let { "第 $it 步" }
+        return Model(listOfNotNull(title?.let(::doing) ?: "正在想…", step).joinToString(" · "), motion = OrbMotion.Working, key = "work")
     }
 
     /** 步骤标题读成正在做的事：打开「哔哩哔哩」→ 正在打开「哔哩哔哩」；在屏幕上找… → 正在屏幕上找…。 */
@@ -452,6 +469,7 @@ internal object TvVoicePanel {
             return null
         }
         root = container; owner = service
+        if (hiddenForScreenshot) container.visibility = View.INVISIBLE
         views = Views(column, capsule, orb, slot, text, background, width = start)
         // 出现：先是一个球淡入。
         capsule.alpha = 0f; capsule.animate().alpha(1f).setDuration(150).start()
