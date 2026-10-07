@@ -158,6 +158,8 @@ private class BuiltinSkillAssetStore(
             val targetDir = File(skillsRoot, builtin.id)
             if (!isSafeBuiltinSkillInstallation(targetDir)) {
                 installBuiltinInternal(builtin)
+            } else {
+                refreshBuiltinFiles(builtin, targetDir)
             }
             if (entry?.source == BUILTIN_SOURCE && entry.installState == INSTALL_STATE_INSTALLED) {
                 return@forEach
@@ -190,6 +192,54 @@ private class BuiltinSkillAssetStore(
             }
         }
         copyAssetRecursively(context.assets, builtin.assetPath, targetDir)
+    }
+
+    /**
+     * 已装的内置技能跟着 APK 走：以前装过一次就只在缺 SKILL.md 时才补，APK 升级改了说明（比如工具改名）也一直读旧的
+     * （真机：skill-installer 还在教模型调 skills_list_curated 这些已经不存在的工具）。
+     * 这里把 assets 里的每个文件与已装的副本比对，内容不同才覆盖；技能运行时自己写的文件（如 data/ERRORS.md）不在 assets 里，不动。
+     * 路径上任何一段是符号链接就跳过那个文件，不跟随链接写到技能目录外面。
+     */
+    private fun refreshBuiltinFiles(builtin: BuiltinSkillAsset, targetDir: File) {
+        val files = runCatching { assetFiles(context.assets, builtin.assetPath) }.getOrDefault(emptyList())
+        files.forEach { relative ->
+            // 单个文件刷新失败不影响技能加载：最坏是继续用已装的旧副本。
+            runCatching {
+                val target = File(targetDir, relative)
+                if (!isWithinWithoutLinks(targetDir, target)) return@runCatching
+                val expected = context.assets.open("${builtin.assetPath}/$relative").use { it.readBytes() }
+                val path = target.toPath()
+                val current = if (Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) target.readBytes() else null
+                if (current != null && current.contentEquals(expected)) return@runCatching
+                // 同名的是目录等其他东西：不碰。
+                if (current == null && Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return@runCatching
+                target.parentFile?.mkdirs()
+                target.writeBytes(expected)
+            }
+        }
+    }
+
+    /** assets 目录下所有文件的相对路径。 */
+    private fun assetFiles(assetManager: AssetManager, assetPath: String, prefix: String = ""): List<String> {
+        val children = assetManager.list(assetPath).orEmpty()
+        if (children.isEmpty()) return if (prefix.isEmpty()) emptyList() else listOf(prefix)
+        return children.flatMap { child ->
+            assetFiles(assetManager, "$assetPath/$child", if (prefix.isEmpty()) child else "$prefix/$child")
+        }
+    }
+
+    /** [target] 在 [root] 里面，且从 [root] 起到 [target] 的每一段都不是符号链接（不存在的段不算）。 */
+    private fun isWithinWithoutLinks(root: File, target: File): Boolean {
+        val rootPath = root.toPath().normalize()
+        val targetPath = target.toPath().normalize()
+        if (!targetPath.startsWith(rootPath) || targetPath == rootPath) return false
+        var current = rootPath
+        if (Files.isSymbolicLink(current)) return false
+        for (segment in rootPath.relativize(targetPath)) {
+            current = current.resolve(segment)
+            if (Files.isSymbolicLink(current)) return false
+        }
+        return true
     }
 
     private fun copyAssetRecursively(assetManager: AssetManager, assetPath: String, target: File) {

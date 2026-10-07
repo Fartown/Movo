@@ -16,6 +16,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * 停止与取消按进程树结束。wait 模式在 wait_ms 内结束返回 Completed，否则登记任务转后台；
  * 前台等待期间每 200ms 检查一次运行是否已取消，取消就结束进程树，不等命令自己跑完（真机：sleep 20 时点停止要等 21 秒）。
  * tty=true 时进程跑在伪终端里（与终端页同一套 PTY 启动器），stdout/stderr 合成一路，直接转后台、用 terminal_job write 发输入。
+ * 没传 cwd 时命令在工作区里跑（见 [terminalWorkspace]），与 file_* 的相对路径同一个目录。
+ * terminal_job read / write 的 wait_ms 是最多等多久：有新输出或命令结束就返回，都没有就等满（见 [TerminalWake]）。
  *
  * 输出只在内存里保留开头和最近的一段（见 [BoundedBuffer]），不落盘。
  * keep_alive 不跨任务：本次任务结束时不停止进程，但注册表随任务一起释放，之后的任务看不到、也停不了它
@@ -45,6 +47,7 @@ internal class TerminalJobRegistry(
                 },
                 startedAtMillis = job.startedAtMillis,
                 keepAlive = spec.mode == TerminalMode.KEEP_ALIVE,
+                cwd = job.cwd,
             )
         }
         val deadline = System.currentTimeMillis() + spec.waitMs
@@ -67,6 +70,7 @@ internal class TerminalJobRegistry(
                     elapsedMs = System.currentTimeMillis() - job.startedAtMillis,
                     stdoutTruncated = job.snapshot(StreamBuf.OUT).truncated,
                     stderrTruncated = job.snapshot(StreamBuf.ERR).truncated,
+                    cwd = job.cwd,
                 )
             }
         }
@@ -76,6 +80,7 @@ internal class TerminalJobRegistry(
                 reason = "wait_timeout",
                 startedAtMillis = job.startedAtMillis,
                 keepAlive = false,
+                cwd = job.cwd,
             )
         }
         job.finish()
@@ -89,6 +94,7 @@ internal class TerminalJobRegistry(
             elapsedMs = elapsed,
             stdoutTruncated = job.snapshot(StreamBuf.OUT).truncated,
             stderrTruncated = job.snapshot(StreamBuf.ERR).truncated,
+            cwd = job.cwd,
         )
     }
 
@@ -99,11 +105,32 @@ internal class TerminalJobRegistry(
     /**
      * 不带 cursor 读尾部（每路最近的一段）；带 cursor 从游标处续读。两路各有偏移，游标写成「stdout偏移:stderr偏移」，
      * 每次都返回 next_cursor（没有新输出时也给，模型拿它等下一段）。一次最多给 [READ_CHARS] 字，两路都读时各占一半。
+     *
+     * [waitMs] 是最多等多久：有新输出就尽快返回，命令结束也返回，都没有就等满。带 cursor 时「新输出」是 cursor 之后的输出
+     * （之后已经有了就不等）；不带 cursor 时是这次调用之后才产生的输出。
+     * 以前读线程一有动静就返回（不认 cursor，命令悄悄结束了也不醒、要等满），结果里也不说为什么返回：
+     * 模型要等 8–20 秒，1–700ms 就带着已有的输出回来了，以为 wait_ms 没生效，一个每秒一行的命令读了 10 次（真机 t3c-bg）。
+     * 现在结果里写明等了多久、为什么返回（见 TerminalJobTool）。
      */
-    override fun read(jobId: String, cursor: String?, stream: TerminalStream, waitMs: Long): TerminalJobReadResult? {
+    override fun read(
+        jobId: String,
+        cursor: String?,
+        stream: TerminalStream,
+        waitMs: Long,
+        cancelled: () -> Boolean,
+    ): TerminalJobReadResult? {
         val job = jobs[jobId] ?: return null
         val from = cursor?.let { JobCursor.parse(it) }
-        if (job.isRunning() && waitMs > 0) job.waitForOutput(waitMs)
+        val startedAt = System.currentTimeMillis()
+        val wake = if (job.isRunning() && waitMs > 0) {
+            // 等哪一路的新输出、从哪儿算起：带 cursor 从游标算，不带从现在算。
+            val outFrom = if (stream == TerminalStream.STDERR) null else from?.out ?: job.total(StreamBuf.OUT)
+            val errFrom = if (stream == TerminalStream.STDOUT) null else from?.err ?: job.total(StreamBuf.ERR)
+            job.awaitOutput(outFrom, errFrom, waitMs, cancelled)
+        } else {
+            TerminalWake.NONE
+        }
+        val waited = if (wake == TerminalWake.NONE) 0L else System.currentTimeMillis() - startedAt
         job.refreshExit()
         job.drainOutput()
         val budget = if (stream == TerminalStream.BOTH) READ_CHARS / 2 else READ_CHARS
@@ -121,18 +148,23 @@ internal class TerminalJobRegistry(
             stderrSkipped = err?.skipped ?: 0L,
             hasMore = (out != null && out.next < job.total(StreamBuf.OUT)) ||
                 (err != null && err.next < job.total(StreamBuf.ERR)),
+            wake = wake,
+            waitedMs = waited,
         )
     }
 
-    override fun write(jobId: String, input: String, waitMs: Long): Boolean {
+    /** 写入后最多等 [waitMs]：程序对这次输入有了回应（新输出）、命令结束或超时就返回。 */
+    override fun write(jobId: String, input: String, waitMs: Long, cancelled: () -> Boolean): Boolean {
         val job = jobs[jobId] ?: return false
         if (!job.isRunning()) return false
         return runCatching {
+            val outFrom = job.total(StreamBuf.OUT)
+            val errFrom = job.total(StreamBuf.ERR)
             job.process.outputStream.apply {
                 write((input + "\n").toByteArray(Charsets.UTF_8))
                 flush()
             }
-            if (waitMs > 0) job.waitForOutput(waitMs)
+            if (waitMs > 0) job.awaitOutput(outFrom, errFrom, waitMs, cancelled)
             true
         }.getOrDefault(false)
     }
@@ -208,7 +240,7 @@ internal class TerminalJobRegistry(
                 },
             )
         }
-        val job = Job(id, spec, process)
+        val job = Job(id, spec, process, launch.cwd)
         jobs[id] = job
         job.startReaders()
         return job
@@ -317,6 +349,8 @@ internal class TerminalJobRegistry(
         val id: String,
         private val spec: TerminalRunSpec,
         val process: Process,
+        /** 命令实际的工作目录。 */
+        val cwd: String,
     ) {
         val startedAtMillis: Long = System.currentTimeMillis()
         val keepAlive: Boolean = spec.mode == TerminalMode.KEEP_ALIVE
@@ -331,25 +365,34 @@ internal class TerminalJobRegistry(
 
         fun startReaders() {
             thread("out") {
-                process.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
-                    val buf = CharArray(4096)
-                    while (true) {
-                        val n = reader.read(buf)
-                        if (n < 0) break
-                        out.append(String(buf, 0, n))
-                        synchronized(lock) { lock.notifyAll() }
+                try {
+                    process.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                        val buf = CharArray(4096)
+                        while (true) {
+                            val n = reader.read(buf)
+                            if (n < 0) break
+                            out.append(String(buf, 0, n))
+                            synchronized(lock) { lock.notifyAll() }
+                        }
                     }
+                } finally {
+                    // 读到头（命令结束、管道关闭）也叫醒等待的人，不用等到超时才发现命令已经结束。
+                    synchronized(lock) { lock.notifyAll() }
                 }
             }
             thread("err") {
-                process.errorStream.bufferedReader(Charsets.UTF_8).use { reader ->
-                    val buf = CharArray(4096)
-                    while (true) {
-                        val n = reader.read(buf)
-                        if (n < 0) break
-                        err.append(String(buf, 0, n))
-                        synchronized(lock) { lock.notifyAll() }
+                try {
+                    process.errorStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                        val buf = CharArray(4096)
+                        while (true) {
+                            val n = reader.read(buf)
+                            if (n < 0) break
+                            err.append(String(buf, 0, n))
+                            synchronized(lock) { lock.notifyAll() }
+                        }
                     }
+                } finally {
+                    synchronized(lock) { lock.notifyAll() }
                 }
             }
         }
@@ -386,12 +429,26 @@ internal class TerminalJobRegistry(
             }
         }
 
-        fun waitForOutput(waitMs: Long) {
+        /**
+         * 最多等 [waitMs]，直到 stdout 越过 [outFrom] 或 stderr 越过 [errFrom]（为空的那一路不看）、命令结束或超时。
+         * 已经越过了就不等。每 [CANCEL_POLL_MS] 醒一次检查 [cancelled] 和进程是否已退出（读线程收尾时也会叫醒）。
+         */
+        fun awaitOutput(outFrom: Long?, errFrom: Long?, waitMs: Long, cancelled: () -> Boolean): TerminalWake {
             val deadline = System.currentTimeMillis() + waitMs
             synchronized(lock) {
-                val remaining = deadline - System.currentTimeMillis()
-                if (remaining > 0 && process.isAlive) {
-                    runCatching { lock.wait(remaining) }
+                while (true) {
+                    val newOutput = (outFrom != null && out.total() > outFrom) || (errFrom != null && err.total() > errFrom)
+                    if (newOutput) return TerminalWake.NEW_OUTPUT
+                    if (!process.isAlive) return TerminalWake.EXITED
+                    if (cancelled()) return TerminalWake.CANCELLED
+                    val remaining = deadline - System.currentTimeMillis()
+                    if (remaining <= 0) return TerminalWake.TIMEOUT
+                    try {
+                        lock.wait(minOf(remaining, CANCEL_POLL_MS))
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        return TerminalWake.CANCELLED
+                    }
                 }
             }
         }
@@ -428,17 +485,53 @@ internal class TerminalJobRegistry(
     private data class BufferView(val text: String, val truncated: Boolean)
 }
 
-/** 一次启动用的环境、身份与命令（Linux 环境按设置里选的发行版与后端决定身份）。 */
+/** 一次启动用的环境、身份、工作目录与命令（Linux 环境按设置里选的发行版与后端决定身份）。 */
 private data class LaunchPlan(
     val environment: io.github.fartown.movo.agent.terminal.TerminalEnvironment,
     val identity: String,
     val command: String,
     val rootfsPath: String?,
     val sharedMounts: List<io.github.fartown.movo.agent.terminal.SharedFolderMount>,
+    val cwd: String,
 )
 
+/**
+ * 工作区：没传 cwd 时命令在这里跑。以前不传 cwd 就停在 App 进程的当前目录 `/`，普通身份读不了
+ * （真机：「列出当前目录」得到 `/` 和 Permission denied，试了 3 次才找到工作区），而 HOME 和 file_* 的相对路径都在工作区。
+ * - Android 普通身份：App 的终端工作区，与 file_* 的相对路径、`~` 以及 HOME 是同一个目录；
+ * - Android Root 身份：Root 工作区 /data/local/tmp/movo（与终端页、重构前一致，Root 建的文件不落进 App 私有目录）；
+ * - Linux：/workspace（免 Root 的 PRoot 挂的就是 App 工作区，chroot 挂的是 Root 工作区）。
+ */
+internal fun terminalWorkspace(environment: TerminalEnv, identity: TerminalIdentity): String =
+    if (environment == TerminalEnv.LINUX) {
+        LINUX_WORKSPACE
+    } else {
+        io.github.fartown.movo.agent.terminal.TerminalRuntime.workspace(if (identity == TerminalIdentity.ROOT) "root" else "user")
+    }
+
+/** 解析 cwd：没传就在 [workspace]；`~` 和相对路径也按工作区算（Linux 里 `~` 是 /root）；绝对路径原样。 */
+internal fun resolveTerminalCwd(cwd: String?, environment: TerminalEnv, workspace: String): String {
+    val raw = cwd?.trim().orEmpty()
+    val home = if (environment == TerminalEnv.LINUX) LINUX_HOME else workspace
+    return when {
+        raw.isEmpty() -> workspace
+        raw == "~" -> home
+        raw.startsWith("~/") -> "$home/${raw.removePrefix("~/")}"
+        raw.startsWith("/") -> raw
+        else -> "${workspace.trimEnd('/')}/$raw"
+    }
+}
+
+/** 先进工作目录再跑命令；Android 的工作区可能还没建（新装、清过数据），先建好。Linux 的 /workspace 由挂载提供。 */
+internal fun commandInDirectory(command: String, cwd: String, environment: TerminalEnv, workspace: String): String {
+    val setup = if (environment == TerminalEnv.ANDROID && cwd == workspace) "mkdir -p ${shellQuote(cwd)} && " else ""
+    return "${setup}cd ${shellQuote(cwd)} && $command"
+}
+
 private fun launchPlan(spec: TerminalRunSpec): LaunchPlan {
-    val command = spec.cwd?.let { "cd ${shellQuote(it)} && ${spec.command}" } ?: spec.command
+    val workspace = terminalWorkspace(spec.environment, spec.identity)
+    val cwd = resolveTerminalCwd(spec.cwd, spec.environment, workspace)
+    val command = commandInDirectory(spec.command, cwd, spec.environment, workspace)
     if (spec.environment != TerminalEnv.LINUX) {
         return LaunchPlan(
             environment = io.github.fartown.movo.agent.terminal.TerminalEnvironment.ANDROID,
@@ -446,6 +539,7 @@ private fun launchPlan(spec: TerminalRunSpec): LaunchPlan {
             command = command,
             rootfsPath = null,
             sharedMounts = emptyList(),
+            cwd = cwd,
         )
     }
     val context = io.github.fartown.movo.agent.runtime.AgentAppContext.resolve()
@@ -465,12 +559,17 @@ private fun launchPlan(spec: TerminalRunSpec): LaunchPlan {
         command = command,
         rootfsPath = rootfs,
         sharedMounts = runCatching { io.github.fartown.movo.agent.terminal.SharedFolderMounts.current() }.getOrDefault(emptyList()),
+        cwd = cwd,
     )
 }
 
 private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
 private const val CANCEL_POLL_MS = 200L
+
+/** Linux 环境的工作区与 HOME（与终端页一致）。 */
+private const val LINUX_WORKSPACE = "/workspace"
+private const val LINUX_HOME = "/root"
 
 /** 进程退出后等读线程把管道读完的上限。 */
 private const val READER_DRAIN_MS = 500L

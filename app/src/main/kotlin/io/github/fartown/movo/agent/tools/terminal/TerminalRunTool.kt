@@ -61,7 +61,7 @@ internal class TerminalRunTool(
         string("description", "供卡片展示的简述，≤60", maxLength = 60)
         string("environment", "运行环境，默认 android", enum = TerminalEnv.entries.map { it.name.lowercase() })
         string("identity", "身份，默认 user", enum = TerminalIdentity.entries.map { it.name.lowercase() })
-        string("cwd", "工作目录")
+        string("cwd", "工作目录，默认工作区（普通身份就是 file_* 相对路径所在的目录）；相对路径和 ~ 也按工作区算")
         integer("wait_ms", "前台等待毫秒，1000–180000，默认 30000，到时未结束转后台", min = 1000, max = 180_000)
         boolean("tty", "在伪终端里运行交互程序：直接转后台返回 job_id，用 terminal_job write 发输入、read 看输出（stderr 并入 stdout）")
         string(
@@ -186,7 +186,7 @@ internal class TerminalRunTool(
         append("elapsed_ms: ").append(result.elapsedMs).append('\n')
         append("environment: ").append(input.environment.name.lowercase()).append('\n')
         append("identity: ").append(input.identity.name.lowercase()).append('\n')
-        input.cwd?.let { append("cwd: ").append(it).append('\n') }
+        (result.cwd ?: input.cwd)?.let { append("cwd: ").append(it).append('\n') }
         // 输出过长时缓冲区在中间注明省略量（见 TerminalJobRegistry.BoundedBuffer），这里不再另加截断说明。
         append("--- stdout ---\n")
         append(result.stdout)
@@ -199,7 +199,7 @@ internal class TerminalRunTool(
             // job_id / running / reason 由 ContractTool 注入 data（避免重复，这里不再写）。
             append("environment: ").append(input.environment.name.lowercase()).append('\n')
             append("identity: ").append(input.identity.name.lowercase()).append('\n')
-            input.cwd?.let { append("cwd: ").append(it).append('\n') }
+            (result.cwd ?: input.cwd)?.let { append("cwd: ").append(it).append('\n') }
             append("命令已转入后台，用 terminal_job read 查看输出；不要 sleep 轮询。")
         }
 }

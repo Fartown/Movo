@@ -31,16 +31,35 @@ class TerminalJobRegistryReadTest {
     private fun registry(supervisor: ShellProcessSupervisor = ShellProcessSupervisor()) =
         TerminalJobRegistry(AndroidAgentLogger, supervisor).also { registries += it }
 
-    private fun spec(command: String, tty: Boolean = false, mode: TerminalMode = TerminalMode.BACKGROUND) = TerminalRunSpec(
+    private fun spec(
+        command: String,
+        tty: Boolean = false,
+        mode: TerminalMode = TerminalMode.BACKGROUND,
+        cwd: String? = null,
+    ) = TerminalRunSpec(
         command = command,
         description = null,
         environment = TerminalEnv.ANDROID,
         identity = TerminalIdentity.USER,
-        cwd = null,
+        cwd = cwd,
         waitMs = 30_000,
         tty = tty,
         mode = mode,
     )
+
+    /** 后台起一条命令，等到 stdout 里出现 [marker]，返回 job_id 和此时 stdout 读到哪儿的游标。 */
+    private fun startedWith(registry: TerminalJobRegistry, command: String, marker: String): Pair<String, String> {
+        val job = (registry.run(spec(command)) as TerminalRunResult.Backgrounded).jobId
+        val deadline = System.currentTimeMillis() + 20_000
+        while (true) {
+            val read = registry.read(job, cursor = "0:0", stream = TerminalStream.BOTH, waitMs = 0)!!
+            if (marker in read.stdout) return job to read.nextCursor!!
+            assertTrue("20 秒内应输出 $marker", System.currentTimeMillis() < deadline)
+            Thread.sleep(50)
+        }
+    }
+
+    private fun canonical(path: String): String = File(path.trim()).canonicalPath
 
     /** 后台跑完一条命令，返回 job_id。 */
     private fun finished(registry: TerminalJobRegistry, command: String): String {
@@ -106,6 +125,109 @@ class TerminalJobRegistryReadTest {
         assertTrue("续读越过已丢弃的部分时要报跳过的字数", read.stdoutSkipped > 0)
         assertFalse(read.tail)
         assertTrue(read.stdout.contains("row"))
+    }
+
+    // ---- 默认目录：没传 cwd 时在工作区（真机：在 `/`，ls 报 Permission denied）----
+
+    @Test
+    fun withoutCwd_commandsRunInTheWorkspace() {
+        val registry = registry()
+        val workspace = io.github.fartown.movo.agent.terminal.TerminalRuntime.userWorkspacePath
+        val result = registry.run(spec("pwd && ls", mode = TerminalMode.WAIT)) as TerminalRunResult.Completed
+        assertEquals(result.stderr, 0, result.exitCode)
+        assertEquals(canonical(workspace), canonical(result.stdout.lineSequence().first()))
+        assertEquals(workspace, result.cwd)
+    }
+
+    @Test
+    fun relativeCwdAndTilde_areInTheWorkspace() {
+        val registry = registry()
+        val workspace = io.github.fartown.movo.agent.terminal.TerminalRuntime.userWorkspacePath
+        File(workspace, "notes-dir").mkdirs()
+        val relative = registry.run(spec("pwd", mode = TerminalMode.WAIT, cwd = "notes-dir")) as TerminalRunResult.Completed
+        assertEquals(relative.stderr, 0, relative.exitCode)
+        assertEquals(canonical("$workspace/notes-dir"), canonical(relative.stdout))
+        val home = registry.run(spec("pwd", mode = TerminalMode.WAIT, cwd = "~")) as TerminalRunResult.Completed
+        assertEquals(canonical(workspace), canonical(home.stdout))
+        // 后台命令也一样：结果里带上实际目录。
+        assertEquals(workspace, (registry.run(spec("sleep 5")) as TerminalRunResult.Backgrounded).cwd)
+    }
+
+    // ---- terminal_job 的 wait_ms：有新输出就尽快返回，命令结束也返回，没有就等满（真机 t3c-bg）----
+
+    @Test
+    fun read_withCursor_waitsForOutputAfterTheCursor() {
+        val registry = registry()
+        val (job, cursor) = startedWith(registry, "echo first; sleep 2; echo second; sleep 30", "first")
+        val started = System.currentTimeMillis()
+        val read = registry.read(job, cursor = cursor, stream = TerminalStream.BOTH, waitMs = 15_000)!!
+        val elapsed = System.currentTimeMillis() - started
+        assertEquals(TerminalWake.NEW_OUTPUT, read.wake)
+        assertTrue(read.stdout, read.stdout.contains("second"))
+        assertFalse("游标之前的不再给", read.stdout.contains("first"))
+        assertTrue("要等到新输出出来（约 2 秒），实际 ${elapsed}ms", elapsed >= 300)
+        assertTrue("有新输出就返回，不等满 15 秒，实际 ${elapsed}ms", elapsed < 10_000)
+    }
+
+    @Test
+    fun read_withUnreadOutputAfterTheCursor_returnsRightAway() {
+        val registry = registry()
+        val (job, _) = startedWith(registry, "echo first; sleep 30", "first")
+        val started = System.currentTimeMillis()
+        val read = registry.read(job, cursor = "0:0", stream = TerminalStream.BOTH, waitMs = 15_000)!!
+        val elapsed = System.currentTimeMillis() - started
+        assertEquals(TerminalWake.NEW_OUTPUT, read.wake)
+        assertTrue(read.stdout.contains("first"))
+        assertTrue("游标之后已经有输出就不等，实际 ${elapsed}ms", elapsed < 3_000)
+    }
+
+    @Test
+    fun read_withoutNewOutput_waitsTheFullTime() {
+        val registry = registry()
+        val (job, cursor) = startedWith(registry, "echo only; sleep 30", "only")
+        val started = System.currentTimeMillis()
+        val read = registry.read(job, cursor = cursor, stream = TerminalStream.BOTH, waitMs = 1_500)!!
+        val elapsed = System.currentTimeMillis() - started
+        assertEquals(TerminalWake.TIMEOUT, read.wake)
+        assertEquals("", read.stdout)
+        assertTrue("没有新输出要等满 1.5 秒，实际 ${elapsed}ms", elapsed >= 1_400)
+        assertTrue(read.waitedMs >= 1_400)
+    }
+
+    @Test
+    fun read_withoutCursor_waitsForOutputAfterTheCall() {
+        val registry = registry()
+        val (job, _) = startedWith(registry, "echo a; sleep 2; echo b; sleep 30", "a")
+        val read = registry.read(job, cursor = null, stream = TerminalStream.BOTH, waitMs = 15_000)!!
+        assertEquals(TerminalWake.NEW_OUTPUT, read.wake)
+        assertTrue("不带游标时等这次调用之后的新输出，再给尾部", read.stdout.contains("b"))
+    }
+
+    @Test
+    fun read_returnsWhenTheCommandEnds() {
+        val registry = registry()
+        val job = (registry.run(spec("sleep 1")) as TerminalRunResult.Backgrounded).jobId
+        val started = System.currentTimeMillis()
+        val read = registry.read(job, cursor = "0:0", stream = TerminalStream.BOTH, waitMs = 20_000)!!
+        val elapsed = System.currentTimeMillis() - started
+        assertEquals(TerminalWake.EXITED, read.wake)
+        assertFalse(read.info.running)
+        assertEquals(0, read.info.exitCode)
+        assertTrue("命令结束就返回，不等满 20 秒，实际 ${elapsed}ms", elapsed < 10_000)
+    }
+
+    @Test
+    fun read_cancelledRun_stopsWaiting() {
+        val registry = registry()
+        val job = (registry.run(spec("sleep 30")) as TerminalRunResult.Backgrounded).jobId
+        val started = System.currentTimeMillis()
+        val read = registry.read(
+            job, cursor = "0:0", stream = TerminalStream.BOTH, waitMs = 20_000,
+            cancelled = { System.currentTimeMillis() - started > 300 },
+        )!!
+        val elapsed = System.currentTimeMillis() - started
+        assertEquals(TerminalWake.CANCELLED, read.wake)
+        assertTrue("取消后应在几秒内返回，实际 ${elapsed}ms", elapsed < 5_000)
     }
 
     @Test

@@ -69,6 +69,7 @@ internal class AndroidSkillReadBackend(context: Context) : SkillReadBackend {
  * - PublicGitHubSkillSource 需要一个 OkHttpClient；这里用默认实例（无自定义缓存/代理），由 Provider 关闭。
  * - replace=true 时 installRepositoryZip 要求 expectedReplacementIds 等于所选全部技能 id；这里从归档
  *   二次 inspect 推导 id，与所选路径匹配后传入。
+ * - install 的 ref 是 SkillInstallTool 核对过的、检查时的 commitSha（下载时 GitHub 返回的 commit 不一致会报错）。
  */
 internal class AndroidSkillInstallBackend(context: Context) : SkillInstallBackend, AutoCloseable {
     private val appContext = context.applicationContext
@@ -86,6 +87,7 @@ internal class AndroidSkillInstallBackend(context: Context) : SkillInstallBacken
             items = insp.candidates.map {
                 SkillCatalogItem(it.name, it.path, installed = indexService.findInstalledSkill(it.name) != null)
             },
+            prefix = insp.prefix,
         )
     }.getOrElse { mapGithubFailure(it) }
 
@@ -99,6 +101,7 @@ internal class AndroidSkillInstallBackend(context: Context) : SkillInstallBacken
             items = insp.candidates.map {
                 SkillCatalogItem(it.name, it.path, installed = indexService.findInstalledSkill(it.name) != null)
             },
+            prefix = insp.prefix,
         )
     }.getOrElse { mapGithubFailure(it) }
 
@@ -107,12 +110,15 @@ internal class AndroidSkillInstallBackend(context: Context) : SkillInstallBacken
         ref: String?,
         paths: List<String>,
         replace: Boolean,
+        cancelled: () -> Boolean,
     ): SkillInstallOutcome = runCatching {
         val repo = GitHubSkillRepositoryParser.resolve(repository, ref, null)
         source.downloadArchive(repo).use { archive ->
+            // 下载期间任务被取消：不再解包提交（旧实现同样在下载后、提交前检查）。
+            if (cancelled()) return@runCatching SkillInstallOutcome.Failed(ToolErrorCode.CANCELLED, "技能安装已取消，没有写入文件")
             val open = { archive.file.inputStream() }
             val expectedIds: Set<String> = if (replace) {
-                when (val insp = installer.inspectRepositoryZip(open)) {
+                when (val insp = installer.inspectRepositoryZip(open, isCancelled = cancelled)) {
                     is io.github.fartown.movo.agent.skill.SkillArchiveInspectionResult.Success ->
                         insp.candidates.filter { it.relativePath in paths }.mapTo(mutableSetOf()) { it.id }
                     is io.github.fartown.movo.agent.skill.SkillArchiveInspectionResult.Failure -> emptySet()
@@ -125,6 +131,7 @@ internal class AndroidSkillInstallBackend(context: Context) : SkillInstallBacken
                 selectedPaths = paths,
                 replaceUserSkills = replace,
                 expectedReplacementIds = expectedIds,
+                isCancelled = cancelled,
             )
             mapInstallResult(result)
         }

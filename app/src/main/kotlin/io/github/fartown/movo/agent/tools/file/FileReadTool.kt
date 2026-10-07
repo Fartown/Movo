@@ -14,6 +14,7 @@ import io.github.fartown.movo.agent.tools.core.ModelInput
 import io.github.fartown.movo.agent.tools.core.Risk
 import io.github.fartown.movo.agent.tools.core.Sensitivity
 import io.github.fartown.movo.agent.tools.core.ToolArgs
+import io.github.fartown.movo.agent.tools.core.ToolAvailability
 import io.github.fartown.movo.agent.tools.core.ToolContext
 import io.github.fartown.movo.agent.tools.core.ToolContract
 import io.github.fartown.movo.agent.tools.core.ToolDomain
@@ -95,6 +96,18 @@ internal class FileReadTool(
         offsetLine = args.intOrNull("offset"),
         limitLines = args.intOrNull("limit"),
     )
+
+    /**
+     * 开关按来源管（定义清单 §0.5，见 [execute]）：读任意路径要「终端与文件」，读句柄和附件要「读取敏感信息」。
+     * 两个都关着时什么都读不了，不进目录（以前仍在目录里，调用了才报 DISABLED）。
+     * 只关「终端与文件」时还能读 file_search 的句柄和附件，留在目录里。
+     */
+    override fun availability(env: ToolEnvironment): ToolAvailability =
+        if (env.switches.terminal || env.switches.sensitiveRead) {
+            ToolAvailability.Available
+        } else {
+            ToolAvailability.Unavailable(ToolErrorCode.DISABLED, "读取文件需要在 设置 → 工具 里开启「终端与文件」或「读取敏感信息」")
+        }
 
     override fun resolve(input: FileReadInput, env: ToolEnvironment): CallResolution {
         val sensitivity = when (sourceClass(input.file)) {

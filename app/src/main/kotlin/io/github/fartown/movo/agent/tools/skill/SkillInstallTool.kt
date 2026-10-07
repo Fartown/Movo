@@ -23,8 +23,12 @@ import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.fail
 import io.github.fartown.movo.agent.tools.core.objectSchema
 import io.github.fartown.movo.agent.tools.core.ApprovalPreview
+import io.github.fartown.movo.agent.skill.GitHubSkillRepositoryParser
+import io.github.fartown.movo.agent.skill.GitHubSkillSourceException
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 internal enum class SkillInstallAction { CURATED, INSPECT, INSTALL }
 
@@ -39,6 +43,8 @@ internal sealed interface SkillDiscoverResult {
         val ref: String,
         val commitSha: String,
         val items: List<SkillCatalogItem>,
+        /** 检查时限定的仓库子目录（inspect 的 path、URL 里的目录、curated 的 skills/.curated）；整个仓库为空。 */
+        val prefix: String? = null,
     ) : SkillDiscoverResult
 
     data class Failed(val code: ToolErrorCode, val message: String) : SkillDiscoverResult
@@ -60,7 +66,15 @@ internal sealed interface SkillInstallOutcome {
 internal interface SkillInstallBackend {
     fun curated(): SkillDiscoverResult
     fun inspect(repository: String, ref: String?, path: String?): SkillDiscoverResult
-    fun install(repository: String, ref: String?, paths: List<String>, replace: Boolean): SkillInstallOutcome
+
+    /** 安装选中目录；[ref] 是 inspect 时钉住的 commit。[cancelled] 为真时不再提交文件（返回 CANCELLED）。 */
+    fun install(
+        repository: String,
+        ref: String?,
+        paths: List<String>,
+        replace: Boolean,
+        cancelled: () -> Boolean = { false },
+    ): SkillInstallOutcome
 }
 
 internal data class SkillInstallInput(
@@ -85,24 +99,30 @@ internal data class SkillInstallOutput(
  * - install：安装选中目录；脚本不执行，available:"next_task"。
  *
  * 风险/确认：install → Risk.EXTERNAL（中央先确认一次）；curated/inspect 只是网络发现 → Risk.READ。
+ * 先检查再安装（恢复重构前 skills_install_from_github 的约束）：install 必须对应本次任务里 curated / inspect 过的同一仓库与 ref，
+ * 所选目录必须是那次检查返回的候选、且在检查限定的目录内，下载固定用检查时的 commitSha——
+ * 检查之后仓库被改，装上的也还是用户看过的那个版本。没检查过就在确认之前拒绝。本工具一次任务一个实例，记录随任务结束清掉。
  * 冲突：install 命中已安装技能且没传 replace 时不替换，也不弹卡，把 CONFLICT 回给模型；用户要更新时由模型带 replace=true 重试。
- * 提交失败目录状态不确定 → Verdict.Unknown（绝不冒领 ok）。
+ * 提交失败目录状态不确定 → Verdict.Unknown（绝不冒领 ok）。运行被取消时不再提交文件。
  */
 internal class SkillInstallTool(
     private val backend: SkillInstallBackend,
 ) : ToolContract<SkillInstallInput, SkillInstallOutput> {
+
+    /** 本次任务里检查过的仓库：键是「仓库@ref」（见 [inspectionKey]）。 */
+    private val inspections = ConcurrentHashMap<String, InspectionSnapshot>()
     override val name = "skill_install"
     override val domain = ToolDomain.SKILL
     override val summary =
-        "从公开 GitHub 发现和安装技能：curated 官方精选、inspect 列仓库技能目录、install 安装选中目录。" +
-            "脚本不执行，装完下一次任务才可用。"
+        "从公开 GitHub 发现和安装技能：curated 官方精选、inspect 列仓库技能目录、install 安装选中目录" +
+            "（先在本次任务里 curated/inspect 同一仓库，装的是检查时的版本）。脚本不执行，装完下一次任务才可用。"
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
         string("action", "动作", required = true, enum = SkillInstallAction.entries.map { it.name.lowercase() })
         string("repository", "GitHub 仓库 owner/repo 或 URL（inspect、install 必填）")
-        string("ref", "分支、标签或 commit（可选）")
+        string("ref", "分支、标签或 commit（可选；install 时不传，或传检查返回的 commit_sha）")
         string("path", "inspect 时限定的仓库子路径")
-        stringArray("paths", "install 时安装的目录（来自 inspect，1–20）", minItems = 1, maxItems = 20)
+        stringArray("paths", "install 时安装的目录（本次 curated/inspect 返回的 items 里的 path，1–20）", minItems = 1, maxItems = 20)
         boolean("replace", "install 时允许替换同名已安装技能")
     }
 
@@ -137,6 +157,8 @@ internal class SkillInstallTool(
             sensitivity = Sensitivity.NORMAL,
             resources = emptySet(),
             category = if (input.action == SkillInstallAction.INSTALL) ApprovalCategory.INSTALL else null,
+            // 没先检查、或选的目录不在检查结果里：确认之前就拒绝，不让用户批一个装不了的安装。
+            reject = if (input.action == SkillInstallAction.INSTALL) installPlan(input).error else null,
         )
 
     override fun approvalPreview(input: SkillInstallInput): ApprovalPreview = ApprovalPreview(
@@ -152,20 +174,112 @@ internal class SkillInstallTool(
         resolution: CallResolution,
         ctx: ToolContext,
     ): Verdict<SkillInstallOutput> = when (input.action) {
-        SkillInstallAction.CURATED -> discover(input.action, backend.curated())
-        SkillInstallAction.INSPECT -> discover(input.action, backend.inspect(input.repository!!, input.ref, input.path))
-        SkillInstallAction.INSTALL -> install(input)
+        SkillInstallAction.CURATED -> discover(input, backend.curated())
+        SkillInstallAction.INSPECT -> discover(input, backend.inspect(input.repository!!, input.ref, input.path))
+        SkillInstallAction.INSTALL -> install(input, ctx)
     }
 
-    private fun discover(action: SkillInstallAction, result: SkillDiscoverResult): Verdict<SkillInstallOutput> =
+    private fun discover(input: SkillInstallInput, result: SkillDiscoverResult): Verdict<SkillInstallOutput> =
         when (result) {
-            is SkillDiscoverResult.Items -> Verdict.Read(SkillInstallOutput(action, result, emptyList()))
+            is SkillDiscoverResult.Items -> {
+                remember(input, result)
+                Verdict.Read(SkillInstallOutput(input.action, result, emptyList()))
+            }
             is SkillDiscoverResult.Failed -> Verdict.Failed(ToolError(result.code, result.message))
         }
 
-    private fun install(input: SkillInstallInput): Verdict<SkillInstallOutput> {
+    /** 一次检查的结果：钉住的 commit、限定的目录、候选目录。 */
+    private data class InspectionSnapshot(val commitSha: String, val prefix: String?, val paths: Set<String>)
+
+    /** install 要用的仓库与 commit；不满足「先检查再安装」时 [error] 非空。 */
+    private data class InstallPlan(
+        val repository: String? = null,
+        val commitSha: String? = null,
+        val paths: List<String> = emptyList(),
+        val error: ToolError? = null,
+    )
+
+    /**
+     * 记下这次检查（移植旧 rememberInspection）：按请求的 ref、返回的 ref 和 commitSha 都记一份，
+     * 没指定 ref（curated 也算）的再记成默认，这样 install 不带 ref、带分支名或带 commit_sha 都能对上。
+     */
+    private fun remember(input: SkillInstallInput, result: SkillDiscoverResult.Items) {
+        val requested = runCatching {
+            when (input.action) {
+                SkillInstallAction.INSPECT -> GitHubSkillRepositoryParser.resolve(input.repository!!, input.ref, input.path)
+                else -> GitHubSkillRepositoryParser.parse(result.repository)
+            }
+        }.getOrNull() ?: return
+        val slug = runCatching { GitHubSkillRepositoryParser.parse(result.repository).slug }.getOrDefault(requested.slug)
+        val snapshot = InspectionSnapshot(
+            commitSha = result.commitSha,
+            prefix = result.prefix?.takeUnless { it == "." },
+            paths = result.items.mapTo(mutableSetOf()) { it.path },
+        )
+        val refs = buildSet {
+            add(requested.ref)
+            add(result.ref)
+            add(result.commitSha)
+            if (requested.ref == null) add(null)
+        }
+        refs.forEach { ref -> inspections[inspectionKey(slug, ref)] = snapshot }
+    }
+
+    /** 核对 install 是否对应本次任务里的一次检查（移植旧 skillsInstallFromGitHub 的校验）。 */
+    private fun installPlan(input: SkillInstallInput): InstallPlan {
+        fun reject(message: String, hint: String) =
+            InstallPlan(error = ToolError(ToolErrorCode.INVALID_ARGUMENTS, message, hint = hint))
+        val requested = try {
+            GitHubSkillRepositoryParser.resolve(input.repository!!, input.ref, null)
+        } catch (e: GitHubSkillSourceException) {
+            return reject(e.message ?: "GitHub 仓库无效", "repository 用 owner/repo 或 github.com 的仓库地址")
+        }
+        val selected = try {
+            input.paths.map(GitHubSkillRepositoryParser::normalizeRelativePath)
+        } catch (e: GitHubSkillSourceException) {
+            return reject(e.message ?: "Skill 路径无效", "paths 用检查结果 items 里的 path")
+        }
+        // install 没带 ref、这个仓库又只检查过一个版本（比如 inspect 时指定了分支）：就是那一次，不必让模型再补 ref。
+        val snapshot = inspections[inspectionKey(requested.slug, requested.ref)]
+            ?: onlyInspectionOf(requested.slug).takeIf { requested.ref == null }
+            ?: return reject(
+                "安装前要先在这次任务里检查同一个仓库：${requested.slug}" + requested.ref?.let { "@$it" }.orEmpty(),
+                "先用 skill_install action=inspect（官方精选用 action=curated）查看，再从返回的 items 里选 path 安装；ref 不传或传返回的 commit_sha",
+            )
+        selected.firstOrNull { it !in snapshot.paths }?.let { path ->
+            return reject("所选目录不在这次检查返回的候选里：$path", "paths 只能用检查结果 items 里的 path")
+        }
+        // 检查限定了目录（inspect 的 path、curated 的精选目录），或安装时给的是指向某个目录的 URL：所选目录都要在里面。
+        val scopes = listOfNotNull(snapshot.prefix, requested.path?.takeUnless { it == "." })
+        selected.firstOrNull { path -> scopes.any { scope -> path != scope && !path.startsWith("$scope/") } }?.let { path ->
+            return reject("所选目录不在检查的目录范围内：$path", "paths 只能用检查结果 items 里的 path")
+        }
+        return InstallPlan(repository = requested.slug, commitSha = snapshot.commitSha, paths = selected)
+    }
+
+    private fun inspectionKey(slug: String, ref: String?): String = "${slug.lowercase(Locale.ROOT)}@${ref.orEmpty()}"
+
+    /** 这个仓库本次任务里只检查过一个版本时返回它；没检查过或检查过多个版本返回 null。 */
+    private fun onlyInspectionOf(slug: String): InspectionSnapshot? {
+        val prefix = inspectionKey(slug, null)
+        return inspections.filterKeys { it.startsWith(prefix) }.values.distinct().singleOrNull()
+    }
+
+    private fun install(input: SkillInstallInput, ctx: ToolContext): Verdict<SkillInstallOutput> {
+        // resolve 已经拒过没检查的；这里复核一次（两步之间记录不会变少，只防直接调用）。
+        val plan = installPlan(input)
+        plan.error?.let { return Verdict.Failed(it) }
+        ctx.checkCancelled()
+        // 下载固定用检查时的 commit；仓库按 owner/repo 传（URL 里的 ref 已由检查记录代替）。
+        val outcome = backend.install(
+            repository = plan.repository!!,
+            ref = plan.commitSha,
+            paths = plan.paths,
+            replace = input.replace,
+            cancelled = { ctx.isCancelled },
+        )
         // 与已安装技能同名且没传 replace：不替换，回给模型冲突，由它确认用户意图后带 replace=true 重试。
-        return when (val o = backend.install(input.repository!!, input.ref, input.paths, input.replace)) {
+        return when (val o = outcome) {
             is SkillInstallOutcome.Installed -> Verdict.Done(
                 SkillInstallOutput(SkillInstallAction.INSTALL, null, o.items),
                 Evidence.ReadBack("installed=${o.items.joinToString(",") { it.id }}"),
