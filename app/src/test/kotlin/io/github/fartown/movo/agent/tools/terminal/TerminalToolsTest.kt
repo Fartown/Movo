@@ -227,7 +227,7 @@ class TerminalToolsTest {
     fun terminalSchemas_tellTheTruthAboutTailReadAndKeepAlive() {
         val run = ContractTool(TerminalRunTool(runBackend)).parameters(ToolEnvironment()).getJSONObject("properties")
         val mode = run.getJSONObject("mode").getString("description")
-        assertTrue(mode, mode.contains("之后的任务看不到也停不了它"))
+        assertTrue(mode, mode.contains("之后的任务也能用 terminal_job 查看和停止"))
         assertTrue(run.getJSONObject("tty").getString("description").contains("直接转后台"))
         val job = ContractTool(TerminalJobTool(jobBackend))
         assertTrue(job.description, job.description.contains("不带 cursor 读最新的尾部"))
@@ -386,5 +386,86 @@ class TerminalToolsTest {
         assertEquals("输出", output.label)
         assertFalse("终端输出重启后仍能展开（真机 V9）", view.transient)
         assertEquals("已转到后台运行", p.execute(call("terminal_run", """{"command":"sleep 100"}""")).outcome!!.view!!.summary)
+    }
+
+    // ---- 与重构前对齐：身份、会话、常驻任务 ----
+
+    @Test
+    fun terminalRun_identityRootOnlyOfferedWithRoot() {
+        fun identities(env: ToolEnvironment): List<String> {
+            val array = ContractTool(TerminalRunTool(runBackend)).parameters(env)
+                .getJSONObject("properties").getJSONObject("identity").getJSONArray("enum")
+            return (0 until array.length()).map { array.getString(it) }
+        }
+        assertEquals(listOf("user"), identities(ToolEnvironment()))
+        assertEquals(listOf("user", "root"), identities(ToolEnvironment(rootAvailable = true)))
+    }
+
+    @Test
+    fun terminalRun_sessionOnlyWithWait_keepAliveNotWithTty() {
+        val p = pipeline()
+        listOf(
+            """{"command":"ls","session":"main","mode":"background"}""",
+            """{"command":"ls","session":"main","tty":true}""",
+            """{"command":"top","mode":"keep_alive","tty":true}""",
+        ).forEach { args ->
+            val r = p.execute(call("terminal_run", args))
+            assertEquals(args, "INVALID_ARGUMENTS", r.errorCode)
+        }
+        assertFalse("参数不对时不该跑命令", runExecuted)
+    }
+
+    @Test
+    fun terminalRun_sessionResultSaysWhereItIsAndWhenItClosed() {
+        var seen: TerminalRunSpec? = null
+        val sessionBackend = object : TerminalRunBackend {
+            override fun run(spec: TerminalRunSpec): TerminalRunResult {
+                seen = spec
+                return TerminalRunResult.Completed(
+                    exitCode = -2, stdout = "partial", stderr = "", elapsedMs = 30_000,
+                    stdoutTruncated = false, stderrTruncated = false,
+                    cwd = "/ws/sub", session = "main", sessionClosed = true, timedOut = true,
+                )
+            }
+        }
+        val p = ToolPipeline(
+            registry = ToolRegistry(listOf(object : ToolProvider { override val tools = listOf(ContractTool(TerminalRunTool(sessionBackend))) })),
+            environment = { ToolEnvironment() },
+            appContext = ApplicationProvider.getApplicationContext(),
+            logger = AndroidAgentLogger,
+            runId = "run1",
+            cancelled = { false },
+        ).also { it.catalog() }
+
+        val content = p.execute(call("terminal_run", """{"command":"make","session":"main"}""")).content
+
+        assertEquals("main", seen!!.session)
+        assertTrue(content, content.contains("session: main"))
+        assertTrue(content, content.contains("cwd: /ws/sub"))
+        assertTrue(content, content.contains("timed_out: true"))
+        assertTrue(content, content.contains("session_closed: true"))
+    }
+
+    @Test
+    fun terminalRun_keepAliveSaysItOutlivesTheTask() {
+        val daemonBackend = object : TerminalRunBackend {
+            override fun run(spec: TerminalRunSpec) = TerminalRunResult.Backgrounded(
+                "dm_1234abcd", "keep_alive", 1000, keepAlive = true, cwd = "/ws", logPath = "/ws/daemon/dm_1234abcd.log",
+            )
+        }
+        val p = ToolPipeline(
+            registry = ToolRegistry(listOf(object : ToolProvider { override val tools = listOf(ContractTool(TerminalRunTool(daemonBackend))) })),
+            environment = { ToolEnvironment() },
+            appContext = ApplicationProvider.getApplicationContext(),
+            logger = AndroidAgentLogger,
+            runId = "run1",
+            cancelled = { false },
+        ).also { it.catalog() }
+
+        val content = p.execute(call("terminal_run", """{"command":"python3 -m http.server","mode":"keep_alive"}""")).content
+
+        assertTrue(content, content.contains("job_id: dm_1234abcd"))
+        assertTrue(content, content.contains("log_path: /ws/daemon/dm_1234abcd.log"))
+        assertTrue(content, content.contains("之后的任务也能用 terminal_job"))
     }
 }

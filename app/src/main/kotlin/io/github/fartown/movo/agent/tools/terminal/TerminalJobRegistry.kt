@@ -1,12 +1,25 @@
 package io.github.fartown.movo.agent.tools.terminal
 
+import io.github.fartown.movo.agent.terminal.DaemonStartResult
+import io.github.fartown.movo.agent.terminal.DetachedTaskStatus
+import io.github.fartown.movo.agent.terminal.DetachedTaskSupervisor
+import io.github.fartown.movo.agent.terminal.LinuxEnvironmentPaths
+import io.github.fartown.movo.agent.terminal.SharedFolderMount
+import io.github.fartown.movo.agent.terminal.SharedFolderMounts
 import io.github.fartown.movo.agent.terminal.ShellProcessSupervisor
+import io.github.fartown.movo.agent.terminal.TerminalEnvironment
+import io.github.fartown.movo.agent.terminal.TerminalRuntime
+import io.github.fartown.movo.agent.terminal.UserTerminalController
 import io.github.fartown.movo.agent.terminal.isLinux
+import io.github.fartown.movo.agent.tools.core.ToolErrorCode
+import io.github.fartown.movo.agent.tools.core.ToolFailure
 import io.github.fartown.movo.core.AgentLogger
 import java.io.File
+import java.io.RandomAccessFile
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * 进程内的终端任务注册表，同时作为 terminal_run 与 terminal_job 的真实后端。
@@ -19,34 +32,47 @@ import java.util.concurrent.atomic.AtomicInteger
  * 没传 cwd 时命令在工作区里跑（见 [terminalWorkspace]），与 file_* 的相对路径同一个目录。
  * terminal_job read / write 的 wait_ms 是最多等多久：有新输出或命令结束就返回，都没有就等满（见 [TerminalWake]）。
  *
- * 输出只在内存里保留开头和最近的一段（见 [BoundedBuffer]），不落盘。
- * keep_alive 不跨任务：本次任务结束时不停止进程，但注册表随任务一起释放，之后的任务看不到、也停不了它
- * （跨任务守护应走 DetachedTaskSupervisor，没有实现）。
+ * 普通命令的输出只在内存里保留开头和最近的一段（见 [BoundedBuffer]），随本次任务结束释放。
+ *
+ * keep_alive 常驻任务交给 [daemons]（[DetachedTaskSupervisor]，与重构前 daemon_start、终端页「后台任务」同一套）：
+ * 脱离本次任务一直运行，输出写日志文件，记录落盘，普通身份拿前台服务保活（通知栏「后台命令」里能停），App 重启后按 pid 认回来。
+ * terminal_job 在本次任务的登记表里找不到 job_id 时回落到它，所以之后的任务也能列出、读日志、停止。
+ *
+ * session：同名的命令在同一个常驻 shell 里接着跑（[UserTerminalController]，终端页同一套），cd、export、变量都保留，
+ * 本次任务结束时关掉（与重构前 terminal open / exec 一样）。
  */
 internal class TerminalJobRegistry(
     private val logger: AgentLogger,
     private val supervisor: ShellProcessSupervisor = ShellProcessSupervisor(),
+    /** keep_alive 常驻任务的宿主；为空时 keep_alive 用不了。 */
+    private val daemons: DetachedTaskSupervisor? = null,
 ) : TerminalRunBackend, TerminalJobBackend, AutoCloseable {
 
     private val jobs = ConcurrentHashMap<String, Job>()
     private val counter = AtomicInteger(0)
 
+    /** 会话名 → 常驻 shell。 */
+    private val sessions = ConcurrentHashMap<String, AgentSession>()
+    private val sessionLock = Any()
+    private var sessionController: UserTerminalController? = null
+
+    @Volatile
+    private var closed = false
+
     // ---- TerminalRunBackend ----
 
     override fun run(spec: TerminalRunSpec): TerminalRunResult {
+        spec.session?.let { return runInSession(spec, it) }
+        if (spec.mode == TerminalMode.KEEP_ALIVE) return startDaemon(spec)
         val job = start(spec)
         // 交互程序在等输入，前台等到 wait_ms 也不会结束：tty 直接转后台，交还 job_id。
         val background = spec.mode != TerminalMode.WAIT || spec.tty
         if (background) {
             return TerminalRunResult.Backgrounded(
                 jobId = job.id,
-                reason = when {
-                    spec.mode == TerminalMode.KEEP_ALIVE -> "keep_alive"
-                    spec.mode == TerminalMode.BACKGROUND -> "background"
-                    else -> "tty"
-                },
+                reason = if (spec.mode == TerminalMode.BACKGROUND) "background" else "tty",
                 startedAtMillis = job.startedAtMillis,
-                keepAlive = spec.mode == TerminalMode.KEEP_ALIVE,
+                keepAlive = false,
                 cwd = job.cwd,
             )
         }
@@ -98,9 +124,221 @@ internal class TerminalJobRegistry(
         )
     }
 
+    // ---- keep_alive：常驻任务 ----
+
+    private fun startDaemon(spec: TerminalRunSpec): TerminalRunResult {
+        val host = daemons ?: throw ToolFailure(ToolErrorCode.UNSUPPORTED, "常驻任务（keep_alive）在这里用不了", detail = "daemon_unavailable")
+        val target = launchTarget(spec)
+        // 普通身份默认在工作区里跑，工作区可能还没建（新装、清过数据）。
+        if (target.environment == TerminalEnvironment.ANDROID && target.cwd == target.workspace && target.identity == "user") {
+            File(target.cwd).mkdirs()
+        }
+        return when (val started = host.start(spec.command, target.cwd, target.identity, target.environment)) {
+            is DaemonStartResult.Started -> TerminalRunResult.Backgrounded(
+                jobId = started.task.id,
+                reason = "keep_alive",
+                startedAtMillis = started.task.startedAt,
+                keepAlive = true,
+                cwd = started.task.cwd,
+                logPath = host.hostDaemonPath(started.task, started.task.logPath),
+            )
+            is DaemonStartResult.Failed -> throw daemonStartFailure(started)
+        }
+    }
+
+    private fun daemonStatuses(): List<DetachedTaskStatus> =
+        daemons?.let { host -> runCatching { host.list() }.getOrNull() }.orEmpty()
+
+    private fun daemonRunning(id: String): Boolean = daemonStatuses().firstOrNull { it.task.id == id }?.running == true
+
+    private fun daemonInfo(status: DetachedTaskStatus): TerminalJobInfo {
+        val task = status.task
+        return TerminalJobInfo(
+            jobId = task.id,
+            command = task.command,
+            description = null,
+            environment = if (task.environment.isLinux) TerminalEnv.LINUX else TerminalEnv.ANDROID,
+            identity = if (task.identity == "root") TerminalIdentity.ROOT else TerminalIdentity.USER,
+            running = status.running,
+            keepAlive = true,
+            exitCode = null,
+            startedAtMillis = task.startedAt,
+            endedAtMillis = null,
+            streamsMerged = true,
+            logPath = daemons?.hostDaemonPath(task, task.logPath),
+        )
+    }
+
+    /**
+     * 读常驻任务的日志：日志文件就是它的输出（stdout、stderr 写在一起），游标是文件里的字节偏移（写成「偏移:0」）。
+     * 不带 cursor 读最近一段，带 cursor 从那儿接着读；wait_ms 与普通后台命令一样：攒够一段、任务结束或等满就返回。
+     * App 读不了的日志（Root 身份的任务）用 Root 读最近一段，不支持游标。
+     */
+    private fun readDaemon(
+        id: String,
+        cursor: String?,
+        stream: TerminalStream,
+        waitMs: Long,
+        cancelled: () -> Boolean,
+    ): TerminalJobReadResult? {
+        val host = daemons ?: return null
+        val task = host.findTask(id) ?: return null
+        val from = cursor?.let { JobCursor.parse(it).out }
+        var running = daemonRunning(id)
+        val log = File(host.hostDaemonPath(task, task.logPath))
+        fun result(text: String, next: String?, skipped: Long, more: Boolean, wake: TerminalWake, waited: Long) =
+            TerminalJobReadResult(
+                info = daemonInfo(DetachedTaskStatus(task, running)),
+                stdout = if (stream == TerminalStream.STDERR) "" else text,
+                stderr = if (stream == TerminalStream.STDERR) text else "",
+                nextCursor = next,
+                tail = from == null,
+                stdoutSkipped = if (stream == TerminalStream.STDERR) 0 else skipped,
+                stderrSkipped = if (stream == TerminalStream.STDERR) skipped else 0,
+                hasMore = more,
+                wake = wake,
+                waitedMs = waited,
+            )
+        if (!log.canRead()) {
+            val logs = host.readLogs(id)
+            if (!logs.ok) {
+                throw ToolFailure(ToolErrorCode.SOURCE_UNAVAILABLE, logs.message.ifBlank { "读不到这个常驻任务的日志" }, detail = logs.code)
+            }
+            return result(logs.text, next = null, skipped = 0, more = false, wake = TerminalWake.NONE, waited = 0)
+        }
+        val startedAt = System.currentTimeMillis()
+        var wake = TerminalWake.NONE
+        if (running && waitMs > 0) {
+            wake = awaitLog(id, log, from ?: log.length(), waitMs, cancelled)
+            if (wake == TerminalWake.EXITED) running = false
+        }
+        val waited = if (wake == TerminalWake.NONE) 0L else System.currentTimeMillis() - startedAt
+        val size = log.length()
+        val slice = readLogSlice(log, from, size)
+        return result(slice.text, "${slice.next}:0", slice.skipped, slice.next < size, wake, waited)
+    }
+
+    /** 最多等 [waitMs]：日志从 [from] 起多出一段、任务结束、运行被取消或等满就返回；任务是否还在每秒查一次。 */
+    private fun awaitLog(id: String, log: File, from: Long, waitMs: Long, cancelled: () -> Boolean): TerminalWake {
+        val deadline = System.currentTimeMillis() + waitMs
+        var nextProbe = System.currentTimeMillis() + DAEMON_PROBE_MS
+        while (true) {
+            if (log.length() - from >= READ_ENOUGH_CHARS) return TerminalWake.ENOUGH_OUTPUT
+            if (cancelled()) return TerminalWake.CANCELLED
+            val now = System.currentTimeMillis()
+            if (now >= nextProbe) {
+                if (!daemonRunning(id)) return TerminalWake.EXITED
+                nextProbe = now + DAEMON_PROBE_MS
+            }
+            if (now >= deadline) return TerminalWake.TIMEOUT
+            try {
+                Thread.sleep(minOf(CANCEL_POLL_MS, deadline - now).coerceAtLeast(1))
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return TerminalWake.CANCELLED
+            }
+        }
+    }
+
+    private fun stopDaemon(id: String): TerminalStopOutcome {
+        val host = daemons ?: return TerminalStopOutcome.NOT_FOUND
+        val task = host.findTask(id) ?: return TerminalStopOutcome.NOT_FOUND
+        if (task.identity == "root" && !TerminalRuntime.rootAvailable) return TerminalStopOutcome.ROOT_REQUIRED
+        return if (host.stop(id)) TerminalStopOutcome.STOPPED else TerminalStopOutcome.STILL_RUNNING
+    }
+
+    // ---- session：同名命令在同一个常驻 shell 里接着跑 ----
+
+    /** 一个会话：[UserTerminalController] 里的常驻 shell，记下开它时的环境和身份。 */
+    private data class AgentSession(val controllerId: String, val environment: TerminalEnv, val identity: TerminalIdentity)
+
+    private fun sessionController(): UserTerminalController = synchronized(sessionLock) {
+        if (closed) throw ToolFailure(ToolErrorCode.CANCELLED, "本次任务已结束，会话不再可用")
+        sessionController ?: UserTerminalController(
+            logger = logger,
+            linuxRootfsPathProvider = { environment -> linuxRootfsPath(environment) },
+            linuxSharedMountsProvider = { runCatching { SharedFolderMounts.current() }.getOrDefault(emptyList()) },
+        ).also { sessionController = it }
+    }
+
+    /**
+     * 在会话 [name] 里跑：没有就在 cwd（没给就是工作区）里开一个；有就接着用，给了 cwd 时先 cd 过去。
+     * 到 wait_ms 还没结束或运行被取消：结束这个会话（连同正在跑的命令），之后同名会话重新开（与重构前 exec 超时一样）。
+     */
+    private fun runInSession(spec: TerminalRunSpec, name: String): TerminalRunResult {
+        val controller = sessionController()
+        val target = launchTarget(spec)
+        val existing = sessions[name]
+        if (existing != null && (existing.environment != spec.environment || existing.identity != spec.identity)) {
+            throw ToolFailure(
+                ToolErrorCode.INVALID_ARGUMENTS,
+                "会话「$name」是 ${existing.environment.name.lowercase()} 环境、${existing.identity.name.lowercase()} 身份开的",
+                hint = "接着用这个会话就传同样的 environment、identity；要换环境就换个会话名",
+            )
+        }
+        var command = spec.command
+        val session: AgentSession
+        if (existing == null || !controller.sessionAlive(existing.controllerId)) {
+            session = when (val opened = controller.openSession(target.environment, target.cwd, target.identity)) {
+                is UserTerminalController.OpenResult.Ready -> AgentSession(opened.sessionId, spec.environment, spec.identity)
+                is UserTerminalController.OpenResult.Failed -> throw sessionOpenFailure(opened, target.cwd)
+            }
+            sessions[name] = session
+        } else {
+            session = existing
+            if (spec.cwd != null) command = "cd ${shellQuote(target.cwd)} && $command"
+        }
+        val out = BoundedBuffer()
+        val err = BoundedBuffer()
+        val outcome = AtomicReference<UserTerminalController.ExecResult?>()
+        val startedAt = System.currentTimeMillis()
+        val worker = Thread(
+            {
+                outcome.set(
+                    runCatching {
+                        controller.exec(session.controllerId, command) { text, isStderr -> (if (isStderr) err else out).append(text) }
+                    }.getOrNull(),
+                )
+            },
+            "terminal-session-$name",
+        ).apply {
+            isDaemon = true
+            start()
+        }
+        val deadline = startedAt + spec.waitMs
+        var timedOut = false
+        while (worker.isAlive) {
+            runCatching { worker.join(CANCEL_POLL_MS) }
+            if (!worker.isAlive) break
+            val cancelled = spec.cancelled()
+            if (cancelled || System.currentTimeMillis() >= deadline) {
+                timedOut = !cancelled
+                controller.stopSession(session.controllerId)
+                runCatching { worker.join(SESSION_STOP_JOIN_MS) }
+                break
+            }
+        }
+        val exec = outcome.get()
+        val sessionClosed = timedOut || exec == null || exec.sessionClosed
+        if (sessionClosed) sessions.remove(name)
+        return TerminalRunResult.Completed(
+            exitCode = exec?.exitCode ?: if (timedOut) SESSION_TIMEOUT_EXIT else -1,
+            stdout = out.snapshot(),
+            stderr = err.snapshot(),
+            elapsedMs = System.currentTimeMillis() - startedAt,
+            stdoutTruncated = out.truncated,
+            stderrTruncated = err.truncated,
+            cwd = exec?.cwd ?: target.cwd,
+            session = name,
+            sessionClosed = sessionClosed,
+            timedOut = timedOut,
+        )
+    }
+
     // ---- TerminalJobBackend ----
 
-    override fun list(): List<TerminalJobInfo> = jobs.values.map { it.info() }
+    /** 本次任务里的后台命令，加上所有 keep_alive 常驻任务（含之前的任务、终端页启动的）。 */
+    override fun list(): List<TerminalJobInfo> = jobs.values.map { it.info() } + daemonStatuses().map(::daemonInfo)
 
     /**
      * 不带 cursor 读尾部（每路最近的一段）；带 cursor 从游标处续读。两路各有偏移，游标写成「stdout偏移:stderr偏移」，
@@ -119,7 +357,7 @@ internal class TerminalJobRegistry(
         waitMs: Long,
         cancelled: () -> Boolean,
     ): TerminalJobReadResult? {
-        val job = jobs[jobId] ?: return null
+        val job = jobs[jobId] ?: return readDaemon(jobId, cursor, stream, waitMs, cancelled)
         val from = cursor?.let { JobCursor.parse(it) }
         val startedAt = System.currentTimeMillis()
         val wake = if (job.isRunning() && waitMs > 0) {
@@ -156,7 +394,16 @@ internal class TerminalJobRegistry(
 
     /** 写入后最多等 [waitMs]：程序对这次输入有了回应（新输出）、命令结束或超时就返回。 */
     override fun write(jobId: String, input: String, waitMs: Long, cancelled: () -> Boolean): Boolean {
-        val job = jobs[jobId] ?: return false
+        val job = jobs[jobId] ?: run {
+            if (daemons?.findTask(jobId) != null) {
+                throw ToolFailure(
+                    ToolErrorCode.UNSUPPORTED,
+                    "常驻任务不接收输入",
+                    hint = "要交互的程序用 tty=true 启动（会转成本次任务里的后台命令）",
+                )
+            }
+            return false
+        }
         if (!job.isRunning()) return false
         return runCatching {
             val outFrom = job.total(StreamBuf.OUT)
@@ -171,7 +418,7 @@ internal class TerminalJobRegistry(
     }
 
     override fun stop(jobId: String): TerminalStopOutcome {
-        val job = jobs[jobId] ?: return TerminalStopOutcome.NOT_FOUND
+        val job = jobs[jobId] ?: return stopDaemon(jobId)
         if (!job.isRunning()) {
             jobs.remove(jobId)
             return TerminalStopOutcome.STOPPED
@@ -187,14 +434,16 @@ internal class TerminalJobRegistry(
         }
     }
 
+    /** 本次任务结束：停掉本次的后台命令、关掉会话。keep_alive 常驻任务不在这里，照常运行。 */
     override fun close() {
-        jobs.values.forEach { job ->
-            if (!job.keepAlive) {
-                // keep_alive 不停（进程留着，但注册表一清就没人管得到它；跨任务守护没有实现）；其余的这里停掉。
-                terminate(job)
-            }
-        }
+        closed = true
+        jobs.values.forEach { terminate(it) }
         jobs.clear()
+        synchronized(sessionLock) {
+            runCatching { sessionController?.close() }
+            sessionController = null
+            sessions.clear()
+        }
     }
 
     /** 按进程树结束（su、PRoot、chroot 下的子进程一起），再兜底 destroy。 */
@@ -211,11 +460,11 @@ internal class TerminalJobRegistry(
 
     private fun start(spec: TerminalRunSpec): Job {
         val id = "job_" + counter.incrementAndGet()
-        val launch = launchPlan(spec)
+        val launch = launchTarget(spec)
         val process = runCatching {
             supervisor.startShellProcess(
                 identity = launch.identity,
-                command = launch.command,
+                command = commandInDirectory(spec.command, launch.cwd, spec.environment, launch.workspace, spec.tty),
                 mergeStderr = false,
                 environment = launch.environment,
                 linuxRootfsPath = launch.rootfsPath,
@@ -354,7 +603,6 @@ internal class TerminalJobRegistry(
         val cwd: String,
     ) {
         val startedAtMillis: Long = System.currentTimeMillis()
-        val keepAlive: Boolean = spec.mode == TerminalMode.KEEP_ALIVE
         var exitCode: Int? = null
             private set
         var endedAtMillis: Long? = null
@@ -484,7 +732,7 @@ internal class TerminalJobRegistry(
             environment = spec.environment,
             identity = spec.identity,
             running = process.isAlive,
-            keepAlive = keepAlive,
+            keepAlive = false,
             exitCode = exitCode,
             startedAtMillis = startedAtMillis,
             endedAtMillis = endedAtMillis,
@@ -496,13 +744,13 @@ internal class TerminalJobRegistry(
     private data class BufferView(val text: String, val truncated: Boolean)
 }
 
-/** 一次启动用的环境、身份、工作目录与命令（Linux 环境按设置里选的发行版与后端决定身份）。 */
-private data class LaunchPlan(
-    val environment: io.github.fartown.movo.agent.terminal.TerminalEnvironment,
+/** 一次启动用的环境、身份与工作目录（Linux 环境按设置里选的发行版与后端决定身份）。 */
+private data class LaunchTarget(
+    val environment: TerminalEnvironment,
     val identity: String,
-    val command: String,
     val rootfsPath: String?,
-    val sharedMounts: List<io.github.fartown.movo.agent.terminal.SharedFolderMount>,
+    val sharedMounts: List<SharedFolderMount>,
+    val workspace: String,
     val cwd: String,
 )
 
@@ -533,50 +781,157 @@ internal fun resolveTerminalCwd(cwd: String?, environment: TerminalEnv, workspac
     }
 }
 
-/** 先进工作目录再跑命令；Android 的工作区可能还没建（新装、清过数据），先建好。Linux 的 /workspace 由挂载提供。 */
-internal fun commandInDirectory(command: String, cwd: String, environment: TerminalEnv, workspace: String): String {
+/**
+ * 先进工作目录再跑命令；Android 的工作区可能还没建（新装、清过数据），先建好。Linux 的 /workspace 由挂载提供。
+ * Android 的非 tty 命令设 TERM=dumb、NO_COLOR=1（与重构前一样，Linux 环境由启动器设）：输出不是终端，
+ * 不要颜色和进度控制符，也不因为没有 TERM 报警告。
+ */
+internal fun commandInDirectory(
+    command: String,
+    cwd: String,
+    environment: TerminalEnv,
+    workspace: String,
+    tty: Boolean = false,
+): String {
     val setup = if (environment == TerminalEnv.ANDROID && cwd == workspace) "mkdir -p ${shellQuote(cwd)} && " else ""
-    return "${setup}cd ${shellQuote(cwd)} && $command"
+    val plainTerminal = if (environment == TerminalEnv.ANDROID && !tty) "export TERM=dumb NO_COLOR=1 && " else ""
+    return "${setup}cd ${shellQuote(cwd)} && $plainTerminal$command"
 }
 
-private fun launchPlan(spec: TerminalRunSpec): LaunchPlan {
+private fun launchTarget(spec: TerminalRunSpec): LaunchTarget {
     val workspace = terminalWorkspace(spec.environment, spec.identity)
     val cwd = resolveTerminalCwd(spec.cwd, spec.environment, workspace)
-    val command = commandInDirectory(spec.command, cwd, spec.environment, workspace)
     if (spec.environment != TerminalEnv.LINUX) {
-        return LaunchPlan(
-            environment = io.github.fartown.movo.agent.terminal.TerminalEnvironment.ANDROID,
+        return LaunchTarget(
+            environment = TerminalEnvironment.ANDROID,
             identity = if (spec.identity == TerminalIdentity.ROOT) "root" else "user",
-            command = command,
             rootfsPath = null,
             sharedMounts = emptyList(),
+            workspace = workspace,
             cwd = cwd,
         )
     }
     val context = io.github.fartown.movo.agent.runtime.AgentAppContext.resolve()
-        ?: throw io.github.fartown.movo.agent.tools.core.ToolFailure(
-            io.github.fartown.movo.agent.tools.core.ToolErrorCode.UNSUPPORTED, "Linux 环境尚未就绪", detail = "linux_not_ready",
-        )
+        ?: throw ToolFailure(ToolErrorCode.UNSUPPORTED, "Linux 环境尚未就绪", detail = "linux_not_ready")
     val distribution = io.github.fartown.movo.data.repository.LinuxEnvironmentSettingsRepository.current(context)
     val environment = when (distribution) {
-        io.github.fartown.movo.agent.terminal.LinuxDistribution.ALPINE -> io.github.fartown.movo.agent.terminal.TerminalEnvironment.ALPINE
-        io.github.fartown.movo.agent.terminal.LinuxDistribution.DEBIAN -> io.github.fartown.movo.agent.terminal.TerminalEnvironment.DEBIAN
+        io.github.fartown.movo.agent.terminal.LinuxDistribution.ALPINE -> TerminalEnvironment.ALPINE
+        io.github.fartown.movo.agent.terminal.LinuxDistribution.DEBIAN -> TerminalEnvironment.DEBIAN
     }
-    val rootfs = io.github.fartown.movo.agent.terminal.LinuxEnvironmentPaths.rootfsDir(context, distribution).absolutePath
-    return LaunchPlan(
+    val rootfs = LinuxEnvironmentPaths.rootfsDir(context, distribution).absolutePath
+    return LaunchTarget(
         environment = environment,
         // 免 Root（PRoot）用普通身份，chroot 用 Root：由用户在设置里选的后端决定，不看模型传的 identity。
-        identity = io.github.fartown.movo.agent.terminal.TerminalRuntime.defaultIdentity(environment, rootfs),
-        command = command,
+        identity = TerminalRuntime.defaultIdentity(environment, rootfs),
         rootfsPath = rootfs,
-        sharedMounts = runCatching { io.github.fartown.movo.agent.terminal.SharedFolderMounts.current() }.getOrDefault(emptyList()),
+        sharedMounts = runCatching { SharedFolderMounts.current() }.getOrDefault(emptyList()),
+        workspace = workspace,
         cwd = cwd,
     )
+}
+
+/** 会话用的 Linux rootfs（按发行版）；拿不到 App 时为空。 */
+private fun linuxRootfsPath(environment: TerminalEnvironment): String? {
+    val distribution = environment.linuxDistribution ?: return null
+    val context = io.github.fartown.movo.agent.runtime.AgentAppContext.resolve() ?: return null
+    return LinuxEnvironmentPaths.rootfsDir(context, distribution).absolutePath
+}
+
+/** 常驻任务启动失败：按原因给错误码和下一步。 */
+private fun daemonStartFailure(failed: DaemonStartResult.Failed): ToolFailure = when (failed.code) {
+    "ROOT_REQUIRED" -> ToolFailure(ToolErrorCode.ROOT_REQUIRED, failed.message, detail = failed.code)
+    "LINUX_ENVIRONMENT_NOT_READY", "PROOT_UNAVAILABLE" -> ToolFailure(
+        ToolErrorCode.UNSUPPORTED, "Linux 环境尚未就绪：${failed.message}",
+        hint = "让用户到 设置 → Linux 工具环境 装好后再试", detail = "linux_not_ready",
+    )
+    "LINUX_ENVIRONMENT_REQUIRES_ROOT", "INVALID_IDENTITY" -> ToolFailure(ToolErrorCode.UNSUPPORTED, failed.message, detail = failed.code)
+    "MAX_TASKS_REACHED" -> ToolFailure(
+        ToolErrorCode.LIMIT_REACHED, failed.message,
+        hint = "用 terminal_job list 看现有的常驻任务，stop 掉不用的再启动", detail = failed.code,
+    )
+    "BACKGROUND_START_NOT_ALLOWED" -> ToolFailure(
+        ToolErrorCode.SYSTEM_REJECTED, "系统不让 Movo 在后台启动常驻任务",
+        hint = "让用户回到 Movo 界面后再试", detail = failed.code,
+    )
+    else -> ToolFailure(ToolErrorCode.SYSTEM_REJECTED, "常驻任务没能启动：${failed.message}", detail = failed.code)
+}
+
+/** 会话开不起来：按原因给错误码和下一步。 */
+private fun sessionOpenFailure(failed: UserTerminalController.OpenResult.Failed, cwd: String): ToolFailure = when (failed.code) {
+    "ROOT_REQUIRED" -> ToolFailure(ToolErrorCode.ROOT_REQUIRED, failed.message, detail = failed.code)
+    "LINUX_ENVIRONMENT_NOT_READY" -> ToolFailure(
+        ToolErrorCode.UNSUPPORTED, "Linux 环境尚未就绪",
+        hint = "让用户到 设置 → Linux 工具环境 装好后再试", detail = "linux_not_ready",
+    )
+    "SESSION_LIMIT_REACHED" -> ToolFailure(
+        ToolErrorCode.LIMIT_REACHED, "会话太多了",
+        hint = "接着用已有的会话名，或不带 session 跑", detail = failed.code,
+    )
+    "SESSION_OPEN_FAILED" -> ToolFailure(
+        ToolErrorCode.SYSTEM_REJECTED, "会话没能在 $cwd 里打开",
+        hint = "确认 cwd 存在、有权限进去", detail = failed.code,
+    )
+    else -> ToolFailure(ToolErrorCode.SYSTEM_REJECTED, "会话没能打开：${failed.message}", detail = failed.code)
+}
+
+/** 读到的一段日志：[next] 是读到哪儿（字节偏移），[skipped] 是这段之前没给的字节数。 */
+private data class LogSlice(val text: String, val next: Long, val skipped: Long)
+
+/**
+ * 从日志文件读一段（最多 [READ_CHARS] 字节，不超过同样多的字）：不带 [from] 读最近一段，带 [from] 从那儿接着读。
+ * 不把一个字的几个字节拆开：读尾部时跳过开头的半个字，末尾不完整的字留到下一次。
+ */
+private fun readLogSlice(log: File, from: Long?, size: Long): LogSlice {
+    val start = if (from == null) maxOf(0L, size - READ_CHARS) else from.coerceIn(0L, size)
+    val end = minOf(size, start + READ_CHARS)
+    val bytes = ByteArray((end - start).toInt())
+    if (bytes.isNotEmpty()) {
+        RandomAccessFile(log, "r").use { file ->
+            file.seek(start)
+            file.readFully(bytes)
+        }
+    }
+    var head = 0
+    if (from == null) {
+        while (head < bytes.size && bytes[head].isUtf8Continuation()) head++
+    }
+    val tail = utf8CompleteEnd(bytes, head, bytes.size)
+    return LogSlice(
+        text = String(bytes, head, tail - head, Charsets.UTF_8),
+        next = start + tail,
+        skipped = if (from == null) start + head else 0L,
+    )
+}
+
+private fun Byte.isUtf8Continuation(): Boolean = (toInt() and 0xC0) == 0x80
+
+/** [end] 之前最后一个字不完整时退到它的开头。 */
+private fun utf8CompleteEnd(bytes: ByteArray, from: Int, end: Int): Int {
+    var lead = end - 1
+    while (lead >= from && end - lead <= 4 && bytes[lead].isUtf8Continuation()) lead--
+    if (lead < from) return end
+    val first = bytes[lead].toInt() and 0xFF
+    val length = when {
+        first >= 0xF0 -> 4
+        first >= 0xE0 -> 3
+        first >= 0xC0 -> 2
+        else -> 1
+    }
+    return if (end - lead >= length) end else lead
 }
 
 private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
 private const val CANCEL_POLL_MS = 200L
+
+/** 等常驻任务的日志时，隔多久查一次任务还在不在。 */
+private const val DAEMON_PROBE_MS = 1_000L
+
+/** 会话里的命令超时被结束后，最多等这么久拿回已有的输出。 */
+private const val SESSION_STOP_JOIN_MS = 3_000L
+
+/** 会话里的命令到 wait_ms 没结束被结束时的退出码（与重构前 exec 超时一样）。 */
+private const val SESSION_TIMEOUT_EXIT = -2
 
 /** read 攒到这么多字的新输出就提前返回，不必等满 wait_ms。 */
 private const val READ_ENOUGH_CHARS = 4_000L
