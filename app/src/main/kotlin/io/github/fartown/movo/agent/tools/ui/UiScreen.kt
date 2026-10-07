@@ -25,9 +25,10 @@ import org.json.JSONObject
  * 屏幕 UI 领域共享类型与工具函数。
  *
  * 本领域最难的两点都落在这里：
- * 1. **观察绑定**（合同 §5.1）：index 必带 observation_id，绑那次观察的内容代际，失效一律 STALE_OBSERVATION，
- *    不允许“默认最近观察”兜底。坐标隐式绑最近一次 ui_observe 的坐标系（[CoordinateFrame]）：只在从没观察过、
- *    屏幕方向或尺寸变了、前台窗口 / 应用换了时拒绝，页面内容刷新、滚动、文字变化都不算（见 [coordinateError]）。
+ * 1. **观察绑定**（合同 §5.1）：index 必带 observation_id，观察不在了（被新观察挤掉、无障碍服务重连）报 STALE_OBSERVATION，
+ *    不允许“默认最近观察”兜底；页面内容变没变交给无障碍服务按节点身份核对（见 [observationError]）。
+ *    坐标隐式绑最近一次 ui_observe 的坐标系（[CoordinateFrame]）：只在屏幕方向或尺寸变了、前台窗口 / 应用换了时拒绝，
+ *    页面内容刷新、滚动、文字变化都不算；从没观察过就按屏幕像素直接执行（见 [coordinateError]）。
  * 2. **审批分类**统一由 [buildUiActionResolution] 声明：模型声明的发送 / 支付等后果、所在应用；
  *    要不要弹卡由权限模式决定。读不到坐标点上的节点只记录（readableTarget），不单独确认。
  */
@@ -221,6 +222,9 @@ internal sealed interface UiObserveResult {
         /** 附给模型的截图；无则 null。 */
         val screenshot: AgentModelClient.ModelImage?,
         val screenshotFailure: String? = null,
+        /** 截图只截到部分窗口：缺了 [screenshotMissingWindows] 个（弹窗、输入法等截不到的窗口）。 */
+        val screenshotPartial: Boolean = false,
+        val screenshotMissingWindows: Int = 0,
     ) : UiObserveResult
 
     /** 无障碍不可用且无 root：PERMISSION_REQUIRED。 */
@@ -274,6 +278,8 @@ internal data class UiKeyRequest(val key: UiKeyCode, val backend: InjectionBacke
 internal data class UiWaitRequest(
     val text: String?, val match: WaitMatch, val gone: Boolean,
     val packageName: String?, val durationMs: Int?, val timeoutMs: Int,
+    /** 等文字时是否也比对节点描述（图标按钮的名字）；false 只比文字。 */
+    val includeDesc: Boolean = true,
 )
 
 /** tap / swipe / key 的送达型结果。 */
@@ -329,7 +335,13 @@ internal sealed interface UiInputResult {
 }
 
 internal sealed interface UiWaitResult {
-    data class Finished(val matched: Boolean, val elapsedMs: Long, val node: UiNodeProbe?) : UiWaitResult
+    /** [currentPackage]：等应用没等到时，当时在前台的应用；读不到为 null。 */
+    data class Finished(
+        val matched: Boolean,
+        val elapsedMs: Long,
+        val node: UiNodeProbe?,
+        val currentPackage: String? = null,
+    ) : UiWaitResult
     /** 等文字/应用但无障碍不可用。 */
     data object PermissionRequired : UiWaitResult
 }
@@ -343,7 +355,7 @@ internal fun SchemaBuilder.flatTarget(allowCoordinates: Boolean = true, allowAre
     integer("index", "目标节点 index（来自 observation_id 指向的那次 ui_observe）", min = 0)
     string("observation_id", "index 对应的观察 id；用 index 时必填，绑定其观察代际", maxLength = 64)
     if (allowCoordinates) {
-        number("x", "坐标点横坐标（在最近一次 ui_observe 的 coord_space 中）")
+        number("x", "坐标点横坐标（在最近一次 ui_observe 的 coord_space 中；本次任务还没观察过就是屏幕像素）")
         number("y", "坐标点纵坐标")
         if (allowArea) {
             number("x2", "区域右下角横坐标（给出 x,y,x2,y2 即区域，操作其中心）")
@@ -449,6 +461,25 @@ internal fun UiNodeProbe.displayName(): String? =
     (text ?: desc)?.replace(Regex("\\s+"), " ")?.trim()?.takeIf { it.isNotEmpty() }
         ?.let { if (it.length > 20) it.take(20) + "…" else it }
 
+/**
+ * index 动作（ui_tap、ui_scroll）的观察校验：只看这次观察还在不在——被新观察挤掉、无障碍服务重连都算不在，
+ * 报 STALE_OBSERVATION。页面内容变没变不在这里比：交给无障碍服务按节点身份核对（同一窗口里节点还在、身份对得上就执行，
+ * 对不上报「窗口内容已经变化」「目标节点内容或身份已经变化」），和重构前一样。按内容代际严格比的话，
+ * 一直刷新的页面（视频进度、弹幕、倒计时）上 index 永远追不上，手动审批确认后几乎必然被拒。
+ * resolve 时预检（观察不在就不先弹卡），execute 前复核（确认期间可能又观察了好几次）。
+ */
+internal fun observationError(registry: UiObservationRegistry, observationId: String?): ToolError? {
+    if (observationId.isNullOrEmpty()) {
+        return ToolError(ToolErrorCode.STALE_OBSERVATION, "没有可用的屏幕观察", hint = "先调用 ui_observe")
+    }
+    if (registry.genOf(observationId) != null) return null
+    return ToolError(
+        ToolErrorCode.STALE_OBSERVATION,
+        "observation_id=$observationId 已过期",
+        hint = "重新 ui_observe 后再用新的 index/坐标",
+    )
+}
+
 /** 代际再校验：失效返回 Verdict.Failed(STALE_OBSERVATION)，有效返回 null。 */
 internal fun checkGen(registry: UiObservationRegistry, observationId: String?, boundGen: Long): Verdict.Failed? =
     genError(registry, observationId, boundGen)?.let { Verdict.Failed(it) }
@@ -479,18 +510,13 @@ internal fun genError(registry: UiObservationRegistry, observationId: String?, b
 
 /**
  * 坐标动作（ui_tap 坐标 / 区域、ui_swipe）的预检与复核：坐标只绑最近一次观察的坐标系。
- * 从没观察过、屏幕方向或尺寸变了、前台窗口 / 应用换了才拒绝；页面内容刷新（视频进度条约 0.12 秒一次）、
- * 滚动、文字变化都不算，否则持续刷新的页面上坐标动作永远追不上。resolve 时预检（不先弹卡让用户白点），
- * execute 前用同一条规则复核（确认期间可能切走了）。
+ * 屏幕方向或尺寸变了、前台窗口 / 应用换了才拒绝；页面内容刷新（视频进度条约 0.12 秒一次）、
+ * 滚动、文字变化都不算，否则持续刷新的页面上坐标动作永远追不上。本次任务还没观察过时没有可比的坐标系，
+ * 按屏幕像素直接执行（和重构前一样，「点一下屏幕中间」不用先观察一次；越界由 [coordinateRangeError] 按屏幕尺寸查）。
+ * resolve 时预检（不先弹卡让用户白点），execute 前用同一条规则复核（确认期间可能切走了）。
  */
 internal fun coordinateError(registry: UiObservationRegistry, observationId: String?): ToolError? {
-    if (observationId.isNullOrEmpty()) {
-        return ToolError(
-            ToolErrorCode.STALE_OBSERVATION,
-            "没有可用的屏幕观察",
-            hint = "先调用 ui_observe，坐标用它返回的 coord_space",
-        )
-    }
+    if (observationId.isNullOrEmpty()) return null
     val bound = registry.observationFrame(observationId) ?: return null
     val now = registry.currentFrame() ?: return null
     val change = frameChange(bound, now, registry.selfPackage) ?: return null
@@ -520,18 +546,24 @@ internal fun frameChange(bound: CoordinateFrame, now: CoordinateFrame, selfPacka
 }
 
 /**
- * 坐标越界：按观察的 coord_space 检查，报参数错误并写出合法范围（不让控制器抛异常，
- * 被管线兜成「内部错误，可以重试」诱导原样重试）。范围未知时不查。
+ * 坐标越界：按最近一次观察的 coord_space 检查；本次任务还没观察过时按现在的屏幕尺寸查。
+ * 报参数错误并写出合法范围（不让控制器抛异常，被管线兜成「内部错误，可以重试」诱导原样重试）。范围未知时不查。
  */
-internal fun coordinateRangeError(ref: ObservationRef?, vararg points: Pair<Double, Double>): ToolError? {
-    val width = ref?.coordWidth ?: 0
-    val height = ref?.coordHeight ?: 0
+internal fun coordinateRangeError(
+    registry: UiObservationRegistry,
+    ref: ObservationRef?,
+    vararg points: Pair<Double, Double>,
+): ToolError? {
+    val screen = if (ref == null) registry.currentFrame() else null
+    val width = ref?.coordWidth ?: screen?.width ?: 0
+    val height = ref?.coordHeight ?: screen?.height ?: 0
     if (width <= 0 || height <= 0) return null
     val (x, y) = points.firstOrNull { (px, py) -> px < 0 || py < 0 || px >= width || py >= height } ?: return null
+    val space = if (ref != null) "最近一次 ui_observe 的 coord_space" else "还没观察过，按屏幕像素"
     return ToolError(
         ToolErrorCode.INVALID_ARGUMENTS,
         "坐标 (${x.coordText()}, ${y.coordText()}) 超出屏幕范围",
-        hint = "合法范围：x 0–${width - 1}，y 0–${height - 1}（最近一次 ui_observe 的 coord_space ${width}x$height）",
+        hint = "合法范围：x 0–${width - 1}，y 0–${height - 1}（$space ${width}x$height）",
     )
 }
 
@@ -555,9 +587,9 @@ internal fun textMatcher(needle: String, match: WaitMatch): (String) -> Boolean 
     }
 }
 
-/** 节点的文字或描述命中即算。 */
-internal fun List<UiNodeProbe>.firstMatching(matches: (String) -> Boolean): UiNodeProbe? =
-    firstOrNull { node -> listOfNotNull(node.text, node.desc).any(matches) }
+/** 节点的文字或描述命中即算；[includeDesc]=false 时只比文字。 */
+internal fun List<UiNodeProbe>.firstMatching(matches: (String) -> Boolean, includeDesc: Boolean = true): UiNodeProbe? =
+    firstOrNull { node -> listOfNotNull(node.text, node.desc.takeIf { includeDesc }).any(matches) }
 
 /** ui_wait 文字条件的一次判定：[met] 是否满足；等出现时 [node] 是命中的节点。 */
 internal data class TextCheck(val met: Boolean, val node: UiNodeProbe? = null)
@@ -565,10 +597,16 @@ internal data class TextCheck(val met: Boolean, val node: UiNodeProbe? = null)
 /**
  * ui_wait 文字条件的一次判定。等出现：有节点命中就满足，带回命中的节点。
  * 等消失（[gone]）：要读到了节点、且没有一个命中才算消失；读不到屏幕（null 或空）不算，
- * 免得把「看不见」当成「没有了」。
+ * 免得把「看不见」当成「没有了」。[includeDesc]=false 时只比节点文字，不比描述。
  */
-internal fun textCheck(nodes: List<UiNodeProbe>?, needle: String, match: WaitMatch, gone: Boolean): TextCheck {
-    val hit = nodes?.firstMatching(textMatcher(needle, match))
+internal fun textCheck(
+    nodes: List<UiNodeProbe>?,
+    needle: String,
+    match: WaitMatch,
+    gone: Boolean,
+    includeDesc: Boolean = true,
+): TextCheck {
+    val hit = nodes?.firstMatching(textMatcher(needle, match), includeDesc)
     return if (gone) TextCheck(met = !nodes.isNullOrEmpty() && hit == null) else TextCheck(met = hit != null, node = hit)
 }
 

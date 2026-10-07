@@ -29,6 +29,8 @@ import org.json.JSONObject
 /**
  * §9 ui_observe（只读）：观察屏幕，返回 observation_id、代际 gen、节点、可选截图。
  * query 只保留文字或描述里含这段字的节点（不分大小写），其余不返回；index 仍是这次观察里的序号，可直接用来操作。
+ * 节点按字数预算给（[MODEL_BUDGET_CHARS]）：放不下时截掉后面的节点、写明截了多少和怎么找后面的，
+ * 不让整份结果超过工具结果上限、被整体降成一段只留开头的文字（120 个节点的聊天、长列表页常见）。
  */
 
 internal data class UiObserveInput(
@@ -68,7 +70,7 @@ internal class UiObserveTool(
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
         if (env.screenshotAvailable) boolean("screenshot", "是否附截图，默认 false；用户要求看图、节点为 0 或 Canvas/地图/图片界面时设 true")
         boolean("nodes", "是否返回节点列表，默认 true")
-        integer("max_nodes", "节点数量上限 1–120，默认 60", min = 1, max = 120)
+        integer("max_nodes", "节点数量上限 1–120，默认 60；结果太长时会少给，见 nodes_omitted", min = 1, max = 120)
         string("query", "可选：只返回文字或描述里含这段字的节点（不分大小写），其余不返回，减少 token")
     }
 
@@ -160,6 +162,21 @@ internal class UiObserveTool(
     }
 
     override fun renderForModel(output: UiObserveOutput): ModelContent {
+        val nodes = output.observed.nodes.map(::nodeJson)
+        val full = render(output, nodes, omitted = 0)
+        if (full.toString().length <= MODEL_BUDGET_CHARS) return ModelContent.Json(full)
+        // 放不下：其余字段按「截了节点」的样子量一遍长度（含截断说明），剩下的预算按顺序放节点。
+        val fixed = render(output, nodes = emptyList(), omitted = nodes.size).toString().length
+        var used = fixed + NODES_KEY_CHARS
+        val shown = nodes.takeWhile { node ->
+            used += node.toString().length + 1
+            used <= MODEL_BUDGET_CHARS
+        }
+        return ModelContent.Json(render(output, shown, omitted = nodes.size - shown.size))
+    }
+
+    /** 给模型的结果；[omitted] 是因为放不下没给的节点数（这些节点仍在这次观察里，index 照样有效）。 */
+    private fun render(output: UiObserveOutput, nodes: List<JSONObject>, omitted: Int): JSONObject {
         val o = output.observed
         val json = JSONObject()
             .put("observation_id", o.observationId)
@@ -167,12 +184,17 @@ internal class UiObserveTool(
             .put("coord_space", JSONObject().put("width", o.coordWidth).put("height", o.coordHeight))
         o.packageName?.let { json.put("package", it) }
         o.focusedIndex?.let { json.put("focused_index", it) }
-        if (o.nodes.isNotEmpty()) {
-            val arr = JSONArray()
-            for (n in o.nodes) arr.put(nodeJson(n))
-            json.put("nodes", arr)
+        if (nodes.isNotEmpty()) json.put("nodes", JSONArray(nodes))
+        json.put("nodes_truncated", o.nodesTruncated || omitted > 0)
+        if (omitted > 0) {
+            val next = if (output.query != null) {
+                "换个更具体的 query 缩小范围"
+            } else {
+                "要找的控件不在里面时用 query 按文字找（不受这个长度限制），或滚动后再观察"
+            }
+            json.put("nodes_omitted", omitted)
+                .put("nodes_note", "结果太长，只给了前 ${nodes.size} 个节点，后面 $omitted 个没给；$next。调大 max_nodes 没用")
         }
-        json.put("nodes_truncated", o.nodesTruncated)
         output.query?.let { q ->
             json.put(
                 "query",
@@ -189,9 +211,14 @@ internal class UiObserveTool(
                 .apply {
                     o.screenshotQuality?.let { put("quality", it) }
                     o.screenshotFailure?.let { put("failure", it) }
+                    if (o.screenshotPartial) {
+                        put("partial", true)
+                        if (o.screenshotMissingWindows > 0) put("missing_windows", o.screenshotMissingWindows)
+                        put("note", "截图缺了部分窗口（弹窗、输入法、悬浮窗等），截图里看不到的不代表屏幕上没有，以节点为准")
+                    }
                 },
         )
-        return ModelContent.Json(json)
+        return json
     }
 
     /** 把截图作为本回合图片附给模型（合同新增 images()）。 */
@@ -201,6 +228,15 @@ internal class UiObserveTool(
     companion object {
         /** 一次观察最多返回的节点数（max_nodes 上限）。 */
         const val MAX_NODES = 120
+
+        /**
+         * 给模型的观察结果最多多少字：比工具结果上限（[io.github.fartown.movo.agent.tools.core.ToolProjection.MAX_MODEL_CHARS]）
+         * 留出外层 status、images_attached 等的余量，超过上限会整份降成只留开头的文字。
+         */
+        val MODEL_BUDGET_CHARS = io.github.fartown.movo.agent.tools.core.ToolProjection.MAX_MODEL_CHARS - 1_000
+
+        /** `"nodes":[]` 本身占的字数。 */
+        private const val NODES_KEY_CHARS = 12
     }
 
     private fun nodeJson(n: UiObservedNode): JSONObject = JSONObject().apply {

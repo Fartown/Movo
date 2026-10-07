@@ -89,11 +89,25 @@ class UiScreenActionsTest {
     }
 
     @Test
-    fun coordinateTap_neverObserved_failsStale() {
+    fun coordinateTap_neverObserved_usesScreenPixels() {
+        // 重构前：没观察过也能按屏幕坐标点（「点一下屏幕中间」不用先观察一次）。
         val fake = Fake().apply { latestRef = null }
         val result = run(fake, tap(fake), """{"x":540,"y":1200}""")
-        assertEquals("STALE_OBSERVATION", result.errorCode)
-        assertEquals("没有可用的屏幕观察", result.outcome!!.error!!.message)
+        assertEquals("ok", result.status)
+        assertEquals(UiTarget.Point(540.0, 1200.0), fake.taps.single().target)
+        val swiped = run(fake, swipe(fake), """{"x":540,"y":1800,"x2":540,"y2":600}""")
+        assertEquals("ok", swiped.status)
+        assertEquals(1, fake.swipes.size)
+    }
+
+    @Test
+    fun coordinateTap_neverObserved_rangeIsTheScreen() {
+        val fake = Fake().apply { latestRef = null }
+        val result = run(fake, tap(fake), """{"x":540,"y":2400}""")
+        assertEquals("INVALID_ARGUMENTS", result.errorCode)
+        val hint = result.outcome!!.error!!.hint!!
+        assertTrue(hint, hint.contains("y 0–2399") && hint.contains("屏幕像素"))
+        assertTrue(fake.taps.isEmpty())
     }
 
     @Test
@@ -108,15 +122,50 @@ class UiScreenActionsTest {
     }
 
     @Test
-    fun elementTap_contentChanged_stillFailsStale() {
-        // index 的校验不放宽：内容代际变了仍按过期处理。
+    fun elementTap_contentRefreshed_stillDispatches() {
+        // 一直刷新的页面（视频进度、弹幕）：内容代际在解析和执行之间变了，节点身份交给无障碍服务核对，照样点。
         val fake = Fake().apply { genMap["obs1"] = 2L }
         val tool = UiTapTool(fake, fake)
         val resolution = tool.resolve(tool.parse(args("""{"index":0,"observation_id":"obs1"}"""), env), env)
         fake.genMap["obs1"] = 3L
         val verdict = tool.execute(tool.parse(args("""{"index":0,"observation_id":"obs1"}"""), env), resolution, ctx())
-        assertEquals("STALE_OBSERVATION", (verdict as io.github.fartown.movo.agent.tools.core.Verdict.Failed).error.code.name)
-        assertTrue(fake.taps.isEmpty())
+        assertTrue(verdict.toString(), verdict is io.github.fartown.movo.agent.tools.core.Verdict.Dispatched)
+        assertEquals(1, fake.taps.size)
+    }
+
+    @Test
+    fun elementTap_contentRefreshedWhileWaitingForApproval_stillDispatches() {
+        // 手动审批：用户看卡的几秒里页面刷新了很多次，确认后不再一律报过期。
+        val fake = Fake()
+        val refreshing = Capture(ApprovalDecision.Approved) { fake.genMap["obs1"] = 99L }
+        val result = run(fake, tap(fake), """{"index":0,"observation_id":"obs1","effect":"send"}""", manualEnv, refreshing)
+        assertEquals(1, refreshing.seen.size)
+        assertEquals("ok", result.status)
+        assertEquals(1, fake.taps.size)
+    }
+
+    @Test
+    fun elementTapAndScroll_observationGone_failStale() {
+        // 观察不在了（被新观察挤掉、无障碍服务重连）：报过期，不弹卡、不执行。
+        val fake = Fake().apply { genMap.clear() }
+        val tapped = run(fake, tap(fake), """{"index":0,"observation_id":"obs1","effect":"send"}""", manualEnv, Capture(ApprovalDecision.Approved))
+        assertEquals("STALE_OBSERVATION", tapped.errorCode)
+        assertTrue(tapped.outcome!!.error!!.message.contains("已过期"))
+        val scrolled = run(fake, scroll(fake), """{"direction":"down","index":0,"observation_id":"obs1"}""")
+        assertEquals("STALE_OBSERVATION", scrolled.errorCode)
+        assertTrue(fake.taps.isEmpty() && fake.scrollCalls == 0)
+    }
+
+    @Test
+    fun elementScroll_contentRefreshed_stillScrolls() {
+        val fake = Fake()
+        val tool = UiScrollTool(fake, fake)
+        val input = tool.parse(args("""{"direction":"down","index":0,"observation_id":"obs1"}"""), env)
+        val resolution = tool.resolve(input, env)
+        fake.genMap["obs1"] = 5L
+        val verdict = tool.execute(input, resolution, ctx())
+        assertTrue(verdict.toString(), verdict is io.github.fartown.movo.agent.tools.core.Verdict.Done)
+        assertEquals(UiTarget.Element("obs1", 0), fake.scrollRequests.single().element)
     }
 
     @Test
@@ -175,6 +224,25 @@ class UiScreenActionsTest {
         assertTrue(hint, hint.contains("x 0–1079") && hint.contains("y 0–2399"))
         assertTrue("参数错了不弹卡", capture.seen.isEmpty())
         assertTrue(fake.taps.isEmpty() && fake.probeCalls == 0)
+    }
+
+    // ---- 默认时长（#13）----
+
+    @Test
+    fun swipe_defaultDurationIs500LikeBeforeTheRefactor() {
+        val fake = Fake()
+        assertEquals("ok", run(fake, swipe(fake), """{"x":540,"y":1800,"x2":540,"y2":600}""").status)
+        assertEquals(500, fake.swipes.single().durationMs)
+        val schema = UiSwipeTool(fake, fake).schema(env).getJSONObject("properties")
+        assertTrue(schema.getJSONObject("duration_ms").getString("description").contains("默认 500"))
+    }
+
+    @Test
+    fun tap_holdMsSaysLongPressIsUsually800() {
+        val fake = Fake()
+        val description = UiTapTool(fake, fake).schema(env).getJSONObject("properties")
+            .getJSONObject("hold_ms").getString("description")
+        assertTrue(description, description.contains("800"))
     }
 
     @Test
@@ -395,6 +463,44 @@ class UiScreenActionsTest {
     }
 
     @Test
+    fun uiWait_includeDescFalse_matchesOnlyText() {
+        // 重构前 wait_for_text 的 include_desc：等「返回」两个字出现，不让图标按钮的描述「返回」抢先命中。
+        val nodes = listOf(UiNodeProbe(desc = "返回"), UiNodeProbe(text = "返回首页"))
+        assertEquals("返回", textCheck(nodes, "返回", WaitMatch.CONTAINS, gone = false).node!!.desc)
+        assertEquals("返回首页", textCheck(nodes, "返回", WaitMatch.CONTAINS, gone = false, includeDesc = false).node!!.text)
+        assertFalse(textCheck(listOf(UiNodeProbe(desc = "加载中")), "加载中", WaitMatch.CONTAINS, gone = false, includeDesc = false).met)
+        val fake = Fake()
+        val tool = ContractTool(UiWaitTool(fake))
+        assertTrue(UiWaitTool(fake).schema(env).getJSONObject("properties").has("include_desc"))
+        run(fake, tool, """{"text":"返回"}""")
+        assertTrue("默认也比描述", fake.waits.last().includeDesc)
+        run(fake, tool, """{"text":"返回","include_desc":false}""")
+        assertFalse(fake.waits.last().includeDesc)
+    }
+
+    @Test
+    fun uiWait_packageTimeout_saysWhatIsInFront() {
+        val fake = Fake().apply {
+            waitResult = UiWaitResult.Finished(false, 10_000, null, currentPackage = "com.android.permissioncontroller")
+        }
+        val tool = ContractTool(UiWaitTool(fake))
+        val data = JSONObject(run(fake, tool, """{"package":"com.tencent.mm"}""").content).getJSONObject("data")
+        assertFalse(data.getBoolean("matched"))
+        assertEquals("com.android.permissioncontroller", data.getString("current_package"))
+        fake.waitResult = UiWaitResult.Finished(true, 800, null, currentPackage = "com.tencent.mm")
+        val matched = JSONObject(run(fake, tool, """{"package":"com.tencent.mm"}""").content).getJSONObject("data")
+        assertFalse("等到了就不用再说", matched.has("current_package"))
+    }
+
+    @Test
+    fun uiWait_onlyWaitsForTime_onlyWhenDurationAlone() {
+        assertTrue(UiWaitTool.onlyWaitsForTime(args("""{"duration_ms":2000}""")))
+        assertFalse(UiWaitTool.onlyWaitsForTime(args("""{"text":"完成"}""")))
+        assertFalse(UiWaitTool.onlyWaitsForTime(args("""{"package":"com.tencent.mm"}""")))
+        assertFalse("参数组合错了按要看屏幕处理", UiWaitTool.onlyWaitsForTime(args("""{"duration_ms":2000,"text":"完成"}""")))
+    }
+
+    @Test
     fun uiWait_durationOverAMinute_invalidArguments() {
         val fake = Fake()
         assertEquals("INVALID_ARGUMENTS", run(fake, ContractTool(UiWaitTool(fake)), """{"duration_ms":60001}""").errorCode)
@@ -475,6 +581,88 @@ class UiScreenActionsTest {
             "INVALID_ARGUMENTS",
             run(fake, ContractTool(UiObserveTool(fake)), """{"query":"设置","nodes":false}""").errorCode,
         )
+    }
+
+    // ---- ui_observe 按预算给节点、截图不完整、观察登记（#10、#15）----
+
+    /** 文字多的页面（聊天、长列表）：每个节点文字、描述都接近 120 字的上限。 */
+    private fun wordyNode(index: Int) = UiObservedNode(
+        index = index,
+        text = "第${index}条消息：" + "今天下午三点在会议室讨论下个版本的需求排期，请大家提前看一下文档并准备问题".repeat(3).take(110),
+        desc = "消息气泡 $index，" + "长按可以复制、转发、收藏或者删除这条消息".repeat(4).take(100),
+        role = "android.widget.TextView",
+        viewId = "com.tencent.mm:id/message_content_$index",
+        bounds = listOf(0, index * 100, 1080, index * 100 + 96),
+        editable = false, password = false, enabled = true,
+        actions = listOf("click", "long_click"),
+    )
+
+    @Test
+    fun observe_120WordyNodes_keepsStructureAndSaysWhatWasCut() {
+        val fake = Fake().apply { observeResult = observed(*(0 until 120).map(::wordyNode).toTypedArray()) }
+        val result = run(fake, ContractTool(UiObserveTool(fake)), """{"max_nodes":120}""")
+        assertTrue("不超过工具结果上限：${result.content.length}", result.content.length <= io.github.fartown.movo.agent.tools.core.ToolProjection.MAX_MODEL_CHARS)
+        val json = JSONObject(result.content)
+        assertFalse("没有整份降成文字", json.has("data_text"))
+        val data = json.getJSONObject("data")
+        val nodes = data.getJSONArray("nodes")
+        assertTrue(nodes.length() in 1 until 120)
+        assertEquals("按顺序给前面的节点", (0 until nodes.length()).toList(), (0 until nodes.length()).map { nodes.getJSONObject(it).getInt("index") })
+        assertTrue(data.getBoolean("nodes_truncated"))
+        assertEquals(120 - nodes.length(), data.getInt("nodes_omitted"))
+        val note = data.getString("nodes_note")
+        assertTrue(note, note.contains("query") && note.contains("${120 - nodes.length()}"))
+        assertEquals("obs9", data.getString("observation_id"))
+        assertTrue(data.has("screenshot"))
+    }
+
+    @Test
+    fun observe_fewNodes_untouched() {
+        val fake = Fake().apply { observeResult = observed(*(0 until 20).map(::wordyNode).toTypedArray()) }
+        val data = JSONObject(run(fake, ContractTool(UiObserveTool(fake)), "{}").content).getJSONObject("data")
+        assertEquals(20, data.getJSONArray("nodes").length())
+        assertFalse(data.getBoolean("nodes_truncated"))
+        assertFalse(data.has("nodes_omitted") || data.has("nodes_note"))
+    }
+
+    @Test
+    fun observe_queryWithTooManyMatches_suggestsANarrowerQuery() {
+        val fake = Fake().apply { observeResult = observed(*(0 until 120).map(::wordyNode).toTypedArray()) }
+        val data = JSONObject(run(fake, ContractTool(UiObserveTool(fake)), """{"query":"消息","max_nodes":120}""").content)
+            .getJSONObject("data")
+        assertTrue(data.getInt("nodes_omitted") > 0)
+        assertTrue(data.getString("nodes_note").contains("更具体的 query"))
+        assertEquals(120, data.getJSONObject("query").getInt("matched"))
+    }
+
+    @Test
+    fun observe_partialScreenshot_isMarked() {
+        val fake = Fake().apply {
+            observeResult = observed(UiObservedNode(index = 0, text = "确定")).copy(
+                screenshotAttached = true, screenshotQuality = "partial",
+                screenshotPartial = true, screenshotMissingWindows = 1,
+            )
+        }
+        val shot = JSONObject(run(fake, ContractTool(UiObserveTool(fake)), """{"screenshot":true}""", env.copy(screenshotAvailable = true)).content)
+            .getJSONObject("data").getJSONObject("screenshot")
+        assertTrue(shot.getBoolean("partial"))
+        assertEquals(1, shot.getInt("missing_windows"))
+        assertEquals("partial", shot.getString("quality"))
+        assertTrue(shot.getString("note").contains("不代表屏幕上没有"))
+    }
+
+    @Test
+    fun recentObservations_keepOnlyTheLatestFew() {
+        val recent = RecentObservations<Int>(capacity = 3)
+        (1..5).forEach { recent["obs$it"] = it }
+        assertEquals(3, recent.size())
+        assertNull("最早的被挤掉，按过期处理", recent["obs1"])
+        assertNull(recent["obs2"])
+        assertEquals(5, recent["obs5"])
+        recent["obs3"] = 30
+        recent["obs6"] = 6
+        assertEquals("重新登记的算最新，不被挤掉", 30, recent["obs3"])
+        assertNull(recent["obs4"])
     }
 
     // ---- 成功后才显示手势指示（#13 / B7）----
