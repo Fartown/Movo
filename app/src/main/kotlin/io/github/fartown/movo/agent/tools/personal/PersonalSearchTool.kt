@@ -25,6 +25,7 @@ import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.fail
 import io.github.fartown.movo.agent.tools.core.invalidArgs
 import io.github.fartown.movo.agent.tools.core.objectSchema
+import io.github.fartown.movo.data.repository.NotificationHistoryRepository.Companion.RETENTION_DAYS
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -32,12 +33,14 @@ import org.json.JSONObject
  * 个人数据来源。每个来源声明：是否支持时间过滤、是否 secret、以及在当前环境是否可用
  * （Root / ColorOS / 通知权）。supportsTimeFilter 只给后端真的按 since/until 过滤的来源标 true：
  * 系统记忆（coloros_memory）的查询（Hook 与 Root 快照共用 ColorOsMemoryDatabaseQuery）没有时间条件，不标。
+ * notifications 是 Movo 记下的通知历史（含已划掉的），notification_bar 是通知栏里现在还挂着的通知（旧 recent_notifications）。
  */
 internal enum class PersonalSource(
     val supportsTimeFilter: Boolean,
     val secret: Boolean = false,
 ) {
     NOTIFICATIONS(supportsTimeFilter = true),
+    NOTIFICATION_BAR(supportsTimeFilter = true),
     CONTACTS(supportsTimeFilter = false),
     CALL_LOG(supportsTimeFilter = true),
     SMS(supportsTimeFilter = true),
@@ -53,6 +56,7 @@ internal enum class PersonalSource(
     /** 当前环境下该来源是否可读。clipboard 还依赖受支持输入法，运行时才知道，这里只看 Root。 */
     fun isAvailable(env: ToolEnvironment): Boolean = when (this) {
         NOTIFICATIONS -> env.rootAvailable || env.notificationAccess
+        NOTIFICATION_BAR -> env.notificationAccess
         CONTACTS, CALL_LOG, SMS, CALENDAR, CLIPBOARD_HISTORY -> env.rootAvailable
         NOTES, RECORDING_SUMMARIES, COLOROS_MEMORY, PLACES -> env.rootAvailable && env.colorOs
         ORDERS -> env.notificationAccess || (env.rootAvailable && env.colorOs)
@@ -94,6 +98,7 @@ internal data class PersonalSearchOutput(
     val items: List<PersonalItem>,
     val nextCursor: String?,
     val toolWarnings: List<ToolWarning>,
+    val meta: JSONObject? = null,
 ) : ToolOutput
 
 /** 后端查询结果：命中条目 + 下一页游标；来源级失败走 [error]，部分失败进 [warnings]。 */
@@ -102,6 +107,8 @@ internal data class PersonalSearchResult(
     val nextCursor: String? = null,
     val warnings: List<ToolWarning> = emptyList(),
     val error: ToolError? = null,
+    /** 结果的附加说明（覆盖范围、按应用名匹配到的包名等），原样并进给模型的结果。 */
+    val meta: JSONObject? = null,
 )
 
 /** 可测后端：按来源读本机数据，统一归一成 [PersonalItem]。 */
@@ -121,7 +128,7 @@ internal class PersonalSearchTool(
     override val name = "personal_search"
     override val domain = ToolDomain.PERSONAL
     override val summary =
-        "检索本机个人记录。source 必选（如 sms、contacts、calendar、notifications 等）；query 关键词；" +
+        "检索本机个人记录。source 必选（如 sms、contacts、calendar、notifications 通知历史、notification_bar 当前通知栏等）；query 关键词；" +
             "部分来源支持 since/until 过滤；limit 1–30；cursor 翻页。可读文件/图片/录音用 file_search。"
 
     override fun availability(env: ToolEnvironment): ToolAvailability =
@@ -139,15 +146,21 @@ internal class PersonalSearchTool(
         return objectSchema {
             // 写明哪些来源能按时间过滤：模型不用试错，也不会以为别的来源也筛了时间。
             val timed = sources.filter { it.supportsTimeFilter }.joinToString("、") { it.wire }.ifEmpty { "无" }
+            // 两个通知来源要分得清：问「现在有哪些通知」用 notification_bar，问「之前那条通知」用 notifications。
+            val notes = listOfNotNull(
+                "notifications 是 Movo 记下的最近 $RETENTION_DAYS 天通知历史（含已划掉的）。"
+                    .takeIf { PersonalSource.NOTIFICATIONS in sources },
+                "notification_bar 是通知栏里现在还挂着的通知。".takeIf { PersonalSource.NOTIFICATION_BAR in sources },
+            ).joinToString("")
             string(
-                "source", "数据来源，必选。since/until 仅部分来源支持。",
+                "source", "数据来源，必选。since/until 仅部分来源支持。$notes",
                 required = true, enum = sources.map { it.wire },
             )
             string("query", "关键词，匹配标题/正文，最长 200", maxLength = MAX_QUERY)
-            string("since", "起始时间（ISO 8601 或毫秒），仅这些来源可用：$timed")
+            string("since", "起始时间（ISO 8601 或毫秒），仅这些来源可用：$timed。不给时 notifications 查最近 24 小时、orders 查最近 7 天")
             string("until", "结束时间（ISO 8601 或毫秒），仅这些来源可用：$timed")
-            string("app", "按应用过滤（仅 notifications、orders）")
-            integer("limit", "返回条数，1–30，默认 10", min = 1, max = MAX_LIMIT.toLong())
+            string("app", "按应用过滤：包名或应用名，如 com.tencent.mm 或 微信（仅 notifications、notification_bar、orders）")
+            integer("limit", "返回条数，1–30，默认 $DEFAULT_LIMIT", min = 1, max = MAX_LIMIT.toLong())
             string("cursor", "翻页游标，来自上一次返回的 next_cursor")
         }
     }
@@ -213,6 +226,7 @@ internal class PersonalSearchTool(
                 items = masked,
                 nextCursor = result.nextCursor,
                 toolWarnings = result.warnings,
+                meta = result.meta,
             ),
         )
     }
@@ -240,6 +254,7 @@ internal class PersonalSearchTool(
 
     private fun PersonalSource.uiLabel(): String = when (this) {
         PersonalSource.NOTIFICATIONS -> "通知"
+        PersonalSource.NOTIFICATION_BAR -> "通知栏"
         PersonalSource.CONTACTS -> "通讯录"
         PersonalSource.CALL_LOG -> "通话记录"
         PersonalSource.SMS -> "短信"
@@ -269,6 +284,7 @@ internal class PersonalSearchTool(
             .put("source", output.source.wire)
             .put("items", array)
             .put("count", output.items.size)
+        output.meta?.let { meta -> meta.keys().forEach { key -> json.put(key, meta.get(key)) } }
         output.nextCursor?.let { json.put("next_cursor", it) }
         return ModelContent.Json(json)
     }
@@ -288,7 +304,7 @@ internal class PersonalSearchTool(
     }
 
     private companion object {
-        const val DEFAULT_LIMIT = 10
+        const val DEFAULT_LIMIT = 20
         const val MAX_LIMIT = 30
         const val MAX_QUERY = 200
     }

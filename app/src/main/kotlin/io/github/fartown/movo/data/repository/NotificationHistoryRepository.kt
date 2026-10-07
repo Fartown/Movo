@@ -38,39 +38,100 @@ internal class NotificationHistoryRepository(context: Context) {
         }
     }
 
-    fun search(query: String, packageName: String, maxAgeHours: Int, limit: Int): String {
+    /** 一条记下的通知。[key] 是系统的通知 key（同一条通知更新时 key 不变，库里只留最新内容）。 */
+    data class Row(
+        val key: String,
+        val packageName: String,
+        val title: String?,
+        val text: String?,
+        val subText: String?,
+        val postedAt: Long,
+    )
+
+    /**
+     * 查询条件。时间窗、应用、关键词都在 SQL 里筛（不在取回的一页里再筛，否则较早的时间窗会被误报成「没找到」）；
+     * [anyKeywords] 是「标题、正文、副标题里含其中任一个词」，[text] 是用户给的关键词，两者同时给时都要满足。
+     */
+    data class Query(
+        val sinceMillis: Long,
+        val untilMillis: Long? = null,
+        val text: String = "",
+        val packages: List<String> = emptyList(),
+        val anyKeywords: List<String> = emptyList(),
+        val offset: Int = 0,
+        val limit: Int,
+    )
+
+    /** 按 [Query] 查，最新的在前。 */
+    fun rows(query: Query): List<Row> {
         val clauses = mutableListOf("posted_at>=?")
-        val args = mutableListOf((System.currentTimeMillis() - maxAgeHours * HOUR_MS).toString())
-        if (packageName.isNotBlank()) {
-            clauses += "package_name=?"
-            args += packageName
+        val args = mutableListOf(query.sinceMillis.toString())
+        query.untilMillis?.let {
+            clauses += "posted_at<=?"
+            args += it.toString()
         }
-        if (query.isNotBlank()) {
-            clauses += "(title LIKE ? ESCAPE '\\' OR text LIKE ? ESCAPE '\\' OR sub_text LIKE ? ESCAPE '\\')"
-            val pattern = "%${query.escapeLike()}%"
+        val packages = query.packages.filter { it.isNotBlank() }
+        if (packages.isNotEmpty()) {
+            clauses += "package_name IN (${packages.joinToString(",") { "?" }})"
+            args += packages
+        }
+        if (query.text.isNotBlank()) {
+            clauses += LIKE_ANY_FIELD
+            val pattern = "%${query.text.escapeLike()}%"
             repeat(3) { args += pattern }
         }
-        val items = JSONArray()
+        val keywords = query.anyKeywords.filter { it.isNotBlank() }
+        if (keywords.isNotEmpty()) {
+            clauses += keywords.joinToString(" OR ", prefix = "(", postfix = ")") { LIKE_ANY_FIELD }
+            keywords.forEach { keyword ->
+                val pattern = "%${keyword.escapeLike()}%"
+                repeat(3) { args += pattern }
+            }
+        }
+        val rows = mutableListOf<Row>()
         database.readableDatabase.query(
             TABLE,
-            arrayOf("package_name", "title", "text", "sub_text", "posted_at"),
+            arrayOf("notification_key", "package_name", "title", "text", "sub_text", "posted_at"),
             clauses.joinToString(" AND "),
             args.toTypedArray(),
             null,
             null,
-            "posted_at DESC",
-            limit.toString(),
+            "posted_at DESC, notification_key ASC",
+            "${query.offset.coerceAtLeast(0)},${query.limit.coerceAtLeast(1)}",
         ).use { cursor ->
             while (cursor.moveToNext()) {
-                items.put(
-                    JSONObject()
-                        .put("package_name", cursor.getString(0))
-                        .put("title", cursor.getString(1))
-                        .put("text", cursor.getString(2))
-                        .put("sub_text", cursor.getString(3))
-                        .put("posted_at", cursor.getLong(4)),
+                rows += Row(
+                    key = cursor.getString(0),
+                    packageName = cursor.getString(1),
+                    title = cursor.getString(2),
+                    text = cursor.getString(3),
+                    subText = cursor.getString(4),
+                    postedAt = cursor.getLong(5),
                 )
             }
+        }
+        return rows
+    }
+
+    fun search(query: String, packageName: String, maxAgeHours: Int, limit: Int): String {
+        val found = rows(
+            Query(
+                sinceMillis = System.currentTimeMillis() - maxAgeHours * HOUR_MS,
+                text = query,
+                packages = listOf(packageName),
+                limit = limit,
+            ),
+        )
+        val items = JSONArray()
+        found.forEach { row ->
+            items.put(
+                JSONObject()
+                    .put("package_name", row.packageName)
+                    .put("title", row.title)
+                    .put("text", row.text)
+                    .put("sub_text", row.subText)
+                    .put("posted_at", row.postedAt),
+            )
         }
         return JSONObject()
             .put("ok", true)
@@ -111,15 +172,21 @@ internal class NotificationHistoryRepository(context: Context) {
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
     }
 
-    private companion object {
-        const val DATABASE_NAME = "movo_notification_history.db"
-        const val TABLE = "notification_history"
-        const val MAX_RECORDS = 1_000
+    companion object {
+        /** 只保留最近这么多天的通知（授权通知使用权之后开始记）。 */
         const val RETENTION_DAYS = 7
-        const val HOUR_MS = 60L * 60 * 1_000
-        const val RETENTION_MS = RETENTION_DAYS * 24L * HOUR_MS
-        const val MAX_FIELD_CHARS = 4_000
-        const val MAX_KEY_CHARS = 1_000
-        const val MAX_PACKAGE_CHARS = 255
+
+        /** 库里最多留这么多条，更早的删掉。 */
+        const val MAX_RECORDS = 1_000
+
+        private const val DATABASE_NAME = "movo_notification_history.db"
+        private const val TABLE = "notification_history"
+        private const val HOUR_MS = 60L * 60 * 1_000
+        private const val LIKE_ANY_FIELD =
+            "(title LIKE ? ESCAPE '\\' OR text LIKE ? ESCAPE '\\' OR sub_text LIKE ? ESCAPE '\\')"
+        private const val RETENTION_MS = RETENTION_DAYS * 24L * HOUR_MS
+        private const val MAX_FIELD_CHARS = 4_000
+        private const val MAX_KEY_CHARS = 1_000
+        private const val MAX_PACKAGE_CHARS = 255
     }
 }
