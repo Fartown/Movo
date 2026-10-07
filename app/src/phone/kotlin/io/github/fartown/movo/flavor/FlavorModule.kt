@@ -58,7 +58,7 @@ internal object FlavorModule : Flavor {
             UiToolProvider(context, logger, rootAvailable, screenshotExcludedPackages = services.screenshotExcludedPackages),
             PersonalToolProvider(context, root, rootAvailable),
             FileToolProvider(context, root, rootAvailable),
-            TerminalToolProvider(logger),
+            TerminalToolProvider(logger, context),
             BrowserToolProvider(context, services.runId),
             MemoryToolProvider(context, inputs.characterId),
             SkillToolProvider(context),

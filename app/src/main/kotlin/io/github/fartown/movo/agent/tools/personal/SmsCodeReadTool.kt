@@ -79,7 +79,8 @@ internal interface SmsCodeBackend {
 
 /**
  * sms_code_read（只读，secret）：只抽取最近短信里的 4–8 位验证码、发送方、时间，不返回正文。
- * max_age_minutes 1–60 默认 10。无可用来源时整体 Unavailable（目录层隐藏）。
+ * max_age_minutes 1–1440 默认 10（与旧 read_sms_code 一样）：没有 Root 时从通知历史里找，
+ * 以前上限 60 分钟，一小时前的验证码就取不到了。无可用来源时整体 Unavailable（目录层隐藏）。
  */
 internal class SmsCodeReadTool(
     private val backend: SmsCodeBackend,
@@ -88,7 +89,7 @@ internal class SmsCodeReadTool(
     override val domain = ToolDomain.PERSONAL
     override val summary =
         "只提取最近短信里的验证码（4–8 位）、发送方和时间，不返回正文。" +
-            "max_age_minutes 1–60，默认 10。没有验证码时返回空数组。"
+            "max_age_minutes 1–1440，默认 10。没有验证码时返回空数组。"
 
     override fun availability(env: ToolEnvironment): ToolAvailability =
         if (backend.available(env)) {
@@ -101,7 +102,7 @@ internal class SmsCodeReadTool(
         }
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
-        integer("max_age_minutes", "只看最近多少分钟内的短信，1–60，默认 10", min = 1, max = 60)
+        integer("max_age_minutes", "只看最近多少分钟内的短信，1–$MAX_AGE_MIN，默认 $DEFAULT_AGE_MIN", min = 1, max = MAX_AGE_MIN.toLong())
     }
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): SmsCodeReadInput =
@@ -159,6 +160,6 @@ internal class SmsCodeReadTool(
 
     private companion object {
         const val DEFAULT_AGE_MIN = 10
-        const val MAX_AGE_MIN = 60
+        const val MAX_AGE_MIN = 1_440
     }
 }

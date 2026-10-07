@@ -27,6 +27,7 @@ import io.github.fartown.movo.agent.tools.core.ToolInput
 import io.github.fartown.movo.agent.tools.core.ToolOutput
 import io.github.fartown.movo.agent.tools.core.ToolResource
 import io.github.fartown.movo.agent.tools.core.Verdict
+import io.github.fartown.movo.agent.tools.core.invalidArgs
 import io.github.fartown.movo.agent.tools.core.objectSchema
 import org.json.JSONObject
 
@@ -39,6 +40,7 @@ internal data class TerminalRunInput(
     val waitMs: Long,
     val tty: Boolean,
     val mode: TerminalMode,
+    val session: String? = null,
 ) : ToolInput
 
 internal data class TerminalRunOutput(
@@ -60,28 +62,54 @@ internal class TerminalRunTool(
         string("command", "要执行的命令，≤4000", required = true, maxLength = 4000)
         string("description", "供卡片展示的简述，≤60", maxLength = 60)
         string("environment", "运行环境，默认 android", enum = TerminalEnv.entries.map { it.name.lowercase() })
-        string("identity", "身份，默认 user", enum = TerminalIdentity.entries.map { it.name.lowercase() })
+        // 没有 Root 时只给 user（与重构前一样）：模型不会去试 root 再白白多一轮。
+        if (env.rootAvailable) {
+            string("identity", "身份，默认 user；要 Android 特权时用 root", enum = TerminalIdentity.entries.map { it.name.lowercase() })
+        } else {
+            string("identity", "身份：这台手机没有 Root，只能用 user（Movo 的应用身份）", enum = listOf(TerminalIdentity.USER.name.lowercase()))
+        }
         string("cwd", "工作目录，默认工作区（普通身份就是 file_* 相对路径所在的目录）；相对路径和 ~ 也按工作区算")
         integer("wait_ms", "前台等待毫秒，1000–180000，默认 30000，到时未结束转后台", min = 1000, max = 180_000)
         boolean("tty", "在伪终端里运行交互程序：直接转后台返回 job_id，用 terminal_job write 发输入、read 看输出（stderr 并入 stdout）")
         string(
             "mode",
             "运行方式，默认 wait。background：转后台，本次任务结束时停止；" +
-                "keep_alive：转后台，本次任务结束时不停止，但之后的任务看不到也停不了它",
+                "keep_alive：常驻服务（监听端口、Web 面板等），脱离本次任务一直运行，输出写到日志文件，" +
+                "之后的任务也能用 terminal_job 查看和停止，终端页「后台任务」里也能看到；手机重启后失效",
             enum = TerminalMode.entries.map { it.name.lowercase() },
+        )
+        string(
+            "session",
+            "会话名（自己起，如 main）：同名的命令在同一个 shell 里接着跑，cd、export、变量都保留，本次任务内有效。" +
+                "只能和 mode=wait 一起用；会话里的命令到 wait_ms 还没结束会被结束，会话随之关闭（长任务别放进会话，用 mode=background）",
+            maxLength = MAX_SESSION_NAME,
         )
     }
 
-    override fun parse(args: ToolArgs, env: ToolEnvironment): TerminalRunInput = TerminalRunInput(
-        command = args.nonBlank("command"),
-        description = args.stringOrNull("description")?.trim()?.ifEmpty { null },
-        environment = args.enum<TerminalEnv>("environment", TerminalEnv.ANDROID),
-        identity = args.enum<TerminalIdentity>("identity", TerminalIdentity.USER),
-        cwd = args.stringOrNull("cwd")?.trim()?.ifEmpty { null },
-        waitMs = args.long("wait_ms", default = 30_000, range = 1000L..180_000L),
-        tty = args.bool("tty", default = false),
-        mode = args.enum<TerminalMode>("mode", TerminalMode.WAIT),
-    )
+    override fun parse(args: ToolArgs, env: ToolEnvironment): TerminalRunInput {
+        val tty = args.bool("tty", default = false)
+        val mode = args.enum<TerminalMode>("mode", TerminalMode.WAIT)
+        val session = args.stringOrNull("session")?.trim()?.ifEmpty { null }
+        if (mode == TerminalMode.KEEP_ALIVE && tty) {
+            invalidArgs("keep_alive 不能和 tty 一起用：常驻任务没有终端，也不接收输入", "交互程序用 tty=true（本次任务里的后台命令）")
+        }
+        if (session != null) {
+            if (session.length > MAX_SESSION_NAME) invalidArgs("session 最长 $MAX_SESSION_NAME 字")
+            if (mode != TerminalMode.WAIT) invalidArgs("session 只能和 mode=wait 一起用", "要在后台跑的命令去掉 session")
+            if (tty) invalidArgs("session 不能和 tty 一起用", "交互程序去掉 session，用 tty=true 后 terminal_job write 发输入")
+        }
+        return TerminalRunInput(
+            command = args.nonBlank("command"),
+            description = args.stringOrNull("description")?.trim()?.ifEmpty { null },
+            environment = args.enum<TerminalEnv>("environment", TerminalEnv.ANDROID),
+            identity = args.enum<TerminalIdentity>("identity", TerminalIdentity.USER),
+            cwd = args.stringOrNull("cwd")?.trim()?.ifEmpty { null },
+            waitMs = args.long("wait_ms", default = 30_000, range = 1000L..180_000L),
+            tty = tty,
+            mode = mode,
+            session = session,
+        )
+    }
 
     /** 「终端与文件」开关关着时不进目录（以前要到执行时才报错，先弹确认卡、批完才失败）。 */
     override fun availability(env: ToolEnvironment): ToolAvailability =
@@ -162,7 +190,7 @@ internal class TerminalRunTool(
     override fun renderForUi(input: TerminalRunInput, output: TerminalRunOutput): ToolUiView {
         val body = TerminalBody.parse(output.textBody)
         if (body == null || (body.exitCode == null && !output.textBody.contains("--- stdout ---"))) {
-            return ToolUiView(summary = "已转到后台运行")
+            return ToolUiView(summary = if (input.mode == TerminalMode.KEEP_ALIVE) "已作为常驻任务启动" else "已转到后台运行")
         }
         return ToolUiView(summary = body.summary(), blocks = body.outputBlocks())
     }
@@ -179,6 +207,7 @@ internal class TerminalRunTool(
         tty = tty,
         mode = mode,
         cancelled = cancelled,
+        session = session,
     )
 
     private fun completedBody(input: TerminalRunInput, result: TerminalRunResult.Completed): String = buildString {
@@ -187,6 +216,13 @@ internal class TerminalRunTool(
         append("environment: ").append(input.environment.name.lowercase()).append('\n')
         append("identity: ").append(input.identity.name.lowercase()).append('\n')
         (result.cwd ?: input.cwd)?.let { append("cwd: ").append(it).append('\n') }
+        result.session?.let { append("session: ").append(it).append('\n') }
+        if (result.timedOut) {
+            append("timed_out: true（到 wait_ms 还没结束，命令连同会话已结束；长任务用 mode=background）\n")
+        }
+        if (result.sessionClosed) {
+            append("session_closed: true（之前的 cd、export 不在了，再用这个会话名会开一个新的 shell）\n")
+        }
         // 输出过长时缓冲区在中间注明省略量（见 TerminalJobRegistry.BoundedBuffer），这里不再另加截断说明。
         append("--- stdout ---\n")
         append(result.stdout)
@@ -200,9 +236,19 @@ internal class TerminalRunTool(
             append("environment: ").append(input.environment.name.lowercase()).append('\n')
             append("identity: ").append(input.identity.name.lowercase()).append('\n')
             (result.cwd ?: input.cwd)?.let { append("cwd: ").append(it).append('\n') }
-            append("命令已转入后台，用 terminal_job read 查看输出；不要 sleep 轮询。")
+            if (result.keepAlive) {
+                result.logPath?.let { append("log_path: ").append(it).append('\n') }
+                append(
+                    "常驻任务已启动：本次任务结束后照常运行，之后的任务也能用 terminal_job list、read（读日志）、stop 管它；" +
+                        "用户在终端页「后台任务」里也能看到和停止。",
+                )
+            } else {
+                append("命令已转入后台，用 terminal_job read 查看输出；不要 sleep 轮询。")
+            }
         }
 }
+
+private const val MAX_SESSION_NAME = 40
 
 /** 能把内容发到网上的命令。 */
 private val NETWORK_COMMAND = Regex("""(^|[\s;&|(`])(curl|wget|nc|ncat|netcat|ssh|scp|sftp|rsync|ftp|telnet|socat|aria2c)(\s|$)""")

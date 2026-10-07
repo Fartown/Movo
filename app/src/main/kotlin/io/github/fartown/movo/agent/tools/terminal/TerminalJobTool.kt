@@ -52,7 +52,8 @@ internal class TerminalJobTool(
     override val name = "terminal_job"
     override val domain = ToolDomain.TERMINAL
     override val summary =
-        "管理本次任务里的后台命令：action=list 列出、read 读输出（可等待）、write 给 tty 任务发输入、stop 停止。" +
+        "管理后台命令：action=list 列出、read 读输出（可等待）、write 给 tty 任务发输入、stop 停止。" +
+            "普通后台命令只在启动它的那次任务里；keep_alive 常驻任务之后的任务也能管，read 读的是它的日志。" +
             "read 不带 cursor 读最新的尾部，带 next_cursor 续读，cursor=0:0 从头读。"
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
@@ -137,7 +138,8 @@ internal class TerminalJobTool(
             // 说清这次为什么返回、等了多久：wait_ms 是上限，有新输出就提前回来。
             waitNote(read.wake)?.let { append("waited_ms: ").append(read.waitedMs).append("（").append(it).append("）\n") }
             append("identity: ").append(read.info.identity.name.lowercase()).append('\n')
-            if (read.info.streamsMerged) append("streams: merged（伪终端里 stderr 也在 stdout 里）\n")
+            if (read.info.streamsMerged) append("streams: merged（stderr 也在同一路输出里）\n")
+            read.info.logPath?.let { append("log_path: ").append(it).append('\n') }
             read.nextCursor?.let { append("next_cursor: ").append(it).append('\n') }
             // 说清这段之前有没有没给的输出，以及怎么读到：读尾部省略的开头可以 0:0 从头读；续读跳过的是缓冲区已丢弃的。
             val skippedNote = if (read.tail) "之前的输出没给，cursor=0:0 从头读" else "缓冲区已丢弃，读不回来"
@@ -180,7 +182,7 @@ internal class TerminalJobTool(
             )
             TerminalStopOutcome.NOT_FOUND -> notFound(input.jobId)
             TerminalStopOutcome.ROOT_REQUIRED -> Verdict.Failed(
-                ToolError(ToolErrorCode.ROOT_REQUIRED, "停止 Root 守护任务需要 Root"),
+                ToolError(ToolErrorCode.ROOT_REQUIRED, "停止 Root 身份的常驻任务需要 Root"),
             )
             TerminalStopOutcome.STILL_RUNNING -> Verdict.Unknown(
                 reason = "已发停止但未能确认任务停下",
@@ -242,12 +244,13 @@ internal class TerminalJobTool(
         .put("started_at", info.startedAtMillis)
         .apply { info.endedAtMillis?.let { put("ended_at", it) } }
         .apply { if (info.streamsMerged) put("streams", "merged") }
+        .apply { info.logPath?.let { put("log_path", it) } }
 
     private fun notFound(jobId: String): Verdict<TerminalJobOutput> = Verdict.Failed(
         ToolError(
             ToolErrorCode.NOT_FOUND,
             "任务不存在：$jobId",
-            hint = "后台命令只在启动它的那次任务里能查看；用 terminal_job list 看现有的",
+            hint = "普通后台命令只在启动它的那次任务里能查看，keep_alive 常驻任务停掉后也查不到了；用 terminal_job list 看现有的",
         ),
     )
 }
