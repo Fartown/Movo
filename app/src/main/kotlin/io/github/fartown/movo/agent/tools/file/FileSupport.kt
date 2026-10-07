@@ -1,7 +1,11 @@
 package io.github.fartown.movo.agent.tools.file
 
+import io.github.fartown.movo.agent.media.hasSupportedImageMagic
 import io.github.fartown.movo.agent.tools.core.Sensitivity
 import org.json.JSONObject
+import java.nio.ByteBuffer
+import java.nio.CharBuffer
+import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
@@ -49,6 +53,35 @@ internal object FileSupport {
 
     /** Root shell 单引号转义，复用 AgentImageTools / AgentPersonalDataTools 的既有写法。 */
     fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
+
+    // ---- 按内容判定类型：没有扩展名的文件（微信/QQ 聊天图片缓存、日志、配置）靠文件开头的字节判断 ----
+
+    /** 判定类型时读取的文件开头字节数。 */
+    const val SNIFF_BYTES = 512
+
+    /**
+     * 按文件开头的字节判定类型：图片魔数 → IMAGE；不含 NUL 且是合法 UTF-8（末尾被截断的多字节字符不算错）→ TEXT；
+     * 其余 → UNKNOWN。空文件按文本处理。
+     */
+    fun sniffKind(header: ByteArray): FileKind {
+        if (header.hasSupportedImageMagic()) return FileKind.IMAGE
+        if (header.any { it == 0.toByte() }) return FileKind.UNKNOWN
+        val decoder = Charsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+        val result = decoder.decode(ByteBuffer.wrap(header), CharBuffer.allocate(header.size), false)
+        return if (result.isError) FileKind.UNKNOWN else FileKind.TEXT
+    }
+
+    /** Root 读文件开头：toybox head + od 输出十六进制，避免二进制内容经 shell 输出被改写。 */
+    fun headerCommand(path: String): String = "head -c $SNIFF_BYTES ${shellQuote(path)} | od -An -v -tx1"
+
+    /** 解析 `od -An -v -tx1` 的输出（以空白分隔的两位十六进制）；不是两位十六进制的片段忽略。 */
+    fun parseOdHex(output: String): ByteArray =
+        output.split(Regex("\\s+"))
+            .filter { it.length == 2 }
+            .mapNotNull { it.toIntOrNull(16)?.toByte() }
+            .toByteArray()
 
     // ---- file_search 句柄：不透明 token，file_read 可解回路径（定义清单 §0.5）----
     // 句柄用进程内随机密钥 HMAC 签名：模型无法伪造句柄去读 file_search 范围以外的任意路径（句柄是 file_read 唯一凭据）。

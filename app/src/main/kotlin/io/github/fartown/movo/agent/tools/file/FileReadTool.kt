@@ -1,5 +1,6 @@
 package io.github.fartown.movo.agent.tools.file
 
+import io.github.fartown.movo.agent.model.AgentModelClient
 import io.github.fartown.movo.agent.tools.core.TerminalBody
 import io.github.fartown.movo.agent.tools.core.ToolUiBlock
 import io.github.fartown.movo.agent.tools.core.ToolUiView
@@ -26,26 +27,20 @@ import io.github.fartown.movo.agent.tools.core.fail
 import io.github.fartown.movo.agent.tools.core.objectSchema
 import org.json.JSONObject
 
-/** PDF 读取方式；mode 仅对 PDF 生效。 */
-internal enum class FileReadMode { AUTO, TEXT, IMAGE }
-
-/** 文件类型（由后端按 mime/扩展名判定）。 */
+/** 文件类型：先按 mime/扩展名判定；没有扩展名或扩展名不认识时，由后端按文件开头的内容判定（见 [FileSupport.sniffKind]）。 */
 internal enum class FileKind { TEXT, IMAGE, PDF, VIDEO, AUDIO, UNKNOWN }
 
 internal data class FileReadInput(
     val file: String,
-    /** 以下均为“是否提供”敏感：不适用参数不静默忽略，报 INVALID_ARGUMENTS。 */
+    /** 只对文本生效：读到图片时不静默忽略，报 INVALID_ARGUMENTS。 */
     val offsetLine: Int?,
     val limitLines: Int?,
-    val pages: String?,
-    val mode: FileReadMode,
-    val modeExplicit: Boolean,
-    val frames: Int?,
 ) : ToolInput
 
 internal data class FileReadOutput(
     val data: JSONObject,
-    val imageAttached: Boolean,
+    /** 附给模型本回合的图片；读文本时为空。 */
+    val image: AgentModelClient.ModelImage? = null,
 ) : ToolOutput
 
 // ---- 后端返回类型 ----
@@ -65,27 +60,18 @@ internal data class TextRead(
     val nextOffsetLine: Int?,
 )
 
-internal data class ImageRead(val width: Int, val height: Int)
+/** 读到的图片：尺寸 + 已编码成模型输入的图片（由 [FileReadTool.images] 附给模型）。 */
+internal data class ImageRead(val width: Int, val height: Int, val image: AgentModelClient.ModelImage)
 
-/** 以下三类为“默认关闭 / 尚未实现”占位，真实后端一律抛 UNSUPPORTED（见定义清单 §28 转写、§7.4）。 */
-internal data class PdfRead(val pageCount: Int, val pages: List<JSONObject>)
-internal data class VideoRead(val durationSeconds: Long, val frames: List<JSONObject>)
-internal data class AudioTranscript(val text: String, val coverage: Double)
-
-/** 可测后端：真实实现读本机文件 / content URI；测试用假实现。 */
+/** 可测后端：真实实现读本机文件 / content URI，App 读不到的走 Root；测试用假实现。 */
 internal interface FileReadBackend {
     /** 解析来源（句柄、URI、绝对路径），判定类型；文件不存在返回 null。 */
     fun resolve(file: String): ResolvedFile?
 
     fun readText(file: String, offsetLine: Int, limitLines: Int): TextRead
 
-    /** 暂存图片并返回尺寸。实际把图片喂给模型需要 ContractTool 透传 images（见报告 core 需求）。 */
+    /** 读图并编码成模型输入；App 读不到时用 Root 复制到缓存再读。读不出图片时抛 ToolFailure。 */
     fun readImage(file: String): ImageRead
-
-    // 默认关闭 / API34 降级：签名留全，实现返回 UNSUPPORTED。
-    fun readPdf(file: String, pages: String?, mode: FileReadMode): PdfRead
-    fun readVideo(file: String, frames: Int): VideoRead
-    fun transcribeAudio(file: String): AudioTranscript
 }
 
 /** §F.28 file_read：读文件并转成模型可理解的内容，按类型自动处理。 */
@@ -95,26 +81,19 @@ internal class FileReadTool(
     override val name = "file_read"
     override val domain = ToolDomain.FILE
     override val summary =
-        "读文件：text 按行返回并给续读 offset；image 直接附（需模型支持视觉）。" +
-            "PDF、视频、音频转写默认关闭。file 可传 file_search 的句柄、附件 URI 或绝对路径。"
+        "读文件：文本按行返回并给续读 offset；图片直接附给模型（需模型支持看图）。没有扩展名的文件按内容判断是文本还是图片；" +
+            "PDF、视频、音频暂不支持。file 可传 file_search 的句柄、附件 URI 或绝对路径。"
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
         string("file", "句柄、附件 URI、绝对路径、file://、content://", required = true, maxLength = 1024)
-        integer("offset", "文本起始行号（从 1 开始），仅 text", min = 1)
-        integer("limit", "文本返回行数，仅 text", min = 1, max = 20_000)
-        string("pages", "PDF 页范围，如 \"1-3\"，仅 pdf")
-        string("mode", "PDF 处理方式，仅 pdf", enum = FileReadMode.entries.map { it.name.lowercase() })
-        integer("frames", "视频抽帧数，1–12，仅 video", min = 1, max = 12)
+        integer("offset", "文本起始行号（从 1 开始），仅文本", min = 1)
+        integer("limit", "文本返回行数，仅文本", min = 1, max = 20_000)
     }
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): FileReadInput = FileReadInput(
         file = args.nonBlank("file"),
         offsetLine = args.intOrNull("offset"),
         limitLines = args.intOrNull("limit"),
-        pages = args.stringOrNull("pages"),
-        mode = args.enum<FileReadMode>("mode", FileReadMode.AUTO),
-        modeExplicit = args.has("mode"),
-        frames = if (args.has("frames")) args.int("frames", default = 6, range = 1..12) else null,
     )
 
     override fun resolve(input: FileReadInput, env: ToolEnvironment): CallResolution {
@@ -146,29 +125,16 @@ internal class FileReadTool(
         val resolved = backend.resolve(input.file)
             ?: return Verdict.Failed(ToolError(ToolErrorCode.NOT_FOUND, "文件不存在或无法访问：${input.file}"))
 
-        // mode 只对 PDF 生效；auto 时按真实类型。
-        val kind = when {
-            input.mode == FileReadMode.TEXT -> FileKind.TEXT
-            else -> resolved.kind
-        }
-        validateParams(input, kind)
+        validateParams(input, resolved.kind)
 
-        return when (kind) {
+        // PDF、视频、音频没有实现读取：schema 不再暴露 pages/mode/frames，这里如实回不支持。
+        return when (resolved.kind) {
             FileKind.TEXT -> readTextVerdict(input, resolved)
-            FileKind.IMAGE -> readImageVerdict(input, resolved, ctx.env)
-            FileKind.PDF -> {
-                backend.readPdf(resolved.path, input.pages, input.mode) // 抛 UNSUPPORTED
-                unsupported("PDF 读取默认关闭", "pdf_default_off_api34_render_degrade_todo")
-            }
-            FileKind.VIDEO -> {
-                backend.readVideo(resolved.path, input.frames ?: 6) // 抛 UNSUPPORTED
-                unsupported("视频抽帧默认关闭", "video_default_off_todo")
-            }
-            FileKind.AUDIO -> {
-                backend.transcribeAudio(resolved.path) // 抛 UNSUPPORTED
-                unsupported("音频转写默认关闭", "audio_transcription_default_off")
-            }
-            FileKind.UNKNOWN -> unsupported("不支持的文件格式", "unsupported_format")
+            FileKind.IMAGE -> readImageVerdict(resolved, ctx.env)
+            FileKind.PDF -> unsupported("暂不支持读取 PDF", "pdf_unsupported")
+            FileKind.VIDEO -> unsupported("暂不支持读取视频", "video_unsupported")
+            FileKind.AUDIO -> unsupported("暂不支持读取或转写音频", "audio_unsupported")
+            FileKind.UNKNOWN -> unsupported("文件内容既不是文本也不是可识别的图片，无法读取", "unsupported_format")
         }
     }
 
@@ -185,27 +151,25 @@ internal class FileReadTool(
             data.put("next_offset", it)
             data.put("truncated", JSONObject().put("shown", limit).put("total", read.totalLines).put("unit", "lines"))
         }
-        return Verdict.Read(FileReadOutput(data, imageAttached = false))
+        return Verdict.Read(FileReadOutput(data))
     }
 
     private fun readImageVerdict(
-        input: FileReadInput,
         resolved: ResolvedFile,
         env: ToolEnvironment,
     ): Verdict<FileReadOutput> {
         if (ModelInput.IMAGE !in env.modelInputs) {
             return unsupported("当前模型不支持图片输入", "model_no_vision")
         }
-        val image = backend.readImage(resolved.path)
-        // NOTE(core)：ContractTool 目前只透传 renderForModel 的 JSON/Text，不透传 images。
-        // 这里先把 image_attached 元数据放进 JSON；真正附图待 core 增加 images 透传。
+        val read = backend.readImage(resolved.path)
+        // image_attached 只在真的附了图时出现：图片经 images() 随本回合交给模型。
         val data = JSONObject()
             .put("kind", "image")
             .put("path", resolved.path)
-            .put("width", image.width)
-            .put("height", image.height)
+            .put("width", read.width)
+            .put("height", read.height)
             .put("image_attached", true)
-        return Verdict.Read(FileReadOutput(data, imageAttached = true))
+        return Verdict.Read(FileReadOutput(data, image = read.image))
     }
 
     override fun uiTitle(input: FileReadInput): String = "读取文件 · ${input.file.fileName().forTitle(30)}"
@@ -230,15 +194,15 @@ internal class FileReadTool(
 
     override fun renderForModel(output: FileReadOutput): ModelContent = ModelContent.Json(output.data)
 
+    /** 图片作为本回合图片附给模型（与 ui_observe 截图、browser_read 截图同一条路）。 */
+    override fun images(output: FileReadOutput): List<AgentModelClient.ModelImage> = listOfNotNull(output.image)
+
     /** 不适用参数不静默忽略（定义清单 §28）。 */
     private fun validateParams(input: FileReadInput, kind: FileKind) {
-        fun reject(param: String, onlyFor: String): Nothing =
-            fail(ToolErrorCode.INVALID_ARGUMENTS, "参数 $param 只适用于 $onlyFor 文件，当前是 ${kind.name.lowercase()}")
-        if (input.offsetLine != null && kind != FileKind.TEXT) reject("offset", "text")
-        if (input.limitLines != null && kind != FileKind.TEXT) reject("limit", "text")
-        if (input.pages != null && kind != FileKind.PDF) reject("pages", "pdf")
-        if (input.modeExplicit && kind != FileKind.PDF && input.mode != FileReadMode.TEXT) reject("mode", "pdf")
-        if (input.frames != null && kind != FileKind.VIDEO) reject("frames", "video")
+        fun reject(param: String): Nothing =
+            fail(ToolErrorCode.INVALID_ARGUMENTS, "参数 $param 只适用于文本文件，当前是 ${kind.name.lowercase()}")
+        if (input.offsetLine != null && kind != FileKind.TEXT) reject("offset")
+        if (input.limitLines != null && kind != FileKind.TEXT) reject("limit")
     }
 
     private fun sourceClass(file: String): SourceClass = when {
