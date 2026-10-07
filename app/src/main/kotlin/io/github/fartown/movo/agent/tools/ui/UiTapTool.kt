@@ -23,7 +23,9 @@ import org.json.JSONObject
 /**
  * §10 ui_tap（送达型）。点击或长按一个目标（index / 点 / 区域）。ok 只代表已送达，需再观察确认。
  * 手动审批时，声明了发送 / 支付等后果、或在用户选的应用里才会问（见 buildUiActionResolution）；
- * 坐标点下的节点（readableNodeAtPoint）只用来在确认卡上写「点按「转账」」。
+ * 坐标点下的节点（readableNodeAtPoint）只用来在确认卡上写「点按「转账」」，所以只在要弹卡时才去抓。
+ * index 绑那次观察的内容代际；坐标绑最近一次观察的坐标系（[coordinateError]），页面内容刷新不影响坐标。
+ * 成功后在被点的位置显示点击 / 长按指示并配触感（规范 9.5）。
  */
 
 internal data class UiTapInput(
@@ -40,6 +42,7 @@ internal class UiTapTool(
     override val domain = ToolDomain.UI
     override val summary =
         "点击或长按目标：index（需 observation_id）、或 x,y、或 x,y,x2,y2 区域。hold_ms>0 为长按。" +
+            "坐标不受页面内容刷新影响，换了窗口、应用或横竖屏要重新 ui_observe。" +
             "ok 只代表已送达（effect_verified=false），需再观察确认。"
 
     override fun availability(env: ToolEnvironment): ToolAvailability =
@@ -83,8 +86,9 @@ internal class UiTapTool(
                     action = tapAction(registry.observedNode(t.observationId, t.index), input.holdMs),
                 )
             }
-            is UiTarget.Point -> coordinateResolution(backendKind, t.x, t.y, input.effect, input.holdMs)
-            is UiTarget.Area -> coordinateResolution(backendKind, t.centerX, t.centerY, input.effect, input.holdMs)
+            is UiTarget.Point -> coordinateResolution(env, backendKind, t.x, t.y, input.effect, input.holdMs)
+            // 区域点的是中心：越界只查中心，节点 bounds 的右下边正好等于屏幕宽高也能直接用。
+            is UiTarget.Area -> coordinateResolution(env, backendKind, t.centerX, t.centerY, input.effect, input.holdMs)
         }
     }
 
@@ -94,11 +98,22 @@ internal class UiTapTool(
         return node?.displayName()?.let { "$verb「$it」" } ?: "${verb}屏幕上的一个位置"
     }
 
-    private fun coordinateResolution(backendKind: InjectionBackend, x: Double, y: Double, effect: UiEffect?, holdMs: Int): CallResolution {
+    private fun coordinateResolution(
+        env: ToolEnvironment,
+        backendKind: InjectionBackend,
+        x: Double,
+        y: Double,
+        effect: UiEffect?,
+        holdMs: Int,
+    ): CallResolution {
         val latest = registry.latest()
         val pkg = registry.foregroundPackage()
-        // 纯坐标：实时抓树取该点下最深的节点，用来在确认卡上写「点按「转账」」；读不到时 readableTarget=false（只记录）。
-        val probe = backend.readableNodeAtPoint(x, y)
+        val rejected = coordinateError(registry, latest?.observationId) ?: coordinateRangeError(latest, x to y)
+        // 纯坐标：只在这一步会弹确认卡时才实时抓树，取该点下最深的节点写「点按「转账」」。不弹卡时不抓——
+        // 每次坐标点按都抓整棵树太慢（只有 Root 时是一次 uiautomator dump）。没抓 / 读不到时 readableTarget=false（只记录）。
+        val asks = rejected == null && pkg != registry.selfPackage &&
+            env.approvalPolicy.shouldAsk(effect?.category(), pkg)
+        val probe = if (asks) backend.readableNodeAtPoint(x, y) else null
         return buildUiActionResolution(
             backend = backendKind,
             target = TargetIdentity.Coordinate(latest?.observationId ?: "", latest?.gen ?: -1L),
@@ -107,7 +122,7 @@ internal class UiTapTool(
             readableTarget = probe != null,
             effect = effect,
             selfProtect = true,
-            stale = genError(registry, latest?.observationId, latest?.gen ?: -1L),
+            stale = rejected,
             action = tapAction(probe, holdMs),
         )
     }
@@ -118,17 +133,19 @@ internal class UiTapTool(
         if (backendKind == InjectionBackend.NONE) {
             return Verdict.Failed(ToolError(ToolErrorCode.PERMISSION_REQUIRED, "无障碍不可用，无法点击"))
         }
-        // 代际再校验。
+        // 复核（确认期间页面可能变了）：index 看内容代际，坐标看坐标系，和 resolve 预检同一套规则。
         when (val target = resolution.target) {
             is TargetIdentity.Observed -> checkGen(registry, target.observationId, target.gen)?.let { return it }
-            is TargetIdentity.Coordinate -> checkGen(registry, target.observationId, target.gen)?.let { return it }
+            is TargetIdentity.Coordinate -> coordinateError(registry, target.observationId)?.let { return Verdict.Failed(it) }
             else -> Unit
         }
         val result = backend.tap(UiTapRequest(input.target, input.holdMs, backendKind), ctx.env)
         return when (result) {
-            is UiInjectResult.Dispatched -> Verdict.Dispatched(
-                UiAfter(result.afterPackage, result.windowChanged, method = result.method),
-            )
+            is UiInjectResult.Dispatched -> {
+                // 送达后才在被点的位置显示指示、配触感（重构方案「执行成功后再播放」）；没有触屏的设备不画手势。
+                if (ctx.env.touchscreen) result.touch?.let(backend::showTouch)
+                Verdict.Dispatched(UiAfter(result.afterPackage, result.windowChanged, method = result.method))
+            }
             is UiInjectResult.NotActionable -> Verdict.Failed(
                 ToolError(ToolErrorCode.NOT_ACTIONABLE, "目标不可点击：${result.reason}", hint = "重新观察后换目标"),
             )

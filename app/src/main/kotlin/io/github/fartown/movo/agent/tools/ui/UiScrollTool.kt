@@ -30,7 +30,8 @@ import org.json.JSONObject
 /**
  * §11 ui_scroll（可判定）。按想看到的内容方向滚动，可用 index 指定可滚动节点。
  * effect_verified=moved：moved → Done(ReadBack)；没动 → Dispatched；界面反向 → Unknown。
- * 滚动是导航动作，不读提交点，不触发确认。
+ * until_text：一次一次滚，每滚完看一眼，找到这段文字、到头（没动）或滚满 [MAX_UNTIL_SCROLLS] 次就停，
+ * 结果写滚了几次、找没找到；找到了 → Done(ReadBack)。滚动是导航动作，不读提交点，不触发确认。
  */
 
 internal data class UiScrollInput(
@@ -43,7 +44,17 @@ internal data class UiScrollOutput(
     val moved: Boolean,
     val atBoundary: Boolean?,
     val packageName: String?,
+    /** 带了 until_text 才有。 */
+    val until: UntilText? = null,
 ) : ToolOutput
+
+/** until_text 的结果：找的文字、找没找到、滚动了几次（只数真的动了的）、中途停下的原因。 */
+internal data class UntilText(
+    val text: String,
+    val found: Boolean,
+    val scrolls: Int,
+    val stopped: String? = null,
+)
 
 internal class UiScrollTool(
     private val registry: UiObservationRegistry,
@@ -53,7 +64,8 @@ internal class UiScrollTool(
     override val domain = ToolDomain.UI
     override val summary =
         "按想看到的内容方向滚动：up、down、left、right。方向明确的滑动/翻页（“往下滑/往上翻”）直接用它，不必先 ui_observe。" +
-            "可用 index（需 observation_id）指定可滚动节点；返回是否移动、是否到边界。"
+            "可用 index（需 observation_id）指定可滚动节点；until_text 一直滚到该文字出现（最多 $MAX_UNTIL_SCROLLS 次）。" +
+            "返回是否移动、是否到边界。"
 
     override fun availability(env: ToolEnvironment): ToolAvailability =
         if (env.accessibilityUsable || env.rootAvailable) {
@@ -69,7 +81,11 @@ internal class UiScrollTool(
         )
         integer("index", "可滚动节点 index（可选）", min = 0)
         string("observation_id", "给出 index 时必填，绑定其观察代际", maxLength = 64)
-        string("until_text", "滚动到该文字出现为止（可选）")
+        string(
+            "until_text",
+            "一直滚到这段文字出现为止（可选，文字或描述包含即可，不分大小写）；到头或滚满 $MAX_UNTIL_SCROLLS 次就停，" +
+                "结果里写 found 和滚了几次 scrolls",
+        )
     }
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): UiScrollInput {
@@ -113,10 +129,13 @@ internal class UiScrollTool(
         (resolution.target as? TargetIdentity.Observed)?.let {
             checkGen(registry, it.observationId, it.gen)?.let { stale -> return stale }
         }
-        val result = backend.scroll(
-            UiScrollRequest(input.direction, input.element, input.untilText, resolution.backend), ctx.env,
-        )
-        return when (result) {
+        input.untilText?.let { text -> return scrollUntil(input, text, resolution, ctx) }
+        return verdictOf(backend.scroll(UiScrollRequest(input.direction, input.element, resolution.backend), ctx.env))
+    }
+
+    /** 滚一次的结果：动了 → Done(ReadBack)；没动 → Dispatched；没成按原因报错。 */
+    private fun verdictOf(result: UiScrollResult): Verdict<UiScrollOutput> =
+        when (result) {
             is UiScrollResult.Finished ->
                 if (result.moved) {
                     Verdict.Done(
@@ -140,6 +159,58 @@ internal class UiScrollTool(
                 ToolError(ToolErrorCode.PERMISSION_REQUIRED, "无障碍不可用，无法滚动"),
             )
         }
+
+    /**
+     * 滚到 [text] 出现为止。先看一眼，已经在屏幕上就不滚；之后每滚一次看一次。
+     * 停下：找到了、这一下没动（到头）、动了但已到边界、滚满 [MAX_UNTIL_SCROLLS] 次。
+     * 第一下就失败按普通滚动报错；滚过几次之后失败：结果不确定的报 unknown，确定没滚的停下并写原因。
+     */
+    private fun scrollUntil(
+        input: UiScrollInput,
+        text: String,
+        resolution: CallResolution,
+        ctx: ToolContext,
+    ): Verdict<UiScrollOutput> {
+        var hit = backend.findText(text)
+        var scrolls = 0
+        var atBoundary: Boolean? = null
+        var packageName: String? = null
+        var stopped: String? = null
+        while (hit == null && scrolls < MAX_UNTIL_SCROLLS) {
+            ctx.checkCancelled()
+            val step = backend.scroll(UiScrollRequest(input.direction, input.element, resolution.backend), ctx.env)
+            if (step !is UiScrollResult.Finished) {
+                if (scrolls == 0) return verdictOf(step)
+                if (step is UiScrollResult.DirectionMismatch || step is UiScrollResult.OutcomeUnknown) {
+                    return Verdict.Unknown(
+                        reason = "已滚动 $scrolls 次，没找到「$text」；下一次滚动结果不确定",
+                        next = "先 ui_observe 确认当前位置",
+                    )
+                }
+                stopped = when (step) {
+                    is UiScrollResult.NotActionable -> "无法继续滚动：${step.reason}"
+                    else -> "无障碍不可用，无法继续滚动"
+                }
+                break
+            }
+            packageName = step.afterPackage ?: packageName
+            atBoundary = step.atBoundary
+            if (!step.moved) break
+            scrolls++
+            hit = backend.findText(text)
+            if (step.atBoundary == true) break
+        }
+        val output = UiScrollOutput(
+            moved = scrolls > 0,
+            atBoundary = atBoundary,
+            packageName = packageName,
+            until = UntilText(text, found = hit != null, scrolls = scrolls, stopped = stopped),
+        )
+        return when {
+            hit != null -> Verdict.Done(output, Evidence.ReadBack("until_text"))
+            scrolls > 0 -> Verdict.Done(output, Evidence.ReadBack("moved"))
+            else -> Verdict.Dispatched(output)
+        }
     }
 
     override fun uiTitle(input: UiScrollInput): String {
@@ -148,7 +219,11 @@ internal class UiScrollTool(
     }
 
     override fun renderForUi(input: UiScrollInput, output: UiScrollOutput): ToolUiView = ToolUiView(
-        summary = when {
+        summary = output.until?.let { until ->
+            val times = if (until.scrolls > 0) "滚动 ${until.scrolls} 次" else "没有滚动"
+            val found = if (until.found) "找到「${until.text.forTitle()}」" else "没找到「${until.text.forTitle()}」"
+            listOfNotNull(found, times, "到头了".takeIf { !until.found && output.atBoundary == true }).joinToString(" · ")
+        } ?: when {
             output.moved && output.atBoundary == true -> "已滚动 · 到头了"
             output.moved -> "已滚动"
             output.atBoundary == true -> "到头了，没有再滚动"
@@ -159,7 +234,16 @@ internal class UiScrollTool(
     override fun renderForModel(output: UiScrollOutput): ModelContent {
         val json = JSONObject().put("moved", output.moved)
         output.atBoundary?.let { json.put("at_boundary", it) }
+        output.until?.let { until ->
+            json.put("found", until.found).put("scrolls", until.scrolls)
+            until.stopped?.let { json.put("stopped", it) }
+        }
         output.packageName?.let { json.put("after", afterJson(it, false)) }
         return ModelContent.Json(json)
+    }
+
+    companion object {
+        /** until_text 最多滚几次：找不到时不至于一直滚下去。 */
+        const val MAX_UNTIL_SCROLLS = 10
     }
 }

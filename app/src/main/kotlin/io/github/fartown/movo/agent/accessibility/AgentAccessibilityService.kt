@@ -99,6 +99,8 @@ open class AgentAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         instance = this
+        // 断开期间收不到窗口事件：重连后一律当作窗口变过，旧观察上的坐标重新观察再用。
+        WINDOW_FRAME_GENERATION.incrementAndGet()
         notifyInstanceChanged()
         // 常驻悬浮球（默认开）原来只在主界面恢复时请求：装包或进程被杀后无障碍可能比主界面晚连上，
         // 断开重连时建球也可能失败——无障碍连上时补一次，悬浮球自己回来（常驻关或用户刚移除过时什么都不做）。
@@ -130,6 +132,12 @@ open class AgentAccessibilityService : AccessibilityService() {
             AccessibilityEvent.TYPE_WINDOWS_CHANGED,
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 pruneWindowContentGenerations()
+                if (
+                    event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+                    WindowFramePolicy.changesFrame(event.packageName?.toString(), packageName, event.contentChangeTypes)
+                ) {
+                    WINDOW_FRAME_GENERATION.incrementAndGet()
+                }
                 signalWindowChanged()
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
@@ -204,6 +212,12 @@ open class AgentAccessibilityService : AccessibilityService() {
      */
     fun currentGenerationOf(snapshot: NodeSnapshot): Long? =
         if (snapshot.serviceToken != serviceToken) null else windowContentGeneration(snapshot.windowId)
+
+    /**
+     * 前台窗口代际：只在换窗口（新 Activity、对话框、菜单、输入法……）时 +1，见 [WindowFramePolicy]。
+     * 坐标动作拿它判断坐标系是否还对；内容刷新不动它（内容代际见 [currentGenerationOf]）。
+     */
+    fun windowFrameGeneration(): Long = WINDOW_FRAME_GENERATION.get()
 
     fun displaySize(): Pair<Int, Int>? = runCatching {
         val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -1028,6 +1042,14 @@ open class AgentAccessibilityService : AccessibilityService() {
             "RECENTS" -> GLOBAL_ACTION_RECENTS
             "NOTIFICATIONS" -> GLOBAL_ACTION_NOTIFICATIONS
             "QUICK_SETTINGS" -> GLOBAL_ACTION_QUICK_SETTINGS
+            // 锁屏、截屏要 Android 9：手机版和电视版的 minSdk 都够。
+            "LOCK_SCREEN" -> GLOBAL_ACTION_LOCK_SCREEN
+            "SCREENSHOT" -> GLOBAL_ACTION_TAKE_SCREENSHOT
+            "DISMISS_NOTIFICATIONS" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE
+            } else {
+                return NodeActionResult.failure("UNSUPPORTED", "Android 12 以下没有收起通知栏的无障碍动作")
+            }
             else -> return NodeActionResult.failure("INVALID_ARGUMENT", "不支持的系统动作")
         }
         return runNodeActionOnMainSync {
@@ -1038,6 +1060,25 @@ open class AgentAccessibilityService : AccessibilityService() {
             }
         }
     }
+
+    /**
+     * 先在 ([x1], [y1]) 按住 [holdMs] 再拖到 ([x2], [y2])（拖动排序、拖图标）：同一根手指的两段连续笔画，
+     * 第一段原地按住不抬起，完成后用 continueStroke 接着拖过去再抬起，两次 dispatchGesture（见 [GestureStrokes]）。
+     */
+    fun gestureHoldAndDrag(
+        x1: Float,
+        y1: Float,
+        x2: Float,
+        y2: Float,
+        holdMs: Long,
+        durationMs: Long,
+    ): NodeActionResult =
+        dispatchStrokesResult(
+            x1,
+            y1,
+            GestureStrokes.holdThenDrag(x1, y1, x2, y2, holdMs.coerceIn(1, 3_000), durationMs.coerceIn(100, 3_000)),
+            successMethod = "GESTURE_HOLD_DRAG",
+        )
 
     fun globalAction(name: String): Boolean = globalActionResult(name).ok
 
@@ -1858,14 +1899,27 @@ open class AgentAccessibilityService : AccessibilityService() {
         path: Path,
         durationMs: Long,
         successMethod: String,
+    ): NodeActionResult =
+        dispatchStrokesResult(startX, startY, listOf(GestureStrokes.Stroke(path, durationMs)), successMethod)
+
+    /** 同 [dispatchGestureResult]，手势由一段或几段连续笔画组成（先按住再拖），整个过程都按 Agent 注入标记。 */
+    private fun dispatchStrokesResult(
+        startX: Float,
+        startY: Float,
+        strokes: List<GestureStrokes.Stroke>,
+        successMethod: String,
     ): NodeActionResult {
-        if (Looper.myLooper() == Looper.getMainLooper()) return dispatchGestureNow(path, durationMs, successMethod)
-        return AgentTouchInjection.touchAt(startX, startY) { dispatchGestureNow(path, durationMs, successMethod) }
+        if (Looper.myLooper() == Looper.getMainLooper()) return dispatchGestureNow(strokes, successMethod)
+        return AgentTouchInjection.touchAt(startX, startY) { dispatchGestureNow(strokes, successMethod) }
     }
 
+    /**
+     * 派发手势并等它做完。多段笔画（[GestureStrokes.chain]）一段一个手势：前一段完成后在回调里接着派发下一段，
+     * 中间手指不抬起；最后一段完成才算 COMPLETED。第一段没派发出去是 NOT_DISPATCHED（可以 Root 重放），
+     * 之后任何一段出问题都是结果不确定（手指已经按下过）。
+     */
     private fun dispatchGestureNow(
-        path: Path,
-        durationMs: Long,
+        strokes: List<GestureStrokes.Stroke>,
         successMethod: String,
     ): NodeActionResult {
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -1874,60 +1928,67 @@ open class AgentAccessibilityService : AccessibilityService() {
                 "不能在无障碍主线程同步等待手势",
             )
         }
+        val totalDurationMs = strokes.sumOf { it.durationMs }
         val latch = CountDownLatch(1)
         val gate = MainThreadCallGate()
         val outcome = java.util.concurrent.atomic.AtomicReference<GestureDispatch>()
+        // 只认第一个结论：接续失败后系统可能再回调一次取消。
+        fun settle(result: GestureDispatch) {
+            outcome.compareAndSet(null, result)
+            gate.finish()
+            latch.countDown()
+        }
         val posted = mainHandler.post {
             if (!gate.tryStart()) {
                 latch.countDown()
                 return@post
             }
-            val gesture = runCatching {
-                GestureDescription.Builder()
-                    .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
-                    .build()
-            }.getOrElse {
-                outcome.set(GestureDispatch.NOT_DISPATCHED)
-                gate.finish()
-                latch.countDown()
+            val descriptions = runCatching { GestureStrokes.chain(strokes) }.getOrElse {
+                settle(GestureDispatch.NOT_DISPATCHED)
                 return@post
+            }
+            val callback = object : GestureResultCallback() {
+                private var next = 1
+
+                override fun onCompleted(gestureDescription: GestureDescription?) {
+                    if (next >= descriptions.size) {
+                        settle(GestureDispatch.COMPLETED)
+                        return
+                    }
+                    // 上一段没抬起：马上接下一段，同一根手指继续。
+                    val continued = descriptions[next++]
+                    val dispatched = runCatching {
+                        dispatchGesture(
+                            GestureDescription.Builder().addStroke(continued).build(),
+                            this,
+                            GESTURE_CALLBACK_HANDLER,
+                        )
+                    }.getOrDefault(false)
+                    if (!dispatched) settle(GestureDispatch.OUTCOME_UNKNOWN)
+                }
+
+                override fun onCancelled(gestureDescription: GestureDescription?) {
+                    settle(GestureDispatch.CANCELLED)
+                }
             }
             val dispatched = try {
                 dispatchGesture(
-                    gesture,
-                    object : GestureResultCallback() {
-                        override fun onCompleted(gestureDescription: GestureDescription?) {
-                            outcome.set(GestureDispatch.COMPLETED)
-                            gate.finish()
-                            latch.countDown()
-                        }
-
-                        override fun onCancelled(gestureDescription: GestureDescription?) {
-                            outcome.set(GestureDispatch.CANCELLED)
-                            gate.finish()
-                            latch.countDown()
-                        }
-                    },
+                    GestureDescription.Builder().addStroke(descriptions.first()).build(),
+                    callback,
                     GESTURE_CALLBACK_HANDLER,
                 )
             } catch (_: Throwable) {
                 // Binder 事务可能已经送达；异常不能证明手势未执行，禁止 Root 重放。
-                outcome.set(GestureDispatch.OUTCOME_UNKNOWN)
-                gate.finish()
-                latch.countDown()
+                settle(GestureDispatch.OUTCOME_UNKNOWN)
                 return@post
             }
-            if (!dispatched) {
-                outcome.set(GestureDispatch.NOT_DISPATCHED)
-                gate.finish()
-                latch.countDown()
-            }
+            if (!dispatched) settle(GestureDispatch.NOT_DISPATCHED)
         }
         if (!posted) {
             return NodeActionResult.failure("GESTURE_NOT_DISPATCHED", "无障碍主线程拒绝手势任务")
         }
         val finishedInTime = try {
-            latch.await(durationMs + GESTURE_CALLBACK_GRACE_MS, TimeUnit.MILLISECONDS)
+            latch.await(totalDurationMs + GESTURE_CALLBACK_GRACE_MS, TimeUnit.MILLISECONDS)
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
             false
@@ -2478,6 +2539,8 @@ open class AgentAccessibilityService : AccessibilityService() {
         )
 
         private val SERVICE_TOKENS = AtomicLong(0)
+        /** 前台窗口代际，见 [windowFrameGeneration]；进程级，服务重连不归零（重连时 +1）。 */
+        private val WINDOW_FRAME_GENERATION = AtomicLong(0)
         private val SNAPSHOT_IDS = AtomicLong(0)
         private val CLIP_IDS = AtomicLong(0)
 

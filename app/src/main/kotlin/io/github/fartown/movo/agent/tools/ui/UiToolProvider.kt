@@ -47,7 +47,7 @@ internal class UiToolProvider(
         text = """
             ## 屏幕
             - 先 ui_observe 再操作；优先用 index（它绑定对应那次观察的代际）。
-            - 每次新观察让旧 index 失效；动作结果不返回新的 observation_id。
+            - index 绑定它那次观察，页面内容一变就可能失效；坐标只在换了窗口、应用或横竖屏后失效，视频进度、滚动这类内容刷新不影响。动作结果不返回新的 observation_id。
             - 动作 ok 只代表已送达（effect_verified=false），关键步骤后重新 ui_observe 确认。
             - ui_scroll 能判定移动：moved=true 才算滚到；没动可能到边界。
             - ui_input：append 接在框里已有内容末尾，replace 整段替换；框是空的、密码框或读不到原文时用 replace，要保留原文就先看清再整段写。

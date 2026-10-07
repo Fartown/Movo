@@ -25,7 +25,8 @@ import org.json.JSONObject
 
 /**
  * §15 ui_wait。等屏幕出现/消失指定文字，或指定应用到前台，或等一段时间。
- * 超时返回 ok + matched:false（不报 TIMEOUT）。只等时长时不占屏幕。
+ * 超时返回 ok + matched:false（不报 TIMEOUT）。等文字出现时带回命中的节点。
+ * 只等时长时等满 duration_ms，不受 timeout_ms 影响，也不占屏幕。
  */
 
 internal sealed interface UiWaitCondition {
@@ -51,19 +52,19 @@ internal class UiWaitTool(
     override val name = "ui_wait"
     override val domain = ToolDomain.UI
     override val summary =
-        "等条件满足：text(+match/gone)、package 到前台、或 duration_ms 等时长，四选一。" +
-            "超时返回 ok 且 matched=false，不是错误。"
+        "等条件满足，三选一：text 出现（gone=true 等它消失，match 选匹配方式）、package 到前台、duration_ms 等满时长。" +
+            "等到文字出现时返回命中的节点；超时返回 ok 且 matched=false，不是错误。"
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
-        string("text", "等待出现/消失的文字（四选一之一）")
+        string("text", "等这段文字出现（三选一之一；文字或描述匹配即可）")
         string(
-            "match", "文字匹配方式：contains（默认）、exact、prefix、regex",
+            "match", "文字匹配方式：contains（默认，不分大小写）、exact、prefix、regex",
             enum = WaitMatch.entries.map { it.name.lowercase() },
         )
-        boolean("gone", "等文字消失（配合 text）")
-        string("package", "等该应用到前台（四选一之一）")
-        integer("duration_ms", "只等一段时间（四选一之一）", min = 1)
-        integer("timeout_ms", "超时毫秒 500–60000，默认 10000", min = 500, max = 60000)
+        boolean("gone", "改为等这段文字从屏幕上消失（配合 text）")
+        string("package", "等该应用到前台（三选一之一）")
+        integer("duration_ms", "只等一段时间，等满为止，1–60000（三选一之一）", min = 1, max = MAX_DURATION_MS.toLong())
+        integer("timeout_ms", "等文字 / 应用的超时毫秒 500–60000，默认 10000；只等时长时不用", min = 500, max = 60000)
     }
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): UiWaitInput {
@@ -82,7 +83,7 @@ internal class UiWaitTool(
                 UiWaitCondition.Text(text, match, args.bool("gone", false))
             }
             hasPackage -> UiWaitCondition.Package(args.nonBlank("package"))
-            else -> UiWaitCondition.Duration(args.int("duration_ms"))
+            else -> UiWaitCondition.Duration(args.int("duration_ms", 0, 1..MAX_DURATION_MS))
         }
         return UiWaitInput(condition, args.int("timeout_ms", 10000, 500..60000))
     }
@@ -127,6 +128,7 @@ internal class UiWaitTool(
     override fun renderForUi(input: UiWaitInput, output: UiWaitOutput): ToolUiView = ToolUiView(
         summary = when {
             input.condition is UiWaitCondition.Duration -> "已等 ${seconds(output.elapsedMs)}"
+            output.matched && (input.condition as? UiWaitCondition.Text)?.gone == true -> "已消失 · ${seconds(output.elapsedMs)}"
             output.matched -> "等到了 · ${seconds(output.elapsedMs)}"
             else -> "没等到 · ${seconds(output.elapsedMs)}后超时"
         },
@@ -139,5 +141,10 @@ internal class UiWaitTool(
         val json = JSONObject().put("matched", output.matched).put("elapsed_ms", output.elapsedMs)
         output.node?.let { json.put("node", it.toJson()) }
         return ModelContent.Json(json)
+    }
+
+    companion object {
+        /** 只等时长的上限：和等文字 / 应用的超时上限一样，一分钟。 */
+        const val MAX_DURATION_MS = 60_000
     }
 }
