@@ -6,11 +6,14 @@ import android.content.Context
 import android.hardware.camera2.CameraManager
 import android.net.wifi.WifiManager
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.os.StatFs
 import android.os.storage.StorageManager
 import android.provider.Settings
 import io.github.fartown.movo.agent.device.BoundedRootCommandExecutor
 import io.github.fartown.movo.agent.device.RootAccess
+import io.github.fartown.movo.agent.tools.core.ToolError
 import io.github.fartown.movo.agent.tools.core.ToolErrorCode
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -27,39 +30,59 @@ private fun BoundedRootCommandExecutor.Result.toDispatch(): ToggleDispatch = whe
 private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
 /**
- * device_toggle 真实后端。flashlight 走 CameraManager torch（不需 Root，回读靠 torch 回调跟踪）；
- * wifi/bluetooth 走 Root `cmd` 命令，回读走 WifiManager / BluetoothAdapter。
+ * 手电筒状态跟踪。torch 没有直接的 getter，只能靠 [CameraManager.TorchCallback]：注册时系统先报一次当前状态，
+ * 之后每次开关再报。进程内只注册一次（工具后端每次运行都会新建，按实例注册会越积越多），
+ * 回调投到主线程：工具线程没有 Looper，传 null Handler 会抛 IllegalArgumentException
+ *（真机上就是这样被 runCatching 吞掉，一直读不到，开关生效却报 OUTCOME_UNKNOWN）。
+ */
+internal object TorchStateTracker {
+    private val states = ConcurrentHashMap<String, Boolean>()
+    private var registeredOn: CameraManager? = null
+    private var callback: CameraManager.TorchCallback? = null
+
+    /** 确保已在 [manager] 上注册回调；换了 CameraManager 实例（测试里每次新建应用）时重新注册。 */
+    @Synchronized
+    fun ensureRegistered(manager: CameraManager): Boolean {
+        if (registeredOn === manager) return true
+        callback?.let { old -> runCatching { registeredOn?.unregisterTorchCallback(old) } }
+        registeredOn = null
+        callback = null
+        states.clear()
+        val fresh = object : CameraManager.TorchCallback() {
+            override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
+                states[cameraId] = enabled
+            }
+
+            override fun onTorchModeUnavailable(cameraId: String) {
+                states.remove(cameraId)
+            }
+        }
+        return runCatching { manager.registerTorchCallback(fresh, Handler(Looper.getMainLooper())) }
+            .onSuccess {
+                registeredOn = manager
+                callback = fresh
+            }
+            .isSuccess
+    }
+
+    /** 回调报过的开关状态；还没报（或相机被占用、不可用）为 null。 */
+    fun state(cameraId: String): Boolean? = states[cameraId]
+}
+
+/**
+ * device_toggle 真实后端。flashlight 走 CameraManager torch（不需 Root，回读靠 [TorchStateTracker]）；
+ * wifi/bluetooth 走 Root `cmd` 命令，回读走 WifiManager / BluetoothAdapter（两者读开关都不需要额外权限）。
  */
 internal class AndroidDeviceToggleBackend(
     private val context: Context,
     private val root: BoundedRootCommandExecutor,
 ) : DeviceToggleBackend {
 
-    // torch 无直接 getter，用回调跟踪每个闪光灯摄像头的开关状态。
-    private val torchStates = ConcurrentHashMap<String, Boolean>()
-    private var torchCallbackRegistered = false
-
     private val cameraManager: CameraManager?
         get() = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
 
     private fun ensureTorchCallback() {
-        if (torchCallbackRegistered) return
-        val manager = cameraManager ?: return
-        runCatching {
-            manager.registerTorchCallback(
-                object : CameraManager.TorchCallback() {
-                    override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
-                        torchStates[cameraId] = enabled
-                    }
-
-                    override fun onTorchModeUnavailable(cameraId: String) {
-                        torchStates.remove(cameraId)
-                    }
-                },
-                null,
-            )
-            torchCallbackRegistered = true
-        }
+        cameraManager?.let { TorchStateTracker.ensureRegistered(it) }
     }
 
     private fun torchCameraId(): String? = runCatching {
@@ -92,8 +115,7 @@ internal class AndroidDeviceToggleBackend(
     override fun readState(target: ToggleTarget): Boolean? = when (target) {
         ToggleTarget.FLASHLIGHT -> {
             ensureTorchCallback()
-            val id = torchCameraId()
-            if (id == null) null else torchStates[id]
+            torchCameraId()?.let { TorchStateTracker.state(it) }
         }
         ToggleTarget.WIFI -> runCatching {
             (context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager).isWifiEnabled
@@ -104,30 +126,53 @@ internal class AndroidDeviceToggleBackend(
     }
 }
 
-/** setting_read + setting_write 的真实后端。读走 Settings API（失败回退 Root），写走 Root。 */
+/**
+ * setting_read + setting_write 的真实后端。读走 Settings API（读不到再回退 Root），写走 Root。
+ * 公开接口抛 SecurityException（Android 12 起非公开键只对系统应用开放）记为「没权限读」，不再吞成 null。
+ */
 internal class AndroidSettingBackend(
     private val context: Context,
     private val root: BoundedRootCommandExecutor,
     private val rootAvailable: () -> Boolean = { RootAccess.isGranted },
+    /** 公开 Settings 接口；测试替换成会抛 SecurityException 的实现。 */
+    private val publicRead: (SettingNamespace, String) -> String? = { namespace, key ->
+        when (namespace) {
+            SettingNamespace.SYSTEM -> Settings.System.getString(context.contentResolver, key)
+            SettingNamespace.SECURE -> Settings.Secure.getString(context.contentResolver, key)
+            SettingNamespace.GLOBAL -> Settings.Global.getString(context.contentResolver, key)
+        }
+    },
 ) : SettingReadBackend, SettingWriteBackend {
 
-    override fun read(namespace: SettingNamespace, key: String): String? {
-        val publicValue = runCatching {
-            when (namespace) {
-                SettingNamespace.SYSTEM -> Settings.System.getString(context.contentResolver, key)
-                SettingNamespace.SECURE -> Settings.Secure.getString(context.contentResolver, key)
-                SettingNamespace.GLOBAL -> Settings.Global.getString(context.contentResolver, key)
-            }
-        }.getOrNull()
-        if (publicValue != null) return publicValue
-        if (!rootAvailable()) return null
+    override fun readValue(namespace: SettingNamespace, key: String): SettingValue {
+        val public: SettingValue = try {
+            publicRead(namespace, key)?.let { SettingValue.Value(it) } ?: SettingValue.Unset
+        } catch (_: SecurityException) {
+            SettingValue.Unreadable(
+                if (rootAvailable()) {
+                    ToolError(ToolErrorCode.SOURCE_UNAVAILABLE, "系统不允许普通应用读取这个设置，Root 读取也失败了")
+                } else {
+                    ToolError(
+                        ToolErrorCode.ROOT_REQUIRED,
+                        "系统不允许普通应用读取这个设置（不是没值），需要 Root",
+                        hint = "如实告诉用户这一项读不到；不要说它没设置",
+                    )
+                },
+            )
+        } catch (_: RuntimeException) {
+            SettingValue.Unreadable(ToolError(ToolErrorCode.SOURCE_UNAVAILABLE, "设置服务暂时读不到"))
+        }
+        if (public is SettingValue.Value || !rootAvailable()) return public
         val ns = namespace.name.lowercase(Locale.ROOT)
-        return root.execute("settings --user current get ${shellQuote(ns)} ${shellQuote(key)}")
-            .takeIf { it.ok }
-            ?.stdout
-            ?.trim()
-            ?.takeUnless { it == "null" || it.isEmpty() }
+        val result = root.execute("settings --user current get ${shellQuote(ns)} ${shellQuote(key)}")
+        if (!result.ok) return public
+        val value = result.stdout.trim().takeUnless { it == "null" || it.isEmpty() }
+        return value?.let { SettingValue.Value(it) } ?: SettingValue.Unset
     }
+
+    /** setting_write 写前写后回读：只要值，读不了按读不到（null）处理。 */
+    override fun read(namespace: SettingNamespace, key: String): String? =
+        (readValue(namespace, key) as? SettingValue.Value)?.value
 
     override fun write(namespace: SettingNamespace, key: String, value: String): ToggleDispatch {
         val ns = namespace.name.lowercase(Locale.ROOT)

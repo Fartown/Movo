@@ -11,6 +11,7 @@ import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.Risk
 import io.github.fartown.movo.agent.tools.core.Sensitivity
 import io.github.fartown.movo.agent.tools.core.ToolArgs
+import io.github.fartown.movo.agent.tools.core.ToolAvailability
 import io.github.fartown.movo.agent.tools.core.ToolContext
 import io.github.fartown.movo.agent.tools.core.ToolContract
 import io.github.fartown.movo.agent.tools.core.ToolDomain
@@ -59,7 +60,9 @@ internal interface DeviceDiagnosticsBackend {
 
 /**
  * device_diagnostics（只读）：top_processes、app_storage、logcat。
- * 全部需 Root → 无 Root Failed(ROOT_REQUIRED)；logcat 结果为 private。
+ * 三项全靠 Root（ps -A、dumpsys diskstats、logcat 没 Root 只能看到自己）→ 没 Root 时整个工具不进目录，
+ * schema 和说明都不出现，模型也就不会去调必报 ROOT_REQUIRED 的项（真机：没 Root 时模型调 top_processes 白跑一次）。
+ * logcat 结果为 private。
  */
 internal class DeviceDiagnosticsTool(
     private val backend: DeviceDiagnosticsBackend,
@@ -81,6 +84,14 @@ internal class DeviceDiagnosticsTool(
         string("package", "仅 logcat：按包名过滤")
         string("query", "仅 logcat：在取到的行里按子串过滤")
     }
+
+    /** 没有 Root 时不进目录：三项诊断没 Root 都必然失败。 */
+    override fun availability(env: ToolEnvironment): ToolAvailability =
+        if (env.rootAvailable) {
+            ToolAvailability.Available
+        } else {
+            ToolAvailability.Unavailable(ToolErrorCode.ROOT_REQUIRED, "进程占用、应用存储明细、系统日志诊断需要 Root")
+        }
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): DeviceDiagnosticsInput {
         val kind = args.enum<DiagnosticKind>("kind")
@@ -111,6 +122,7 @@ internal class DeviceDiagnosticsTool(
         resolution: CallResolution,
         ctx: ToolContext,
     ): Verdict<DeviceDiagnosticsOutput> {
+        // 兜底：目录已按 Root 过滤，这里防执行期 Root 失效。
         if (!ctx.env.rootAvailable) {
             return Verdict.Failed(
                 ToolError(ToolErrorCode.ROOT_REQUIRED, "device_diagnostics 需要 Root 授权，本次未执行"),

@@ -37,7 +37,8 @@ internal class ClockMediaToolProvider(
               要用 clock_read 查看或请用户在时钟界面确认，不要直接重复创建。没有取消能力，取消改走时钟界面。
             - clock_create 报设备上没有时钟应用时，如实告诉用户设不了；不要拿倒计时、监听或通知代替闹钟：
               监听有最长时长，到点前就会结束，用户会以为设好了。
-            - media_control 是送达型：媒体键已派发不代表播放器已响应（effect_verified=false），需再查播放状态。
+            - media_control 派发后回读播放状态：effect_verified=true 才是确认生效，false 只是媒体键已送达、没读到状态；
+              报「现在没有正在播放的内容」时如实告诉用户，不要说已停住或已切换。
             - volume_set 回读确认实际音量；系统钳制或免打扰可能导致实际值与请求不一致，看 warnings 与 actual_percent。
         """.trimIndent(),
     )
