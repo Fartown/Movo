@@ -377,9 +377,11 @@ internal class RealUiScreenBackend(
             return if (code == "ACTION_OUTCOME_UNKNOWN") UiInputResult.OutcomeUnknown
             else UiInputResult.NotActionable(obj.optString("message").ifBlank { code.ifBlank { "无法写入" } }, code)
         }
-        // 规范 9.5 输入文字指示：写进去之后给这个输入框描边。
-        obj.optJSONArray("bounds")?.takeIf { it.length() == 4 }?.let { b ->
-            GestureIndicator.showInput(context, android.graphics.Rect(b.optInt(0), b.optInt(1), b.optInt(2), b.optInt(3)))
+        // 规范 9.5 输入文字指示：写进去之后给这个输入框描边（和点按、滑动指示一样只在触屏设备上画）。
+        if (env.touchscreen) {
+            obj.optJSONArray("bounds")?.takeIf { it.length() == 4 }?.let { b ->
+                GestureIndicator.showInput(context, android.graphics.Rect(b.optInt(0), b.optInt(1), b.optInt(2), b.optInt(3)))
+            }
         }
         var submitted = false
         var submitError: String? = null
