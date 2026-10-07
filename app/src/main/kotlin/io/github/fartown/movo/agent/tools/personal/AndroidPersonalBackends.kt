@@ -283,7 +283,7 @@ internal class AndroidPersonalSearchBackend(
                 uri = null,
                 extra = row.optString("sub_text").takeIf(String::isNotEmpty)?.let { JSONObject().put("sub_text", it) },
             )
-        }
+        }.filter { it.beforeUntil(input.untilMillis) }
         val offset = input.cursor?.let { PersonalCursor.decodeOffset(it, input) } ?: 0
         return window(items, input, offset)
     }
@@ -291,7 +291,10 @@ internal class AndroidPersonalSearchBackend(
     // ---- 剪贴板历史：复用私有数据库快照读取 ----
 
     private fun clipboardHistory(input: PersonalSearchInput): PersonalSearchResult {
+        // since/until 交给数据库按 TIME 过滤（不在取回的一页里再筛，否则较早的时间窗会被误报成「没找到」）。
         val args = JSONObject().put("query", input.query.orEmpty()).put("limit", input.limit)
+        input.sinceMillis?.let { args.put("since_millis", it) }
+        input.untilMillis?.let { args.put("until_millis", it) }
         val json = runCatching { JSONObject(privateDatabase.execute("search_clipboard_history", args)!!.content) }
             .getOrElse {
                 return PersonalSearchResult(error = ToolError(ToolErrorCode.SOURCE_UNAVAILABLE, "剪贴板历史暂时读不到"))
@@ -302,7 +305,7 @@ internal class AndroidPersonalSearchBackend(
         val items = jsonItems(json).map { row ->
             PersonalItem(
                 id = null,
-                timeMillis = row.optLong("TIME").takeIf { it > 0 },
+                timeMillis = row.optLong("TIME").takeIf { it > 0 }?.let(::normalizeToMillis),
                 title = null,
                 text = row.optString("CONTENT").takeIf(String::isNotEmpty),
                 from = null,
@@ -363,7 +366,9 @@ internal class AndroidPersonalSearchBackend(
         if (rootAvailable()) {
             val memory = runCatching { JSONObject(colorOsMemory.searchOrders(memoryArgs(input)).content) }.getOrNull()
             if (memory != null && memory.optBoolean("ok")) {
-                jsonItems(memory).forEach { memoryItems += memoryItem(it) }
+                // 系统记忆查询不带时间条件：取回后按时间窗筛，不把窗外的订单当结果。
+                jsonItems(memory).map { memoryItem(it) }
+                    .filterTo(memoryItems) { it.afterSince(input.sinceMillis) && it.beforeUntil(input.untilMillis) }
             } else {
                 warnings += ToolWarning(ToolErrorCode.SOURCE_UNAVAILABLE, "系统记忆订单来源读取失败")
             }
@@ -393,6 +398,7 @@ internal class AndroidPersonalSearchBackend(
                         uri = null,
                     )
                 }
+                notifItems.retainAll { it.beforeUntil(input.untilMillis) }
             } else {
                 warnings += ToolWarning(ToolErrorCode.SOURCE_UNAVAILABLE, "通知历史订单来源读取失败")
             }
@@ -456,6 +462,13 @@ internal class AndroidPersonalSearchBackend(
             nextCursor = if (hasMore) PersonalCursor.encode(input, offset + input.limit) else null,
         )
     }
+
+    /** 通知历史只能按「最近几小时」取，until 在取回后按发出时间筛（没有时间的条目不算在窗内）。 */
+    private fun PersonalItem.beforeUntil(untilMillis: Long?): Boolean =
+        untilMillis == null || (timeMillis != null && timeMillis <= untilMillis)
+
+    private fun PersonalItem.afterSince(sinceMillis: Long?): Boolean =
+        sinceMillis == null || (timeMillis != null && timeMillis >= sinceMillis)
 
     private fun ageHours(sinceMillis: Long?): Int {
         if (sinceMillis == null) return 24

@@ -30,7 +30,8 @@ import org.json.JSONObject
 
 /**
  * 个人数据来源。每个来源声明：是否支持时间过滤、是否 secret、以及在当前环境是否可用
- * （Root / ColorOS / 通知权）。
+ * （Root / ColorOS / 通知权）。supportsTimeFilter 只给后端真的按 since/until 过滤的来源标 true：
+ * 系统记忆（coloros_memory）的查询（Hook 与 Root 快照共用 ColorOsMemoryDatabaseQuery）没有时间条件，不标。
  */
 internal enum class PersonalSource(
     val supportsTimeFilter: Boolean,
@@ -43,7 +44,7 @@ internal enum class PersonalSource(
     CALENDAR(supportsTimeFilter = true),
     NOTES(supportsTimeFilter = false),
     RECORDING_SUMMARIES(supportsTimeFilter = false),
-    COLOROS_MEMORY(supportsTimeFilter = true),
+    COLOROS_MEMORY(supportsTimeFilter = false),
     PLACES(supportsTimeFilter = false),
     ORDERS(supportsTimeFilter = true),
     CLIPBOARD_HISTORY(supportsTimeFilter = true, secret = true),
@@ -136,13 +137,15 @@ internal class PersonalSearchTool(
     override fun schema(env: ToolEnvironment): JSONObject {
         val sources = PersonalSource.available(env)
         return objectSchema {
+            // 写明哪些来源能按时间过滤：模型不用试错，也不会以为别的来源也筛了时间。
+            val timed = sources.filter { it.supportsTimeFilter }.joinToString("、") { it.wire }.ifEmpty { "无" }
             string(
                 "source", "数据来源，必选。since/until 仅部分来源支持。",
                 required = true, enum = sources.map { it.wire },
             )
             string("query", "关键词，匹配标题/正文，最长 200", maxLength = MAX_QUERY)
-            string("since", "起始时间（ISO 8601 或毫秒），仅支持时间过滤的来源可用")
-            string("until", "结束时间（ISO 8601 或毫秒），仅支持时间过滤的来源可用")
+            string("since", "起始时间（ISO 8601 或毫秒），仅这些来源可用：$timed")
+            string("until", "结束时间（ISO 8601 或毫秒），仅这些来源可用：$timed")
             string("app", "按应用过滤（仅 notifications、orders）")
             integer("limit", "返回条数，1–30，默认 10", min = 1, max = MAX_LIMIT.toLong())
             string("cursor", "翻页游标，来自上一次返回的 next_cursor")

@@ -142,6 +142,50 @@ class PersonalToolsTest {
     }
 
     @Test
+    fun personalSearch_colorOsMemory_timeFilterRejected() {
+        // #18：系统记忆的查询没有时间条件，since/until 以前被静默忽略；现在不再声称支持。
+        val p = pipeline(fullEnv)
+        val result = p.execute(call("personal_search", """{"source":"coloros_memory","since":"2026-01-01T00:00:00Z"}"""))
+        assertEquals("error", result.status)
+        assertEquals("INVALID_ARGUMENTS", result.errorCode)
+    }
+
+    @Test
+    fun personalSearch_clipboardHistory_timeFilterPassedToBackend() {
+        var seen: PersonalSearchInput? = null
+        val recording = object : PersonalSearchBackend {
+            override fun search(input: PersonalSearchInput, env: ToolEnvironment): PersonalSearchResult {
+                seen = input
+                return PersonalSearchResult()
+            }
+        }
+        val p = ToolPipeline(
+            registry = ToolRegistry(listOf(object : ToolProvider {
+                override val tools = listOf(ContractTool(PersonalSearchTool(recording)))
+            })),
+            environment = { fullEnv },
+            appContext = ApplicationProvider.getApplicationContext(),
+            logger = AndroidAgentLogger,
+            runId = "run1",
+            cancelled = { false },
+        ).also { it.catalog() }
+        val result = p.execute(call("personal_search", """{"source":"clipboard_history","since":"1000","until":"2000"}"""))
+        assertEquals("ok", JSONObject(result.content).getString("status"))
+        assertEquals(1000L, seen?.sinceMillis)
+        assertEquals(2000L, seen?.untilMillis)
+    }
+
+    @Test
+    fun personalSearch_schemaNamesTheSourcesThatFilterByTime() {
+        val schema = ContractTool(PersonalSearchTool(searchBackend)).parameters(fullEnv).getJSONObject("properties")
+        val since = schema.getJSONObject("since").getString("description")
+        assertTrue(since, since.contains("clipboard_history"))
+        assertTrue(since, since.contains("notifications"))
+        assertFalse(since, since.contains("coloros_memory"))
+        assertFalse(since, since.contains("contacts"))
+    }
+
+    @Test
     fun personalSearch_sms_noCardEvenInManualMode() {
         // 读个人数据由「个人数据与系统」开关管能不能用，不再首读确认（权限模式方案）。
         val p = pipeline(fullEnv.copy(approvalPolicy = ApprovalPolicy.MANUAL_BUILT_IN), declineAll)
@@ -238,6 +282,17 @@ class PersonalToolsTest {
         assertEquals("ok", json.getString("status"))
         assertTrue(result.sensitive)
         assertTrue(json.getJSONObject("data").getBoolean("has_data"))
+    }
+
+    @Test
+    fun healthRead_unavailableMessageNamesOnlyRoot() {
+        // #19：后端只支持 Root 读系统健康数据库，不再说「Health Connect 健康权限或 Root」。
+        val result = pipeline(ToolEnvironment(notificationAccess = true)).execute(call("health_read", "{}"))
+        assertEquals("error", result.status)
+        assertEquals("ROOT_REQUIRED", result.errorCode)
+        val message = JSONObject(result.content).getString("message")
+        assertTrue(message, message.contains("Root"))
+        assertFalse(message, message.contains("权限或"))
     }
 
     // ---- wifi_password_read ----
