@@ -32,8 +32,8 @@ internal object TextEditPlanner {
     fun canPasteWhenRejected(inWebView: Boolean, supportsPaste: Boolean): Boolean = supportsPaste && !inWebView
 
     /**
-     * 直接写入后要不要改用粘贴补回换行：编辑器把换行改成了空格或吞掉（读回的只差在空白）。
-     * 原生单行框本来就不收换行，不重写；网页里的框报不准是不是多行（真机：小米笔记），都试。
+     * 直接写入后换行丢了：编辑器把换行改成了空格或吞掉（读回的只差在空白）。原生单行框本来就不收换行，不算；
+     * 网页里的框报不准是不是多行（真机：小米笔记），都算。原生多行框会改用粘贴补回，其他的在结果里说明。
      */
     fun lostLineBreaks(wanted: String, readback: String?, multiLine: Boolean, inWebView: Boolean): Boolean {
         if (!(multiLine || inWebView) || readback == null || sameText(wanted, readback) || '\n' !in wanted) return false

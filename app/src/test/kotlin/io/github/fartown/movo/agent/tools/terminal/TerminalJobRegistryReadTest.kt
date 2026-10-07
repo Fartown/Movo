@@ -130,7 +130,8 @@ class TerminalJobRegistryReadTest {
             setExecutable(true)
             deleteOnExit()
         }
-        val registry = registry(ShellProcessSupervisor(userPtyExecutable = { helper }))
+        // 机器忙时 shell 起得慢，默认 0.5 秒等不到子进程报到（满负荷全量跑时出现过）：测试里放宽，产品行为不变。
+        val registry = registry(ShellProcessSupervisor(userPtyExecutable = { helper }, ownershipWaitMs = 5_000L))
         val started = System.currentTimeMillis()
         val result = registry.run(spec("read line; echo got:\$line", tty = true, mode = TerminalMode.WAIT))
         assertTrue("tty 不等 wait_ms，直接转后台", result is TerminalRunResult.Backgrounded)

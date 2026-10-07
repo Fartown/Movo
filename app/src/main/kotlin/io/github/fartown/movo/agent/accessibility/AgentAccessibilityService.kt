@@ -803,9 +803,9 @@ open class AgentAccessibilityService : AccessibilityService() {
      * ui_input 的写入。[index] 给了就写观察里的那个输入框（先让它获得输入焦点），否则写当前输入焦点。
      * [append] 时接在已有内容末尾，否则整段替换；密码框读不出原文，总是整段替换。
      *
-     * 写法按 [TextEditPlanner]：先直接设置文字（ACTION_SET_TEXT）；原生输入框不接受时改用粘贴（临时剪贴板标记为敏感，
-     * 写完恢复原内容）；编辑器把换行改掉了（真机：小米笔记）也试一次粘贴，读回不对就马上用直接写入改回来——
-     * 网页里粘出来的可能是更早的剪贴板内容（真机：小米浏览器）。
+     * 写法按 [TextEditPlanner]：先直接设置文字（ACTION_SET_TEXT）；原生输入框不接受、或原生多行框把换行改掉了，改用粘贴
+     * （临时剪贴板标记为敏感，写完恢复原内容；读回不对就马上改回直接写入的结果）。网页里的框不粘贴：真机上网页粘出来的
+     * 可能是更早的剪贴板内容（小米浏览器），小米笔记的网页编辑器则根本粘不进去；丢了换行就在结果里说明。
      * 写完在 [READBACK_WINDOW_MS] 内反复读回：网页里的文字约 100ms 后才更新，马上读是旧值（真机实验）。
      */
     fun writeText(snapshot: NodeSnapshot?, index: Int?, text: String, append: Boolean): NodeActionResult {
@@ -830,10 +830,10 @@ open class AgentAccessibilityService : AccessibilityService() {
         if (direct.code == "ACTION_FAILED" && TextEditPlanner.canPasteWhenRejected(inWebView, supportsPaste)) {
             return pasteWrite(node, existing, text, wanted, append).copy(bounds = bounds)
         }
-        if (direct.ok && direct.verified == false && supportsPaste &&
+        val lineBreaksLost = direct.ok && direct.verified == false &&
             TextEditPlanner.lostLineBreaks(wanted, direct.readback, node.isMultiLine, inWebView)
-        ) {
-            // 粘贴一次补回换行（这时框里是直接写入的内容，整段替换）；读回不对就马上改回直接写入的结果。
+        if (lineBreaksLost && supportsPaste && !inWebView) {
+            // 原生多行框：粘贴一次补回换行（这时框里是直接写入的内容，整段替换）；读回不对就马上改回直接写入的结果。
             val pasted = pasteWrite(node, existing = direct.readback, text = wanted, wanted = wanted, append = false)
             if (pasted.ok && pasted.verified == true) return pasted.copy(bounds = bounds)
             val restored = setTextAndReadBack(node, wanted)
@@ -849,11 +849,7 @@ open class AgentAccessibilityService : AccessibilityService() {
                 },
             )
         }
-        return direct.copy(
-            bounds = bounds,
-            lineBreaksLost = direct.ok && direct.verified == false &&
-                TextEditPlanner.lostLineBreaks(wanted, direct.readback, node.isMultiLine, inWebView),
-        )
+        return direct.copy(bounds = bounds, lineBreaksLost = lineBreaksLost)
     }
 
     private sealed interface WriteTarget {
