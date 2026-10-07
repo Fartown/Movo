@@ -35,6 +35,12 @@ internal object FlavorModule : Flavor {
     /** P2 接入：本轮进行中按返回取消（§5.8）。 */
     override val keyInterceptor: KeyInterceptor = io.github.fartown.movo.tv.TvBackHandler
 
+    /**
+     * 电视也记完整运行日志：电视上的问题最难现场排查（10-07 一次任务卡了 36 轮，只能从对话库里拼）。
+     * 上限同手机（200 MB、20 次）；暂无导出页，debug 包用 adb 读 files/run-log。
+     */
+    override val fullRunLog: Boolean = true
+
     override val screenCapture: io.github.fartown.movo.platform.DeviceScreenCapture
         get() = io.github.fartown.movo.tv.TvAssistantScreenCapture
 
