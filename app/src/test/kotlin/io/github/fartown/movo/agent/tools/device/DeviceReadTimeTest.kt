@@ -29,6 +29,14 @@ class DeviceReadTimeTest {
     fun close() = root.close()
 
     @Test
+    fun sectionsSayWhatEnvironmentHolds() {
+        // 重构前 get_device_environment 写明「锁屏、勿扰、铃声、音频输出和外接显示器」；只写「环境」时模型问「声音从哪出」会绕远路。
+        val tool = DeviceReadTool(AndroidDeviceReadBackend(ApplicationProvider.getApplicationContext(), root) { false })
+        val sections = tool.schema(ToolEnvironment()).getJSONObject("properties").getJSONObject("sections").getString("description")
+        listOf("锁屏", "勿扰", "铃声", "音频输出", "外接显示器").forEach { assertTrue(it, sections.contains(it)) }
+    }
+
+    @Test
     fun timeSection_isToTheSecondWithZoneAndWeekday() {
         val now = ZonedDateTime.of(2026, 10, 7, 14, 3, 27, 600_000_000, ZoneId.of("Asia/Shanghai"))
         val time = deviceTime(now)
