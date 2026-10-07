@@ -41,6 +41,12 @@ internal class TvEchoCanceller(
     private val yRe = FloatArray(bins)
     private val yIm = FloatArray(bins)
 
+    /** 新会话开始：清掉上一段的信号缓存，保留已学到的回声路径（滤波器系数和参考功率）。 */
+    fun resetStreams() {
+        for (p in 0 until partitions) { xRe[p].fill(0f); xIm[p].fill(0f) }
+        previousRef.fill(0f); errorHistory.fill(0f); echoHistory.fill(0f); overlap.fill(0f)
+    }
+
     /** 消一块：[mic]、[ref] 各 [BLOCK] 个样本，返回同样长度的输出（上一块的结果）。 */
     fun process(mic: FloatArray, ref: FloatArray): FloatArray {
         require(mic.size == BLOCK && ref.size == BLOCK)
@@ -179,6 +185,11 @@ internal class TclEchoPipeline(private val gain: Int, private val canceller: TvE
     private val micBlock = FloatArray(TvEchoCanceller.BLOCK)
     private val refBlock = FloatArray(TvEchoCanceller.BLOCK)
     private var filled = 0
+    // 每秒一条电平诊断：节目参考声、麦克风、消除后（验收和排查用）。
+    private var refEnergy = 0.0
+    private var micEnergy = 0.0
+    private var outEnergy = 0.0
+    private var levelSamples = 0
 
     /** null = 还没收到数据；true = 在消回声；false = 没有参考，退回原样。 */
     var echoCancelling: Boolean? = null
@@ -193,11 +204,29 @@ internal class TclEchoPipeline(private val gain: Int, private val canceller: TvE
             micBlock[filled] = mic[i]; refBlock[filled] = ref[i]
             if (++filled < TvEchoCanceller.BLOCK) continue
             filled = 0
+            for (k in 0 until TvEchoCanceller.BLOCK) {
+                refEnergy += (refBlock[k] * refBlock[k]).toDouble(); micEnergy += (micBlock[k] * micBlock[k]).toDouble()
+            }
             for (sample in canceller.process(micBlock, refBlock)) {
+                outEnergy += (sample * sample).toDouble()
                 val value = (sample * 32768f * gain).toInt().coerceIn(-32768, 32767)
                 out.write(value and 255); out.write((value shr 8) and 255)
             }
+            levelSamples += TvEchoCanceller.BLOCK
+            if (levelSamples >= LEVEL_WINDOW) reportLevels()
         }
         return out.toByteArray()
+    }
+
+    private fun reportLevels() {
+        fun db(energy: Double) = if (energy <= 0.0) -120.0 else Math.round(100 * Math.log10(energy / levelSamples)) / 10.0
+        io.github.fartown.movo.diagnostics.MemoryDiagnostics.record("tv.voice", "echo.level", fields = mapOf(
+            "ref_db" to db(refEnergy), "mic_db" to db(micEnergy), "out_db" to db(outEnergy)))
+        refEnergy = 0.0; micEnergy = 0.0; outEnergy = 0.0; levelSamples = 0
+    }
+
+    private companion object {
+        /** 16 kHz 下 1 秒。 */
+        const val LEVEL_WINDOW = 16_000
     }
 }
