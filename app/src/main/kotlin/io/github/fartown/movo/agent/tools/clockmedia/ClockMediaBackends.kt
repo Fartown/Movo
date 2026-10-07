@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.media.AudioManager
+import android.media.MediaMetadata
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.os.Handler
@@ -365,7 +366,7 @@ internal class RealMediaControlBackend(
 ) : MediaControlBackend {
 
     override fun sessionState(env: ToolEnvironment): MediaSessionState {
-        // 有通知使用权时走 MediaSessionManager 列会话（最准）。
+        // 有通知使用权时走 MediaSessionManager 列会话（最准，能读播放状态和曲目）。
         if (env.notificationAccess) {
             val viaManager = runCatching {
                 val manager = context.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
@@ -374,9 +375,13 @@ internal class RealMediaControlBackend(
                 if (sessions.isEmpty()) {
                     MediaSessionState.None
                 } else {
-                    val playing = sessions.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+                    val target = sessions.firstOrNull { MediaPlayback.isPlaying(it.playbackState?.state) == true }
                         ?: sessions.first()
-                    MediaSessionState.Active(playing.packageName)
+                    MediaSessionState.Active(
+                        packageName = target.packageName,
+                        playing = MediaPlayback.isPlaying(target.playbackState?.state),
+                        track = MediaPlayback.track(target.metadata),
+                    )
                 }
             }.getOrDefault(MediaSessionState.Unknown)
             if (viaManager != MediaSessionState.Unknown) return viaManager
@@ -385,7 +390,7 @@ internal class RealMediaControlBackend(
         if (env.rootAvailable) {
             return sessionStateViaRoot()
         }
-        // 无通知权、无 Root：无法检测，如实返回 Unknown，不冒领。
+        // 无通知权、无 Root：看不到会话，如实返回 Unknown；有没有在播由 musicActive 判断。
         return MediaSessionState.Unknown
     }
 
@@ -398,14 +403,19 @@ internal class RealMediaControlBackend(
         val sessions = DumpsysMediaSessionParser.parse(dump)
         // 命令成功执行：空列表即确实没有活动会话（不冒领）。
         val active = DumpsysMediaSessionParser.activeSession(sessions) ?: return MediaSessionState.None
-        return MediaSessionState.Active(active.packageName)
+        return MediaSessionState.Active(active.packageName, playing = MediaPlayback.isPlaying(active.playbackStateCode))
     }
+
+    /** 免权限：任何应用在媒体通道出声都算（含 Movo 自己的语音播报）。 */
+    override fun musicActive(): Boolean? =
+        runCatching { (context.getSystemService(Context.AUDIO_SERVICE) as AudioManager).isMusicActive }.getOrNull()
 
     override fun dispatch(action: MediaAction) {
         val keyCode = when (action) {
             MediaAction.PLAY -> KeyEvent.KEYCODE_MEDIA_PLAY
             MediaAction.PAUSE -> KeyEvent.KEYCODE_MEDIA_PAUSE
             MediaAction.TOGGLE -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+            MediaAction.STOP -> KeyEvent.KEYCODE_MEDIA_STOP
             MediaAction.NEXT -> KeyEvent.KEYCODE_MEDIA_NEXT
             MediaAction.PREVIOUS -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
             MediaAction.FAST_FORWARD -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
@@ -414,6 +424,36 @@ internal class RealMediaControlBackend(
         val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
         audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
+    }
+}
+
+/** 媒体会话的播放状态与曲目标识换算（MediaSessionManager 与 dumpsys 两条路共用）。 */
+internal object MediaPlayback {
+    /** 这些状态都算「在播」：缓冲、快进快退、切歌中，按暂停都有意义。 */
+    private val PLAYING_STATES = setOf(
+        PlaybackState.STATE_PLAYING,
+        PlaybackState.STATE_BUFFERING,
+        PlaybackState.STATE_FAST_FORWARDING,
+        PlaybackState.STATE_REWINDING,
+        PlaybackState.STATE_CONNECTING,
+        PlaybackState.STATE_SKIPPING_TO_NEXT,
+        PlaybackState.STATE_SKIPPING_TO_PREVIOUS,
+        PlaybackState.STATE_SKIPPING_TO_QUEUE_ITEM,
+    )
+
+    /** PlaybackState.state → 是否在播；会话没报状态（null）返回 null。NONE、STOPPED、PAUSED、ERROR 算没在播。 */
+    fun isPlaying(state: Int?): Boolean? = state?.let { it in PLAYING_STATES }
+
+    /** 曲目标识：媒体 ID + 标题 + 歌手；全读不到返回 null（切歌就无从回读）。 */
+    fun track(metadata: MediaMetadata?): String? {
+        metadata ?: return null
+        val parts = listOf(
+            MediaMetadata.METADATA_KEY_MEDIA_ID,
+            MediaMetadata.METADATA_KEY_TITLE,
+            MediaMetadata.METADATA_KEY_DISPLAY_TITLE,
+            MediaMetadata.METADATA_KEY_ARTIST,
+        ).mapNotNull { key -> runCatching { metadata.getString(key) }.getOrNull()?.takeIf { it.isNotBlank() } }
+        return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
     }
 }
 

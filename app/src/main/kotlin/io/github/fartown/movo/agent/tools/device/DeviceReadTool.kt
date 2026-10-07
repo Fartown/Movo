@@ -9,6 +9,7 @@ import io.github.fartown.movo.agent.tools.core.uiText
 import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
 import io.github.fartown.movo.agent.tools.core.ModelContent
+import io.github.fartown.movo.agent.tools.core.Retry
 import io.github.fartown.movo.agent.tools.core.Risk
 import io.github.fartown.movo.agent.tools.core.Sensitivity
 import io.github.fartown.movo.agent.tools.core.ToolArgs
@@ -16,6 +17,7 @@ import io.github.fartown.movo.agent.tools.core.ToolContext
 import io.github.fartown.movo.agent.tools.core.ToolContract
 import io.github.fartown.movo.agent.tools.core.ToolDomain
 import io.github.fartown.movo.agent.tools.core.ToolEnvironment
+import io.github.fartown.movo.agent.tools.core.ToolError
 import io.github.fartown.movo.agent.tools.core.ToolErrorCode
 import io.github.fartown.movo.agent.tools.core.ToolInput
 import io.github.fartown.movo.agent.tools.core.ToolOutput
@@ -33,10 +35,28 @@ internal data class DeviceReadInput(val sections: List<DeviceSection>) : ToolInp
 
 internal data class DeviceReadOutput(
     val data: JSONObject,
-    val failed: List<DeviceSection>,
+    /** 读失败的 section 与原因（按请求顺序）。 */
+    val failed: Map<DeviceSection, ToolError>,
 ) : ToolOutput
 
-/** 可测后端：真实实现从 Context/系统服务读；测试用假实现。null 表示该 section 暂不可读。 */
+/**
+ * 某个 section 读不到、且知道原因时由后端抛出：缺权限、开关关着、暂时没数据各给各的码、提示与 retry。
+ * 例如位置：没授权是用户要去开（PERMISSION_REQUIRED，retry=user），不是「稍后重试」。
+ */
+internal class DeviceSectionUnavailable(
+    val code: ToolErrorCode,
+    override val message: String,
+    val hint: String? = null,
+    val retry: Retry = code.retry,
+    val detail: String? = null,
+) : RuntimeException(message) {
+    fun toError(): ToolError = ToolError(code, message, hint, detail, retry)
+}
+
+/**
+ * 可测后端：真实实现从 Context/系统服务读；测试用假实现。null 表示该 section 暂不可读（原因不明）；
+ * 知道原因时抛 [DeviceSectionUnavailable]。
+ */
 internal interface DeviceReadBackend {
     fun read(section: DeviceSection, env: ToolEnvironment): JSONObject?
     /** 该 section 是否敏感（network 的 SSID、位置、设备标识等）。 */
@@ -83,21 +103,50 @@ internal class DeviceReadTool(
 
     override fun execute(input: DeviceReadInput, resolution: CallResolution, ctx: ToolContext): Verdict<DeviceReadOutput> {
         val data = JSONObject()
-        val failed = mutableListOf<DeviceSection>()
+        val failed = LinkedHashMap<DeviceSection, ToolError>()
         for (section in input.sections) {
             ctx.checkCancelled()
-            val value = runCatching { backend.read(section, ctx.env) }.getOrNull()
-            if (value == null) failed += section else data.put(section.name.lowercase(), value)
+            val value = try {
+                backend.read(section, ctx.env)
+            } catch (unavailable: DeviceSectionUnavailable) {
+                failed[section] = unavailable.toError()
+                continue
+            } catch (cancelled: io.github.fartown.movo.agent.runtime.AgentRunCancelledException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+            if (value == null) failed[section] = unknownFailure(section) else data.put(section.name.lowercase(), value)
         }
-        if (data.length() == 0) {
-            return Verdict.Failed(
-                io.github.fartown.movo.agent.tools.core.ToolError(
-                    code = ToolErrorCode.SOURCE_UNAVAILABLE,
-                    message = "设备状态暂时读不到",
-                ),
+        if (data.length() == 0) return Verdict.Failed(allFailed(failed))
+        return Verdict.Read(DeviceReadOutput(data, failed))
+    }
+
+    private fun unknownFailure(section: DeviceSection) = ToolError(
+        code = ToolErrorCode.SOURCE_UNAVAILABLE,
+        message = "${section.label()}暂时读不到",
+    )
+
+    /**
+     * 全部 section 都失败：只有一个（或原因同码）时原样给出它的码、提示与 retry（例如位置缺权限 → retry=user），
+     * 不再一律报「暂时读不到 / 稍后重试」；原因各不相同时按 SOURCE_UNAVAILABLE 汇总，逐项写明，
+     * 其中有要用户去开的（缺权限、开关关着）就按 retry=user。
+     */
+    private fun allFailed(failed: Map<DeviceSection, ToolError>): ToolError {
+        val errors = failed.values.toList()
+        if (errors.size == 1) return errors.single()
+        val message = failed.entries.joinToString("；") { (section, error) -> "${section.name.lowercase()}：${error.message}" }
+        val first = errors.first()
+        return if (errors.all { it.code == first.code && it.retry == first.retry }) {
+            first.copy(message = message, hint = errors.mapNotNull { it.hint }.distinct().joinToString("；").ifBlank { null })
+        } else {
+            ToolError(
+                code = ToolErrorCode.SOURCE_UNAVAILABLE,
+                message = message,
+                hint = errors.mapNotNull { it.hint }.distinct().joinToString("；").ifBlank { null },
+                retry = if (errors.any { it.retry == Retry.USER }) Retry.USER else ToolErrorCode.SOURCE_UNAVAILABLE.retry,
             )
         }
-        return Verdict.Read(DeviceReadOutput(data, failed))
     }
 
     override fun uiTitle(input: DeviceReadInput): String =
@@ -136,7 +185,10 @@ internal class DeviceReadTool(
 
     override fun renderForModel(output: DeviceReadOutput): ModelContent = ModelContent.Json(output.data)
 
-    /** 部分 section 读失败时作为 warning（合同：整体 ok + warnings）。 */
+    /** 部分 section 读失败时作为 warning（合同：整体 ok + warnings），带上原因与下一步（warning 没有 retry 字段）。 */
     override fun warnings(output: DeviceReadOutput): List<ToolWarning> =
-        output.failed.map { ToolWarning(ToolErrorCode.SOURCE_UNAVAILABLE, "${it.name.lowercase()} 读取失败") }
+        output.failed.map { (section, error) ->
+            val next = error.hint?.let { "（$it）" }.orEmpty()
+            ToolWarning(error.code, "${section.name.lowercase()} 读取失败：${error.message}$next")
+        }
 }

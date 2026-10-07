@@ -33,7 +33,7 @@ internal class LauncherAppIndex(private val context: Context) {
                 AppMatch(
                     name = label,
                     packageName = pkg,
-                    isSystem = appInfo.flags and ApplicationInfo.FLAG_SYSTEM != 0,
+                    isSystem = isPreinstalled(appInfo.flags, appInfo.sourceDir),
                 ),
             )
         }
@@ -70,8 +70,26 @@ internal class LauncherAppIndex(private val context: Context) {
         }
     }
 
-    private companion object {
-        val TV_ALIASES = mapOf(
+    internal companion object {
+        /**
+         * 只读系统分区：装在这些位置的应用都是出厂预装。小米 HyperOS 的计算器、便签等装在 /product/data-app，
+         * 可以卸载所以不带 FLAG_SYSTEM，按 flags 判会被标成非系统应用；ColorOS 的预装分区是 /my_*。
+         */
+        private val SYSTEM_PARTITION_PREFIXES = listOf(
+            "/system/", "/system_ext/", "/product/", "/vendor/", "/odm/", "/oem/", "/apex/", "/cust/", "/preload/", "/my_",
+        )
+
+        /**
+         * 是否系统（出厂预装）应用：带 FLAG_SYSTEM，或是系统应用的更新版（FLAG_UPDATED_SYSTEM_APP，安装在 /data/app），
+         * 或 APK 就在只读系统分区上（厂商可卸载预装）。从应用商店更新过的厂商可卸载预装会搬到 /data/app，这时认不出。
+         */
+        fun isPreinstalled(flags: Int, sourceDir: String?): Boolean {
+            if (flags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0) return true
+            val path = sourceDir ?: return false
+            return SYSTEM_PARTITION_PREFIXES.any { path.startsWith(it) }
+        }
+
+        private val TV_ALIASES = mapOf(
             "com.tcl.qiyiguo" to listOf("爱奇艺", "奇异果", "iqiyi", "qiyi"),
             "com.gitvdemo.video" to listOf("爱奇艺", "奇异果", "iqiyi", "qiyi"),
             "com.ktcp.csvideo" to listOf("腾讯视频", "云视听极光", "tencent"),

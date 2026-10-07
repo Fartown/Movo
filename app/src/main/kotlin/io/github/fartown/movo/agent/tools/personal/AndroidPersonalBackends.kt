@@ -94,6 +94,20 @@ private data class ProviderSpec(
     val uriTemplate: String? = null,
 )
 
+/** 从通知里认订单：外卖、快递、出行、酒店、票务等订单状态通知里常见的字（沿用旧 AgentStructuredDeviceTools.ORDER_KEYWORDS）。 */
+internal object OrderNotifications {
+    val KEYWORDS = listOf(
+        "订单", "外卖", "取餐", "配送", "骑手", "送达", "商家", "快递", "车票", "机票",
+        "酒店", "电影票",
+    )
+
+    /** 标题、正文、副标题里任一处含订单关键词。 */
+    fun looksLikeOrder(vararg texts: String?): Boolean {
+        val joined = texts.filterNotNull().joinToString(" ")
+        return KEYWORDS.any(joined::contains)
+    }
+}
+
 internal class AndroidPersonalSearchBackend(
     private val context: Context,
     private val root: BoundedRootCommandExecutor,
@@ -388,7 +402,16 @@ internal class AndroidPersonalSearchBackend(
                 )
             }.getOrNull()
             if (raw != null) {
+                // 没给关键词时只留像订单的通知（恢复旧 search_personal_orders 的 ORDER_KEYWORDS 过滤）：
+                // 以前直接把时间窗里的所有通知都当订单返回，聊天、系统通知全混进来。给了关键词就按关键词查，不再二次过滤。
+                val keywordless = input.query.isNullOrBlank()
                 jsonItems(raw).forEach { row ->
+                    if (keywordless && !OrderNotifications.looksLikeOrder(
+                            row.optString("title"), row.optString("text"), row.optString("sub_text"),
+                        )
+                    ) {
+                        return@forEach
+                    }
                     notifItems += PersonalItem(
                         id = row.optString("key").takeIf(String::isNotEmpty),
                         timeMillis = row.optLong("posted_at").takeIf { it > 0 },

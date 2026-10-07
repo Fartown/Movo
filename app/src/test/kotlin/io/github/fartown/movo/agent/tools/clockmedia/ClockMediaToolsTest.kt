@@ -128,43 +128,243 @@ class ClockMediaToolsTest {
 
     // ---- media_control ----
 
+    /**
+     * 假后端：[states] 依次作为每次观察的会话状态（派发前一次，之后每次回读一次，用完停在最后一个），
+     * [audio] 同理给媒体声音。
+     */
+    private class FakeMedia(
+        private val states: List<MediaSessionState>,
+        private val audio: List<Boolean?> = listOf(null),
+    ) : MediaControlBackend {
+        val dispatched = mutableListOf<MediaAction>()
+        private var sessionReads = 0
+        private var audioReads = 0
+        override fun sessionState(env: ToolEnvironment) = states[minOf(sessionReads++, states.lastIndex)]
+        override fun musicActive() = audio[minOf(audioReads++, audio.lastIndex)]
+        override fun dispatch(action: MediaAction) { dispatched += action }
+    }
+
+    private fun media(backend: MediaControlBackend, env: ToolEnvironment = ToolEnvironment()) =
+        pipeline(provider(ContractTool(MediaControlTool(backend, readBackTimeoutMs = 50, pollIntervalMs = 1))), env)
+
+    private fun runMedia(backend: MediaControlBackend, action: String): JSONObject =
+        JSONObject(media(backend).execute(call("media_control", """{"action":"$action"}""")).content)
+
     @Test
-    fun mediaControl_activeSession_returnsDispatchedUnverified() {
-        val backend = object : MediaControlBackend {
-            override fun sessionState(env: ToolEnvironment) = MediaSessionState.Active("com.example.player")
-            override fun dispatch(action: MediaAction) = Unit
-        }
-        val p = pipeline(provider(ContractTool(MediaControlTool(backend))), ToolEnvironment())
-        val json = JSONObject(p.execute(call("media_control", """{"action":"pause"}""")).content)
+    fun mediaControl_pausePlayingSession_readBackConfirms() {
+        val backend = FakeMedia(
+            listOf(
+                MediaSessionState.Active("com.example.player", playing = true),
+                MediaSessionState.Active("com.example.player", playing = false),
+            ),
+        )
+        val json = runMedia(backend, "pause")
         assertEquals("ok", json.getString("status"))
-        assertFalse(json.getBoolean("effect_verified")) // 送达型
-        assertEquals("com.example.player", json.getJSONObject("data").getString("session"))
+        assertTrue(json.getBoolean("effect_verified"))
+        val data = json.getJSONObject("data")
+        assertEquals("com.example.player", data.getString("session"))
+        assertFalse(data.getBoolean("playing"))
+        assertEquals("media_session", data.getString("confirmed_by"))
+        assertEquals(listOf(MediaAction.PAUSE), backend.dispatched)
     }
 
     @Test
-    fun mediaControl_noSessionPause_returnsNotFound() {
-        val backend = object : MediaControlBackend {
-            override fun sessionState(env: ToolEnvironment) = MediaSessionState.None
-            override fun dispatch(action: MediaAction) = Unit
-        }
-        val p = pipeline(provider(ContractTool(MediaControlTool(backend))), ToolEnvironment())
-        val json = JSONObject(p.execute(call("media_control", """{"action":"pause"}""")).content)
+    fun mediaControl_pauseButStillPlaying_isUnknown() {
+        val backend = FakeMedia(listOf(MediaSessionState.Active("com.example.player", playing = true)))
+        val json = runMedia(backend, "pause")
+        assertEquals("unknown", json.getString("status"))
+        assertEquals("OUTCOME_UNKNOWN", json.getString("code"))
+        assertTrue(json.getString("message").contains("回读仍在播放"))
+    }
+
+    @Test
+    fun mediaControl_noSessionPause_returnsNotFoundWithoutDispatch() {
+        val backend = FakeMedia(listOf(MediaSessionState.None), audio = listOf(false))
+        val json = runMedia(backend, "pause")
         assertEquals("error", json.getString("status"))
         assertEquals("NOT_FOUND", json.getString("code"))
+        assertEquals("never", json.getString("retry"))
+        assertTrue(json.getString("message").contains("现在没有正在播放的内容"))
+        assertTrue(backend.dispatched.isEmpty())
+    }
+
+    /** 真机复现：没通知使用权、没 Root 看不到会话，也没有声音在响——pause 以前回 ok/dispatched，模型说「已停住」。 */
+    @Test
+    fun mediaControl_sessionsHiddenAndSilent_pauseFailsClearly() {
+        for (action in listOf("pause", "stop", "next", "previous", "fast_forward", "rewind")) {
+            val backend = FakeMedia(listOf(MediaSessionState.Unknown), audio = listOf(false))
+            val json = runMedia(backend, action)
+            assertEquals(action, "error", json.getString("status"))
+            assertEquals(action, "NOT_FOUND", json.getString("code"))
+            assertEquals(action, "no_music_active", json.getString("detail"))
+            assertTrue(action, backend.dispatched.isEmpty())
+        }
     }
 
     @Test
-    fun mediaControl_noSessionPlay_stillDispatches() {
-        var dispatched = false
-        val backend = object : MediaControlBackend {
-            override fun sessionState(env: ToolEnvironment) = MediaSessionState.None
-            override fun dispatch(action: MediaAction) { dispatched = true }
-        }
-        val p = pipeline(provider(ContractTool(MediaControlTool(backend))), ToolEnvironment())
-        val json = JSONObject(p.execute(call("media_control", """{"action":"play"}""")).content)
+    fun mediaControl_sessionsHiddenButAudioPlaying_pauseVerifiedByAudio() {
+        val backend = FakeMedia(listOf(MediaSessionState.Unknown), audio = listOf(true, false))
+        val json = runMedia(backend, "pause")
         assertEquals("ok", json.getString("status"))
-        assertTrue(dispatched)
+        assertTrue(json.getBoolean("effect_verified"))
+        assertEquals("audio", json.getJSONObject("data").getString("confirmed_by"))
     }
+
+    /** 什么都读不到：照常派发，但只算送达（effect_verified=false），不冒领。 */
+    @Test
+    fun mediaControl_nothingReadable_isDispatchedUnverified() {
+        val backend = FakeMedia(listOf(MediaSessionState.Unknown), audio = listOf(null))
+        val json = runMedia(backend, "pause")
+        assertEquals("ok", json.getString("status"))
+        assertFalse(json.getBoolean("effect_verified"))
+        assertTrue(json.getJSONObject("data").getString("note").contains("没确认"))
+        assertEquals(listOf(MediaAction.PAUSE), backend.dispatched)
+    }
+
+    @Test
+    fun mediaControl_audioWithoutSession_isNotActionable() {
+        val backend = FakeMedia(listOf(MediaSessionState.None), audio = listOf(true))
+        val json = runMedia(backend, "pause")
+        assertEquals("NOT_ACTIONABLE", json.getString("code"))
+        assertTrue(backend.dispatched.isEmpty())
+    }
+
+    @Test
+    fun mediaControl_pauseAlreadyPaused_returnsNothingPlaying() {
+        val backend = FakeMedia(listOf(MediaSessionState.Active("com.example.player", playing = false)), audio = listOf(false))
+        val json = runMedia(backend, "pause")
+        assertEquals("NOT_FOUND", json.getString("code"))
+        assertEquals("already_paused", json.getString("detail"))
+        assertTrue(backend.dispatched.isEmpty())
+    }
+
+    @Test
+    fun mediaControl_noSessionPlay_dispatchesAndConfirmsWhenPlaybackStarts() {
+        val backend = FakeMedia(
+            listOf(MediaSessionState.None, MediaSessionState.Active("com.example.player", playing = true)),
+        )
+        val json = runMedia(backend, "play")
+        assertEquals("ok", json.getString("status"))
+        assertTrue(json.getBoolean("effect_verified"))
+        assertEquals(listOf(MediaAction.PLAY), backend.dispatched)
+    }
+
+    @Test
+    fun mediaControl_playNeverStarts_isUnknown() {
+        val backend = FakeMedia(listOf(MediaSessionState.None), audio = listOf(false))
+        val json = runMedia(backend, "play")
+        assertEquals("unknown", json.getString("status"))
+        assertTrue(json.getString("message").contains("没检测到开始播放"))
+        assertEquals(listOf(MediaAction.PLAY), backend.dispatched)
+    }
+
+    /** 审计 C6：补上 stop。 */
+    @Test
+    fun mediaControl_stop_inSchemaAndVerifiedWhenSessionGone() {
+        val tool = MediaControlTool(FakeMedia(listOf(MediaSessionState.None)))
+        val actions = tool.schema(ToolEnvironment()).getJSONObject("properties").getJSONObject("action").getJSONArray("enum")
+        assertTrue((0 until actions.length()).any { actions.getString(it) == "stop" })
+        val backend = FakeMedia(listOf(MediaSessionState.Active("com.example.player", playing = true), MediaSessionState.None))
+        val json = runMedia(backend, "stop")
+        assertEquals("ok", json.getString("status"))
+        assertTrue(json.getBoolean("effect_verified"))
+        assertEquals(listOf(MediaAction.STOP), backend.dispatched)
+    }
+
+    @Test
+    fun mediaControl_next_trackChangeConfirms_otherwiseOnlyDispatched() {
+        val changed = FakeMedia(
+            listOf(
+                MediaSessionState.Active("com.example.player", playing = true, track = "歌 A"),
+                MediaSessionState.Active("com.example.player", playing = true, track = "歌 B"),
+            ),
+        )
+        val json = runMedia(changed, "next")
+        assertTrue(json.getBoolean("effect_verified"))
+        assertEquals("track", json.getJSONObject("data").getString("confirmed_by"))
+        // 没有曲目信息（不少视频应用不报）：派发了，但只算送达。
+        val noTrack = FakeMedia(listOf(MediaSessionState.Active("com.example.video", playing = true)))
+        val unverified = runMedia(noTrack, "next")
+        assertEquals("ok", unverified.getString("status"))
+        assertFalse(unverified.getBoolean("effect_verified"))
+        // 暂停中的播放器也能切歌：不拦。
+        val paused = FakeMedia(listOf(MediaSessionState.Active("com.example.player", playing = false)), audio = listOf(false))
+        runMedia(paused, "next")
+        assertEquals(listOf(MediaAction.NEXT), paused.dispatched)
+    }
+
+    @Test
+    fun mediaControl_toggle_expectsOppositeOfBefore() {
+        val backend = FakeMedia(
+            listOf(
+                MediaSessionState.Active("com.example.player", playing = false),
+                MediaSessionState.Active("com.example.player", playing = true),
+            ),
+        )
+        val json = runMedia(backend, "toggle")
+        assertTrue(json.getBoolean("effect_verified"))
+        assertTrue(json.getJSONObject("data").getBoolean("playing"))
+    }
+
+    // ---- media_control 真实后端（Robolectric 系统服务） ----
+
+    @Test
+    fun realMediaBackend_noNotificationAccess_fallsBackToAudioSignal() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val audio = org.robolectric.Shadows.shadowOf(context.getSystemService(android.media.AudioManager::class.java))
+        val backend = RealMediaControlBackend(context, noRootExecutor())
+        assertEquals(MediaSessionState.Unknown, backend.sessionState(ToolEnvironment(notificationAccess = false)))
+        audio.setIsMusicActive(false)
+        assertEquals(false, backend.musicActive())
+        // 经工具：看不到会话、没声音 → 清楚报错，不派发媒体键。
+        val json = JSONObject(
+            media(backend, ToolEnvironment(notificationAccess = false))
+                .execute(call("media_control", """{"action":"pause"}""")).content,
+        )
+        assertEquals("NOT_FOUND", json.getString("code"))
+        assertTrue(audio.dispatchedMediaKeyEvents.isEmpty())
+        // stop 派发 KEYCODE_MEDIA_STOP。
+        backend.dispatch(MediaAction.STOP)
+        assertEquals(android.view.KeyEvent.KEYCODE_MEDIA_STOP, audio.dispatchedMediaKeyEvents.first().keyCode)
+    }
+
+    @Test
+    fun realMediaBackend_readsSessionStateAndTrack() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val session = android.media.session.MediaSession(context, "test")
+        val controller = android.media.session.MediaController(context, session.sessionToken)
+        org.robolectric.Shadows.shadowOf(controller).apply {
+            setPackageName("com.example.player")
+            setPlaybackState(
+                android.media.session.PlaybackState.Builder()
+                    .setState(android.media.session.PlaybackState.STATE_PAUSED, 0L, 1f)
+                    .build(),
+            )
+            setMetadata(
+                android.media.MediaMetadata.Builder()
+                    .putString(android.media.MediaMetadata.METADATA_KEY_TITLE, "晴天")
+                    .putString(android.media.MediaMetadata.METADATA_KEY_ARTIST, "周杰伦")
+                    .build(),
+            )
+        }
+        org.robolectric.Shadows.shadowOf(context.getSystemService(android.media.session.MediaSessionManager::class.java))
+            .addController(controller)
+        val state = RealMediaControlBackend(context, noRootExecutor()).sessionState(ToolEnvironment(notificationAccess = true))
+        assertEquals(MediaSessionState.Active("com.example.player", playing = false, track = "晴天 · 周杰伦"), state)
+        session.release()
+    }
+
+    @Test
+    fun mediaPlayback_stateMapping() {
+        assertEquals(true, MediaPlayback.isPlaying(android.media.session.PlaybackState.STATE_PLAYING))
+        assertEquals(true, MediaPlayback.isPlaying(android.media.session.PlaybackState.STATE_BUFFERING))
+        assertEquals(false, MediaPlayback.isPlaying(android.media.session.PlaybackState.STATE_PAUSED))
+        assertEquals(false, MediaPlayback.isPlaying(android.media.session.PlaybackState.STATE_STOPPED))
+        assertEquals(null, MediaPlayback.isPlaying(null))
+    }
+
+    private fun noRootExecutor() =
+        io.github.fartown.movo.agent.device.BoundedRootCommandExecutor(AndroidAgentLogger, rootAvailable = { false })
 
     // ---- volume_set ----
 

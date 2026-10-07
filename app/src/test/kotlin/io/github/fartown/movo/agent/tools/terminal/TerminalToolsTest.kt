@@ -52,9 +52,15 @@ class TerminalToolsTest {
             running = true, keepAlive = false, exitCode = null, startedAtMillis = 1000, endedAtMillis = null,
         )
         override fun list() = listOf(sample)
-        override fun read(jobId: String, cursor: String?, stream: TerminalStream, waitMs: Long): TerminalJobReadResult? =
+        override fun read(
+            jobId: String,
+            cursor: String?,
+            stream: TerminalStream,
+            waitMs: Long,
+            cancelled: () -> Boolean,
+        ): TerminalJobReadResult? =
             if (jobId == "job_1") TerminalJobReadResult(sample, "partial out", "", nextCursor = "11") else null
-        override fun write(jobId: String, input: String, waitMs: Long) = jobId == "job_1"
+        override fun write(jobId: String, input: String, waitMs: Long, cancelled: () -> Boolean) = jobId == "job_1"
         override fun stop(jobId: String) = if (jobId == "job_1") stopOutcome else TerminalStopOutcome.NOT_FOUND
     }
 
@@ -189,7 +195,13 @@ class TerminalToolsTest {
     fun terminalJob_read_tailWindowExplainsWhatWasSkipped() {
         // #25：不带 cursor 读的是尾部，前面没给的要说清楚、给出从头读的办法。
         val tailBackend = object : TerminalJobBackend by jobBackend {
-            override fun read(jobId: String, cursor: String?, stream: TerminalStream, waitMs: Long) = TerminalJobReadResult(
+            override fun read(
+                jobId: String,
+                cursor: String?,
+                stream: TerminalStream,
+                waitMs: Long,
+                cancelled: () -> Boolean,
+            ) = TerminalJobReadResult(
                 info = jobBackend.list().single().copy(streamsMerged = true),
                 stdout = "last lines", stderr = "", nextCursor = "52000:0",
                 tail = true, stdoutSkipped = 45_000, hasMore = false,
@@ -219,6 +231,114 @@ class TerminalToolsTest {
         assertTrue(run.getJSONObject("tty").getString("description").contains("直接转后台"))
         val job = ContractTool(TerminalJobTool(jobBackend))
         assertTrue(job.description, job.description.contains("不带 cursor 读最新的尾部"))
+    }
+
+    private fun jobPipeline(backend: TerminalJobBackend, cancelled: () -> Boolean = { false }) = ToolPipeline(
+        registry = ToolRegistry(listOf(object : ToolProvider { override val tools = listOf(ContractTool(TerminalJobTool(backend))) })),
+        environment = { ToolEnvironment() },
+        appContext = ApplicationProvider.getApplicationContext(),
+        logger = AndroidAgentLogger,
+        runId = "run1",
+        cancelled = cancelled,
+    ).also { it.catalog() }
+
+    @Test
+    fun terminalJob_read_saysWhyItReturnedAndHowLongItWaited() {
+        // 真机 t3c-bg：wait_ms 要 8–20 秒，1–700ms 就回来了，模型以为没等、反复读。现在结果里说清为什么返回、等了多久。
+        var wake = TerminalWake.NEW_OUTPUT
+        var waited = 312L
+        var passedWait = -1L
+        val backend = object : TerminalJobBackend by jobBackend {
+            override fun read(
+                jobId: String,
+                cursor: String?,
+                stream: TerminalStream,
+                waitMs: Long,
+                cancelled: () -> Boolean,
+            ): TerminalJobReadResult {
+                passedWait = waitMs
+                return TerminalJobReadResult(
+                    info = jobBackend.list().single(), stdout = "line 4", stderr = "", nextCursor = "60:0",
+                    wake = wake, waitedMs = waited,
+                )
+            }
+        }
+        val p = jobPipeline(backend)
+        val read = """{"action":"read","job_id":"job_1","cursor":"45:0","wait_ms":8000}"""
+        val early = p.execute(call("terminal_job", read)).content
+        assertEquals(8000L, passedWait)
+        assertTrue(early, early.contains("waited_ms: 312（有新输出，提前返回）"))
+
+        wake = TerminalWake.TIMEOUT
+        waited = 8000
+        val full = p.execute(call("terminal_job", read)).content
+        assertTrue(full, full.contains("waited_ms: 8000（等满 wait_ms）"))
+
+        wake = TerminalWake.ENOUGH_OUTPUT
+        waited = 900
+        assertTrue(p.execute(call("terminal_job", read)).content.contains("waited_ms: 900（攒够一段输出，提前返回）"))
+
+        wake = TerminalWake.EXITED
+        waited = 1500
+        assertTrue(p.execute(call("terminal_job", read)).content.contains("waited_ms: 1500（命令已结束）"))
+
+        wake = TerminalWake.NONE
+        waited = 0
+        assertFalse("没等就不写", p.execute(call("terminal_job", read)).content.contains("waited_ms"))
+    }
+
+    @Test
+    fun terminalJob_read_waitEndsWithTheRunAndIsNotReportedAsOutput() {
+        // wait_ms 现在会等满（最长 180 秒）：等待中用户点了停止，后端要看得到并提前返回，管线按取消处理。
+        var stopped = false
+        var backendSawStop = false
+        val backend = object : TerminalJobBackend by jobBackend {
+            override fun read(
+                jobId: String,
+                cursor: String?,
+                stream: TerminalStream,
+                waitMs: Long,
+                cancelled: () -> Boolean,
+            ): TerminalJobReadResult {
+                stopped = true
+                backendSawStop = cancelled()
+                return TerminalJobReadResult(jobBackend.list().single(), "", "", nextCursor = "0:0", wake = TerminalWake.CANCELLED)
+            }
+        }
+        val p = jobPipeline(backend, cancelled = { stopped })
+        org.junit.Assert.assertThrows(io.github.fartown.movo.agent.runtime.AgentRunCancelledException::class.java) {
+            p.execute(call("terminal_job", """{"action":"read","job_id":"job_1","wait_ms":20000}"""))
+        }
+        assertTrue(backendSawStop)
+    }
+
+    @Test
+    fun terminalRun_reportsTheDirectoryItRanIn() {
+        val inWorkspace = object : TerminalRunBackend {
+            override fun run(spec: TerminalRunSpec) = TerminalRunResult.Completed(
+                exitCode = 0, stdout = "/ws", stderr = "", elapsedMs = 5,
+                stdoutTruncated = false, stderrTruncated = false, cwd = "/ws",
+            )
+        }
+        val p = ToolPipeline(
+            registry = ToolRegistry(listOf(object : ToolProvider { override val tools = listOf(ContractTool(TerminalRunTool(inWorkspace))) })),
+            environment = { ToolEnvironment() },
+            appContext = ApplicationProvider.getApplicationContext(),
+            logger = AndroidAgentLogger,
+            runId = "run1",
+            cancelled = { false },
+        ).also { it.catalog() }
+        val content = p.execute(call("terminal_run", """{"command":"pwd && ls"}""")).content
+        assertTrue("没传 cwd 也要告诉模型命令在哪个目录跑", content.contains("cwd: /ws"))
+    }
+
+    @Test
+    fun terminalSchemas_explainDefaultDirectoryAndWaitTiming() {
+        val run = ContractTool(TerminalRunTool(runBackend)).parameters(ToolEnvironment()).getJSONObject("properties")
+        assertTrue(run.getJSONObject("cwd").getString("description").contains("默认工作区"))
+        val wait = ContractTool(TerminalJobTool(jobBackend)).parameters(ToolEnvironment())
+            .getJSONObject("properties").getJSONObject("wait_ms").getString("description")
+        assertTrue(wait, wait.contains("攒够一段") && wait.contains("命令结束就返回") && wait.contains("等满"))
     }
 
     @Test

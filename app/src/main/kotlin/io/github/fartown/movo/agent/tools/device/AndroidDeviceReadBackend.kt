@@ -18,7 +18,9 @@ import android.os.SystemClock
 import io.github.fartown.movo.agent.device.BoundedRootCommandExecutor
 import io.github.fartown.movo.agent.device.DeviceLocationProvider
 import io.github.fartown.movo.agent.device.RootAccess
+import io.github.fartown.movo.agent.tools.core.Retry
 import io.github.fartown.movo.agent.tools.core.ToolEnvironment
+import io.github.fartown.movo.agent.tools.core.ToolErrorCode
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -69,7 +71,7 @@ internal class AndroidDeviceReadBackend(
                 .put("longitude", result.longitude)
                 .put("accuracy_m", result.accuracyMeters ?: JSONObject.NULL)
                 .put("age_seconds", result.ageMillis / 1000L)
-            is DeviceLocationProvider.Result.Unavailable -> null
+            is DeviceLocationProvider.Result.Unavailable -> throw locationUnavailable(result.status)
         }
     }
 
@@ -146,8 +148,41 @@ internal class AndroidDeviceReadBackend(
         else -> JSONObject.NULL
     }
 
-    private companion object {
+    internal companion object {
         val WIFI_STATUS_SSID = Regex("""\bSSID:\s*([^,\r\n]+)""")
         val WIFI_STATUS_RSSI = Regex("""\bRSSI:\s*(-?\d+)""")
+
+        /**
+         * 位置读不到的原因 → 给模型的错误（[DeviceLocationProvider.Result.Unavailable.status]）：
+         * 没授权、只授权了「使用时允许」都是用户要去开（retry=user）；系统定位开关关着也是用户要去开；
+         * 只有开关开着、权限也有，但系统还没有最近位置时才是「稍后再试」。
+         */
+        fun locationUnavailable(status: String): DeviceSectionUnavailable = when (status) {
+            "permission_required" -> DeviceSectionUnavailable(
+                code = ToolErrorCode.PERMISSION_REQUIRED,
+                message = "Movo 没有位置权限",
+                hint = "请用户给 Movo 打开位置权限并选「始终允许」（系统设置 → 应用 → Movo → 权限 → 位置）；授权前重试也读不到",
+                detail = status,
+            )
+            "background_permission_required" -> DeviceSectionUnavailable(
+                code = ToolErrorCode.PERMISSION_REQUIRED,
+                message = "位置权限只允许了「使用时」，Movo 在后台执行时读不到",
+                hint = "请用户在系统设置 → 应用 → Movo → 权限 → 位置里改成「始终允许」；改之前重试也读不到",
+                detail = status,
+            )
+            "location_disabled" -> DeviceSectionUnavailable(
+                code = ToolErrorCode.SOURCE_UNAVAILABLE,
+                message = "系统定位开关关着",
+                hint = "请用户在下拉快捷开关或系统设置里打开「位置信息」；打开前重试也读不到",
+                retry = Retry.USER,
+                detail = status,
+            )
+            else -> DeviceSectionUnavailable(
+                code = ToolErrorCode.SOURCE_UNAVAILABLE,
+                message = "定位开关和权限都正常，但系统暂时还没有最近的位置（只读系统已有的位置，不主动开 GPS）",
+                hint = "稍后再读一次；还是没有时，可以请用户打开地图类应用定位一下再读",
+                detail = status,
+            )
+        }
     }
 }

@@ -58,6 +58,70 @@ class DeviceToolContractTest {
         return JSONObject(result.content).also { it.put("__sensitive", result.sensitive) }
     }
 
+    // ---- device_read ----
+
+    private fun locationBackend(status: String) = object : DeviceReadBackend {
+        override fun read(section: DeviceSection, env: ToolEnvironment): JSONObject? = when (section) {
+            DeviceSection.BATTERY -> JSONObject().put("percent", 100).put("charging", true)
+            DeviceSection.LOCATION -> throw AndroidDeviceReadBackend.locationUnavailable(status)
+            else -> null
+        }
+    }
+
+    /** 真机：位置读不到只给「暂时读不到 / 稍后重试」。缺权限是用户要去开，retry=user，不是 later。 */
+    @Test
+    fun deviceRead_locationWithoutPermission_isPermissionRequiredForUser() {
+        for (status in listOf("permission_required", "background_permission_required")) {
+            val json = pipeline(DeviceReadTool(locationBackend(status)), ToolEnvironment())
+                .run("device_read", """{"sections":["location"]}""")
+            assertEquals("error", json.getString("status"))
+            assertEquals("PERMISSION_REQUIRED", json.getString("code"))
+            assertEquals("user", json.getString("retry"))
+            assertTrue(json.getString("hint").contains("始终允许"))
+            assertEquals(status, json.getString("detail"))
+        }
+    }
+
+    @Test
+    fun deviceRead_locationSwitchOff_isUserActionNotLater() {
+        val json = pipeline(DeviceReadTool(locationBackend("location_disabled")), ToolEnvironment())
+            .run("device_read", """{"sections":["location"]}""")
+        assertEquals("error", json.getString("status"))
+        assertEquals("SOURCE_UNAVAILABLE", json.getString("code"))
+        assertEquals("user", json.getString("retry"))
+        assertTrue(json.getString("message").contains("定位开关关着"))
+    }
+
+    @Test
+    fun deviceRead_locationOnButNoFixYet_isRetryLater() {
+        val json = pipeline(DeviceReadTool(locationBackend("unavailable")), ToolEnvironment())
+            .run("device_read", """{"sections":["location"]}""")
+        assertEquals("SOURCE_UNAVAILABLE", json.getString("code"))
+        assertEquals("later", json.getString("retry"))
+        assertTrue(json.getString("message").contains("暂时还没有最近的位置"))
+    }
+
+    /** 一起读多个 section 时整体 ok，位置失败的原因写进 warning（以前只有「location 读取失败」）。 */
+    @Test
+    fun deviceRead_partialFailure_warningCarriesReason() {
+        val json = pipeline(DeviceReadTool(locationBackend("permission_required")), ToolEnvironment())
+            .run("device_read", """{"sections":["battery","location"]}""")
+        assertEquals("ok", json.getString("status"))
+        assertEquals(100, json.getJSONObject("data").getJSONObject("battery").getInt("percent"))
+        val warning = json.getJSONArray("warnings").getJSONObject(0)
+        assertEquals("PERMISSION_REQUIRED", warning.getString("code"))
+        assertTrue(warning.getString("message").contains("location 读取失败：Movo 没有位置权限"))
+        assertTrue(warning.getString("message").contains("授权前重试也读不到"))
+    }
+
+    @Test
+    fun deviceRead_unknownFailure_staysSourceUnavailableLater() {
+        val json = pipeline(DeviceReadTool(locationBackend("unavailable")), ToolEnvironment())
+            .run("device_read", """{"sections":["memory"]}""")
+        assertEquals("SOURCE_UNAVAILABLE", json.getString("code"))
+        assertEquals("later", json.getString("retry"))
+    }
+
     // ---- device_toggle ----
 
     @Test
@@ -105,8 +169,8 @@ class DeviceToolContractTest {
     @Test
     fun settingRead_isReadOnlyPrivate_noEffectVerified() {
         val backend = object : SettingReadBackend {
-            override fun read(namespace: SettingNamespace, key: String) =
-                if (key == "screen_brightness") "120" else null
+            override fun readValue(namespace: SettingNamespace, key: String) =
+                if (key == "screen_brightness") SettingValue.Value("120") else SettingValue.Unset
         }
         val json = pipeline(SettingReadTool(backend), ToolEnvironment())
             .run("setting_read", """{"namespace":"system","keys":["screen_brightness","missing"]}""")
@@ -116,6 +180,98 @@ class DeviceToolContractTest {
         val values = json.getJSONObject("data").getJSONObject("values")
         assertEquals("120", values.getString("screen_brightness"))
         assertTrue(values.isNull("missing"))
+        assertFalse("全部读到时不该有 unreadable", json.getJSONObject("data").has("unreadable"))
+    }
+
+    /** 审计 C7：没权限读（SecurityException）和「没值」分开报——前者进 unreadable + warning，不混进 values 的 null。 */
+    @Test
+    fun settingRead_deniedKey_reportedApartFromUnset() {
+        val backend = object : SettingReadBackend {
+            override fun readValue(namespace: SettingNamespace, key: String) = when (key) {
+                "screen_brightness" -> SettingValue.Value("8")
+                "hidden_key" -> SettingValue.Unreadable(
+                    io.github.fartown.movo.agent.tools.core.ToolError(
+                        io.github.fartown.movo.agent.tools.core.ToolErrorCode.ROOT_REQUIRED,
+                        "系统不允许普通应用读取这个设置（不是没值），需要 Root",
+                    ),
+                )
+                else -> SettingValue.Unset
+            }
+        }
+        val json = pipeline(SettingReadTool(backend), ToolEnvironment())
+            .run("setting_read", """{"namespace":"global","keys":["screen_brightness","hidden_key","missing"]}""")
+        assertEquals("ok", json.getString("status"))
+        val data = json.getJSONObject("data")
+        val values = data.getJSONObject("values")
+        assertEquals("8", values.getString("screen_brightness"))
+        assertTrue(values.isNull("missing"))
+        assertFalse("读不了的键不能当成没值放进 values", values.has("hidden_key"))
+        assertTrue(data.getJSONObject("unreadable").getString("hidden_key").contains("不是没值"))
+        val warning = json.getJSONArray("warnings").getJSONObject(0)
+        assertEquals("ROOT_REQUIRED", warning.getString("code"))
+        assertTrue(warning.getString("message").startsWith("hidden_key"))
+    }
+
+    @Test
+    fun settingRead_allDenied_isErrorNotEmptyValues() {
+        val backend = object : SettingReadBackend {
+            override fun readValue(namespace: SettingNamespace, key: String) = SettingValue.Unreadable(
+                io.github.fartown.movo.agent.tools.core.ToolError(
+                    io.github.fartown.movo.agent.tools.core.ToolErrorCode.ROOT_REQUIRED,
+                    "系统不允许普通应用读取这个设置（不是没值），需要 Root",
+                ),
+            )
+        }
+        val json = pipeline(SettingReadTool(backend), ToolEnvironment())
+            .run("setting_read", """{"namespace":"global","keys":["torch_enabled"]}""")
+        assertEquals("error", json.getString("status"))
+        assertEquals("ROOT_REQUIRED", json.getString("code"))
+        assertEquals("never", json.getString("retry"))
+        assertTrue(json.getString("message").contains("torch_enabled"))
+    }
+
+    /** 回复里不该只有原始键名和数字：附人话说明，原值字段不动。 */
+    @Test
+    fun settingRead_addsMeaningsWithoutTouchingRawValues() {
+        val backend = object : SettingReadBackend {
+            override fun readValue(namespace: SettingNamespace, key: String) = when (key) {
+                "screen_off_timeout" -> SettingValue.Value("2147483647")
+                "screen_brightness_mode" -> SettingValue.Value("1")
+                "screen_brightness" -> SettingValue.Value("8")
+                else -> SettingValue.Value("abc")
+            }
+        }
+        val p = pipeline(SettingReadTool(backend), ToolEnvironment())
+        val call = io.github.fartown.movo.agent.model.AgentModelClient.ToolCall(
+            "c1", "setting_read",
+            """{"namespace":"system","keys":["screen_off_timeout","screen_brightness_mode","screen_brightness","some_vendor_key"]}""",
+        )
+        val result = p.execute(call)
+        val data = JSONObject(result.content).getJSONObject("data")
+        val values = data.getJSONObject("values")
+        assertEquals("2147483647", values.getString("screen_off_timeout"))
+        assertEquals("1", values.getString("screen_brightness_mode"))
+        val meanings = data.getJSONObject("meanings")
+        assertEquals("自动锁屏时间：永不息屏", meanings.getString("screen_off_timeout"))
+        assertTrue(meanings.getString("screen_brightness_mode").startsWith("自动亮度：开"))
+        assertTrue(meanings.getString("screen_brightness").contains("不等于亮度条百分比"))
+        assertFalse("不认识的键不硬造说明", meanings.has("some_vendor_key"))
+        // 执行卡上也显示人话。
+        val fields = (result.outcome!!.view!!.blocks.single() as io.github.fartown.movo.agent.tools.core.ToolUiBlock.Fields).rows
+        assertEquals("永不息屏", fields.first { it.label == "自动锁屏时间" }.value)
+    }
+
+    @Test
+    fun settingMeaning_commonValues() {
+        assertEquals("无操作 30 秒后息屏", settingMeaning("screen_off_timeout", "30000"))
+        assertEquals("无操作 10 分钟后息屏", settingMeaning("screen_off_timeout", "600000"))
+        assertEquals("永不息屏", settingMeaning("screen_off_timeout", "2147483647"))
+        assertEquals(null, settingMeaning("screen_off_timeout", "-1"))
+        assertEquals("关（锁定方向）", settingMeaning("accelerometer_rotation", "0"))
+        assertEquals("开（完全静音）", settingMeaning("zen_mode", "2"))
+        assertEquals("开", settingMeaning("airplane_mode_on", "1"))
+        assertEquals(null, settingMeaning("airplane_mode_on", "x"))
+        assertEquals("24 小时制", settingMeaning("time_12_24", "24"))
     }
 
     // ---- setting_write ----
@@ -154,16 +310,41 @@ class DeviceToolContractTest {
 
     @Test
     fun deviceDiagnostics_noRoot_isRootRequired() {
+        var called = false
+        val backend = object : DeviceDiagnosticsBackend {
+            override fun topProcesses(limit: Int) = DiagnosticsResult.Ok(JSONObject(), false).also { called = true }
+            override fun appStorage(limit: Int) = DiagnosticsResult.Ok(JSONObject(), false).also { called = true }
+            override fun logcat(maxLines: Int, level: String?, packageName: String?, query: String?) =
+                DiagnosticsResult.Ok(JSONObject(), false).also { called = true }
+        }
+        val json = pipeline(DeviceDiagnosticsTool(backend), ToolEnvironment(rootAvailable = false))
+            .run("device_diagnostics", """{"kind":"top_processes"}""")
+        assertEquals("error", json.getString("status"))
+        assertEquals("ROOT_REQUIRED", json.getString("code"))
+        assertFalse("没 Root 不该去执行", called)
+    }
+
+    /** 没 Root 时三项诊断都必然失败：整个工具（schema 和说明）不进目录；有 Root 才出现。 */
+    @Test
+    fun deviceDiagnostics_catalogOnlyWithRoot() {
         val backend = object : DeviceDiagnosticsBackend {
             override fun topProcesses(limit: Int) = DiagnosticsResult.Ok(JSONObject(), false)
             override fun appStorage(limit: Int) = DiagnosticsResult.Ok(JSONObject(), false)
             override fun logcat(maxLines: Int, level: String?, packageName: String?, query: String?) =
                 DiagnosticsResult.Ok(JSONObject(), false)
         }
-        val json = pipeline(DeviceDiagnosticsTool(backend), ToolEnvironment(rootAvailable = false))
-            .run("device_diagnostics", """{"kind":"top_processes"}""")
-        assertEquals("error", json.getString("status"))
-        assertEquals("ROOT_REQUIRED", json.getString("code"))
+        fun names(env: ToolEnvironment): List<String> {
+            val catalog = pipeline(DeviceDiagnosticsTool(backend), env).catalog()
+            return (0 until catalog.length()).map { catalog.getJSONObject(it).getJSONObject("function").getString("name") }
+        }
+        assertFalse("device_diagnostics" in names(ToolEnvironment(rootAvailable = false)))
+        assertTrue("device_diagnostics" in names(ToolEnvironment(rootAvailable = true)))
+        val unavailable = DeviceDiagnosticsTool(backend).availability(ToolEnvironment(rootAvailable = false))
+        assertTrue(unavailable is io.github.fartown.movo.agent.tools.core.ToolAvailability.Unavailable)
+        assertEquals(
+            io.github.fartown.movo.agent.tools.core.ToolErrorCode.ROOT_REQUIRED,
+            (unavailable as io.github.fartown.movo.agent.tools.core.ToolAvailability.Unavailable).code,
+        )
     }
 
     @Test
@@ -199,6 +380,19 @@ class DeviceToolContractTest {
         val apps = json.getJSONObject("data").getJSONArray("apps")
         assertEquals("com.android.camera", apps.getJSONObject(0).getString("package"))
         assertTrue(apps.getJSONObject(0).getBoolean("is_system"))
+    }
+
+    /** 小米 HyperOS 的计算器装在 /product/data-app、可卸载，不带 FLAG_SYSTEM，以前被标成 is_system:false。 */
+    @Test
+    fun appSearch_preinstalledDetection() {
+        val system = android.content.pm.ApplicationInfo.FLAG_SYSTEM
+        val updated = android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP
+        assertTrue(LauncherAppIndex.isPreinstalled(0, "/product/data-app/MIUICalculator/MIUICalculator.apk"))
+        assertTrue(LauncherAppIndex.isPreinstalled(0, "/my_stock/del-app/OppoNote2/OppoNote2.apk"))
+        assertTrue(LauncherAppIndex.isPreinstalled(system, "/system/priv-app/Settings/Settings.apk"))
+        assertTrue(LauncherAppIndex.isPreinstalled(updated, "/data/app/~~x==/com.android.chrome-y==/base.apk"))
+        assertFalse(LauncherAppIndex.isPreinstalled(0, "/data/app/~~x==/com.tencent.mm-y==/base.apk"))
+        assertFalse(LauncherAppIndex.isPreinstalled(0, null))
     }
 
     // ---- app_open ----

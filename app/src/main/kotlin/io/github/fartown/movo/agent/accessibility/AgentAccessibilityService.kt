@@ -156,9 +156,12 @@ open class AgentAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() = Unit
 
-    /** 「用户最近在用的应用」不算的包：Movo 自己、系统界面、输入法。 */
+    /**
+     * 「用户最近在用的应用」不算的包：Movo 自己、系统界面、输入法、系统权限弹窗
+     * （真机：授权弹窗被记成最近在用的应用，模型说「看你刚才在权限管理界面」）。
+     */
     private fun notAUserApp(pkg: String): Boolean =
-        pkg == packageName || pkg == "com.android.systemui" || pkg in inputMethodPackages
+        pkg == packageName || pkg in SYSTEM_SURFACE_PACKAGES || pkg in inputMethodPackages
 
     private val inputMethodPackages: Set<String> by lazy {
         runCatching {
@@ -2495,6 +2498,13 @@ open class AgentAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val CLIP_LABEL = "movo_agent"
+        /** 系统界面和权限弹窗：不是用户在用的应用。 */
+        private val SYSTEM_SURFACE_PACKAGES = setOf(
+            "com.android.systemui",
+            "com.android.permissioncontroller",
+            "com.google.android.permissioncontroller",
+            "com.lbe.security.miui",
+        )
         /** 写入文字后读回核对的时长和间隔：网页、富文本编辑器里的文字异步更新。 */
         private const val READBACK_WINDOW_MS = 800L
         private const val READBACK_STEP_MS = 100L

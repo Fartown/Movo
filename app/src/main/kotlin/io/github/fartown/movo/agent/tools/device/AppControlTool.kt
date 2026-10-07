@@ -85,7 +85,11 @@ internal class AppControlTool(
         if (env.rootAvailable) {
             ToolAvailability.Available
         } else {
-            ToolAvailability.Unavailable(ToolErrorCode.ROOT_REQUIRED, "停止、冻结应用需要 Root")
+            ToolAvailability.Unavailable(
+                ToolErrorCode.ROOT_REQUIRED,
+                // 真机：没 Root 时模型在最近任务里划掉卡片，就说「已经关掉了」，进程其实还在。
+                "停止、冻结应用需要 Root；在最近任务里划掉卡片不会停止应用，只能说已从最近任务里移除，不要说已关掉",
+            )
         }
 
     override fun approvalPreview(input: AppControlInput): ApprovalPreview {

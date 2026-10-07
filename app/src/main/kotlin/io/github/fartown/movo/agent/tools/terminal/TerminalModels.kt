@@ -42,6 +42,8 @@ internal sealed interface TerminalRunResult {
         /** 缓冲区是否在中间丢过输出（丢过时正文接缝处已注明省略了多少字）。 */
         val stdoutTruncated: Boolean,
         val stderrTruncated: Boolean,
+        /** 命令实际在哪个目录里跑（没传 cwd 时是工作区）；为空时按传入的 cwd 显示。 */
+        val cwd: String? = null,
     ) : TerminalRunResult
 
     /** 到 wait_ms 未结束，或 background/keep_alive：转后台。 */
@@ -50,6 +52,8 @@ internal sealed interface TerminalRunResult {
         val reason: String,
         val startedAtMillis: Long,
         val keepAlive: Boolean,
+        /** 同 [Completed.cwd]。 */
+        val cwd: String? = null,
     ) : TerminalRunResult
 }
 
@@ -88,7 +92,28 @@ internal data class TerminalJobReadResult(
     val stderrSkipped: Long = 0,
     /** next_cursor 之后还有已产生、没读完的输出。 */
     val hasMore: Boolean = false,
+    /** 这次读为什么返回（没有等待时为 [TerminalWake.NONE]）。 */
+    val wake: TerminalWake = TerminalWake.NONE,
+    /** 实际等了多少毫秒。 */
+    val waitedMs: Long = 0,
 )
+
+/**
+ * read / write 带 wait_ms 时为什么返回：有新输出就尽快返回，命令结束也返回，都没有就等满 wait_ms。
+ * 「新输出」带 cursor 时指 cursor 之后的输出（之后已经有了就不等），不带 cursor 时指这次调用之后才产生的输出。
+ */
+internal enum class TerminalWake {
+    /** 没有等：wait_ms=0，或任务已经结束。 */
+    NONE,
+    /** 有新输出（write：对方一有回应就返回）。 */
+    NEW_OUTPUT,
+    /** 攒够了一段新输出（read）。 */
+    ENOUGH_OUTPUT,
+    EXITED,
+    TIMEOUT,
+    /** 运行被取消，提前结束等待（调用方随后按取消处理）。 */
+    CANCELLED,
+}
 
 /** stop 的判定结果。 */
 internal enum class TerminalStopOutcome {
@@ -105,11 +130,20 @@ internal enum class TerminalStopOutcome {
 internal interface TerminalJobBackend {
     fun list(): List<TerminalJobInfo>
 
-    /** 读取输出；任务不存在返回 null。 */
-    fun read(jobId: String, cursor: String?, stream: TerminalStream, waitMs: Long): TerminalJobReadResult?
+    /**
+     * 读取输出；任务不存在返回 null。[waitMs] 是最多等多久（见 [TerminalWake]）；
+     * 等待期间按 [cancelled] 检查运行是否已取消，取消就立刻返回。
+     */
+    fun read(
+        jobId: String,
+        cursor: String?,
+        stream: TerminalStream,
+        waitMs: Long,
+        cancelled: () -> Boolean = { false },
+    ): TerminalJobReadResult?
 
-    /** 向 tty 任务写输入；成功返回 true，任务不存在/不可写返回 false。 */
-    fun write(jobId: String, input: String, waitMs: Long): Boolean
+    /** 向 tty 任务写输入，再最多等 [waitMs] 看有没有新输出；成功返回 true，任务不存在/不可写返回 false。 */
+    fun write(jobId: String, input: String, waitMs: Long, cancelled: () -> Boolean = { false }): Boolean
 
     fun stop(jobId: String): TerminalStopOutcome
 }

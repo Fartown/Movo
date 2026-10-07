@@ -24,7 +24,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
-/** skill_read / skill_install 的管线验证：只读发现、安装回读 Done、冲突当场确认、外发确认、提交不确定 Unknown。 */
+/**
+ * skill_read / skill_install 的管线验证：只读发现、安装回读 Done、冲突当场确认、外发确认、提交不确定 Unknown；
+ * 以及「先检查再安装」：没检查过、选的不是检查返回的目录就在确认前拒绝，安装钉住检查时的 commit。
+ */
 @RunWith(RobolectricTestRunner::class)
 class SkillToolsTest {
 
@@ -34,12 +37,44 @@ class SkillToolsTest {
 
     private class FakeInstall(private val outcome: SkillInstallOutcome) : SkillInstallBackend {
         var lastReplace: Boolean? = null
+        var lastRepository: String? = null
+        var lastRef: String? = null
+        var lastPaths: List<String>? = null
+        var installs = 0
+        /** 安装时运行是否已被取消（测取消有没有接到后端）。 */
+        var cancelledDuringInstall: Boolean? = null
+        /** 检查时返回的 commit：测「检查之后仓库又被改了」时换掉它。 */
+        var sha = "sha1"
+        /** install 进行中时调一下：模拟下载期间用户点了停止。 */
+        var duringInstall: () -> Unit = {}
+
         override fun curated() = SkillDiscoverResult.Items(
-            "o/r", "main", "sha1", listOf(SkillCatalogItem("alpha", "skills/alpha", installed = false)),
+            "openai/skills", "main", sha,
+            listOf(SkillCatalogItem("alpha", "skills/.curated/alpha", installed = false)),
+            prefix = "skills/.curated",
         )
-        override fun inspect(repository: String, ref: String?, path: String?) = curated()
-        override fun install(repository: String, ref: String?, paths: List<String>, replace: Boolean): SkillInstallOutcome {
+        override fun inspect(repository: String, ref: String?, path: String?) = SkillDiscoverResult.Items(
+            "o/r", ref ?: "main", sha,
+            listOf(
+                SkillCatalogItem("alpha", "skills/alpha", installed = false),
+                SkillCatalogItem("beta", "tools/beta", installed = false),
+            ),
+            prefix = path,
+        )
+        override fun install(
+            repository: String,
+            ref: String?,
+            paths: List<String>,
+            replace: Boolean,
+            cancelled: () -> Boolean,
+        ): SkillInstallOutcome {
+            installs++
             lastReplace = replace
+            lastRepository = repository
+            lastRef = ref
+            lastPaths = paths
+            duringInstall()
+            cancelledDuringInstall = cancelled()
             return if (outcome is SkillInstallOutcome.Conflict && replace) {
                 SkillInstallOutcome.Installed(listOf(InstalledSkillView("alpha", "alpha")))
             } else {
@@ -64,6 +99,7 @@ class SkillToolsTest {
         installBackend: SkillInstallBackend = FakeInstall(SkillInstallOutcome.Installed(emptyList())),
         interaction: UserInteraction = UserInteraction.NONE,
         env: ToolEnvironment = ToolEnvironment(),
+        cancelled: () -> Boolean = { false },
     ): ToolPipeline {
         val provider = object : ToolProvider {
             override val tools = listOf(
@@ -77,12 +113,19 @@ class SkillToolsTest {
             appContext = ApplicationProvider.getApplicationContext(),
             logger = AndroidAgentLogger,
             runId = "run1",
-            cancelled = { false },
+            cancelled = cancelled,
             interaction = interaction,
         ).also { it.catalog() }
     }
 
     private fun call(name: String, args: String) = AgentModelClient.ToolCall("c1", name, args)
+
+    /** 先检查 o/r（安装前必须的一步）。 */
+    private fun ToolPipeline.inspect(args: String = """{"action":"inspect","repository":"o/r"}""") =
+        execute(call("skill_install", args)).also { assertEquals("ok", it.status) }
+
+    private fun ToolPipeline.install(args: String = """{"action":"install","repository":"o/r","paths":["skills/alpha"]}""") =
+        execute(call("skill_install", args))
 
     @Test
     fun read_body_isReadOnly() {
@@ -127,7 +170,8 @@ class SkillToolsTest {
             installBackend = FakeInstall(SkillInstallOutcome.Installed(listOf(InstalledSkillView("alpha", "alpha")))),
             interaction = approve,
         )
-        val r = p.execute(call("skill_install", """{"action":"install","repository":"o/r","paths":["skills/alpha"]}"""))
+        p.inspect()
+        val r = p.install()
         val json = JSONObject(r.content)
         assertEquals("ok", json.getString("status"))
         assertTrue(json.getBoolean("effect_verified"))
@@ -140,7 +184,8 @@ class SkillToolsTest {
             approvalPolicy = ApprovalPolicy(mode = PermissionMode.MANUAL, categories = setOf(ApprovalCategory.INSTALL)),
         )
         val p = pipeline(interaction = decline, env = rule)
-        val r = p.execute(call("skill_install", """{"action":"install","repository":"o/r","paths":["skills/alpha"]}"""))
+        p.inspect()
+        val r = p.install()
         assertEquals("USER_DECLINED", r.errorCode)
     }
 
@@ -150,7 +195,8 @@ class SkillToolsTest {
             SkillInstallOutcome.Conflict(listOf(SkillConflictView("alpha", "alpha", "user"))),
         )
         val p = pipeline(installBackend = backend, interaction = approve)
-        val r = p.execute(call("skill_install", """{"action":"install","repository":"o/r","paths":["skills/alpha"]}"""))
+        p.inspect()
+        val r = p.install()
         // 同名冲突不再弹卡当场替换：回给模型，由它确认用户意图后带 replace=true 重试。
         assertEquals("CONFLICT", r.errorCode)
         assertTrue(JSONObject(r.content).toString().contains("alpha"))
@@ -160,8 +206,147 @@ class SkillToolsTest {
     @Test
     fun install_commitUncertain_unknown() {
         val p = pipeline(installBackend = FakeInstall(SkillInstallOutcome.CommitUncertain), interaction = approve)
-        val r = p.execute(call("skill_install", """{"action":"install","repository":"o/r","paths":["skills/alpha"]}"""))
+        p.inspect()
+        val r = p.install()
         assertEquals("unknown", r.status)
         assertEquals("OUTCOME_UNKNOWN", r.errorCode)
+    }
+
+    // ---- 先检查再安装（审计 D11，恢复旧 skills_install_from_github 的约束）----
+
+    @Test
+    fun install_withoutInspectionThisRun_rejectedBeforeAsking() {
+        val backend = FakeInstall(SkillInstallOutcome.Installed(listOf(InstalledSkillView("alpha", "alpha"))))
+        var asked = false
+        val asking = object : UserInteraction {
+            override val available = true
+            override fun ask(question: UserQuestion, timeoutMs: Long) = UserAnswer.Declined
+            override fun approve(request: ApprovalRequest, timeoutMs: Long): ApprovalDecision {
+                asked = true
+                return ApprovalDecision.Approved
+            }
+        }
+        val manual = ToolEnvironment(approvalPolicy = ApprovalPolicy(mode = PermissionMode.MANUAL, categories = setOf(ApprovalCategory.INSTALL)))
+        val r = pipeline(installBackend = backend, interaction = asking, env = manual).install()
+        assertEquals("INVALID_ARGUMENTS", r.errorCode)
+        assertTrue(r.content, r.content.contains("inspect"))
+        assertFalse("没检查过的安装不该先弹确认卡", asked)
+        assertEquals(0, backend.installs)
+    }
+
+    @Test
+    fun install_pinsTheCommitSeenAtInspection() {
+        val backend = FakeInstall(SkillInstallOutcome.Installed(listOf(InstalledSkillView("alpha", "alpha"))))
+        val p = pipeline(installBackend = backend, interaction = approve)
+        p.inspect()
+        // 检查之后仓库被推了新提交：装的仍是检查时看到的那个版本。
+        backend.sha = "sha2"
+        assertEquals("ok", p.install().status)
+        assertEquals("sha1", backend.lastRef)
+        assertEquals("o/r", backend.lastRepository)
+        assertEquals(listOf("skills/alpha"), backend.lastPaths)
+
+        // 带检查返回的 commit_sha 或分支名也对得上同一次检查。
+        assertEquals("ok", p.install("""{"action":"install","repository":"o/r","ref":"sha1","paths":["skills/alpha"]}""").status)
+        assertEquals("ok", p.install("""{"action":"install","repository":"O/R","ref":"main","paths":["skills/alpha"]}""").status)
+        assertEquals("sha1", backend.lastRef)
+    }
+
+    @Test
+    fun install_otherRepositoryOrRef_needsItsOwnInspection() {
+        val backend = FakeInstall(SkillInstallOutcome.Installed(emptyList()))
+        val p = pipeline(installBackend = backend, interaction = approve)
+        p.inspect()
+        assertEquals("INVALID_ARGUMENTS", p.install("""{"action":"install","repository":"o/other","paths":["skills/alpha"]}""").errorCode)
+        assertEquals("INVALID_ARGUMENTS", p.install("""{"action":"install","repository":"o/r","ref":"dev","paths":["skills/alpha"]}""").errorCode)
+        assertEquals(0, backend.installs)
+    }
+
+    @Test
+    fun install_withoutRef_usesTheOnlyInspectedVersionOfThatRepository() {
+        val backend = FakeInstall(SkillInstallOutcome.Installed(emptyList()))
+        val p = pipeline(installBackend = backend, interaction = approve)
+        p.inspect("""{"action":"inspect","repository":"o/r","ref":"release"}""")
+        assertEquals("ok", p.install().status)
+        assertEquals("sha1", backend.lastRef)
+
+        // 同一仓库检查过两个版本：不带 ref 分不清装哪个，要带 commit_sha。
+        backend.sha = "sha2"
+        p.inspect("""{"action":"inspect","repository":"o/r","ref":"dev"}""")
+        assertEquals("INVALID_ARGUMENTS", p.install().errorCode)
+        assertEquals("ok", p.install("""{"action":"install","repository":"o/r","ref":"sha2","paths":["skills/alpha"]}""").status)
+        assertEquals("sha2", backend.lastRef)
+    }
+
+    @Test
+    fun install_onlyPathsReturnedByTheInspection() {
+        val backend = FakeInstall(SkillInstallOutcome.Installed(emptyList()))
+        val p = pipeline(installBackend = backend, interaction = approve)
+        p.inspect()
+        val r = p.install("""{"action":"install","repository":"o/r","paths":["skills/alpha","skills/gamma"]}""")
+        assertEquals("INVALID_ARGUMENTS", r.errorCode)
+        assertTrue(r.content, r.content.contains("gamma"))
+        assertEquals(0, backend.installs)
+    }
+
+    @Test
+    fun install_staysInsideTheInspectedDirectory() {
+        val backend = FakeInstall(SkillInstallOutcome.Installed(emptyList()))
+        val p = pipeline(installBackend = backend, interaction = approve)
+        // 检查限定在 skills/ 下：即使候选里混进了别处的目录，也不能装到范围外去。
+        p.inspect("""{"action":"inspect","repository":"o/r","path":"skills"}""")
+        assertEquals("INVALID_ARGUMENTS", p.install("""{"action":"install","repository":"o/r","paths":["tools/beta"]}""").errorCode)
+        assertEquals("ok", p.install().status)
+        assertEquals(1, backend.installs)
+    }
+
+    @Test
+    fun install_fromATreeUrl_matchesThatInspectionAndPassesTheSlug() {
+        val backend = FakeInstall(SkillInstallOutcome.Installed(emptyList()))
+        val p = pipeline(installBackend = backend, interaction = approve)
+        p.inspect("""{"action":"inspect","repository":"https://github.com/o/r/tree/main/skills"}""")
+        val r = p.install("""{"action":"install","repository":"https://github.com/o/r/tree/main/skills","paths":["skills/alpha"]}""")
+        assertEquals("ok", r.status)
+        // URL 里的分支由检查时的 commit 代替，仓库按 owner/repo 交给后端（否则 URL 的 ref 与 commit 对不上会报错）。
+        assertEquals("o/r", backend.lastRepository)
+        assertEquals("sha1", backend.lastRef)
+    }
+
+    @Test
+    fun install_afterCurated_usesTheCuratedCommit() {
+        val backend = FakeInstall(SkillInstallOutcome.Installed(emptyList()))
+        val p = pipeline(installBackend = backend, interaction = approve)
+        p.execute(call("skill_install", """{"action":"curated"}"""))
+        val r = p.install("""{"action":"install","repository":"openai/skills","paths":["skills/.curated/alpha"]}""")
+        assertEquals("ok", r.status)
+        assertEquals("openai/skills", backend.lastRepository)
+        assertEquals("sha1", backend.lastRef)
+    }
+
+    @Test
+    fun install_runCancelledDuringDownload_reachesTheBackend() {
+        var cancelled = false
+        val backend = FakeInstall(SkillInstallOutcome.Installed(emptyList())).apply { duringInstall = { cancelled = true } }
+        val p = pipeline(installBackend = backend, interaction = approve, cancelled = { cancelled })
+        p.inspect()
+        p.install()
+        assertEquals("后端在提交前要能看到取消", true, backend.cancelledDuringInstall)
+    }
+
+    @Test
+    fun installerSkill_teachesTheCurrentToolNames() {
+        // 内置 skill-installer 说明里不能再出现已经不存在的旧工具名。
+        val workingDirectory = java.io.File(requireNotNull(System.getProperty("user.dir")))
+        val skillFile = listOf(
+            java.io.File(workingDirectory, "app/src/main/assets/builtin_skills/skill-installer"),
+            java.io.File(workingDirectory, "src/main/assets/builtin_skills/skill-installer"),
+        ).first { it.isDirectory }
+        val text = skillFile.walkTopDown().filter { it.isFile }.joinToString("\n") { it.readText() }
+        for (old in listOf("skills_list_curated", "skills_inspect_github", "skills_install_from_github", "replaceExisting", "expectedReplacementId", "SKILL_CONFLICT")) {
+            assertFalse("skill-installer 还提到旧的 $old", text.contains(old))
+        }
+        for (now in listOf("skill_install", "action=curated", "action=inspect", "action=install", "commit_sha", "replace=true")) {
+            assertTrue("skill-installer 应说明 $now", text.contains(now))
+        }
     }
 }

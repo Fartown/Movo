@@ -69,6 +69,36 @@ class SkillRuntimeTest {
     }
 
     @Test
+    fun seedBuiltinSkills_bringsAnOutdatedBuiltinUpToDate_butKeepsItsRuntimeData() {
+        // 真机：APK 升级后 skill-installer 的说明改了工具名，已装的副本却一直是旧的（只在缺 SKILL.md 时才补）。
+        val app = RuntimeEnvironment.getApplication()
+        val skillsRoot = temporaryFolder.newFolder("refresh-skills")
+        SkillIndexService(context = app, skillsRoot = skillsRoot).seedBuiltinSkillsIfNeeded()
+        val packaged = app.assets.open("builtin_skills/skill-installer/SKILL.md").use { it.readBytes().decodeToString() }
+        val installed = File(skillsRoot, "skill-installer/SKILL.md")
+        assertEquals(packaged, installed.readText())
+
+        // 旧版本装下的说明，加上内置技能运行时自己写的数据。
+        installed.writeText(packaged.replace("skill_install", "skills_list_curated"))
+        val errors = File(skillsRoot, "self-improving-agent/data/ERRORS.md").apply {
+            parentFile?.mkdirs()
+            writeText("preserve existing learning\n")
+        }
+        val untouched = File(skillsRoot, "skill-creator/SKILL.md").lastModified()
+
+        // 升级后的新进程：重新建索引服务时按 APK 里的版本补齐。
+        SkillIndexService(context = app, skillsRoot = skillsRoot).seedBuiltinSkillsIfNeeded()
+
+        assertEquals(packaged, installed.readText())
+        assertEquals("preserve existing learning\n", errors.readText())
+        assertEquals("内容没变的不重写", untouched, File(skillsRoot, "skill-creator/SKILL.md").lastModified())
+        assertTrue(
+            SkillIndexService(context = app, skillsRoot = skillsRoot).listSkillsForManagement()
+                .single { it.id == "skill-installer" }.let { it.installed && it.enabled },
+        )
+    }
+
+    @Test
     fun builtinSkillInstallerManifestAndFileHaveValidMetadata() {
         val workingDirectory = File(requireNotNull(System.getProperty("user.dir")))
         val assetsRoot = listOf(

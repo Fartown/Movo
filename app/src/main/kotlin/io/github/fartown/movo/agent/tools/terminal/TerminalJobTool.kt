@@ -59,7 +59,13 @@ internal class TerminalJobTool(
         string("action", "动作", required = true, enum = TerminalJobAction.entries.map { it.name.lowercase() })
         string("job_id", "任务 ID（read、write、stop 必填）")
         string("input", "要写入的输入（write 必填）")
-        integer("wait_ms", "read/write 等待输出的毫秒", min = 0, max = 180_000)
+        integer(
+            "wait_ms",
+            "read/write 最多等多少毫秒，默认 0 不等。read 在这段时间里攒输出：攒够一段（约 4000 字）或命令结束就返回，" +
+                "否则等满再把这期间的输出一起给；write 在对方一有回应时就返回。带 cursor 从游标算起，不带从这次调用算起",
+            min = 0,
+            max = 180_000,
+        )
         string("cursor", "续读游标：上一次 read 返回的 next_cursor；不带则读最新的尾部，0:0 从头读")
         string("stream", "读取的输出流，默认 both", enum = TerminalStream.entries.map { it.name.lowercase() })
     }
@@ -107,8 +113,8 @@ internal class TerminalJobTool(
         ctx.checkCancelled()
         return when (input.action) {
             TerminalJobAction.LIST -> Verdict.Read(TerminalJobOutput(json = listJson(), textBody = null))
-            TerminalJobAction.READ -> readVerdict(input)
-            TerminalJobAction.WRITE -> writeVerdict(input)
+            TerminalJobAction.READ -> readVerdict(input, ctx)
+            TerminalJobAction.WRITE -> writeVerdict(input, ctx)
             TerminalJobAction.STOP -> stopVerdict(input)
         }
     }
@@ -119,13 +125,17 @@ internal class TerminalJobTool(
         return JSONObject().put("jobs", jobs).put("count", jobs.length())
     }
 
-    private fun readVerdict(input: TerminalJobInput): Verdict<TerminalJobOutput> {
-        val read = backend.read(input.jobId!!, input.cursor, input.stream, input.waitMs)
+    private fun readVerdict(input: TerminalJobInput, ctx: ToolContext): Verdict<TerminalJobOutput> {
+        val read = backend.read(input.jobId!!, input.cursor, input.stream, input.waitMs, cancelled = { ctx.isCancelled })
             ?: return notFound(input.jobId)
+        // 等待中被取消：交给管线按取消处理，不把半截结果当成读到的输出。
+        ctx.checkCancelled()
         val body = buildString {
             append("job_id: ").append(read.info.jobId).append('\n')
             append("running: ").append(read.info.running).append('\n')
             read.info.exitCode?.let { append("exit_code: ").append(it).append('\n') }
+            // 说清这次为什么返回、等了多久：wait_ms 是上限，有新输出就提前回来。
+            waitNote(read.wake)?.let { append("waited_ms: ").append(read.waitedMs).append("（").append(it).append("）\n") }
             append("identity: ").append(read.info.identity.name.lowercase()).append('\n')
             if (read.info.streamsMerged) append("streams: merged（伪终端里 stderr 也在 stdout 里）\n")
             read.nextCursor?.let { append("next_cursor: ").append(it).append('\n') }
@@ -144,9 +154,18 @@ internal class TerminalJobTool(
         return Verdict.Read(TerminalJobOutput(json = null, textBody = body))
     }
 
-    private fun writeVerdict(input: TerminalJobInput): Verdict<TerminalJobOutput> {
-        val delivered = backend.write(input.jobId!!, input.input!!, input.waitMs)
+    private fun waitNote(wake: TerminalWake): String? = when (wake) {
+        TerminalWake.NONE, TerminalWake.CANCELLED -> null
+        TerminalWake.NEW_OUTPUT -> "有新输出，提前返回"
+        TerminalWake.ENOUGH_OUTPUT -> "攒够一段输出，提前返回"
+        TerminalWake.EXITED -> "命令已结束"
+        TerminalWake.TIMEOUT -> "等满 wait_ms"
+    }
+
+    private fun writeVerdict(input: TerminalJobInput, ctx: ToolContext): Verdict<TerminalJobOutput> {
+        val delivered = backend.write(input.jobId!!, input.input!!, input.waitMs, cancelled = { ctx.isCancelled })
         if (!delivered) return notFound(input.jobId)
+        ctx.checkCancelled()
         // 送达型：已把输入写进任务 stdin，但程序是否消费无法回读。
         return Verdict.Dispatched(
             TerminalJobOutput(json = JSONObject().put("job_id", input.jobId).put("delivered", true), textBody = null),

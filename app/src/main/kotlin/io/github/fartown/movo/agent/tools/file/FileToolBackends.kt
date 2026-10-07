@@ -78,6 +78,129 @@ internal fun rootImageCopyCommand(source: String, destination: File): String {
 // file_search
 // ---------------------------------------------------------------------------
 
+/**
+ * file_search 在 MediaStore 上查哪个集合、按什么条件筛（不碰 Android 类，便于直接把条件交给 SQLite 测）。
+ *
+ * 以前的三个问题（重构前 search_media / search_files / search_downloads 都没有）：
+ * - document 和 any 查的是同一个 Files 集合、没有类型条件，document 会把照片、安装包都列出来：现在 document 按 MIME 和扩展名筛；
+ *   下载目录里查某一类时同样按 MIME 筛；
+ * - 关键词只匹配文件名：现在按旧口径一并匹配所在目录（relative_path），音频再加标题和歌手，下载再加标题；
+ * - 下载靠 relative_path LIKE '%Download%' 猜，会混进路径里碰巧带 Download 的目录：Android 10 起改查 MediaStore.Downloads。
+ */
+internal object MediaStoreFileQuery {
+    enum class Collection { IMAGES, VIDEO, AUDIO, FILES, DOWNLOADS }
+
+    data class Plan(val collection: Collection, val selection: String?, val args: List<String>)
+
+    /** 文档的 MIME：文本类，以及 PDF、Office / WPS / OpenDocument、RTF、EPUB。 */
+    private val DOCUMENT_MIME_TYPES = listOf(
+        "application/pdf", "application/msword", "application/rtf", "application/epub+zip",
+        "application/kswps", "application/kset", "application/ksdps",
+    )
+    private val DOCUMENT_MIME_PREFIXES = listOf(
+        "text/", "application/vnd.openxmlformats-officedocument.", "application/vnd.ms-",
+        "application/vnd.oasis.opendocument.", "application/vnd.wps-office.",
+    )
+
+    /** MIME 认不出（常见 application/octet-stream）时按扩展名认文档。 */
+    private val DOCUMENT_EXTENSIONS = listOf(
+        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "csv", "rtf", "epub",
+        "odt", "ods", "odp", "wps", "et", "dps", "pages", "numbers", "key",
+    )
+
+    fun build(
+        type: FileType,
+        location: FileLocation,
+        query: String?,
+        sinceMillis: Long?,
+        untilMillis: Long?,
+        /** 系统有 MediaStore.Downloads（Android 10 起）。 */
+        downloadsCollection: Boolean,
+    ): Plan {
+        val downloads = location == FileLocation.DOWNLOADS && downloadsCollection
+        val collection = when {
+            downloads -> Collection.DOWNLOADS
+            type == FileType.IMAGE -> Collection.IMAGES
+            type == FileType.VIDEO -> Collection.VIDEO
+            type == FileType.AUDIO -> Collection.AUDIO
+            else -> Collection.FILES
+        }
+        val clauses = mutableListOf<String>()
+        val args = mutableListOf<String>()
+
+        // 类型：图片 / 视频 / 音频集合本身就只有那一类；Files 和 Downloads 里按 MIME（文档再加扩展名）筛。
+        if (collection == Collection.FILES || collection == Collection.DOWNLOADS) {
+            when (type) {
+                FileType.IMAGE -> clauses += mimePrefix("image/", args)
+                FileType.VIDEO -> clauses += mimePrefix("video/", args)
+                FileType.AUDIO -> clauses += mimePrefix("audio/", args)
+                FileType.DOCUMENT -> clauses += documentClause(args)
+                FileType.ANY -> Unit
+            }
+        }
+
+        // 关键词：文件名或所在目录（旧 search_media / search_files 的口径）；音频再加标题、歌手，下载再加标题。
+        query?.trim()?.takeIf { it.isNotEmpty() }?.let { keyword ->
+            val columns = buildList {
+                add(MediaStore.MediaColumns.DISPLAY_NAME)
+                add(MediaStore.MediaColumns.RELATIVE_PATH)
+                if (collection == Collection.AUDIO) {
+                    add(MediaStore.MediaColumns.TITLE)
+                    add(MediaStore.Audio.AudioColumns.ARTIST)
+                }
+                if (collection == Collection.DOWNLOADS) add(MediaStore.MediaColumns.TITLE)
+            }
+            val pattern = "%${escapeLike(keyword)}%"
+            clauses += columns.joinToString(" OR ", prefix = "(", postfix = ")") { "$it LIKE ? ESCAPE '\\'" }
+            repeat(columns.size) { args += pattern }
+        }
+        sinceMillis?.let {
+            clauses += "${MediaStore.MediaColumns.DATE_MODIFIED} >= ?"
+            args += (it / 1000).toString()
+        }
+        untilMillis?.let {
+            clauses += "${MediaStore.MediaColumns.DATE_MODIFIED} <= ?"
+            args += (it / 1000).toString()
+        }
+        when (location) {
+            FileLocation.RECORDINGS -> {
+                clauses += "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?"
+                args += "%Record%"
+            }
+            // 没有 Downloads 集合（Android 9 及以下）时只能按路径找 Download 目录。
+            FileLocation.DOWNLOADS -> if (!downloads) {
+                clauses += "${MediaStore.MediaColumns.DATA} LIKE ?"
+                args += "%/Download/%"
+            }
+            else -> Unit
+        }
+        return Plan(collection, clauses.joinToString(" AND ").ifEmpty { null }, args)
+    }
+
+    private fun mimePrefix(prefix: String, args: MutableList<String>): String {
+        args += "$prefix%"
+        return "${MediaStore.MediaColumns.MIME_TYPE} LIKE ?"
+    }
+
+    private fun documentClause(args: MutableList<String>): String {
+        val parts = mutableListOf<String>()
+        parts += "${MediaStore.MediaColumns.MIME_TYPE} IN (${DOCUMENT_MIME_TYPES.joinToString { "?" }})"
+        args += DOCUMENT_MIME_TYPES
+        DOCUMENT_MIME_PREFIXES.forEach { prefix ->
+            parts += "${MediaStore.MediaColumns.MIME_TYPE} LIKE ?"
+            args += "$prefix%"
+        }
+        DOCUMENT_EXTENSIONS.forEach { extension ->
+            parts += "${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?"
+            args += "%.$extension"
+        }
+        return parts.joinToString(" OR ", prefix = "(", postfix = ")")
+    }
+
+    private fun escapeLike(value: String): String =
+        value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+}
+
 internal class RealFileSearchBackend(
     private val context: Context,
     private val root: BoundedRootCommandExecutor,
@@ -105,41 +228,25 @@ internal class RealFileSearchBackend(
         if (sharedStorageHidden()) {
             fail(ToolErrorCode.PERMISSION_REQUIRED, SharedStorageAccess.MESSAGE, hint = SharedStorageAccess.HINT)
         }
-        val collection = when (type) {
-            FileType.IMAGE -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-            FileType.VIDEO -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-            FileType.AUDIO -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-            FileType.DOCUMENT, FileType.ANY ->
-                MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
-        }
-        val selection = StringBuilder()
-        val argsList = mutableListOf<String>()
-        fun and(clause: String) {
-            if (selection.isNotEmpty()) selection.append(" AND ")
-            selection.append(clause)
-        }
-        query?.let {
-            and("${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?")
-            argsList += "%$it%"
-        }
-        sinceMillis?.let {
-            and("${MediaStore.MediaColumns.DATE_MODIFIED} >= ?")
-            argsList += (it / 1000).toString()
-        }
-        untilMillis?.let {
-            and("${MediaStore.MediaColumns.DATE_MODIFIED} <= ?")
-            argsList += (it / 1000).toString()
-        }
-        when (location) {
-            FileLocation.RECORDINGS -> {
-                and("${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?")
-                argsList += "%Record%"
-            }
-            FileLocation.DOWNLOADS -> {
-                and("${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?")
-                argsList += "%Download%"
-            }
-            else -> Unit
+        val plan = MediaStoreFileQuery.build(
+            type = type,
+            location = location,
+            query = query,
+            sinceMillis = sinceMillis,
+            untilMillis = untilMillis,
+            downloadsCollection = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q,
+        )
+        val collection = when (plan.collection) {
+            MediaStoreFileQuery.Collection.IMAGES -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            MediaStoreFileQuery.Collection.VIDEO -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            MediaStoreFileQuery.Collection.AUDIO -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+            MediaStoreFileQuery.Collection.FILES -> MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+            MediaStoreFileQuery.Collection.DOWNLOADS ->
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                } else {
+                    MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+                }
         }
         // TODO：cursor 分页先用 offset，未做稳定游标。
         val offset = cursor?.toIntOrNull()?.coerceAtLeast(0) ?: 0
@@ -157,8 +264,8 @@ internal class RealFileSearchBackend(
         context.contentResolver.query(
             collection,
             projection,
-            selection.toString().ifEmpty { null },
-            argsList.toTypedArray().takeIf { it.isNotEmpty() },
+            plan.selection,
+            plan.args.toTypedArray().takeIf { it.isNotEmpty() },
             sortOrder,
         )?.use { c ->
             val idCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
