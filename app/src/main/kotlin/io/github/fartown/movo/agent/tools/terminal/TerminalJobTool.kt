@@ -61,8 +61,8 @@ internal class TerminalJobTool(
         string("input", "要写入的输入（write 必填）")
         integer(
             "wait_ms",
-            "read/write 最多等多少毫秒，默认 0 不等：有新输出或命令结束就立即返回，都没有就等满。" +
-                "带 cursor 时 cursor 之后已有输出就不等；不带 cursor 时等这次调用之后的新输出",
+            "read/write 最多等多少毫秒，默认 0 不等。read 在这段时间里攒输出：攒够一段（约 4000 字）或命令结束就返回，" +
+                "否则等满再把这期间的输出一起给；write 在对方一有回应时就返回。带 cursor 从游标算起，不带从这次调用算起",
             min = 0,
             max = 180_000,
         )
@@ -157,8 +157,9 @@ internal class TerminalJobTool(
     private fun waitNote(wake: TerminalWake): String? = when (wake) {
         TerminalWake.NONE, TerminalWake.CANCELLED -> null
         TerminalWake.NEW_OUTPUT -> "有新输出，提前返回"
+        TerminalWake.ENOUGH_OUTPUT -> "攒够一段输出，提前返回"
         TerminalWake.EXITED -> "命令已结束"
-        TerminalWake.TIMEOUT -> "等满 wait_ms，期间没有新输出"
+        TerminalWake.TIMEOUT -> "等满 wait_ms"
     }
 
     private fun writeVerdict(input: TerminalJobInput, ctx: ToolContext): Verdict<TerminalJobOutput> {

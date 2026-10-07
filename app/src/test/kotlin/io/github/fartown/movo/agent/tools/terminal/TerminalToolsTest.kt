@@ -272,7 +272,11 @@ class TerminalToolsTest {
         wake = TerminalWake.TIMEOUT
         waited = 8000
         val full = p.execute(call("terminal_job", read)).content
-        assertTrue(full, full.contains("waited_ms: 8000（等满 wait_ms，期间没有新输出）"))
+        assertTrue(full, full.contains("waited_ms: 8000（等满 wait_ms）"))
+
+        wake = TerminalWake.ENOUGH_OUTPUT
+        waited = 900
+        assertTrue(p.execute(call("terminal_job", read)).content.contains("waited_ms: 900（攒够一段输出，提前返回）"))
 
         wake = TerminalWake.EXITED
         waited = 1500
@@ -334,7 +338,7 @@ class TerminalToolsTest {
         assertTrue(run.getJSONObject("cwd").getString("description").contains("默认工作区"))
         val wait = ContractTool(TerminalJobTool(jobBackend)).parameters(ToolEnvironment())
             .getJSONObject("properties").getJSONObject("wait_ms").getString("description")
-        assertTrue(wait, wait.contains("有新输出或命令结束就立即返回") && wait.contains("等满"))
+        assertTrue(wait, wait.contains("攒够一段") && wait.contains("命令结束就返回") && wait.contains("等满"))
     }
 
     @Test

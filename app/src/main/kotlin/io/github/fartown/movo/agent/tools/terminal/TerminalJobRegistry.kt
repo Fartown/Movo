@@ -126,7 +126,8 @@ internal class TerminalJobRegistry(
             // 等哪一路的新输出、从哪儿算起：带 cursor 从游标算，不带从现在算。
             val outFrom = if (stream == TerminalStream.STDERR) null else from?.out ?: job.total(StreamBuf.OUT)
             val errFrom = if (stream == TerminalStream.STDOUT) null else from?.err ?: job.total(StreamBuf.ERR)
-            job.awaitOutput(outFrom, errFrom, waitMs, cancelled)
+            // read 攒一段再回：一行一行出的命令不至于每行回一次（真机：每秒一行的命令被追着读了 12 次）。
+            job.awaitOutput(outFrom, errFrom, waitMs, cancelled, enoughChars = READ_ENOUGH_CHARS)
         } else {
             TerminalWake.NONE
         }
@@ -430,15 +431,25 @@ internal class TerminalJobRegistry(
         }
 
         /**
-         * 最多等 [waitMs]，直到 stdout 越过 [outFrom] 或 stderr 越过 [errFrom]（为空的那一路不看）、命令结束或超时。
-         * 已经越过了就不等。每 [CANCEL_POLL_MS] 醒一次检查 [cancelled] 和进程是否已退出（读线程收尾时也会叫醒）。
+         * 最多等 [waitMs]，直到 stdout 越过 [outFrom]、stderr 越过 [errFrom] 的新输出合计达到 [enoughChars]
+         * （为空的那一路不看）、命令结束或超时。已经够了就不等。[enoughChars] 为 1 时有新输出就返回（write 用）；
+         * read 攒一段再回，返回 [TerminalWake.ENOUGH_OUTPUT]。每 [CANCEL_POLL_MS] 醒一次检查 [cancelled] 和进程是否已退出
+         * （读线程收尾时也会叫醒）。
          */
-        fun awaitOutput(outFrom: Long?, errFrom: Long?, waitMs: Long, cancelled: () -> Boolean): TerminalWake {
+        fun awaitOutput(
+            outFrom: Long?,
+            errFrom: Long?,
+            waitMs: Long,
+            cancelled: () -> Boolean,
+            enoughChars: Long = 1,
+        ): TerminalWake {
             val deadline = System.currentTimeMillis() + waitMs
             synchronized(lock) {
                 while (true) {
-                    val newOutput = (outFrom != null && out.total() > outFrom) || (errFrom != null && err.total() > errFrom)
-                    if (newOutput) return TerminalWake.NEW_OUTPUT
+                    val unread = (outFrom?.let { out.total() - it } ?: 0) + (errFrom?.let { err.total() - it } ?: 0)
+                    if (unread >= enoughChars) {
+                        return if (enoughChars > 1) TerminalWake.ENOUGH_OUTPUT else TerminalWake.NEW_OUTPUT
+                    }
                     if (!process.isAlive) return TerminalWake.EXITED
                     if (cancelled()) return TerminalWake.CANCELLED
                     val remaining = deadline - System.currentTimeMillis()
@@ -566,6 +577,9 @@ private fun launchPlan(spec: TerminalRunSpec): LaunchPlan {
 private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
 private const val CANCEL_POLL_MS = 200L
+
+/** read 攒到这么多字的新输出就提前返回，不必等满 wait_ms。 */
+private const val READ_ENOUGH_CHARS = 4_000L
 
 /** Linux 环境的工作区与 HOME（与终端页一致）。 */
 private const val LINUX_WORKSPACE = "/workspace"

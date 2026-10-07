@@ -153,32 +153,32 @@ class TerminalJobRegistryReadTest {
         assertEquals(workspace, (registry.run(spec("sleep 5")) as TerminalRunResult.Backgrounded).cwd)
     }
 
-    // ---- terminal_job 的 wait_ms：有新输出就尽快返回，命令结束也返回，没有就等满（真机 t3c-bg）----
+    // ---- terminal_job 的 wait_ms：read 攒一段再回（约 4000 字），命令结束也返回，否则等满；write 一有回应就回（真机 t3c-bg）----
 
     @Test
-    fun read_withCursor_waitsForOutputAfterTheCursor() {
+    fun read_collectsLineByLineOutputUntilTheWaitEnds() {
+        // 真机：每秒一行的命令，原来有新输出就返回，被追着读了 12 次。
         val registry = registry()
-        val (job, cursor) = startedWith(registry, "echo first; sleep 2; echo second; sleep 30", "first")
+        val (job, cursor) = startedWith(registry, "echo start; for i in 1 2 3 4 5 6 7 8 9 10; do echo line\$i; sleep 0.2; done; sleep 30", "start")
         val started = System.currentTimeMillis()
-        val read = registry.read(job, cursor = cursor, stream = TerminalStream.BOTH, waitMs = 15_000)!!
+        val read = registry.read(job, cursor = cursor, stream = TerminalStream.BOTH, waitMs = 1_500)!!
         val elapsed = System.currentTimeMillis() - started
-        assertEquals(TerminalWake.NEW_OUTPUT, read.wake)
-        assertTrue(read.stdout, read.stdout.contains("second"))
-        assertFalse("游标之前的不再给", read.stdout.contains("first"))
-        assertTrue("要等到新输出出来（约 2 秒），实际 ${elapsed}ms", elapsed >= 300)
-        assertTrue("有新输出就返回，不等满 15 秒，实际 ${elapsed}ms", elapsed < 10_000)
+        assertEquals(TerminalWake.TIMEOUT, read.wake)
+        assertTrue("一行一行的输出攒到等满再一起给，实际 ${elapsed}ms", elapsed >= 1_400)
+        assertTrue(read.stdout, read.stdout.contains("line3") && read.stdout.contains("line6"))
+        assertFalse("游标之前的不再给", read.stdout.contains("start"))
     }
 
     @Test
-    fun read_withUnreadOutputAfterTheCursor_returnsRightAway() {
+    fun read_withPlentyOfUnreadOutput_returnsRightAway() {
         val registry = registry()
-        val (job, _) = startedWith(registry, "echo first; sleep 30", "first")
+        val (job, _) = startedWith(registry, "head -c 6000 /dev/zero | tr '\\0' x; echo; echo done; sleep 30", "done")
         val started = System.currentTimeMillis()
         val read = registry.read(job, cursor = "0:0", stream = TerminalStream.BOTH, waitMs = 15_000)!!
         val elapsed = System.currentTimeMillis() - started
-        assertEquals(TerminalWake.NEW_OUTPUT, read.wake)
-        assertTrue(read.stdout.contains("first"))
-        assertTrue("游标之后已经有输出就不等，实际 ${elapsed}ms", elapsed < 3_000)
+        assertEquals(TerminalWake.ENOUGH_OUTPUT, read.wake)
+        assertTrue(read.stdout.contains("xxxx"))
+        assertTrue("已经攒够一段就不等，实际 ${elapsed}ms", elapsed < 3_000)
     }
 
     @Test
@@ -195,12 +195,12 @@ class TerminalJobRegistryReadTest {
     }
 
     @Test
-    fun read_withoutCursor_waitsForOutputAfterTheCall() {
+    fun read_withoutCursor_collectsOutputAfterTheCall() {
         val registry = registry()
-        val (job, _) = startedWith(registry, "echo a; sleep 2; echo b; sleep 30", "a")
-        val read = registry.read(job, cursor = null, stream = TerminalStream.BOTH, waitMs = 15_000)!!
-        assertEquals(TerminalWake.NEW_OUTPUT, read.wake)
-        assertTrue("不带游标时等这次调用之后的新输出，再给尾部", read.stdout.contains("b"))
+        val (job, _) = startedWith(registry, "echo a; sleep 1; echo b; sleep 30", "a")
+        val read = registry.read(job, cursor = null, stream = TerminalStream.BOTH, waitMs = 2_500)!!
+        assertEquals(TerminalWake.TIMEOUT, read.wake)
+        assertTrue("不带游标时攒这次调用之后的新输出，再给尾部", read.stdout.contains("b"))
     }
 
     @Test

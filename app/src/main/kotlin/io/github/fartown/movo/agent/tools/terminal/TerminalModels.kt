@@ -105,7 +105,10 @@ internal data class TerminalJobReadResult(
 internal enum class TerminalWake {
     /** 没有等：wait_ms=0，或任务已经结束。 */
     NONE,
+    /** 有新输出（write：对方一有回应就返回）。 */
     NEW_OUTPUT,
+    /** 攒够了一段新输出（read）。 */
+    ENOUGH_OUTPUT,
     EXITED,
     TIMEOUT,
     /** 运行被取消，提前结束等待（调用方随后按取消处理）。 */
