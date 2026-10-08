@@ -38,9 +38,16 @@ internal object SessionStatusProtocol {
     data class Status(val exitCode: Int, val cwd: String?)
 }
 
-/** 有界输出收集器：读取线程持续排空管道，超过上限后丢弃后续内容。 */
-internal class ByteArrayOutputCollector {
+/**
+ * 有界输出收集器：读取线程持续排空管道，超过上限后不再存，只留最后 [tailBytes] 字节（[overflowTail]）。
+ * 会话靠输出末尾的状态行判断命令结束：单条命令输出超过上限时，状态行就在这段尾巴里。
+ */
+internal class ByteArrayOutputCollector(private val tailBytes: Int = DEFAULT_TAIL_BYTES) {
     private val output = ByteArrayOutputStream()
+    private val tail = ByteArray(tailBytes)
+    private var tailStart = 0
+    private var tailLength = 0
+    private var dropped = 0L
 
     fun readFrom(input: java.io.InputStream, maxBytes: Int = Int.MAX_VALUE) {
         runCatching {
@@ -49,10 +56,9 @@ internal class ByteArrayOutputCollector {
                 val read = input.read(buffer)
                 if (read < 0) break
                 synchronized(this) {
-                    val allowed = (maxBytes - output.size()).coerceAtLeast(0)
-                    if (allowed > 0) {
-                        output.write(buffer, 0, read.coerceAtMost(allowed))
-                    }
+                    val allowed = (maxBytes - output.size()).coerceAtLeast(0).coerceAtMost(read)
+                    if (allowed > 0) output.write(buffer, 0, allowed)
+                    if (read > allowed) keepTail(buffer, allowed, read - allowed)
                 }
             }
         }.onFailure { throwable ->
@@ -60,13 +66,39 @@ internal class ByteArrayOutputCollector {
         }
     }
 
+    private fun keepTail(buffer: ByteArray, from: Int, count: Int) {
+        dropped += count
+        for (i in from until from + count) {
+            tail[(tailStart + tailLength) % tailBytes] = buffer[i]
+            if (tailLength < tailBytes) tailLength++ else tailStart = (tailStart + 1) % tailBytes
+        }
+    }
+
     fun bytes(): ByteArray = synchronized(this) { output.toByteArray() }
 
     fun text(): String = bytes().decodeToString()
 
+    /** [overflowTail] 最多保留的字节数。 */
+    val tailCapacity: Int get() = tailBytes
+
+    /** 超过上限后没存下的字节数。 */
+    fun droppedBytes(): Long = synchronized(this) { dropped }
+
+    /** 超过上限后最后收到的那段（最多 [tailBytes] 字节）；没超过时为空。 */
+    fun overflowTail(): String = synchronized(this) {
+        ByteArray(tailLength) { tail[(tailStart + it) % tailBytes] }.decodeToString()
+    }
+
     fun clear() {
         synchronized(this) {
             output.reset()
+            tailStart = 0
+            tailLength = 0
+            dropped = 0
         }
+    }
+
+    private companion object {
+        const val DEFAULT_TAIL_BYTES = 16 * 1024
     }
 }

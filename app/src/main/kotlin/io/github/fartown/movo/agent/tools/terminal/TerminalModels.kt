@@ -53,6 +53,8 @@ internal sealed interface TerminalRunResult {
         val sessionClosed: Boolean = false,
         /** 会话里的命令到 wait_ms 还没结束，被结束了。 */
         val timedOut: Boolean = false,
+        /** 同名会话之前开过、但已经结束了，这次是新开的 shell（之前的 cd、export 不在了）。 */
+        val sessionReopened: Boolean = false,
     ) : TerminalRunResult
 
     /** 到 wait_ms 未结束，或 background/keep_alive：转后台。 */

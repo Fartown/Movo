@@ -268,6 +268,9 @@ class SkillToolsTest {
         assertEquals(listOf(true, true, false, false), items.map { it.installed })
         assertEquals(false, items[0].enabled)
         assertEquals(true, items[1].enabled)
+        // 只按 id 对：已装 id=pdf-tools、名字叫 pdf 的技能，不算装了 id=pdf 的新技能（安装冲突也按 id 判）。
+        val byName = skillCatalogItems(listOf("pdf" to "skills/pdf"), listOf(entry("pdf-tools", "pdf", enabled = true)))
+        assertEquals(false, byName.single().installed)
     }
 
     @Test

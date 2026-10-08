@@ -10,7 +10,8 @@ import io.github.fartown.movo.data.repository.CharacterMemoryRepository
 /**
  * 真实记忆后端：
  * - user 作用域 → AgentMemoryRepository（应用私有 filesDir 下的 MEMORY.md，原子写 + revision CAS）。
- *   和设置页编辑记忆走同一个存储实例、同一把锁：两边同时改时，后写的一方按版本冲突处理，不会悄悄覆盖。
+ *   和设置页编辑记忆走同一个存储实例、同一把锁；工具按版本写入，设置页先存过的内容工具不会悄悄覆盖
+ *   （设置页保存不比版本，和重构前一样）。
  * - character 作用域 → CharacterMemoryRepository，按角色 id 存独立 MEMORY.md。
  *
  * [characterId] 由主流程在角色会话时提供当前角色标识；非角色会话或缺标识时 character 作用域不可读写。

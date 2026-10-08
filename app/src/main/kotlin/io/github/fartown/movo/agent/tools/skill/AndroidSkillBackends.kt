@@ -72,7 +72,7 @@ internal class AndroidSkillReadBackend(context: Context) : SkillReadBackend {
 }
 
 /**
- * curated / inspect 的候选（名字, 路径）对上已安装技能：和重构前一样按规范化后的 id、名称比较，
+ * curated / inspect 的候选（名字, 路径）对上已安装技能：和重构前一样只按规范化后的 id 比较（安装冲突也按 id 判），
  * 停用的也算已安装（enabled=false），免得模型当成没装再去装、撞同名冲突。
  */
 internal fun skillCatalogItems(candidates: List<Pair<String, String>>, entries: List<SkillIndexEntry>): List<SkillCatalogItem> {
@@ -80,7 +80,6 @@ internal fun skillCatalogItems(candidates: List<Pair<String, String>>, entries: 
     return candidates.map { (name, path) ->
         val key = SkillParser.normalizeSkillLookup(name)
         val match = installed.firstOrNull { SkillParser.normalizeSkillLookup(it.id) == key }
-            ?: installed.firstOrNull { SkillParser.normalizeSkillLookup(it.name) == key }
         SkillCatalogItem(name, path, installed = match != null, enabled = match?.enabled ?: true)
     }
 }

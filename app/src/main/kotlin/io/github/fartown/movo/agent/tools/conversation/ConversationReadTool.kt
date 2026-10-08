@@ -63,6 +63,10 @@ internal class ConversationReadTool(
 ) : ToolContract<ConversationReadInput, ConversationReadOutput> {
     override val name = "conversation_read"
     override val domain = ToolDomain.MEMORY
+
+    /** 这次运行里最近一次加载的历史（工具随运行创建，不跨运行）。 */
+    @Volatile
+    private var snapshot: List<ConversationEntryView>? = null
     override val summary =
         "读这次对话的完整记录（没压缩过的原文，含本次任务已做的步骤、工具调用参数和工具结果），核对旧指令、操作细节、工具结果时用。" +
             "可用 query 过滤、index 从某条读起；没读完给 next_cursor，长消息也能接着读后半段。图片不在记录里。"
@@ -109,7 +113,10 @@ internal class ConversationReadTool(
         resolution: CallResolution,
         ctx: ToolContext,
     ): Verdict<ConversationReadOutput> {
-        val history = backend.load()
+        // 和重构前一样：续读用这次运行里上一次读到的快照，不再整份重读、重渲染（长对话翻页时很费）；
+        // 不带 cursor 的读取才重新加载。
+        val history = snapshot?.takeIf { input.cursor != null && it.size >= input.cursor.snapshotSize }
+            ?: backend.load().also { snapshot = it }
         // 续读固定在第一次读时的那些消息里；对话被改过（条数变少）旧游标失效。
         val size = input.cursor?.snapshotSize ?: history.size
         if (size > history.size) {

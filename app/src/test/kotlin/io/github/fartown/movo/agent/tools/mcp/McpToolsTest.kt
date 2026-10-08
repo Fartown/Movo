@@ -193,19 +193,17 @@ class McpToolsTest {
     }
 
     @Test
-    fun shortName_chineseServer_fallsBackToSequential_andCollisionHashes() {
-        val cat = catalog(
-            listOf(
-                raw("id-a", "搜索", tool("lookup", readOnly = true)),
-                raw("id-b", "工具", tool("lookup", readOnly = true)),
-            ),
-        )
-        val names = cat.entries.map { it.shortName }
-        // 中文清洗为空 → s1 / s2
-        assertTrue(names.any { it.startsWith("mcp_s1_") })
-        assertTrue(names.any { it.startsWith("mcp_s2_") })
+    fun shortName_chineseServer_fallsBackToIdHash_stableWhenOthersChange() {
+        val a = raw("id-a", "搜索", tool("lookup", readOnly = true))
+        val b = raw("id-b", "工具", tool("lookup", readOnly = true))
+        val names = catalog(listOf(a, b)).entries.map { it.shortName }
         // 两个工具短名不冲突
         assertEquals(2, names.toSet().size)
+        assertTrue(names.all { it.startsWith("mcp_s") && it.endsWith("_lookup") })
+        // 停用 A 之后，B 的工具名不变，也不会顶替 A 原来的名字。
+        val onlyB = catalog(listOf(b)).entries.single().shortName
+        assertEquals(names[1], onlyB)
+        assertFalse(onlyB == names[0])
     }
 
     @Test

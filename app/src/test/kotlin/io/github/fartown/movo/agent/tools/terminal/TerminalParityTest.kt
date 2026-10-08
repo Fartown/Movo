@@ -192,6 +192,32 @@ class TerminalParityTest {
     }
 
     @Test
+    fun session_outputOverOneMegabyte_stillEndsOnTimeWithTheRealEnding() {
+        // 单条命令输出超过会话收集上限（1 MB）：状态行在没存下的那段里，以前会一直等到 wait_ms 被当成超时。
+        val registry = registry()
+        completed(registry, spec("export MOVO_PARITY=kept", session = "main"))
+        val started = System.currentTimeMillis()
+        val big = completed(registry, spec("yes a | head -c 1300000; echo; echo END-OF-OUTPUT", session = "main", waitMs = 20_000))
+        assertFalse(big.timedOut)
+        assertFalse(big.sessionClosed)
+        assertEquals(0, big.exitCode)
+        assertTrue("应很快结束，不等到 wait_ms", System.currentTimeMillis() - started < 15_000)
+        assertTrue("带回真正的结尾", big.stdout.contains("END-OF-OUTPUT"))
+        val after = completed(registry, spec("echo \"[\$MOVO_PARITY]\"", session = "main"))
+        assertTrue("会话还在：${after.stdout}", after.stdout.contains("[kept]"))
+    }
+
+    @Test
+    fun session_shellDiedBetweenCalls_isReportedAsReopened() {
+        val registry = registry()
+        completed(registry, spec("export MOVO_PARITY=before; (sleep 1; kill -9 \$\$) >/dev/null 2>&1 &", session = "main"))
+        Thread.sleep(2_500)
+        val after = completed(registry, spec("echo \"[\$MOVO_PARITY]\"", session = "main"))
+        assertTrue(after.sessionReopened)
+        assertTrue(after.stdout, after.stdout.contains("[]"))
+    }
+
+    @Test
     fun session_exitClosesIt() {
         val registry = registry()
         val exited = completed(registry, spec("exit 3", session = "main"))

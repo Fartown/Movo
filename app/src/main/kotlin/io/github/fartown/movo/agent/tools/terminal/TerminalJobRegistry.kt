@@ -278,7 +278,8 @@ internal class TerminalJobRegistry(
         }
         var command = spec.command
         val session: AgentSession
-        if (existing == null || !controller.sessionAlive(existing.controllerId)) {
+        val reopened = existing != null && !controller.sessionAlive(existing.controllerId)
+        if (existing == null || reopened) {
             session = when (val opened = controller.openSession(target.environment, target.cwd, target.identity)) {
                 is UserTerminalController.OpenResult.Ready -> AgentSession(opened.sessionId, spec.environment, spec.identity)
                 is UserTerminalController.OpenResult.Failed -> throw sessionOpenFailure(opened, target.cwd)
@@ -332,6 +333,7 @@ internal class TerminalJobRegistry(
             session = name,
             sessionClosed = sessionClosed,
             timedOut = timedOut,
+            sessionReopened = reopened,
         )
     }
 

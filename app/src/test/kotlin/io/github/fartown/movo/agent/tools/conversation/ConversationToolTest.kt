@@ -128,6 +128,20 @@ class ConversationToolTest {
     }
 
     @Test
+    fun cursorReads_reuseTheSnapshotInsteadOfReloading() {
+        var loads = 0
+        val entries = (0 until 50).map { ConversationEntryView(it, "assistant", "第 $it 条") }
+        val p = pipeline(bound = true, backend = object : ConversationBackend {
+            override fun load(): List<ConversationEntryView> { loads++; return entries }
+        })
+        var data = JSONObject(p.execute(call("{}")).content).getJSONObject("data")
+        while (data.has("next_cursor")) {
+            data = JSONObject(p.execute(call("""{"cursor":"${data.getString("next_cursor")}"}""")).content).getJSONObject("data")
+        }
+        assertEquals("翻三页只在第一次加载", 1, loads)
+    }
+
+    @Test
     fun index_jumpsToAMessage() {
         val p = pipeline(bound = true)
         val entries = JSONObject(p.execute(call("""{"index":2}""")).content).getJSONObject("data").getJSONArray("entries")

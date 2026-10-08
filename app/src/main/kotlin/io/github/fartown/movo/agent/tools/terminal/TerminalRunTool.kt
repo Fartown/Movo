@@ -220,6 +220,9 @@ internal class TerminalRunTool(
         if (result.timedOut) {
             append("timed_out: true（到 wait_ms 还没结束，命令连同会话已结束；长任务用 mode=background）\n")
         }
+        if (result.sessionReopened) {
+            append("session_reopened: true（同名会话之前已经结束，这次是新开的 shell，之前的 cd、export 不在了）\n")
+        }
         if (result.sessionClosed) {
             append("session_closed: true（之前的 cd、export 不在了，再用这个会话名会开一个新的 shell）\n")
         }

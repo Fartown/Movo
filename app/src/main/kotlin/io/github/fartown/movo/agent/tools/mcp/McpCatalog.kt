@@ -66,8 +66,8 @@ internal class McpCatalog(
             val serversInOrder = raw.map { it.server }.distinctBy { it.id }
             val usedServerNames = mutableSetOf<String>()
             val serverShortById = mutableMapOf<String, String>()
-            serversInOrder.forEachIndexed { index, server ->
-                val short = assignServerShortName(server, index, usedServerNames)
+            serversInOrder.forEach { server ->
+                val short = assignServerShortName(server, usedServerNames)
                 usedServerNames += short
                 serverShortById[server.id] = short
             }
@@ -105,16 +105,18 @@ internal class McpCatalog(
             return McpCatalog(entries, overBudget)
         }
 
-        /** 服务器短名：显示名清洗为 ASCII 小写字母数字；为空回退 s1/s2；冲突加 id hash。 */
+        /**
+         * 服务器短名：显示名清洗为 ASCII 小写字母数字；为空（如中文名）回退 s+服务器 id 的 hash；冲突加 id hash。
+         * 不按启用顺序编号：停用、新增一台服务器后，别的服务器的工具名不能跟着变（重构前按 serverId 起名）。
+         */
         private fun assignServerShortName(
             server: McpServerSetting,
-            index: Int,
             used: Set<String>,
         ): String {
             val cleaned = server.name.lowercase()
                 .filter { it in 'a'..'z' || it in '0'..'9' }
                 .take(12)
-            val base = cleaned.ifBlank { "s${index + 1}" }
+            val base = cleaned.ifBlank { "s${hash4(server.id)}" }
             if (base !in used) return base
             return "${base}_${hash4(server.id)}"
         }
