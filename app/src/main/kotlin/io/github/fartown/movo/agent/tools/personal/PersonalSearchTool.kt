@@ -293,11 +293,18 @@ internal class PersonalSearchTool(
 
     override fun warnings(output: PersonalSearchOutput): List<ToolWarning> = output.toolWarnings
 
-    /** 对 secret 正文打码：短信、通知正文里的验证码等不整段泄露。 */
+    /** 对 secret 正文打码：短信、通知正文里的验证码等不整段泄露。通知的副标题（extra.sub_text）同样打码。 */
     private fun maskItem(item: PersonalItem): PersonalItem = item.copy(
         title = PersonalSecretPatterns.mask(item.title),
         text = PersonalSecretPatterns.mask(item.text),
+        extra = item.extra?.let(::maskSubText),
     )
+
+    private fun maskSubText(extra: JSONObject): JSONObject {
+        val subText = extra.opt(SUB_TEXT) as? String ?: return extra
+        val masked = PersonalSecretPatterns.mask(subText)
+        return if (masked == subText) extra else JSONObject(extra.toString()).put(SUB_TEXT, masked)
+    }
 
     private fun sourceLabel(source: PersonalSource): String = when (source) {
         PersonalSource.SMS -> "短信"
@@ -309,5 +316,6 @@ internal class PersonalSearchTool(
         const val DEFAULT_LIMIT = 20
         const val MAX_LIMIT = 30
         const val MAX_QUERY = 200
+        const val SUB_TEXT = "sub_text"
     }
 }

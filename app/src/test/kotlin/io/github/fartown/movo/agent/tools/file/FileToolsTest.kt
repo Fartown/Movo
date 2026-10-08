@@ -70,7 +70,7 @@ class FileToolsTest {
             file.endsWith(".pdf") -> ResolvedFile(FileKind.PDF, file, true, 100, "application/pdf")
             else -> ResolvedFile(FileKind.TEXT, file, true, 50, "text/plain")
         }
-        override fun readText(file: String, offsetLine: Int, limitLines: Int, column: Int) =
+        override fun readText(file: String, offsetLine: Int, limitLines: Int, column: Int, checkCancelled: () -> Unit) =
             TextRead(
                 "line1\nline2", "utf-8", totalLines = 10, nextOffsetLine = offsetLine + 2,
                 startLine = offsetLine, endLine = offsetLine + 1,

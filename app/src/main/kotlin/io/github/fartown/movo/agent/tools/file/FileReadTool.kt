@@ -58,7 +58,7 @@ internal data class ResolvedFile(
 internal data class TextRead(
     val content: String,
     val encoding: String,
-    /** 文件总行数；文件太大没数完时为 null。 */
+    /** 文件总行数；文件太大没数完、或是 content:// 这一页没读到末尾时为 null。 */
     val totalLines: Int?,
     /** 还有后续时给下一段起始行号，否则 null。 */
     val nextOffsetLine: Int?,
@@ -78,8 +78,11 @@ internal interface FileReadBackend {
     /** 解析来源（句柄、URI、绝对路径），判定类型；文件不存在返回 null。 */
     fun resolve(file: String): ResolvedFile?
 
-    /** 从第 [offsetLine] 行第 [column] 个字起，最多 [limitLines] 行、[TextPager.MAX_CHARS] 字；不把整个文件读进内存。 */
-    fun readText(file: String, offsetLine: Int, limitLines: Int, column: Int = 0): TextRead
+    /**
+     * 从第 [offsetLine] 行第 [column] 个字起，最多 [limitLines] 行、[TextPager.MAX_CHARS] 字；不把整个文件读进内存。
+     * 读大文件时会反复调 [checkCancelled]，用户停止时不用等这一页读完。
+     */
+    fun readText(file: String, offsetLine: Int, limitLines: Int, column: Int = 0, checkCancelled: () -> Unit = {}): TextRead
 
     /** 读图并编码成模型输入；App 读不到时用 Root 复制到缓存再读。读不出图片时抛 ToolFailure。 */
     fun readImage(file: String): ImageRead
@@ -155,7 +158,7 @@ internal class FileReadTool(
 
         // PDF、视频、音频没有实现读取：schema 不再暴露 pages/mode/frames，这里如实回不支持。
         return when (resolved.kind) {
-            FileKind.TEXT -> readTextVerdict(input, resolved)
+            FileKind.TEXT -> readTextVerdict(input, resolved, ctx)
             FileKind.IMAGE -> readImageVerdict(resolved, ctx.env)
             FileKind.PDF -> unsupported("暂不支持读取 PDF", "pdf_unsupported")
             FileKind.VIDEO -> unsupported("暂不支持读取视频", "video_unsupported")
@@ -164,10 +167,10 @@ internal class FileReadTool(
         }
     }
 
-    private fun readTextVerdict(input: FileReadInput, resolved: ResolvedFile): Verdict<FileReadOutput> {
+    private fun readTextVerdict(input: FileReadInput, resolved: ResolvedFile, ctx: ToolContext): Verdict<FileReadOutput> {
         val offset = input.offsetLine ?: 1
         val limit = input.limitLines ?: DEFAULT_TEXT_LINES
-        val read = backend.readText(resolved.path, offset, limit, input.column ?: 0)
+        val read = backend.readText(resolved.path, offset, limit, input.column ?: 0, ctx::checkCancelled)
         val data = JSONObject()
             .put("kind", "text")
             .put("path", resolved.path)

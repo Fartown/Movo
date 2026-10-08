@@ -38,7 +38,7 @@ class PersonalNotificationsBackendTest {
     private val hour = 60L * 60 * 1000
 
     private var bar: List<ActiveNotification>? = emptyList()
-    private val apps = listOf(
+    private var apps = listOf(
         AppMatch("微信", "com.tencent.mm", isSystem = false),
         AppMatch("美团", "com.sankuai.meituan", isSystem = false),
         AppMatch("美团外卖", "com.sankuai.meituan.takeoutnew", isSystem = false),
@@ -113,6 +113,76 @@ class PersonalNotificationsBackendTest {
         assertEquals(55, pages.flatten().distinct().size)
     }
 
+    // 翻完所有页：返回每页的标题和最后一页的提醒。
+    private fun allPages(limit: Int, between: (page: Int) -> Unit = {}): Pair<List<List<String?>>, List<String>> {
+        val pages = mutableListOf<List<String?>>()
+        val warnings = mutableListOf<String>()
+        var cursor: String? = null
+        do {
+            val page = search(PersonalSource.NOTIFICATIONS, limit = limit, cursor = cursor)
+            assertNull(page.error)
+            pages += page.items.map { it.title }
+            warnings += page.warnings.map { it.message }
+            cursor = page.nextCursor
+            if (cursor != null) between(pages.size)
+        } while (cursor != null)
+        return pages to warnings
+    }
+
+    @Test
+    fun history_newNotificationsWhilePaging_doNotRepeatTheLastPage() {
+        repeat(30) { repository.record("n$it", "com.example.chat", "消息 $it", "内容", null, now - (it + 1) * 1_000L) }
+
+        // 翻完第一页后来了 5 条新通知：按偏移翻页时第二页开头会重复第一页末尾的 5 条。
+        val (pages, warnings) = allPages(limit = 10) { page ->
+            if (page == 1) repeat(5) { repository.record("new$it", "com.example.chat", "新消息 $it", "内容", null, System.currentTimeMillis() + 1_000 + it) }
+        }
+
+        assertEquals((0 until 30).map { "消息 $it" }, pages.flatten())
+        assertTrue(warnings.toString(), warnings.any { it.contains("翻页期间有 5 条通知") })
+    }
+
+    @Test
+    fun history_notificationUpdatedWhilePaging_isNotRepeated_andIsMentioned() {
+        repeat(30) { repository.record("n$it", "com.example.chat", "消息 $it", "内容", null, now - (it + 1) * 1_000L) }
+
+        // 翻完第一页后，第 15 条（还没看到）和第 3 条（已经看过）都更新了，排到了最前面。
+        val (pages, warnings) = allPages(limit = 10) { page ->
+            if (page == 1) {
+                repository.record("n15", "com.example.chat", "消息 15（已更新）", "内容", null, System.currentTimeMillis() + 1_000)
+                repository.record("n3", "com.example.chat", "消息 3（已更新）", "内容", null, System.currentTimeMillis() + 1_001)
+            }
+        }
+
+        val seen = pages.flatten()
+        assertEquals("不重复", seen.size, seen.distinct().size)
+        assertEquals((0 until 30).filter { it != 15 }.map { "消息 $it" }, seen)
+        // 没看到的那条不悄悄漏掉：提醒里说了有更新的，要看就重新查。
+        assertTrue(warnings.toString(), warnings.any { it.contains("翻页期间有 2 条通知") && it.contains("去掉 cursor") })
+    }
+
+    @Test
+    fun history_sameTimestampAcrossPages_isNeitherRepeatedNorSkipped() {
+        repeat(25) { repository.record("k${it.toString().padStart(2, '0')}", "com.example.chat", "同一刻 $it", "内容", null, now - 1_000) }
+
+        val (pages, warnings) = allPages(limit = 10)
+
+        assertEquals(listOf(10, 10, 5), pages.map { it.size })
+        assertEquals((0 until 25).map { "同一刻 $it" }.toSet(), pages.flatten().toSet())
+        assertTrue(warnings.isEmpty())
+    }
+
+    @Test
+    fun history_cursorFromAnotherQuery_isStale() {
+        repeat(5) { repository.record("n$it", "com.example.chat", "消息 $it", "内容", null, now - it * 1_000L) }
+        val cursor = search(PersonalSource.NOTIFICATIONS, limit = 2).nextCursor!!
+
+        assertEquals(ToolErrorCode.STALE_OBSERVATION, search(PersonalSource.NOTIFICATIONS, query = "别的", limit = 2, cursor = cursor).error!!.code)
+        // 以前的偏移游标也不再认。
+        val offsetCursor = PersonalCursor.encode(PersonalSearchInput(PersonalSource.NOTIFICATIONS, null, null, null, null, 2, null), 2)
+        assertEquals(ToolErrorCode.STALE_OBSERVATION, search(PersonalSource.NOTIFICATIONS, limit = 2, cursor = offsetCursor).error!!.code)
+    }
+
     @Test
     fun history_saysHowFarItReaches_andWarnsWhenAskedForMoreThanSevenDays() {
         repository.record("a", "com.example.chat", "消息", "内容", "副标题", now)
@@ -178,6 +248,63 @@ class PersonalNotificationsBackendTest {
 
         assertEquals(listOf("卸载前的通知"), result.items.map { it.title })
         assertFalse(result.meta!!.has("app_packages"))
+        assertTrue(result.meta!!.getString("app_note").contains("按包名 com.uninstalled.app 查"))
+    }
+
+    @Test
+    fun installedPackageName_isUsedDirectly() {
+        repository.record("wx", "com.tencent.mm", "妈妈", "晚上回家吃饭吗", null, now)
+
+        val result = search(PersonalSource.NOTIFICATIONS, app = "com.tencent.mm")
+
+        assertEquals(listOf("妈妈"), result.items.map { it.title })
+        assertFalse(result.meta!!.has("app_packages"))
+        assertFalse(result.meta!!.has("app_note"))
+    }
+
+    @Test
+    fun appNamesThatLookLikePackages_areMatchedByName() {
+        apps = apps + listOf(
+            AppMatch("Booking.com", "com.booking", isSystem = false),
+            AppMatch("Trip.com: 机票酒店", "ctrip.english", isSystem = false),
+        )
+        repository.record("hotel", "com.booking", "预订确认", "您的酒店已确认", null, now)
+        repository.record("flight", "ctrip.english", "航班提醒", "明天 8:00 起飞", null, now - 1_000)
+
+        val booking = search(PersonalSource.NOTIFICATIONS, app = "Booking.com")
+        assertEquals(listOf("预订确认"), booking.items.map { it.title })
+        assertEquals("com.booking", booking.meta!!.getJSONArray("app_packages").getString(0))
+
+        val trip = search(PersonalSource.NOTIFICATIONS, app = "Trip.com")
+        assertEquals(listOf("航班提醒"), trip.items.map { it.title })
+        assertEquals("ctrip.english", trip.meta!!.getJSONArray("app_packages").getString(0))
+    }
+
+    private val banks = (1..12).map { AppMatch("第${it}银行", "com.bank$it", isSystem = false) }
+
+    @Test
+    fun appNameMatchingManyApps_saysWhichWereLeftOut() {
+        apps = banks
+        repository.record("b1", "com.bank1", "第1银行", "工资到账", null, now)
+        repository.record("b12", "com.bank12", "第12银行", "信用卡账单", null, now - 1_000)
+
+        val result = search(PersonalSource.NOTIFICATIONS, app = "银行")
+
+        val packages = result.meta!!.getJSONArray("app_packages")
+        assertEquals(AppFilter.MAX_PARTIAL, packages.length())
+        assertEquals(listOf("第1银行"), result.items.map { it.title })
+        val warning = result.warnings.single { it.code == ToolErrorCode.AMBIGUOUS }.message
+        assertTrue(warning, warning.contains("有 12 个") && warning.contains("第11银行（com.bank11）") && warning.contains("第12银行（com.bank12）"))
+    }
+
+    @Test
+    fun orders_manyMatchingApps_isAWarningNotAnError() {
+        apps = banks
+
+        val result = search(PersonalSource.ORDERS, app = "银行", limit = 10)
+
+        assertNull(result.error)
+        assertTrue(result.warnings.any { it.code == ToolErrorCode.AMBIGUOUS })
     }
 
     @Test
@@ -189,12 +316,22 @@ class PersonalNotificationsBackendTest {
     }
 
     @Test
-    fun appFilter_prefersExactNamesThenPartialMatches() {
-        assertEquals(listOf("com.sankuai.meituan"), AppFilter.resolve("美团") { apps })
-        assertEquals(listOf("com.tencent.mm"), AppFilter.resolve(" 微信 ") { apps })
-        assertEquals(listOf("com.sankuai.meituan.takeoutnew"), AppFilter.resolve("外卖") { apps })
-        assertEquals(listOf("com.a.b"), AppFilter.resolve("com.a.b") { error("包名不用查已装应用") })
-        assertEquals(emptyList<String>(), AppFilter.resolve("抖音") { apps })
+    fun appFilter_installedPackageThenNamesThenRawPackage() {
+        fun resolve(app: String) = AppFilter.resolve(app) { apps }
+
+        assertEquals(AppFilter.Match(listOf("com.tencent.mm"), AppFilter.By.INSTALLED_PACKAGE), resolve("com.tencent.mm"))
+        assertEquals(AppFilter.Match(listOf("com.sankuai.meituan"), AppFilter.By.NAME), resolve("美团"))
+        assertEquals(AppFilter.Match(listOf("com.tencent.mm"), AppFilter.By.NAME), resolve(" 微信 "))
+        assertEquals(AppFilter.Match(listOf("com.sankuai.meituan.takeoutnew"), AppFilter.By.NAME), resolve("外卖"))
+        assertEquals(AppFilter.Match(listOf("com.a.b"), AppFilter.By.PACKAGE_NOT_INSTALLED), resolve("com.a.b"))
+        assertEquals(AppFilter.By.NONE, resolve("抖音").by)
+        // 读不到已装应用时，像包名的仍按包名查。
+        assertEquals(listOf("com.a.b"), AppFilter.resolve("com.a.b") { error("读不到") }.packages)
+
+        val many = AppFilter.resolve("银行") { banks }
+        assertEquals(banks.take(AppFilter.MAX_PARTIAL).map { it.packageName }, many.packages)
+        assertEquals(banks.drop(AppFilter.MAX_PARTIAL), many.skipped)
+
         assertTrue(AppFilter.looksLikePackage("com.tencent.mm"))
         assertFalse(AppFilter.looksLikePackage("微信"))
         assertFalse(AppFilter.looksLikePackage("wechat"))

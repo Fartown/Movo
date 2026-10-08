@@ -191,14 +191,20 @@ internal object TextPager {
     /** 一次最多给模型的正文长度（按 JSON 转义后算），与重构前 read_file 每次 16000 字节相当。 */
     const val MAX_CHARS = 16_000
 
-    /** 读完这一页后还会接着数总行数，从文件开头算最多扫这么多字；超过就不报总行数。 */
+    /** 读完这一页后接着数总行数时，从文件开头算最多扫这么多字；超过就不报总行数。 */
     private const val TOTAL_SCAN_CHARS = 32L * 1024 * 1024
 
+    /** 每读这么多字查一次取消（2 的幂减 1，当掩码用）。 */
+    private const val CANCEL_CHECK_MASK = 64L * 1024 - 1
+
     private const val NEWLINE = '\n'.code
+    private const val CARRIAGE_RETURN = '\r'.code
 
     /**
      * 从第 [offsetLine] 行（1 起）第 [column] 个字（0 起）开始，最多读 [limitLines] 行、[maxCost] 的正文。
-     * [reader] 由调用方关闭。
+     * `\r\n` 和单独的 `\r` 都算一个换行（与重构前 useLines 的分法一样），内容里不留 `\r`，行号、列都按去掉 `\r` 后算。
+     * [countTotal] 为 true 时，没读到文件末尾也接着往后数总行数；为 false 时只有这一页读到了末尾才给总行数。
+     * 每读 64K 字调一次 [checkCancelled]。[reader] 由调用方关闭。
      */
     fun read(
         reader: java.io.Reader,
@@ -207,44 +213,28 @@ internal object TextPager {
         column: Int,
         limitLines: Int,
         maxCost: Int = MAX_CHARS,
+        countTotal: Boolean = true,
+        checkCancelled: () -> Unit = {},
     ): TextRead {
-        // 读过的字都经 take() 计数（换行数、最后一个字）；停下时没用上的字放回 pending，接着数总行数时再读到。
-        val pending = ArrayDeque<Int>()
-        var newlines = 0L
-        var lastChar = -1
-        var scanned = 0L
-        fun take(): Int {
-            val c = if (pending.isNotEmpty()) pending.removeFirst() else reader.read()
-            if (c >= 0) {
-                scanned++
-                lastChar = c
-                if (c == NEWLINE) newlines++
-            }
-            return c
-        }
-        fun giveBack(c: Int) {
-            pending.addFirst(c)
-            scanned--
-            if (c == NEWLINE) newlines--
-        }
+        val source = CharSource(reader, checkCancelled)
 
         var line = 1
         while (line < offsetLine) {
-            val c = take()
+            val c = source.take()
             if (c < 0) break
             if (c == NEWLINE) line++
         }
         if (line < offsetLine) {
             // 起始行已经超出文件末尾。
             return TextRead(
-                "", encoding, totalLines = countLines(newlines, lastChar), nextOffsetLine = null,
+                "", encoding, totalLines = countLines(source), nextOffsetLine = null,
                 startLine = offsetLine, endLine = offsetLine - 1,
             )
         }
         // 跳到这一行的第 column 个字；这一行没那么长时从下一行开头读。
         var col = 0
         while (col < column) {
-            val c = take()
+            val c = source.take()
             if (c < 0) break
             if (c == NEWLINE) {
                 line++
@@ -262,7 +252,7 @@ internal object TextPager {
         var nextLine: Int? = null
         var nextColumn: Int? = null
         while (true) {
-            val c = take()
+            val c = source.take()
             if (c < 0) break
             if (c == NEWLINE) {
                 linesDone++
@@ -270,9 +260,9 @@ internal object TextPager {
                 col = 0
                 if (linesDone >= limitLines) {
                     // 到了行数上限：后面还有字才给续读位置。
-                    val peek = take()
+                    val peek = source.take()
                     if (peek >= 0) {
-                        giveBack(peek)
+                        source.giveBack(peek)
                         nextLine = line
                     }
                     break
@@ -283,7 +273,7 @@ internal object TextPager {
             }
             val charCost = jsonCost(c)
             if (cost + charCost > maxCost) {
-                giveBack(c)
+                source.giveBack(c)
                 nextLine = line
                 if (linesDone > 0) {
                     // 到了字数上限、这一页已有整行：停在上一行末尾，下一页从这一行开头读。
@@ -291,7 +281,7 @@ internal object TextPager {
                 } else {
                     // 一行就超过上限：停在这一行中间，下一页从这个位置接着读（不把一个字的两半拆开）。
                     if (out.isNotEmpty() && out.last().isHighSurrogate()) {
-                        giveBack(out.last().code)
+                        source.giveBack(out.last().code)
                         out.setLength(out.length - 1)
                         col--
                     }
@@ -309,17 +299,17 @@ internal object TextPager {
             nextLine == null && linesDone == 0 && out.isEmpty() -> startLine - 1
             nextColumn != null -> line
             nextLine != null -> line - 1
-            lastChar == NEWLINE -> line - 1
+            source.lastChar == NEWLINE -> line - 1
             else -> line
         }.coerceAtLeast(startLine - 1)
-        // 接着数总行数（不留内容）；文件太大就不数了。
+        // 总行数：读到了末尾就有；没读到末尾时，让数才接着数（不留内容），文件太大就不数了。
         var total: Int? = null
         if (nextLine == null) {
-            total = countLines(newlines, lastChar)
-        } else {
-            while (scanned < TOTAL_SCAN_CHARS) {
-                if (take() < 0) {
-                    total = countLines(newlines, lastChar)
+            total = countLines(source)
+        } else if (countTotal) {
+            while (source.scanned < TOTAL_SCAN_CHARS) {
+                if (source.take() < 0) {
+                    total = countLines(source)
                     break
                 }
             }
@@ -337,14 +327,76 @@ internal object TextPager {
     }
 
     /** 行数 = 换行数，最后一行没有换行结尾时再加一行。 */
-    private fun countLines(newlines: Long, lastChar: Int): Int =
-        (newlines + if (lastChar >= 0 && lastChar != NEWLINE) 1 else 0).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    private fun countLines(source: CharSource): Int =
+        (source.newlines + if (source.lastChar >= 0 && source.lastChar != NEWLINE) 1 else 0)
+            .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
 
-    /** 一个字在 JSON 里占多长：引号、反斜杠和常见控制字符转义成两个字，其余控制字符转义成 \uXXXX。 */
+    /**
+     * 一个字在 JSON 里占多长，按手机上 Android 自带的 org.json 算：引号、反斜杠、`/` 和常见控制字符转义成两个字，
+     * 其余控制字符和 U+2028、U+2029 转义成 \uXXXX。JVM 上的 org.json 不转义 `/`，单测里看不出来。
+     */
     private fun jsonCost(c: Int): Int = when {
-        c == '"'.code || c == '\\'.code -> 2
+        c == '"'.code || c == '\\'.code || c == '/'.code -> 2
         c == '\t'.code || c == '\r'.code || c == '\b'.code || c == 0x0C -> 2
-        c < 0x20 -> 6
+        c < 0x20 || c == 0x2028 || c == 0x2029 -> 6
         else -> 1
+    }
+
+    /**
+     * 按字读 [reader]（自带缓冲）：`\r\n` 和单独的 `\r` 都换成一个 `\n`。
+     * 记下读过多少字、多少个换行、最后一个字；停下时没用上的字放回（[giveBack]），接着数总行数时再读到。
+     */
+    private class CharSource(private val reader: java.io.Reader, private val checkCancelled: () -> Unit) {
+        private val buffer = CharArray(8 * 1024)
+        private var position = 0
+        private var length = 0
+        private var afterCarriageReturn = false
+        private val pending = ArrayDeque<Int>()
+
+        var newlines = 0L
+            private set
+        var lastChar = -1
+            private set
+        var scanned = 0L
+            private set
+
+        fun take(): Int {
+            val c = if (pending.isNotEmpty()) pending.removeFirst() else next()
+            if (c >= 0) {
+                scanned++
+                lastChar = c
+                if (c == NEWLINE) newlines++
+                if (scanned and CANCEL_CHECK_MASK == 0L) checkCancelled()
+            }
+            return c
+        }
+
+        fun giveBack(c: Int) {
+            pending.addFirst(c)
+            scanned--
+            if (c == NEWLINE) newlines--
+        }
+
+        private fun next(): Int {
+            while (true) {
+                if (position >= length) {
+                    val n = reader.read(buffer, 0, buffer.size)
+                    if (n < 0) return -1
+                    position = 0
+                    length = n
+                    continue
+                }
+                val c = buffer[position++].code
+                if (afterCarriageReturn) {
+                    afterCarriageReturn = false
+                    if (c == NEWLINE) continue
+                }
+                if (c == CARRIAGE_RETURN) {
+                    afterCarriageReturn = true
+                    return NEWLINE
+                }
+                return c
+            }
+        }
     }
 }

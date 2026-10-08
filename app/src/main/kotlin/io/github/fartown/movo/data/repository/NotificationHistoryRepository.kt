@@ -51,6 +51,7 @@ internal class NotificationHistoryRepository(context: Context) {
     /**
      * 查询条件。时间窗、应用、关键词都在 SQL 里筛（不在取回的一页里再筛，否则较早的时间窗会被误报成「没找到」）；
      * [anyKeywords] 是「标题、正文、副标题里含其中任一个词」，[text] 是用户给的关键词，两者同时给时都要满足。
+     * [after] 是翻页位置：只取排在它后面的。
      */
     data class Query(
         val sinceMillis: Long,
@@ -58,12 +59,50 @@ internal class NotificationHistoryRepository(context: Context) {
         val text: String = "",
         val packages: List<String> = emptyList(),
         val anyKeywords: List<String> = emptyList(),
-        val offset: Int = 0,
+        val after: Position? = null,
         val limit: Int,
     )
 
+    /** 排序（时间倒序，同一时间按 key）里的一个位置：上一页最后一条的时间和 key。 */
+    data class Position(val postedAt: Long, val key: String)
+
     /** 按 [Query] 查，最新的在前。 */
     fun rows(query: Query): List<Row> {
+        val (selection, args) = whereClause(query)
+        val rows = mutableListOf<Row>()
+        database.readableDatabase.query(
+            TABLE,
+            arrayOf("notification_key", "package_name", "title", "text", "sub_text", "posted_at"),
+            selection,
+            args,
+            null,
+            null,
+            "posted_at DESC, notification_key ASC",
+            query.limit.coerceAtLeast(1).toString(),
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                rows += Row(
+                    key = cursor.getString(0),
+                    packageName = cursor.getString(1),
+                    title = cursor.getString(2),
+                    text = cursor.getString(3),
+                    subText = cursor.getString(4),
+                    postedAt = cursor.getLong(5),
+                )
+            }
+        }
+        return rows
+    }
+
+    /** 符合 [Query] 的有几条（不看 limit）。 */
+    fun count(query: Query): Int {
+        val (selection, args) = whereClause(query)
+        return database.readableDatabase.rawQuery("SELECT COUNT(*) FROM $TABLE WHERE $selection", args).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getInt(0) else 0
+        }
+    }
+
+    private fun whereClause(query: Query): Pair<String, Array<String>> {
         val clauses = mutableListOf("posted_at>=?")
         val args = mutableListOf(query.sinceMillis.toString())
         query.untilMillis?.let {
@@ -88,29 +127,12 @@ internal class NotificationHistoryRepository(context: Context) {
                 repeat(3) { args += pattern }
             }
         }
-        val rows = mutableListOf<Row>()
-        database.readableDatabase.query(
-            TABLE,
-            arrayOf("notification_key", "package_name", "title", "text", "sub_text", "posted_at"),
-            clauses.joinToString(" AND "),
-            args.toTypedArray(),
-            null,
-            null,
-            "posted_at DESC, notification_key ASC",
-            "${query.offset.coerceAtLeast(0)},${query.limit.coerceAtLeast(1)}",
-        ).use { cursor ->
-            while (cursor.moveToNext()) {
-                rows += Row(
-                    key = cursor.getString(0),
-                    packageName = cursor.getString(1),
-                    title = cursor.getString(2),
-                    text = cursor.getString(3),
-                    subText = cursor.getString(4),
-                    postedAt = cursor.getLong(5),
-                )
-            }
+        // 排序是 posted_at DESC, notification_key ASC：排在位置后面 = 更早，或同一时间 key 更大。
+        query.after?.let {
+            clauses += "(posted_at<? OR (posted_at=? AND notification_key>?))"
+            args += listOf(it.postedAt.toString(), it.postedAt.toString(), it.key)
         }
-        return rows
+        return clauses.joinToString(" AND ") to args.toTypedArray()
     }
 
     fun search(query: String, packageName: String, maxAgeHours: Int, limit: Int): String {
