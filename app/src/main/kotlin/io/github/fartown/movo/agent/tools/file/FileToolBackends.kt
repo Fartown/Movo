@@ -467,6 +467,31 @@ internal enum class ChatImageSource(
 // file_read
 // ---------------------------------------------------------------------------
 
+/**
+ * 数过的本机文件总行数：同一个文件（路径、大小、修改时间都没变）往后翻页时直接用，不再从头数。
+ * 只留最近 [MAX_ENTRIES] 个文件。
+ */
+private object TotalLinesCache {
+    private const val MAX_ENTRIES = 32
+
+    data class Key(val path: String, val sizeBytes: Long, val modifiedMillis: Long)
+
+    /** 数的结果；[lines] 为 null 是文件太大、没数完。 */
+    class Counted(val lines: Int?)
+
+    private val entries = object : LinkedHashMap<Key, Counted>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Key, Counted>?): Boolean = size > MAX_ENTRIES
+    }
+
+    @Synchronized
+    operator fun get(key: Key): Counted? = entries[key]
+
+    @Synchronized
+    operator fun set(key: Key, value: Counted) {
+        entries[key] = value
+    }
+}
+
 internal class RealFileReadBackend(
     private val context: Context,
     private val root: BoundedRootCommandExecutor,
@@ -526,15 +551,21 @@ internal class RealFileReadBackend(
         return null
     }
 
-    override fun readText(file: String, offsetLine: Int, limitLines: Int, column: Int): TextRead {
+    override fun readText(file: String, offsetLine: Int, limitLines: Int, column: Int, checkCancelled: () -> Unit): TextRead {
         val local = resolveLocalFile(context, file)
         val start = offsetLine.coerceAtLeast(1)
         if (local.isFile && local.canRead()) {
-            return pageText(start, column, limitLines) { local.inputStream() }
+            // 总行数一个文件只数一次：以前每读一页都从头扫最多 3200 万字，长文件每翻一页多花秒级时间。
+            val key = TotalLinesCache.Key(local.absolutePath, local.length(), local.lastModified())
+            val known = TotalLinesCache[key]
+            val read = pageText(start, column, limitLines, countTotal = known == null, checkCancelled) { local.inputStream() }
+            if (known == null) TotalLinesCache[key] = TotalLinesCache.Counted(read.totalLines)
+            return if (read.totalLines == null && known != null) read.copy(totalLines = known.lines) else read
         }
         if (file.startsWith("content://")) {
+            // content:// 可能是云盘里的文件：不为数行数把整个文件下载下来，这一页读到末尾时才给总行数。
             val parsed = Uri.parse(file)
-            return pageText(start, column, limitLines) {
+            return pageText(start, column, limitLines, countTotal = false, checkCancelled) {
                 context.contentResolver.openInputStream(parsed) ?: fail(ToolErrorCode.NOT_FOUND, "无法打开 content URI：$file")
             }
         }
@@ -563,13 +594,24 @@ internal class RealFileReadBackend(
     }
 
     /** 先看开头判定编码，再从头流式分页（[open] 会被调用两次：一次看开头，一次分页）。 */
-    private fun pageText(offsetLine: Int, column: Int, limitLines: Int, open: () -> InputStream): TextRead {
+    private fun pageText(
+        offsetLine: Int,
+        column: Int,
+        limitLines: Int,
+        countTotal: Boolean,
+        checkCancelled: () -> Unit,
+        open: () -> InputStream,
+    ): TextRead {
         val header = open().use { it.readHeader(FileSupport.ENCODING_SNIFF_BYTES) }
         val encoding = FileSupport.detectEncoding(header)
         return open().use { stream ->
             if (encoding.bomBytes > 0) stream.skipFully(encoding.bomBytes.toLong())
-            java.io.InputStreamReader(stream, encoding.charset).buffered().use { reader ->
-                TextPager.read(reader, encoding.name, offsetLine, column.coerceAtLeast(0), limitLines)
+            // TextPager 自己按块读，不再套 BufferedReader。
+            java.io.InputStreamReader(stream, encoding.charset).use { reader ->
+                TextPager.read(
+                    reader, encoding.name, offsetLine, column.coerceAtLeast(0), limitLines,
+                    countTotal = countTotal, checkCancelled = checkCancelled,
+                )
             }
         }
     }
@@ -753,9 +795,9 @@ internal class RealFileWriteBackend(
         val file = resolveLocalFile(context, path)
         val parent = file.parentFile
         if (parent != null && !parent.exists() && !parent.mkdirs() && !parent.isDirectory) {
-            // App 建不出父目录：共享存储里多半是缺「所有文件访问」，其余多半是 Root 才能写的位置。
+            // App 建不出父目录：共享存储里多半是缺「所有文件访问」，其余多半是别的应用的私有目录或系统位置。
             // TODO：Root 任意内容写入（重构前的写法是 su + stdin）。
-            writeDenied(file)
+            writeDenied(file, "建不了目录 ${parent.absolutePath}")
         }
         if (file.exists() && !file.isFile) {
             fail(ToolErrorCode.CONFLICT, "目标不是普通文件")
@@ -763,8 +805,9 @@ internal class RealFileWriteBackend(
         val bytes = content.toByteArray(Charsets.UTF_8)
         runCatching {
             FileOutputStream(file, append).use { it.write(bytes) }
-        }.getOrElse {
-            writeDenied(file)
+        }.getOrElse { error ->
+            // 系统给的原因开头是路径（Android 上是「路径: open failed: EACCES (Permission denied)」），去掉不重复说。
+            writeDenied(file, error.message?.removePrefix(file.absolutePath)?.trimStart(':', ' '))
         }
         val verifiedSize = file.length()
         // 覆盖写：回读整文件内容哈希作为证据；追加：只回读 size。
@@ -781,15 +824,42 @@ internal class RealFileWriteBackend(
         )
     }
 
-    /** 写不进去时说清原因：以前一律报「设备不支持」，模型会告诉用户写不了，而不是让用户去开权限。 */
-    private fun writeDenied(file: File): Nothing {
-        if (SharedStorageAccess.covers(file) && sharedStorageHidden()) SharedStorageAccess.writeFailure(file.absolutePath)
+    /**
+     * 写不进去时按真实原因说：共享存储里缺「所有文件访问」就让用户去开；别的应用的私有目录、系统位置 Movo 写不了
+     * （Root 写入没有实现，有 Root 也一样），建议改写到工作区或 Download；其余照系统给的原因（[reason]）说。
+     * 以前一律提示「系统位置需要 Root」，会把用户引去授权 Root，可授权了也写不了。
+     */
+    private fun writeDenied(file: File, reason: String?): Nothing {
+        val path = file.absolutePath
+        if (SharedStorageAccess.covers(file) && sharedStorageHidden()) SharedStorageAccess.writeFailure(path)
+        val owner = APP_PRIVATE_DIR.find(path)?.groupValues?.get(1)
+        val ownData = context.filesDir.parentFile?.absolutePath
+        val place = when {
+            owner == context.packageName || (ownData != null && path.startsWith("$ownData/")) -> null
+            owner != null -> "别的应用的私有目录"
+            SharedStorageAccess.covers(file) -> null
+            else -> "系统位置"
+        }
+        if (place != null) {
+            fail(
+                ToolErrorCode.UNSUPPORTED,
+                "写不了 $path：这是$place，Movo 不能写",
+                hint = WRITE_ELSEWHERE_HINT,
+                detail = "write_location_unsupported",
+            )
+        }
         fail(
-            ToolErrorCode.PERMISSION_REQUIRED,
-            "Movo 没有权限写 ${file.absolutePath}",
-            hint = "写到工作区（相对路径）或共享存储里；系统位置需要 Root",
-            detail = "write_denied",
+            ToolErrorCode.SYSTEM_REJECTED,
+            "写 $path 失败" + reason?.let { "：$it" }.orEmpty(),
+            hint = WRITE_ELSEWHERE_HINT,
+            detail = "write_failed",
         )
+    }
+
+    private companion object {
+        /** 应用私有目录：/data/data/包名、/data/user(_de)/N/包名、共享存储里的 Android/data|obb/包名；第 1 组是包名。 */
+        val APP_PRIVATE_DIR = Regex("""^(?:/data/data|/data/user(?:_de)?/\d+|.*/Android/(?:data|obb))/([^/]+)""")
+        const val WRITE_ELSEWHERE_HINT = "改写到工作区（用相对路径）或 /sdcard/Download/ 下"
     }
 }
 

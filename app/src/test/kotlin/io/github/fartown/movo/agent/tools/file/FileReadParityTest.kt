@@ -13,6 +13,10 @@ import io.github.fartown.movo.agent.tools.core.ToolPipeline
 import io.github.fartown.movo.agent.tools.core.ToolProjection
 import io.github.fartown.movo.agent.tools.core.ToolProvider
 import io.github.fartown.movo.agent.tools.core.ToolRegistry
+import io.github.fartown.movo.agent.runtime.AgentRunCancelledException
+import io.github.fartown.movo.agent.tools.core.ToolArgs
+import io.github.fartown.movo.agent.tools.core.ToolContext
+import io.github.fartown.movo.agent.tools.core.UserInteraction
 import io.github.fartown.movo.core.AndroidAgentLogger
 import java.io.File
 import java.io.StringReader
@@ -138,6 +142,214 @@ class FileReadParityTest {
         assertEquals(2, past.totalLines)
     }
 
+    // ---- 换行：\r\n 和单独的 \r 都是一个换行，内容里不留 \r（与重构前 useLines 一样）----
+
+    @Test
+    fun pager_crlfAndLoneCr_areLineBreaks_andNotKeptInContent() {
+        val crlf = page("a\r\nb\r\nc\r\n")
+        assertEquals("a\nb\nc", crlf.content)
+        assertEquals(3, crlf.totalLines)
+        assertEquals(3, crlf.endLine)
+
+        val oldMac = page("a\rb\rc")
+        assertEquals("a\nb\nc", oldMac.content)
+        assertEquals(3, oldMac.totalLines)
+
+        // 空行照样算一行；\r\r\n 是两个换行（readLine 也这么分）。
+        assertEquals("a\n\nb", page("a\r\n\r\nb").content)
+        assertEquals(3, page("a\r\r\nb").totalLines)
+
+        val second = page("a\r\nb\r\nc", offset = 2, limit = 1)
+        assertEquals("b", second.content)
+        assertEquals(3, second.nextOffsetLine)
+        // 列不算 \r。
+        assertEquals("ef", page("abc\r\ndef\r\n", offset = 2, column = 1).content)
+    }
+
+    @Test
+    fun pager_crlfSplitAcrossTheReadBuffer_isStillOneBreak() {
+        // 内部按 8K 字一块读：\r 落在一块末尾、\n 落在下一块开头。
+        val text = "x".repeat(8 * 1024 - 1) + "\r\n" + "y"
+
+        val read = page(text, max = 100_000)
+
+        assertEquals(2, read.totalLines)
+        assertEquals("x".repeat(8 * 1024 - 1) + "\ny", read.content)
+    }
+
+    @Test
+    fun pager_crlfFile_readsBackPageByPage_withColumnsWithoutCr() {
+        val text = (1..2000).joinToString("\r\n") { "第 $it 行，Windows 换行" } + "\r\n" + "z".repeat(40_000) + "\r\nlast\r\n"
+        val pieces = mutableListOf<String>()
+        var offset = 1
+        var column = 0
+        var guard = 0
+        while (true) {
+            val read = page(text, offset, column)
+            assertFalse(read.content.contains('\r'))
+            pieces += read.content
+            val next = read.nextOffsetLine ?: break
+            pieces += if (read.nextColumn != null) "" else "\n"
+            offset = next
+            column = read.nextColumn ?: 0
+            assertTrue(guard++ < 100)
+        }
+        assertEquals(text.replace("\r\n", "\n").removeSuffix("\n"), pieces.joinToString(""))
+    }
+
+    @Test
+    fun readText_crlfFile_hasNoCarriageReturns() {
+        val file = File(dir, "windows.csv").apply { writeText("name,phone\r\n张三,123\r\n李四,456\r\n") }
+
+        val read = backend().readText(file.absolutePath, 1, 100)
+
+        assertEquals("name,phone\n张三,123\n李四,456", read.content)
+        assertEquals(3, read.totalLines)
+    }
+
+    // ---- 总行数不每页从头数；读的过程中能取消 ----
+
+    /** 记下被读走了多少字。 */
+    private class CountingReader(text: String) : java.io.Reader() {
+        private val inner = StringReader(text)
+        var consumed = 0L
+
+        override fun read(cbuf: CharArray, off: Int, len: Int): Int =
+            inner.read(cbuf, off, len).also { if (it > 0) consumed += it }
+
+        override fun close() = inner.close()
+    }
+
+    @Test
+    fun pager_withoutCountTotal_stopsReadingRightAfterThePage() {
+        val text = (1..200_000).joinToString("\n") { "line $it" }
+
+        val counted = CountingReader(text)
+        val withTotal = TextPager.read(counted, "utf-8", 1, 0, 100)
+        assertEquals(200_000, withTotal.totalLines)
+        assertEquals(text.length.toLong(), counted.consumed)
+
+        val bounded = CountingReader(text)
+        val withoutTotal = TextPager.read(bounded, "utf-8", 1, 0, 100, countTotal = false)
+        assertNull(withoutTotal.totalLines)
+        assertEquals(101, withoutTotal.nextOffsetLine)
+        assertTrue("只多读一块缓冲：${bounded.consumed}", bounded.consumed < 20_000)
+
+        // 这一页读到了末尾：不用另外数也知道总行数。
+        val tail = TextPager.read(StringReader(text), "utf-8", 199_990, 0, 100, countTotal = false)
+        assertEquals(200_000, tail.totalLines)
+        assertNull(tail.nextOffsetLine)
+    }
+
+    @Test
+    fun pager_checksCancellationWhileSkippingAndCounting() {
+        val text = (1..300_000).joinToString("\n") { "line $it" }
+        var checks = 0
+
+        // 跳到很后面的行时也会查取消。
+        val skipping = runCatching {
+            TextPager.read(StringReader(text), "utf-8", 290_000, 0, 10) { if (++checks >= 3) throw IllegalStateException("cancelled") }
+        }
+        assertEquals("cancelled", skipping.exceptionOrNull()?.message)
+
+        // 读完第一页接着数总行数时也会查。
+        checks = 0
+        val counting = runCatching {
+            TextPager.read(StringReader(text), "utf-8", 1, 0, 10) { if (++checks >= 3) throw IllegalStateException("cancelled") }
+        }
+        assertEquals("cancelled", counting.exceptionOrNull()?.message)
+    }
+
+    @Test
+    fun readText_countsTotalLinesOncePerFile() {
+        val file = File(dir, "count-once.log").apply { writeText((1..5000).joinToString("\n") { "line $it" }) }
+        val modified = file.lastModified()
+
+        val first = backend().readText(file.absolutePath, 1, 100)
+        assertEquals(5000, first.totalLines)
+
+        // 换成长度一样、行数翻倍的内容，再把修改时间改回去：第二页的总行数仍是第一次数的，说明没有再从头数。
+        file.writeText(file.readText().replace(' ', '\n'))
+        assertTrue(file.setLastModified(modified))
+        val second = backend().readText(file.absolutePath, 101, 100)
+        assertNull(second.nextColumn)
+        assertEquals(5000, second.totalLines)
+
+        // 文件一变（大小或修改时间不同）就重新数。
+        file.appendText("\nmore")
+        assertEquals(10_001, backend().readText(file.absolutePath, 1, 100).totalLines)
+    }
+
+    @Test
+    fun readText_contentUri_doesNotDownloadTheWholeFileToCountLines() {
+        val text = (1..200_000).joinToString("\n") { "cloud line $it" }
+        val bytes = text.toByteArray()
+        val uri = android.net.Uri.parse("content://movo.test.cloud/doc/1")
+        var bytesRead = 0L
+        shadowOf(context.contentResolver).registerInputStreamSupplier(uri) {
+            object : java.io.FilterInputStream(java.io.ByteArrayInputStream(bytes)) {
+                override fun read(): Int = super.read().also { if (it >= 0) bytesRead++ }
+                override fun read(b: ByteArray, off: Int, len: Int): Int =
+                    super.read(b, off, len).also { if (it > 0) bytesRead += it }
+            }
+        }
+
+        val first = backend().readText(uri.toString(), 1, 100)
+
+        assertEquals("cloud line 1", first.content.lineSequence().first())
+        assertNull("没读到末尾时不报总行数", first.totalLines)
+        assertTrue("只读了开头：$bytesRead / ${bytes.size}", bytesRead < 64 * 1024)
+
+        val last = backend().readText(uri.toString(), 199_950, 100)
+        assertEquals(200_000, last.totalLines)
+    }
+
+    @Test
+    fun fileRead_stopsWhenTheRunIsCancelled() {
+        val file = File(dir, "huge.log").apply { writeText((1..300_000).joinToString("\n") { "line $it" }) }
+        var checks = 0
+        val ctx = ToolContext(
+            context, AndroidAgentLogger, "run1", "c1", ToolEnvironment(), UserInteraction.NONE,
+            // 第一次是工具开头的检查，之后在读文件的过程中用户按了停止。
+            cancelled = { ++checks > 1 },
+        )
+        val tool = FileReadTool(backend())
+        val input = tool.parse(ToolArgs(JSONObject().put("file", file.absolutePath).put("offset", 290_000)), ToolEnvironment())
+
+        val thrown = runCatching { tool.execute(input, tool.resolve(input, ToolEnvironment()), ctx) }.exceptionOrNull()
+
+        assertTrue(thrown.toString(), thrown is AgentRunCancelledException)
+    }
+
+    // ---- 字数预算按手机上 org.json 的转义算 ----
+
+    /** Android 自带 org.json（JSONStringer.string）转义后的长度：会把 / 转成 \/，U+2028、U+2029 转成 \uXXXX。 */
+    private fun androidJsonLength(text: String): Int = text.sumOf { c ->
+        when {
+            c == '"' || c == '\\' || c == '/' -> 2
+            c == '\t' || c == '\b' || c == '\n' || c == '\r' || c == '\u000C' -> 2
+            c.code < 0x20 || c == '\u2028' || c == '\u2029' -> 6
+            else -> 1
+        }.toInt()
+    }
+
+    @Test
+    fun pager_budgetCountsSlashesAsAndroidEscapesThem() {
+        val paths = (1..3000).joinToString("\n") { "/storage/emulated/0/DCIM/Camera/IMG_$it.jpg" }
+
+        val read = page(paths)
+
+        assertTrue(androidJsonLength(read.content) <= TextPager.MAX_CHARS)
+        assertEquals(read.endLine + 1, read.nextOffsetLine)
+
+        val slashes = page("/".repeat(40_000))
+        assertEquals(TextPager.MAX_CHARS / 2, slashes.content.length)
+        assertEquals(TextPager.MAX_CHARS / 2, slashes.nextColumn)
+
+        val separators = page("\u2028".repeat(10_000))
+        assertTrue(androidJsonLength(separators.content) <= TextPager.MAX_CHARS)
+    }
+
     // ---- 编码与类型 ----
 
     @Test
@@ -222,8 +434,38 @@ class FileReadParityTest {
         assertTrue(shared.message.contains("所有文件访问"))
 
         val system = failure { writer.write("/proc/movo-parity-test/a.txt", "x", append = false) }
-        assertEquals(ToolErrorCode.PERMISSION_REQUIRED, system.code)
+        assertEquals(ToolErrorCode.UNSUPPORTED, system.code)
         assertFalse(system.message.contains("所有文件访问"))
+    }
+
+    @Test
+    fun write_failures_sayTheRealReason() {
+        // Root 写入没有实现：有没有 Root 都一样，不能再把用户引去授权 Root。
+        val writer = RealFileWriteBackend(context, rootAvailable = { true }, sharedStorageHidden = { false })
+
+        val system = failure { writer.write("/proc/movo-parity-test/a.txt", "x", append = false) }
+        assertEquals(ToolErrorCode.UNSUPPORTED, system.code)
+        assertTrue(system.message, system.message.contains("系统位置"))
+
+        val otherApp = failure { writer.write("/data/data/com.other.app/files/a.txt", "x", append = false) }
+        assertEquals(ToolErrorCode.UNSUPPORTED, otherApp.code)
+        assertTrue(otherApp.message, otherApp.message.contains("别的应用的私有目录"))
+
+        val otherAppOnSdcard = failure { writer.write("/sdcard/Android/data/com.other.app/a.txt", "x", append = false) }
+        assertTrue(otherAppOnSdcard.message, otherAppOnSdcard.message.contains("别的应用的私有目录"))
+
+        // 自己的工作区写不进去（这里是同名的普通文件挡住了目录）：照系统给的原因说。
+        val blocker = writer.write("parity-blocker", "x", append = false)
+        val workspace = failure { writer.write("parity-blocker/a.txt", "x", append = false) }
+        File(blocker.absolutePath!!).delete()
+        assertEquals(ToolErrorCode.SYSTEM_REJECTED, workspace.code)
+        assertTrue(workspace.message, workspace.message.endsWith("失败：(Not a directory)"))
+
+        for (denied in listOf(system, otherApp, otherAppOnSdcard, workspace)) {
+            assertFalse(denied.message, denied.message.contains("需要 Root"))
+            assertFalse(denied.hint!!, denied.hint!!.contains("Root"))
+            assertTrue(denied.hint!!, denied.hint!!.contains("工作区") && denied.hint!!.contains("Download"))
+        }
     }
 
     // ---- 经管线给模型的结果 ----

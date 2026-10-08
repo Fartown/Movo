@@ -55,13 +55,14 @@ internal object PersonalCursor {
         return parts[3].toIntOrNull()
     }
 
-    // 锚点游标：供双来源合并（如订单）稳定翻页用。编码「上一页末尾的 时间 + 去重 key」，
-    // identity 可能含分隔符，单独 Base64 一层再拼。
+    // 锚点游标：供双来源合并（如订单）和通知历史稳定翻页用。编码「上一页末尾的 时间 + 去重 key」，
+    // 通知历史再带上第一页的查询时间；identity 可能含分隔符，单独 Base64 一层再拼。
     private const val ANCHOR_VERSION = "a1"
 
     fun encodeAnchor(input: PersonalSearchInput, anchor: PageAnchor): String {
         val identity = Base64.getUrlEncoder().withoutPadding().encodeToString(anchor.identity.toByteArray())
-        val raw = "$ANCHOR_VERSION|${input.source.name}|${queryKey(input)}|${anchor.timeMillis}|$identity"
+        val firstPage = anchor.firstPageMillis?.let { "|$it" }.orEmpty()
+        val raw = "$ANCHOR_VERSION|${input.source.name}|${queryKey(input)}|${anchor.timeMillis}|$identity$firstPage"
         return Base64.getUrlEncoder().withoutPadding().encodeToString(raw.toByteArray())
     }
 
@@ -69,11 +70,12 @@ internal object PersonalCursor {
     fun decodeAnchor(cursor: String, input: PersonalSearchInput): PageAnchor? {
         val decoded = runCatching { String(Base64.getUrlDecoder().decode(cursor)) }.getOrNull() ?: return null
         val parts = decoded.split("|")
-        if (parts.size != 5 || parts[0] != ANCHOR_VERSION) return null
+        if (parts.size !in 5..6 || parts[0] != ANCHOR_VERSION) return null
         if (parts[1] != input.source.name || parts[2] != queryKey(input)) return null
         val time = parts[3].toLongOrNull() ?: return null
         val identity = runCatching { String(Base64.getUrlDecoder().decode(parts[4])) }.getOrNull() ?: return null
-        return PageAnchor(time, identity)
+        val firstPage = if (parts.size == 6) parts[5].toLongOrNull() ?: return null else null
+        return PageAnchor(time, identity, firstPage)
     }
 }
 
@@ -137,26 +139,37 @@ internal fun currentBarNotifications(): List<ActiveNotification>? =
     }
 
 /**
- * personal_search 的 app 参数：像包名的原样用（卸载了的应用的历史通知也查得到）；
- * 否则当应用名，按桌面上的应用名匹配成包名——名字完全一样的优先，没有再取名字里含这几个字的（最多 [MAX_PARTIAL] 个）。
- * 以前只认精确包名，传「微信」安静地得到 0 条。
+ * personal_search 的 app 参数怎么变成包名：
+ * 1. 是已装应用的包名，就用它；
+ * 2. 否则当应用名，按桌面上的应用名匹配——名字完全一样的优先，没有再取名字里含这几个字的（最多 [MAX_PARTIAL] 个，
+ *    多出来的放进 [Match.skipped]，结果里说明）。「Booking.com」「Trip.com」这类应用名长得像包名，也在这一步按名字找到；
+ * 3. 都对不上但长得像包名，才原样当包名（可能是卸载了的应用留下的通知）。
+ * 以前只认精确包名，传「微信」安静地得到 0 条；后来像包名的一律原样用，「Booking.com」又是安静的 0 条。
  */
 internal object AppFilter {
     private val PACKAGE = Regex("""^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$""")
-    private const val MAX_PARTIAL = 5
+    const val MAX_PARTIAL = 10
+
+    enum class By { INSTALLED_PACKAGE, NAME, PACKAGE_NOT_INSTALLED, NONE }
+
+    /** 要按哪些包名筛（一个应用都对不上时为空）、是怎么对上的、按名字部分匹配时超出上限没算进去的应用。 */
+    data class Match(val packages: List<String>, val by: By, val skipped: List<AppMatch> = emptyList())
 
     fun looksLikePackage(value: String): Boolean = PACKAGE.matches(value.trim())
 
-    /** 要按哪些包名筛；一个应用都对不上时返回空。 */
-    fun resolve(app: String, installed: () -> List<AppMatch>): List<String> {
+    fun resolve(app: String, installed: () -> List<AppMatch>): Match {
         val value = app.trim()
-        if (looksLikePackage(value)) return listOf(value)
-        val apps = installed()
+        val apps = runCatching(installed).getOrDefault(emptyList())
+        if (apps.any { it.packageName == value }) return Match(listOf(value), By.INSTALLED_PACKAGE)
         val exact = apps.filter { it.name.trim().equals(value, ignoreCase = true) }
-        if (exact.isNotEmpty()) return exact.map { it.packageName }.distinct()
+        if (exact.isNotEmpty()) return Match(exact.map { it.packageName }.distinct(), By.NAME)
         val lower = value.lowercase(Locale.ROOT)
-        return apps.filter { it.name.lowercase(Locale.ROOT).contains(lower) }
-            .map { it.packageName }.distinct().take(MAX_PARTIAL)
+        val partial = apps.filter { it.name.lowercase(Locale.ROOT).contains(lower) }.distinctBy { it.packageName }
+        if (partial.isNotEmpty()) {
+            return Match(partial.take(MAX_PARTIAL).map { it.packageName }, By.NAME, skipped = partial.drop(MAX_PARTIAL))
+        }
+        if (looksLikePackage(value)) return Match(listOf(value), By.PACKAGE_NOT_INSTALLED)
+        return Match(emptyList(), By.NONE)
     }
 }
 
@@ -331,26 +344,36 @@ internal class AndroidPersonalSearchBackend(
                 error = ToolError(ToolErrorCode.PERMISSION_REQUIRED, "请先授予 Movo 通知使用权"),
             )
         }
-        val offset = offsetOrStale(input) ?: return staleCursor()
+        // 锚点游标：从上一页最后一条（时间、通知 key）后面接着取。以前按偏移翻页，翻页期间来了新通知或旧通知更新后排到最前面，
+        // 后面的行整体往后挪，下一页开头会重复上一页末尾的几条。游标里还记着第一页是什么时候查的。
+        val anchor = input.cursor?.let { PersonalCursor.decodeAnchor(it, input) }
+        if (input.cursor != null && anchor?.firstPageMillis == null) return staleCursor()
         val apps = appPackages(input)
         apps.error?.let { return PersonalSearchResult(error = it) }
         val now = System.currentTimeMillis()
-        val since = input.sinceMillis ?: (now - NOTIFICATION_DEFAULT_WINDOW_MS)
-        // 时间窗、应用、关键词都在库里筛，再按偏移取这一页（多取一条判断有没有下一页）：
+        val firstPageAt = anchor?.firstPageMillis ?: now
+        // 不给 since 时从第一页查询时往前算，翻页期间时间窗不跟着挪。
+        val since = input.sinceMillis ?: (firstPageAt - NOTIFICATION_DEFAULT_WINDOW_MS)
+        // 时间窗、应用、关键词都在库里筛，再取锚点后面的这一页（多取一条判断有没有下一页）：
         // 以前先取最新 50 条再按 until 筛，往前查容易全被筛光、误报「没找到」，取满 50 条也不说。
-        val rows = runCatching {
-            notificationHistory.rows(
-                NotificationHistoryRepository.Query(
-                    sinceMillis = since,
-                    untilMillis = input.untilMillis,
-                    text = input.query.orEmpty(),
-                    packages = apps.packages,
-                    offset = offset,
-                    limit = input.limit + 1,
-                ),
-            )
-        }.getOrElse {
+        val query = NotificationHistoryRepository.Query(
+            sinceMillis = since,
+            untilMillis = input.untilMillis,
+            text = input.query.orEmpty(),
+            packages = apps.packages,
+            after = anchor?.let { NotificationHistoryRepository.Position(it.timeMillis, it.identity) },
+            limit = input.limit + 1,
+        )
+        val rows = runCatching { notificationHistory.rows(query) }.getOrElse {
             return PersonalSearchResult(error = ToolError(ToolErrorCode.SOURCE_UNAVAILABLE, "通知历史暂时读不到"))
+        }
+        // 翻页期间新来的、内容更新了的通知时间都晚于第一页，排到了第一页前面，后面的页里不会有：数出来告诉模型。
+        val newerSinceFirstPage = if (anchor == null) {
+            0
+        } else {
+            runCatching {
+                notificationHistory.count(query.copy(sinceMillis = maxOf(since, firstPageAt + 1), after = null))
+            }.getOrDefault(0)
         }
         // 每条标上是否还挂在通知栏：历史里也有已经划掉的，模型要分得清。监听没连上时不知道，不标。
         val activeKeys = barNotifications()?.mapTo(HashSet()) { it.key }
@@ -369,6 +392,15 @@ internal class AndroidPersonalSearchBackend(
             )
         }
         val warnings = buildList {
+            addAll(apps.warnings)
+            if (newerSinceFirstPage > 0) {
+                add(
+                    ToolWarning(
+                        ToolErrorCode.STALE_OBSERVATION,
+                        "翻页期间有 $newerSinceFirstPage 条通知是新来的或内容更新了，排到了第一页前面，后面的页里不会出现；要看就去掉 cursor 重新查",
+                    ),
+                )
+            }
             val oldest = now - NotificationHistoryRepository.RETENTION_DAYS * DAY_MS
             if (input.sinceMillis != null && input.sinceMillis < oldest) {
                 add(
@@ -385,9 +417,14 @@ internal class AndroidPersonalSearchBackend(
         val meta = (apps.meta ?: JSONObject())
             .put("retention_days", NotificationHistoryRepository.RETENTION_DAYS)
             .put("since", isoOf(since))
+        val last = rows.take(input.limit).lastOrNull()
         return PersonalSearchResult(
             items = items,
-            nextCursor = if (rows.size > input.limit) PersonalCursor.encode(input, offset + input.limit) else null,
+            nextCursor = if (rows.size > input.limit && last != null) {
+                PersonalCursor.encodeAnchor(input, PageAnchor(last.postedAt, last.key, firstPageMillis = firstPageAt))
+            } else {
+                null
+            },
             warnings = warnings,
             meta = meta,
         )
@@ -432,28 +469,49 @@ internal class AndroidPersonalSearchBackend(
                 )
             }
             .toList()
-        return window(items, input, offset).copy(meta = apps.meta)
+        return window(items, input, offset).copy(meta = apps.meta, warnings = apps.warnings)
     }
 
     /** app 参数解析成的包名；没给 app 时为空（不筛）。 */
     private data class AppPackages(
         val packages: List<String>,
         val meta: JSONObject? = null,
+        val warnings: List<ToolWarning> = emptyList(),
         val error: ToolError? = null,
     )
 
     private fun appPackages(input: PersonalSearchInput): AppPackages {
         val app = input.app?.trim()?.takeIf { it.isNotEmpty() } ?: return AppPackages(emptyList())
-        val packages = runCatching { AppFilter.resolve(app, installedApps) }.getOrDefault(emptyList())
-        if (packages.isEmpty()) {
-            return AppPackages(
+        val match = AppFilter.resolve(app, installedApps)
+        return when (match.by) {
+            AppFilter.By.NONE -> AppPackages(
                 emptyList(),
                 error = ToolError(ToolErrorCode.NOT_FOUND, "没找到叫「$app」的应用", hint = "用 app_search 查到包名再传，或去掉 app"),
             )
+            AppFilter.By.INSTALLED_PACKAGE -> AppPackages(match.packages)
+            // 按应用名匹配时写明对上了哪些包名，模型能看出有没有匹配错；名字里含这几个字的应用太多时说清哪些没算进去。
+            AppFilter.By.NAME -> AppPackages(
+                match.packages,
+                meta = JSONObject().put("app_packages", JSONArray(match.packages)),
+                warnings = listOfNotNull(
+                    match.skipped.takeIf { it.isNotEmpty() }?.let { skipped ->
+                        ToolWarning(
+                            ToolErrorCode.AMBIGUOUS,
+                            "名字里含「$app」的应用有 ${match.packages.size + skipped.size} 个，只查了 app_packages 里的 " +
+                                "${match.packages.size} 个，没算进去：" +
+                                skipped.joinToString("、", limit = MAX_LISTED_APPS, truncated = "等 ${skipped.size} 个") {
+                                    "${it.name}（${it.packageName}）"
+                                } +
+                                "；要查它们请给完整的应用名或包名",
+                        )
+                    },
+                ),
+            )
+            AppFilter.By.PACKAGE_NOT_INSTALLED -> AppPackages(
+                match.packages,
+                meta = JSONObject().put("app_note", "已装应用里没有这个包名或应用名，按包名 $app 查（卸载了的应用留下的通知也查得到）"),
+            )
         }
-        // 按应用名匹配时写明对上了哪些包名，模型能看出有没有匹配错。
-        val meta = if (AppFilter.looksLikePackage(app)) null else JSONObject().put("app_packages", JSONArray(packages))
-        return AppPackages(packages, meta)
     }
 
     // ---- 剪贴板历史：复用私有数据库快照读取 ----
@@ -592,7 +650,7 @@ internal class AndroidPersonalSearchBackend(
         return PersonalSearchResult(
             items = page.items,
             nextCursor = page.nextAnchor?.let { PersonalCursor.encodeAnchor(input, it) },
-            warnings = warnings,
+            warnings = apps.warnings + warnings,
             meta = apps.meta,
         )
     }
@@ -681,6 +739,9 @@ internal class AndroidPersonalSearchBackend(
 
         // 通知栏每条标题/正文/副标题最多给这么多字（与通知历史库一致）。
         const val MAX_NOTIFICATION_FIELD_CHARS = 4_000
+
+        // app 按名字匹配到的应用太多时，提醒里最多列出这么多个没算进去的。
+        const val MAX_LISTED_APPS = 20
 
         const val QUERY_TIMEOUT_MS = 15_000L
         const val MAX_OUTPUT_BYTES = 512 * 1024

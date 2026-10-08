@@ -56,7 +56,7 @@ class NotificationHistoryRepositoryTest {
     }
 
     @Test
-    fun `rows filter time window apps and keywords in the database and page by offset`() {
+    fun `rows filter time window apps and keywords in the database and page from a position`() {
         val now = System.currentTimeMillis()
         val hour = 60L * 60 * 1_000
         repository.record("a", "com.example.food", "订单配送中", "骑手即将送达", "副标题", now - 1 * hour)
@@ -74,8 +74,16 @@ class NotificationHistoryRepositoryTest {
         assertEquals(listOf("a", "c"), keys(NotificationHistoryRepository.Query(sinceMillis = now - 5 * hour, anyKeywords = listOf("骑手", "驿站"), limit = 10)))
         // 关键词与任一关键词同时给时都要满足。
         assertEquals(listOf("c"), keys(NotificationHistoryRepository.Query(sinceMillis = now - 5 * hour, text = "快递", anyKeywords = listOf("骑手", "驿站"), limit = 10)))
-        // 偏移翻页。
-        assertEquals(listOf("c", "d"), keys(NotificationHistoryRepository.Query(sinceMillis = now - 5 * hour, offset = 2, limit = 10)))
+        // 从上一页最后一条往后翻：时间更早的，或同一时间 key 排在后面的。
+        repository.record("b2", "com.example.chat", "同一时间", "另一条", null, now - 2 * hour)
+        val afterB = NotificationHistoryRepository.Position(now - 2 * hour, "b")
+        assertEquals(listOf("b2", "c", "d"), keys(NotificationHistoryRepository.Query(sinceMillis = now - 5 * hour, after = afterB, limit = 10)))
+        assertEquals(listOf("b2"), keys(NotificationHistoryRepository.Query(sinceMillis = now - 5 * hour, after = afterB, limit = 1)))
+        // 位置上那条被删或更新了也照样接着翻（按位置比，不要求那条还在）。
+        assertEquals(listOf("c", "d"), keys(NotificationHistoryRepository.Query(sinceMillis = now - 5 * hour, after = NotificationHistoryRepository.Position(now - 2 * hour, "zz"), limit = 10)))
+        // count 用同样的条件，不看 limit。
+        assertEquals(3, repository.count(NotificationHistoryRepository.Query(sinceMillis = now - 5 * hour, after = afterB, limit = 1)))
+        assertEquals(2, repository.count(NotificationHistoryRepository.Query(sinceMillis = now - 5 * hour, anyKeywords = listOf("骑手", "驿站"), limit = 1)))
         val first = repository.rows(NotificationHistoryRepository.Query(sinceMillis = now - 5 * hour, limit = 1)).single()
         assertEquals("副标题", first.subText)
         assertEquals("com.example.food", first.packageName)
