@@ -515,7 +515,7 @@ internal fun AgentRunController.closeOnStop(tools: AutoCloseable): AgentRunContr
 internal fun switchNotes(config: io.github.fartown.movo.agent.model.AgentModelClient.ModelConfig): String = buildList {
     if (!config.deviceSensitiveReadTools) {
         add(
-            "- 用户关闭了「读取敏感信息」：不要读取通知、位置、验证码、通讯录、短信、通话记录、剪贴板，" +
+            "- 用户关闭了「读取敏感信息」：不要读取通知、位置、验证码、通讯录、短信、通话记录、剪贴板历史，" +
                 "也不要打开对应的应用看屏幕或用命令去读；需要这些信息时，告诉用户可以在 设置 → 工具 里开启。",
         )
     }

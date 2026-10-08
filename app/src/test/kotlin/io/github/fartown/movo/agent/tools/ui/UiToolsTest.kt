@@ -508,15 +508,15 @@ class UiToolsTest {
     }
 
     @Test
-    fun clipboardRead_sensitiveReadOff_disabled() {
+    fun clipboardRead_sensitiveReadOff_stillReads() {
+        // 和重构前 get_clipboard 一样不受「读取敏感信息」管。
         val backend = object : ClipboardReadBackend {
-            override fun read() = ClipboardReadResult.Empty
+            override fun read() = ClipboardReadResult.Text("你好", truncated = false, sensitive = false)
         }
         val env = ToolEnvironment(switches = ToolSwitches(sensitiveRead = false))
         val result = pipeline(provider(ContractTool(ClipboardReadTool(backend))), env)
             .execute(call("clipboard_read", "{}"))
-        assertEquals("error", result.status)
-        assertEquals("DISABLED", result.errorCode)
+        assertEquals("ok", result.status)
     }
 
     @Test
