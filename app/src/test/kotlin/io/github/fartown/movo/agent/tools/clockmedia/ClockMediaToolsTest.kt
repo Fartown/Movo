@@ -113,6 +113,14 @@ class ClockMediaToolsTest {
         assertFalse(noRoot, noRoot.contains("clock_read"))
         assertTrue(noRoot.contains("effect_verified=true"))
         assertTrue(provider.promptSection(ToolEnvironment(rootAvailable = true))!!.text.contains("clock_read"))
+        // 有 Root 但关了「读取敏感信息」：clock_read 不在目录里，提示也不提它。
+        val switchedOff = ToolEnvironment(
+            rootAvailable = true,
+            switches = io.github.fartown.movo.agent.tools.core.ToolSwitches(sensitiveRead = false),
+        )
+        assertFalse(provider.promptSection(switchedOff)!!.text.contains("clock_read"))
+        assertFalse(clockReadUsable(switchedOff))
+        assertTrue(clockReadUsable(ToolEnvironment(rootAvailable = true)))
     }
 
     @Test
@@ -247,11 +255,6 @@ class ClockMediaToolsTest {
             assertTrue(action, backend.dispatched.isEmpty())
         }
     }
-
-    /**
-     * 看不到会话又没声音：可能是播放器暂停着。切歌、快进快退照发媒体键（重构前的做法），结果只算送达，
-     * 不报「没有在播」（暂停中的歌切不了）。
-     */
 
     @Test
     fun mediaControl_sessionsHiddenButAudioPlaying_pauseVerifiedByAudio() {

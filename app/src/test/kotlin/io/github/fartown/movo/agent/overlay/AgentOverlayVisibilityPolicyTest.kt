@@ -20,15 +20,6 @@ class AgentOverlayVisibilityPolicyTest {
     }
 
     @Test
-    fun `waiting neither reveals the overlay nor dismisses the entry surface`() {
-        // 和重构前的 wait、wait_for_text、wait_for_package 一样：名单按工具名判断，分不出只等时长，等待一律不算。
-        val started = AgentEvent.ToolStarted(round = 1, toolCallId = "c-wait", name = "ui_wait", argsPreview = "")
-        assertFalse(AgentOverlayVisibilityPolicy.shouldRevealFor(started))
-        assertFalse(AgentOverlayVisibilityPolicy.shouldDismissEntrySurfaceFor(started))
-        assertFalse(AgentOverlayVisibilityPolicy.isForegroundOperationTool("ui_wait"))
-    }
-
-    @Test
     fun `text-only and background tool events do not reveal operation overlay`() {
         val events = listOf(
             AgentEvent.RunStarted(

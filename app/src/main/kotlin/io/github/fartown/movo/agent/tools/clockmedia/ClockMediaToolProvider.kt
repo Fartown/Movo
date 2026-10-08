@@ -10,6 +10,7 @@ import io.github.fartown.movo.agent.tools.core.ToolAvailability
 import io.github.fartown.movo.agent.tools.core.ToolDomain
 import io.github.fartown.movo.agent.tools.core.ToolEnvironment
 import io.github.fartown.movo.agent.tools.core.ToolProvider
+import io.github.fartown.movo.agent.tools.core.ToolSwitchGate
 import io.github.fartown.movo.core.AgentLogger
 
 /**
@@ -62,9 +63,10 @@ internal class ClockMediaToolProvider(
         """.trimIndent(),
     )
 
-    /** clock_read 要 Root：用不了时去掉提到它的句子，免得模型去调不存在的工具。 */
+    /** clock_read 要 Root、要开「读取敏感信息」：用不了时去掉提到它的句子，免得模型去调不存在的工具。 */
     override fun promptSection(env: ToolEnvironment): PromptSection {
-        val clockReadAvailable = tools.first { it.name == "clock_read" }.availability(env) is ToolAvailability.Available
+        val clockReadAvailable = tools.first { it.name == "clock_read" }.availability(env) is ToolAvailability.Available &&
+            ToolSwitchGate.check("clock_read", env.switches) == null
         if (clockReadAvailable) return promptSection
         val text = promptSection.text.lineSequence().filter { "clock_read" !in it }.joinToString("\n")
         return promptSection.copy(text = text)

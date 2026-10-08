@@ -172,7 +172,7 @@ internal class ClockCreateTool(
                     input.type, verified = false, matchedTriggerAtMs = null,
                     note = "已把${label(input.type)}交给时钟应用，但没核实到（已有更早的闹钟、或系统拦了后台启动都会这样）；" +
                         "告诉用户已提交，" +
-                        (if (ctx.env.rootAvailable) "可以用 clock_read 查看，" else "请用户在时钟里看一眼，") +
+                        (if (clockReadUsable(ctx.env)) "可以用 clock_read 查看，" else "请用户在时钟里看一眼，") +
                         "不要重复创建",
                 ),
             )
@@ -262,3 +262,7 @@ internal class ClockCreateTool(
             SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ROOT).format(Date(timeMs))
     }
 }
+
+/** clock_read 这次用得上：要 Root，还要开着「读取敏感信息」（[ToolSwitchGate]）。 */
+internal fun clockReadUsable(env: ToolEnvironment): Boolean =
+    env.rootAvailable && io.github.fartown.movo.agent.tools.core.ToolSwitchGate.check("clock_read", env.switches) == null

@@ -308,6 +308,7 @@ internal class McpDirectTool(
 ) : ToolContract<McpDirectInput, McpToolOutput> {
     override val name = entry.shortName
     override val domain = ToolDomain.MCP
+    override val thirdPartySchema = true
 
     /** 第三方描述原样给全（和重构前一样）；总长受目录的 token 预算约束，太长的会改走 mcp_find。 */
     override val summary: String = buildString {

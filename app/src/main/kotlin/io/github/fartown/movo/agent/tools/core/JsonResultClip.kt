@@ -7,7 +7,7 @@ import org.json.JSONObject
  * JSON 结果超过给模型的上限时按字段截短，不把整份结果降成一段纯文本：
  * 每次挑 data 里能省出最多字数的一处——数组去掉末尾的项（至少留一项），长字符串只留开头——直到放得下。
  * status、错误码与提示、warnings、truncated（含 next_cursor）原样保留，截了哪些字段写进 output_clipped。
- * 实在截不下（例如 data 是成千上万个短字段）才退回只给 data 开头的原始文本，错误码和提示仍保留。
+ * 实在截不下（例如 data 是成千上万个短字段）才退回只给 data 开头的原始文本，错误码、提示和 warnings 仍保留。
  */
 internal object JsonResultClip {
     /** 短于这个长度的字符串不截；截短的字符串至少留这么多字。 */
@@ -93,10 +93,13 @@ internal object JsonResultClip {
                 clips[target.path] = Clip(value.length(), total, "items")
             }
             is String -> {
-                val total = clips[target.path]?.total ?: value.length
-                val keep = (value.length - needed).coerceAtLeast(MIN_STRING_CHARS)
-                val head = TextClip.head(value, keep).text
-                target.container.putChild(target.key, head + "…（后面省略 ${value.length - head.length} 字）")
+                // 截过一次的字符串末尾带着上次的省略说明：先取回上次留下的开头，省略字数按原文算。
+                val prior = clips[target.path]
+                val base = prior?.let { value.take(it.shown) } ?: value
+                val total = prior?.total ?: value.length
+                val keep = (base.length - needed).coerceAtLeast(MIN_STRING_CHARS)
+                val head = TextClip.head(base, keep).text
+                target.container.putChild(target.key, head + "…（后面省略 ${total - head.length} 字）")
                 clips[target.path] = Clip(head.length, total, "chars")
             }
         }
@@ -126,7 +129,7 @@ internal object JsonResultClip {
         .put(
             "note",
             "结果超过 $maxChars 字，fields 里的字段被截短了：数组去掉了末尾的项，字符串只留了开头。" +
-                "被截掉的内容不在 next_cursor 之后；要看就缩小范围、减小 limit 或分段读取。",
+                "被截掉的内容不在 next_cursor、next_offset 这类续读位置之后；要看就缩小范围、减小 limit 或分段读取。",
         )
         .put(
             "fields",
@@ -147,6 +150,17 @@ internal object JsonResultClip {
             json.optString(key).takeIf { it.isNotEmpty() }?.let { out.put(key, TextClip.head(it, 1_000).text) }
         }
         listOf("effect_verified", "images_attached", "truncated").forEach { key -> json.opt(key)?.let { out.put(key, it) } }
+        json.optJSONArray("warnings")?.let { warnings ->
+            out.put(
+                "warnings",
+                JSONArray().also { kept ->
+                    for (i in 0 until minOf(warnings.length(), 5)) {
+                        val warning = warnings.optJSONObject(i) ?: continue
+                        kept.put(JSONObject(warning.toString()).put("message", TextClip.head(warning.optString("message"), 300).text))
+                    }
+                },
+            )
+        }
         val dataText = json.opt("data")?.toString().orEmpty()
         // 放进 JSON 字符串后引号、反斜杠要转义，按转义后的长度收。
         val room = (maxChars - out.toString().length - 600).coerceAtLeast(0)
@@ -161,7 +175,11 @@ internal object JsonResultClip {
             "output_clipped",
             JSONObject()
                 .put("shown", head.length).put("total", dataText.length).put("unit", "chars")
-                .put("note", "结果过大，按字段截不下来，data_text 只是开头的原始文本；请缩小查询范围或分页读取"),
+                .put(
+                    "note",
+                    "结果过大，按字段截不下来，data_text 只是开头的原始文本；没给出的部分不在 next_cursor 之后，" +
+                        "请缩小查询范围或减小 limit 重读",
+                ),
         )
         return out.toString()
     }

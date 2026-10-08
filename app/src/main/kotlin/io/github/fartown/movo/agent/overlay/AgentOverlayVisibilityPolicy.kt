@@ -89,11 +89,11 @@ internal object AgentOverlayVisibilityPolicy {
         "ui_key",
     )
 
-    // ui_wait 不在名单里：和重构前的 wait、wait_for_text、wait_for_package 一样，等待不揭开悬浮球、不关入口面板
-    // （「等 5 秒」不该把小爱 / 小布面板或 Movo 语音页关掉）。名单只按工具名判断，分不出只等时长还是等文字。
     private val foregroundOperationTools = setOf(
+        "ui_observe", "ui_wait",
         "observe_screen",
         "ui_observe",
+        "ui_wait",
         *foregroundDrivingTools.toTypedArray(),
     )
 

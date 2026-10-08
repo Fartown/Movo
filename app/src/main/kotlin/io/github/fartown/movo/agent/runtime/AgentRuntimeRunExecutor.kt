@@ -32,6 +32,7 @@ import io.github.fartown.movo.core.safeLogType
 import io.github.fartown.movo.data.repository.AgentMemoryRepository
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
+import kotlin.concurrent.thread
 
 /**
  * 单次 Runtime run 的阻塞执行器。
@@ -504,9 +505,13 @@ internal fun liveToolSwitches(
     sensitiveAction = config.deviceSensitiveActionTools && now.deviceSensitiveActionTools,
 )
 
-/** 按停止时立刻关掉这次运行的工具：打断网页加载、MCP 请求、技能下载和前台命令，不等它们自己超时。 */
+/**
+ * 按停止时立刻关掉这次运行的工具：打断网页加载、MCP 请求、技能下载和前台命令，不等它们自己超时。
+ * 停止是在主线程上调的，而关终端要等进程退出（可能好几秒），所以关闭放到后台线程，不卡主线程
+ * （重构前 interruptAll 也是交给 agent-terminal-cleanup 线程）。工具的 close 要能重复调用。
+ */
 internal fun AgentRunController.closeOnStop(tools: AutoCloseable): AgentRunController.ResourceBinding =
-    register { runCatching { tools.close() } }
+    register { thread(name = "agent-tools-stop", isDaemon = true) { runCatching { tools.close() } } }
 
 /**
  * 用户在「设置 → 工具」里关掉的能力：工具已经不进目录，这里再告诉模型不要换个办法（打开对应应用看屏幕、跑命令）绕过去。

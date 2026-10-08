@@ -111,6 +111,25 @@ class UiScreenActionsTest {
     }
 
     @Test
+    fun coordinateTap_neverObserved_screenChangesWhileWaitingForApproval_recheckFailsStale() {
+        // 没观察过时坐标系取 resolve 那一刻的：确认期间转了屏 / 切了应用，确认后不按旧坐标点下去。
+        val rotated = Fake().apply { latestRef = null }
+        val rotating = Capture(ApprovalDecision.Approved) { rotated.nowFrame = frame.copy(width = 2400, height = 1080) }
+        val result = run(rotated, tap(rotated), """{"x":540,"y":1200}""", appRuleEnv, rotating)
+        assertEquals(1, rotating.seen.size)
+        assertEquals("STALE_OBSERVATION", result.errorCode)
+        assertTrue(rotated.taps.isEmpty())
+
+        val switched = Fake().apply { latestRef = null }
+        val switching = Capture(ApprovalDecision.Approved) { switched.nowFrame = frame.copy(packageName = "com.other.app") }
+        assertEquals("STALE_OBSERVATION", run(switched, tap(switched), """{"x":540,"y":1200}""", appRuleEnv, switching).errorCode)
+
+        // 没变就照常点。
+        val steady = Fake().apply { latestRef = null }
+        assertEquals("ok", run(steady, tap(steady), """{"x":540,"y":1200}""", appRuleEnv, Capture(ApprovalDecision.Approved)).status)
+    }
+
+    @Test
     fun coordinateTap_windowChangesWhileWaitingForApproval_recheckFailsStale() {
         val fake = Fake()
         // 用户看确认卡的时候切走了：确认后复核用同一套坐标规则，不点下去。
@@ -663,6 +682,21 @@ class UiScreenActionsTest {
         recent["obs6"] = 6
         assertEquals("重新登记的算最新，不被挤掉", 30, recent["obs3"])
         assertNull(recent["obs4"])
+    }
+
+    // ---- 节点身份对不上时报观察过期，而不是「不可点 / 不可滚」----
+
+    @Test
+    fun nodeIdentityMismatch_isStaleObservationNotNotActionable() {
+        val fake = Fake().apply { tapResult = UiInjectResult.NotActionable("节点已不在原来的窗口里", stale = true) }
+        val tapped = run(fake, tap(fake), """{"index":0,"observation_id":"obs1"}""")
+        assertEquals("STALE_OBSERVATION", tapped.errorCode)
+        fake.scrollScript += UiScrollResult.NotActionable("内容已变", stale = true)
+        val scrolled = run(fake, scroll(fake), """{"index":0,"observation_id":"obs1","direction":"down"}""")
+        assertEquals("STALE_OBSERVATION", scrolled.errorCode)
+        // 真的点不了 / 滚不了时照旧。
+        fake.tapResult = UiInjectResult.NotActionable("挡住了")
+        assertEquals("NOT_ACTIONABLE", run(fake, tap(fake), """{"index":0,"observation_id":"obs1"}""").errorCode)
     }
 
     // ---- 成功后才显示手势指示（#13 / B7）----

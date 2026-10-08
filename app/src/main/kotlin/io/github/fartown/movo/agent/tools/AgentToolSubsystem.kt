@@ -65,8 +65,11 @@ internal class AgentToolSubsystem(
             ),
         ) + meta
 
+    private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** 按停止（后台线程）和运行结束（finally）都会调：只关一次。 */
     override fun close() {
-        pipeline.close()
+        if (closed.compareAndSet(false, true)) pipeline.close()
     }
 }
 

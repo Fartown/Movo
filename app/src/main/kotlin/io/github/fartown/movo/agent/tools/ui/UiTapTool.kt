@@ -117,7 +117,8 @@ internal class UiTapTool(
         val probe = if (asks) backend.readableNodeAtPoint(x, y) else null
         return buildUiActionResolution(
             backend = backendKind,
-            target = TargetIdentity.Coordinate(latest?.observationId ?: "", latest?.gen ?: -1L),
+            // 没观察过时记下现在的坐标系，确认期间屏幕变了 execute 前照样拦下。
+            target = TargetIdentity.Coordinate(latest?.observationId ?: pinCurrentFrame(registry), latest?.gen ?: -1L),
             pkg = pkg,
             selfPackage = registry.selfPackage,
             readableTarget = probe != null,
@@ -149,7 +150,11 @@ internal class UiTapTool(
                 Verdict.Dispatched(UiAfter(result.afterPackage, result.windowChanged, method = result.method))
             }
             is UiInjectResult.NotActionable -> Verdict.Failed(
-                ToolError(ToolErrorCode.NOT_ACTIONABLE, "目标不可点击：${result.reason}", hint = "重新观察后换目标"),
+                if (result.stale) {
+                    ToolError(ToolErrorCode.STALE_OBSERVATION, "页面已经变了：${result.reason}", hint = "重新 ui_observe，用新的 observation_id 再点")
+                } else {
+                    ToolError(ToolErrorCode.NOT_ACTIONABLE, "目标不可点击：${result.reason}", hint = "重新观察后换目标")
+                },
             )
             is UiInjectResult.SystemRejected -> Verdict.Failed(
                 ToolError(ToolErrorCode.SYSTEM_REJECTED, "手势未被系统派发，确定未执行"),

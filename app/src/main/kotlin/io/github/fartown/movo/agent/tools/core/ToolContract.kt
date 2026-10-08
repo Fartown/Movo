@@ -26,6 +26,9 @@ internal interface ToolContract<I : ToolInput, O : ToolOutput> {
     /** 给模型的描述，≤160 字，只写契约。 */
     val summary: String
 
+    /** 参数 Schema 是第三方给的（MCP 直接暴露的工具）：同名参数含义不明，管线不做上限夹紧。 */
+    val thirdPartySchema: Boolean get() = false
+
     /** 当前环境下是否可用；不可用时附原因码（root-only、缺权限、来源不可用）。默认总可用。 */
     fun availability(env: ToolEnvironment): ToolAvailability = ToolAvailability.Available
 

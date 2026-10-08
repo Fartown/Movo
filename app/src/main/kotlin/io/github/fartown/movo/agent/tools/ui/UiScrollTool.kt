@@ -151,7 +151,11 @@ internal class UiScrollTool(
                 reason = "界面朝相反方向移动，结果不确定", next = "先 ui_observe 确认当前位置",
             )
             is UiScrollResult.NotActionable -> Verdict.Failed(
-                ToolError(ToolErrorCode.NOT_ACTIONABLE, "无法滚动：${result.reason}", hint = "该区域可能不可滚动"),
+                if (result.stale) {
+                    ToolError(ToolErrorCode.STALE_OBSERVATION, "页面已经变了：${result.reason}", hint = "重新 ui_observe，用新的 observation_id 再滚动")
+                } else {
+                    ToolError(ToolErrorCode.NOT_ACTIONABLE, "无法滚动：${result.reason}", hint = "该区域可能不可滚动")
+                },
             )
             is UiScrollResult.OutcomeUnknown -> Verdict.Unknown(
                 reason = "滚动已派发但无法确认", next = "先 ui_observe 确认，不要直接重复",

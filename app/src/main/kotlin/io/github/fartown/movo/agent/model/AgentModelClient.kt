@@ -186,6 +186,9 @@ internal object AgentModelClient {
             finishingTools = if (rewriteReply) emptySet() else io.github.fartown.movo.flavor.FlavorModule.finishingTools,
             toolsForRound = {
                 val capabilities = capabilitiesProvider()
+                // 先出目录（会刷新这一轮的工具环境，含现读的开关），再按同一份环境出用法说明：
+                // 任务中途关掉开关时，目录和说明同一轮一起变。
+                val roundTools = toolsFor(capabilities)
                 val nextToolGuide = if (rewriteReply) "" else toolGuide?.let { runCatching(it).getOrDefault("") }
                 if (capabilities.rootAvailable != promptRootAvailable || nextToolGuide != currentToolGuide) {
                     val systemMessages = AgentPromptBuilder.buildSystemMessages(
@@ -198,7 +201,7 @@ internal object AgentModelClient {
                     promptRootAvailable = capabilities.rootAvailable
                     currentToolGuide = nextToolGuide
                 }
-                toolsFor(capabilities)
+                roundTools
             },
         )
         val result = try {

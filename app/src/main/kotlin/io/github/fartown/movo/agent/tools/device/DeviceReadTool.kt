@@ -94,7 +94,8 @@ internal class DeviceReadTool(
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
         stringArray(
             "sections",
-            "要读取的部分，至少 1 项。environment：屏幕是否亮着、是否锁屏、铃声模式、勿扰、音频输出设备（声音从哪出）、" +
+            "要读取的部分，至少 1 项。environment：屏幕是否亮着、是否锁屏、铃声模式、勿扰、已连接的音频输出设备" +
+                "（问声音从哪出时看有没有接耳机、蓝牙；看不出此刻正从哪一路出声）、" +
                 "外接显示器数；network：是否联网、Wi‑Fi 名称与信号、是否计费网络；system：厂商型号与系统版本",
             required = true, minItems = 1,
             enum = DeviceSection.entries.map { it.name.lowercase() },

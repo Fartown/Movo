@@ -92,7 +92,8 @@ internal class UiSwipeTool(
             }
         return buildUiActionResolution(
             backend = backendKind,
-            target = TargetIdentity.Coordinate(latest?.observationId ?: "", latest?.gen ?: -1L),
+            // 没观察过时记下现在的坐标系，确认期间屏幕变了 execute 前照样拦下。
+            target = TargetIdentity.Coordinate(latest?.observationId ?: pinCurrentFrame(registry), latest?.gen ?: -1L),
             pkg = pkg,
             selfPackage = registry.selfPackage,
             // 确认卡写的是「在屏幕上滑动」，用不到起点下的节点：不抓树，readableTarget 只记录没读。

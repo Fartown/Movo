@@ -78,6 +78,9 @@ internal object LegacyResults {
             "MCP_EXECUTOR_CLOSED", "MAIN_THREAD_CALL")
     }
 
+    /** 无障碍服务报的「页面已经变了」类代码（窗口、内容、节点身份对不上）。 */
+    fun isStale(legacyCode: String): Boolean = exact[legacyCode] == ToolErrorCode.STALE_OBSERVATION
+
     fun map(legacyCode: String): ToolErrorCode {
         exact[legacyCode]?.let { return it }
         return when {

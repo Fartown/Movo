@@ -45,6 +45,7 @@ class ToolPipelineGapTest {
         private val schema: JSONObject = objectSchema {},
         private val available: (ToolEnvironment) -> ToolAvailability = { ToolAvailability.Available },
         private val run: (ToolArgs, ToolContext) -> ToolOutcome = { _, _ -> ToolOutcome.ok() },
+        override val thirdPartySchema: Boolean = false,
     ) : AgentTool {
         override val domain = ToolDomain.META
         override val description = "测试用"
@@ -161,11 +162,23 @@ class ToolPipelineGapTest {
         Thread.sleep(100)
         val started = System.nanoTime()
         controller.cancel()
+        assertTrue("停止在主线程上调：关工具不能卡住调用方", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 200)
         worker.join(5_000)
         assertFalse("停止后调用应当马上返回", worker.isAlive)
         assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 3_000)
         assertEquals("error", status)
         binding.close()
+    }
+
+    @Test
+    fun stop_slowCloseDoesNotBlockTheCaller() {
+        val closed = CountDownLatch(1)
+        val controller = AgentRunController()
+        controller.closeOnStop(AutoCloseable { Thread.sleep(1_500); closed.countDown() })
+        val started = System.nanoTime()
+        controller.cancel()
+        assertTrue("关终端要等进程退出，不能让主线程等", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 200)
+        assertTrue("关闭仍会做完", closed.await(5, TimeUnit.SECONDS))
     }
 
     // ---- 7. 上限类参数越界按边界处理 ----
@@ -216,6 +229,23 @@ class ToolPipelineGapTest {
         // 下一次调用不会带上一次的说明。
         val next = JSONObject(p.execute(p.normalize(call("fake_list", """{"limit":3}""", id = "c2"))).content)
         assertFalse(next.has("warnings"))
+    }
+
+    @Test
+    fun clampNote_ofARejectedCall_doesNotLeakIntoTheNextCallWithTheSameId() {
+        val p = pipeline(FakeTool("fake_list", schema = listSchema), FakeTool("other"))
+        // 第 1 轮 tool_call_0 被夹紧后因别的原因被拒，没执行；第 2 轮同 id 换成了别的工具。
+        p.normalize(call("fake_list", """{"limit":100}""", id = "tool_call_0"))
+        val next = JSONObject(p.execute(p.normalize(call("other", "{}", id = "tool_call_0"))).content)
+        assertFalse(next.has("warnings"))
+    }
+
+    @Test
+    fun thirdPartySchema_isNotClamped() {
+        val transfer = objectSchema { integer("amount", "金额", min = 1, max = 1000) }
+        val p = pipeline(FakeTool("mcp_bank_transfer", schema = transfer, thirdPartySchema = true))
+        val modelCall = call("mcp_bank_transfer", """{"amount":5000}""")
+        assertEquals("第三方工具的同名参数不改，越界交给校验拒绝", modelCall, p.normalize(modelCall))
     }
 
     @Test

@@ -68,7 +68,11 @@ class JsonResultClipTest {
         assertEquals(body.length, data.getInt("length"))
         assertTrue(data.getString("text").startsWith("正文很很"))
         assertTrue(data.getString("text").contains("后面省略"))
-        assertEquals(body.length, clipped(json).getValue("data.text").getInt("total"))
+        val field = clipped(json).getValue("data.text")
+        assertEquals(body.length, field.getInt("total"))
+        // 正文里写的省略字数按原文算，和 output_clipped 对得上（截过两次也一样）。
+        val omitted = Regex("后面省略 (\\d+) 字").find(data.getString("text"))!!.groupValues[1].toInt()
+        assertEquals(field.getInt("total") - field.getInt("shown"), omitted)
     }
 
     @Test
@@ -108,10 +112,12 @@ class JsonResultClipTest {
             status = ToolStatus.ERROR,
             error = ToolError(ToolErrorCode.SOURCE_UNAVAILABLE, "部分读不到"),
             data = data,
+            warnings = listOf(ToolWarning(ToolErrorCode.NETWORK_ERROR, "网页返回 HTTP 404")),
         )
         val text = ToolProjection.render(outcome)
         assertTrue(text.length <= max)
         val json = JSONObject(text)
+        assertEquals("退回纯文本时 warnings 也留着", "网页返回 HTTP 404", json.getJSONArray("warnings").getJSONObject(0).getString("message"))
         assertEquals("SOURCE_UNAVAILABLE", json.getString("code"))
         assertEquals("部分读不到", json.getString("message"))
         assertTrue(json.has("data_text"))

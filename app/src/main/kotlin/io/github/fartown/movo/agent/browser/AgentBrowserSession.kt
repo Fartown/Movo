@@ -672,6 +672,10 @@ internal object AgentBrowserSession {
             currentLoading = true
             currentPageVisible = false
             currentProgress = 0
+            // 新的一次加载：旧页面的 HTTP 状态不能沿用（同一网址时 onPageStarted 不会清它）。
+            currentError = null
+            currentHttpStatus = null
+            httpStatusUrl = null
             publishSnapshotOnMain()
             if (backwards) view.goBack() else view.goForward()
         }
@@ -689,6 +693,10 @@ internal object AgentBrowserSession {
             currentLoading = true
             currentPageVisible = false
             currentProgress = 0
+            // 新的一次加载：旧页面的 HTTP 状态不能沿用（同一网址时 onPageStarted 不会清它）。
+            currentError = null
+            currentHttpStatus = null
+            httpStatusUrl = null
             publishSnapshotOnMain()
             view.reload()
         }

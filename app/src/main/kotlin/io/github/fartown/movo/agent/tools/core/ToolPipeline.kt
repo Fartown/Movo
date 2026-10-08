@@ -92,9 +92,14 @@ internal class ToolPipeline(
     /** [normalize] 按边界处理过的参数说明，执行时写进这次调用结果的 warnings。 */
     private val argumentNotes = ConcurrentHashMap<String, List<ToolWarning>>()
 
-    /** 上限类参数越界时按 Schema 边界处理（[ToolArgBounds]），在合同校验之前做，校验与执行看到的是同一份参数。 */
+    /**
+     * 上限类参数越界时按 Schema 边界处理（[ToolArgBounds]），在合同校验之前做，校验与执行看到的是同一份参数。
+     * 只管 Movo 自己的工具：第三方 Schema 的同名参数（如 MCP 工具的 amount）含义不明，越界照旧交给校验拒绝。
+     */
     override fun normalize(toolCall: AgentModelClient.ToolCall): AgentModelClient.ToolCall {
-        val tool = registry.find(toolCall.name) ?: return toolCall
+        // 同一个调用 id 可能被上一轮没执行的调用用过（服务商不给 id 时按序号补），先清掉旧说明。
+        argumentNotes.remove(toolCall.id)
+        val tool = registry.find(toolCall.name)?.takeIf { !it.thirdPartySchema } ?: return toolCall
         val arguments = runCatching { JSONObject(toolCall.argumentsJson.ifBlank { "{}" }) }.getOrNull() ?: return toolCall
         val notes = runCatching { ToolArgBounds.clamp(arguments, tool.parameters(currentEnvironment)) }.getOrNull()
         if (notes.isNullOrEmpty()) return toolCall

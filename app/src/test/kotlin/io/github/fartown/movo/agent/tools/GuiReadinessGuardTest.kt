@@ -129,21 +129,27 @@ class GuiReadinessGuardTest {
 
     @Test
     fun dismissalFollowsTheSameListAsTheOverlayReveal() {
-        listOf("app_open", "ui_tap", "ui_swipe", "ui_scroll", "ui_input", "ui_key", "ui_observe", "clock_create")
+        listOf("app_open", "ui_tap", "ui_swipe", "ui_scroll", "ui_input", "ui_key", "ui_observe", "ui_wait", "clock_create")
             .forEach { name -> assertTrue(name, AgentOverlayVisibilityPolicy.requiresEntrySurfaceDismissal(name)) }
-        // ui_wait 和重构前的 wait、wait_for_* 一样不关入口：「等 5 秒」不该把小爱 / 小布面板关掉。
-        listOf("clipboard_read", "clipboard_write", "file_read", "terminal_run", "ui_wait")
+        listOf("clipboard_read", "clipboard_write", "file_read", "terminal_run")
             .forEach { name -> assertTrue(name, !AgentOverlayVisibilityPolicy.requiresEntrySurfaceDismissal(name)) }
     }
 
     @Test
-    fun waitingOnlyForTimeNeedsNoAccessibilityAndKeepsTheVoicePanel() {
-        // 重构前的 wait 不要无障碍、不关入口；只有等文字 / 等应用要看屏幕，才要无障碍。
+    fun waitingOnlyForTimeNeedsNoAccessibility() {
+        // 重构前的 wait 不要无障碍；入口面板照样先收起（等待一律按名单收起，和 main 一致）。
         accessibilityAvailable = false
         val wait = tool("ui_wait", ToolDomain.UI)
         assertNull(guard.check(wait, ToolArgs.parse("""{"duration_ms":2000}"""), context()))
         assertEquals(0, accessibilityChecks)
-        assertEquals(0, dismissals)
+        assertEquals(1, dismissals)
+    }
+
+    @Test
+    fun waitingForTextOrAppNeedsAccessibilityAndDismissesTheEntrySurfaceFirst() {
+        // 等文字时面板还盖在前面，不先收起就会在 Movo 自己的界面上「等到」那段文字。
+        accessibilityAvailable = false
+        val wait = tool("ui_wait", ToolDomain.UI)
         assertEquals(
             ToolErrorCode.PERMISSION_REQUIRED,
             guard.check(wait, ToolArgs.parse("""{"text":"完成"}"""), context())?.error?.code,
@@ -152,9 +158,10 @@ class GuiReadinessGuardTest {
             ToolErrorCode.PERMISSION_REQUIRED,
             guard.check(wait, ToolArgs.parse("""{"package":"com.tencent.mm"}"""), context())?.error?.code,
         )
+        assertEquals("操作不了时不白白关掉面板", 0, dismissals)
         accessibilityAvailable = true
         assertNull(guard.check(wait, ToolArgs.parse("""{"text":"完成"}"""), context()))
-        assertEquals("等文字也不关入口", 0, dismissals)
+        assertEquals(1, dismissals)
     }
 
     private fun check(tool: AgentTool, env: ToolEnvironment = ToolEnvironment()): ToolOutcome? =

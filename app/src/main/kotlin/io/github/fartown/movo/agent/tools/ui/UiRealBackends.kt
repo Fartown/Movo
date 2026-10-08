@@ -11,6 +11,7 @@ import io.github.fartown.movo.agent.device.RootShellDeviceController
 import io.github.fartown.movo.agent.overlay.GestureIndicator
 import io.github.fartown.movo.agent.tools.core.InjectionBackend
 import io.github.fartown.movo.agent.tools.core.ToolEnvironment
+import io.github.fartown.movo.agent.tools.core.LegacyResults
 import io.github.fartown.movo.core.AgentLogger
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicLong
@@ -366,7 +367,10 @@ internal class RealUiScreenBackend(
         return when {
             code.contains("MISMATCH") -> UiScrollResult.DirectionMismatch
             code == "ACTION_OUTCOME_UNKNOWN" -> UiScrollResult.OutcomeUnknown
-            else -> UiScrollResult.NotActionable(obj.optString("message").ifBlank { code.ifBlank { "滚动未生效" } })
+            else -> UiScrollResult.NotActionable(
+                obj.optString("message").ifBlank { code.ifBlank { "滚动未生效" } },
+                stale = LegacyResults.isStale(code),
+            )
         }
     }
 
@@ -571,7 +575,10 @@ internal class RealUiScreenBackend(
             code == "ACTION_OUTCOME_UNKNOWN" -> UiInjectResult.OutcomeUnknown
             code == "ACCESSIBILITY_UNAVAILABLE" || code == "PERMISSION_REQUIRED" -> UiInjectResult.PermissionRequired
             code == "SYSTEM_REJECTED" -> UiInjectResult.SystemRejected
-            else -> UiInjectResult.NotActionable(obj.optString("message").ifBlank { code.ifBlank { "未执行" } })
+            else -> UiInjectResult.NotActionable(
+                obj.optString("message").ifBlank { code.ifBlank { "未执行" } },
+                stale = LegacyResults.isStale(code),
+            )
         }
     }
 

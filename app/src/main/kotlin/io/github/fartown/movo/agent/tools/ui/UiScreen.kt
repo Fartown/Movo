@@ -293,7 +293,8 @@ internal sealed interface UiInjectResult {
     ) : UiInjectResult
     /** 系统拒绝派发，确定没执行。 */
     data object SystemRejected : UiInjectResult
-    data class NotActionable(val reason: String) : UiInjectResult
+    /** [stale]：无障碍服务核对节点时发现页面已经变了（不是目标本身点不了），该重新观察。 */
+    data class NotActionable(val reason: String, val stale: Boolean = false) : UiInjectResult
     /** 派发了但无法确认是否生效。 */
     data object OutcomeUnknown : UiInjectResult
     data object PermissionRequired : UiInjectResult
@@ -304,7 +305,8 @@ internal sealed interface UiScrollResult {
     data class Finished(val moved: Boolean, val atBoundary: Boolean?, val afterPackage: String?) : UiScrollResult
     /** 界面反向移动：DIRECTION_MISMATCH → OUTCOME_UNKNOWN。 */
     data object DirectionMismatch : UiScrollResult
-    data class NotActionable(val reason: String) : UiScrollResult
+    /** [stale]：无障碍服务核对节点时发现页面已经变了，该重新观察。 */
+    data class NotActionable(val reason: String, val stale: Boolean = false) : UiScrollResult
     data object OutcomeUnknown : UiScrollResult
     data object PermissionRequired : UiScrollResult
 }
@@ -511,19 +513,45 @@ internal fun genError(registry: UiObservationRegistry, observationId: String?, b
 /**
  * 坐标动作（ui_tap 坐标 / 区域、ui_swipe）的预检与复核：坐标只绑最近一次观察的坐标系。
  * 屏幕方向或尺寸变了、前台窗口 / 应用换了才拒绝；页面内容刷新（视频进度条约 0.12 秒一次）、
- * 滚动、文字变化都不算，否则持续刷新的页面上坐标动作永远追不上。本次任务还没观察过时没有可比的坐标系，
- * 按屏幕像素直接执行（和重构前一样，「点一下屏幕中间」不用先观察一次；越界由 [coordinateRangeError] 按屏幕尺寸查）。
+ * 滚动、文字变化都不算，否则持续刷新的页面上坐标动作永远追不上。本次任务还没观察过时按屏幕像素直接执行
+ * （和重构前一样，「点一下屏幕中间」不用先观察一次；越界由 [coordinateRangeError] 按屏幕尺寸查），
+ * 坐标系取 resolve 那一刻的（[pinCurrentFrame]）。
  * resolve 时预检（不先弹卡让用户白点），execute 前用同一条规则复核（确认期间可能切走了）。
  */
 internal fun coordinateError(registry: UiObservationRegistry, observationId: String?): ToolError? {
     if (observationId.isNullOrEmpty()) return null
-    val bound = registry.observationFrame(observationId) ?: return null
+    val bound = unpinFrame(observationId) ?: registry.observationFrame(observationId) ?: return null
     val now = registry.currentFrame() ?: return null
     val change = frameChange(bound, now, registry.selfPackage) ?: return null
     return ToolError(
         ToolErrorCode.STALE_OBSERVATION,
         "坐标系已变：$change",
         hint = "重新 ui_observe，按新的 coord_space 给坐标",
+    )
+}
+
+private const val PINNED_FRAME_PREFIX = "frame:"
+
+/**
+ * 本次任务还没观察过时，坐标动作在 resolve 时记下当时的坐标系，编码成占位的 observation_id（不进登记表）：
+ * 等确认的那段时间里转了屏、切了应用、弹了对话框，execute 前照样按 [coordinateError] 复核。读不到时返回空串（不复核）。
+ */
+internal fun pinCurrentFrame(registry: UiObservationRegistry): String {
+    val frame = registry.currentFrame() ?: return ""
+    val pkg = frame.packageName?.takeIf { it != registry.selfPackage }.orEmpty()
+    return "$PINNED_FRAME_PREFIX${frame.width}x${frame.height}:${frame.windowGen ?: ""}:$pkg"
+}
+
+private fun unpinFrame(id: String): CoordinateFrame? {
+    if (!id.startsWith(PINNED_FRAME_PREFIX)) return null
+    val parts = id.removePrefix(PINNED_FRAME_PREFIX).split(':', limit = 3)
+    if (parts.size != 3) return null
+    val size = parts[0].split('x')
+    return CoordinateFrame(
+        width = size.getOrNull(0)?.toIntOrNull() ?: 0,
+        height = size.getOrNull(1)?.toIntOrNull() ?: 0,
+        windowGen = parts[1].toLongOrNull(),
+        packageName = parts[2].ifEmpty { null },
     )
 }
 
