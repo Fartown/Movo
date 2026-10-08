@@ -25,6 +25,21 @@ gh secret set MOVO_RELEASE_KEY_ALIAS
 gh secret set MOVO_RELEASE_KEY_PASSWORD
 ```
 
+## 本地打签名 Release 包
+
+签名信息除了环境变量，也可以写进仓库根目录的 `.env`（已在 `.gitignore` 中，不会提交）。
+`MOVO_RELEASE_STORE_FILE` 可以是绝对路径，也可以是相对仓库根目录的路径（`*.jks` 同样已被忽略）：
+
+```bash
+MOVO_RELEASE_STORE_FILE=/path/to/Movo-release.jks
+MOVO_RELEASE_STORE_PASSWORD=...
+MOVO_RELEASE_KEY_ALIAS=...
+MOVO_RELEASE_KEY_PASSWORD=...
+```
+
+然后执行 `./gradlew :app:assembleRelease`，产物在 `app/build/outputs/apk/release/`，
+按 ABI 拆包（`app-arm64-v8a-release.apk` 等）。四项缺任何一项时产出的是未签名包。
+
 ## 构建与发布
 
 以下情况会在同一次工作流中生成 Debug APK 和经过签名验证的 Release APK，
