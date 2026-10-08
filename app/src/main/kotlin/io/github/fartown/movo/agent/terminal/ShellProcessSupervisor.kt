@@ -137,10 +137,6 @@ internal class ShellProcessSupervisor(
     val closing: Boolean
         get() = synchronized(activeProcesses) { isClosing }
 
-    fun takeRemainingProcesses(): List<Process> = synchronized(activeProcesses) {
-        activeProcesses.toList().also { activeProcesses.clear() }
-    }
-
     fun terminateProcessTree(process: Process) {
         terminateProcessTree(process, metadataOverride = null)
     }

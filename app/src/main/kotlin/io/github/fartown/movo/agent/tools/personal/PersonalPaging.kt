@@ -7,8 +7,11 @@ package io.github.fartown.movo.agent.tools.personal
  * 记录，也不会错位或重复——这优于「按偏移截断」。抽成纯函数便于单测（见 PersonalPagingTest）。
  */
 
-/** 翻页锚点：上一页末尾条目的有效时间与去重标识，构成全序中的一个位置。 */
-internal data class PageAnchor(val timeMillis: Long, val identity: String)
+/**
+ * 翻页锚点：上一页末尾条目的有效时间与去重标识，构成全序中的一个位置。
+ * [firstPageMillis] 只有通知历史用：第一页是什么时候查的，翻页期间新来或更新的通知时间都比它晚。
+ */
+internal data class PageAnchor(val timeMillis: Long, val identity: String, val firstPageMillis: Long? = null)
 
 internal object PersonalPaging {
 

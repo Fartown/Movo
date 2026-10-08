@@ -60,7 +60,7 @@ class AgentPromptBuilderTest {
         )
 
         assertEquals(
-            listOf("system", "system", "system", "user", "assistant", "user"),
+            listOf("system", "system", "user", "assistant", "user"),
             messages.roles(),
         )
         assertEquals("自定义系统约束", messages.getJSONObject(0).getString("content"))
@@ -93,14 +93,12 @@ class AgentPromptBuilderTest {
         assertTrue(messages.systemContents().any { it.contains("合法且克制的 GitHub Flavored Markdown") })
         assertTrue(messages.systemContents().any { it.contains("不用整句粗体冒充标题") })
         assertTrue(messages.systemContents().any { it.contains("表格前后留空行") })
-        assertTrue(messages.getJSONObject(2).getString("content").contains("terminal_run"))
-        assertTrue(messages.getJSONObject(2).getString("content").contains("同一轮模型回复最多读一张图片"))
-        assertTrue(messages.getJSONObject(2).getString("content").contains("再在下一轮读下一张"))
-        assertFalse(messages.systemContents().any { it.contains("网页浏览、读取") })
-        assertEquals("旧问题", messages.getJSONObject(3).getString("content"))
-        assertEquals("旧回答", messages.getJSONObject(4).getString("content"))
+        // 终端、文件的用法只来自工具分节（toolGuide，对应工具这次可用才有），不再按配置开关写死在这里。
+        assertFalse(messages.systemContents().any { it.contains("terminal_run") || it.contains("/workspace/mounts") })
+        assertEquals("旧问题", messages.getJSONObject(2).getString("content"))
+        assertEquals("旧回答", messages.getJSONObject(3).getString("content"))
 
-        val currentContent = messages.getJSONObject(5).getJSONArray("content")
+        val currentContent = messages.getJSONObject(4).getJSONArray("content")
         assertEquals("当前问题", currentContent.getJSONObject(0).getString("text"))
         assertEquals(
             image.reference,
@@ -109,7 +107,7 @@ class AgentPromptBuilderTest {
     }
 
     @Test
-    fun browserAndSkillMessagesAreConditionalAndStructurallyComplete() {
+    fun skillIndexIsStructurallyCompleteAndToolUsageComesOnlyFromTheGuide() {
         val skill = SkillIndexEntry(
             id = "screen-audit",
             name = "屏幕审计",
@@ -133,16 +131,16 @@ class AgentPromptBuilderTest {
             skillContext = SkillContext(installedSkills = listOf(skill)),
         )
 
-        assertEquals(listOf("system", "system", "system", "user"), messages.roles())
+        assertEquals(listOf("system", "system", "user"), messages.roles())
         val systemContents = messages.systemContents()
-        assertTrue(systemContents.any { it.contains("browser_open") && it.contains("browser_read") })
-        assertFalse(systemContents.any { it.contains("terminal_run") })
+        // 网页用法同样只来自工具分节。
+        assertFalse(systemContents.any { it.contains("browser_open") || it.contains("terminal_run") })
         val skillMessage = systemContents.single { it.contains("id=screen-audit") }
         assertTrue(skillMessage.contains("path=/skills/screen-audit/SKILL.md"))
         assertTrue(skillMessage.contains("capabilities=scripts, assets"))
         assertTrue(skillMessage.contains("description=检查屏幕 并输出 结论"))
         assertTrue(skillMessage.contains("先调用 skill_read"))
-        assertEquals("读取网页", messages.getJSONObject(3).getString("content"))
+        assertEquals("读取网页", messages.getJSONObject(2).getString("content"))
     }
 
     @Test

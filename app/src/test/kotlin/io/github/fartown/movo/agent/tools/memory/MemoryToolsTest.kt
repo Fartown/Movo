@@ -15,6 +15,7 @@ import io.github.fartown.movo.agent.tools.core.UserAnswer
 import io.github.fartown.movo.agent.tools.core.UserInteraction
 import io.github.fartown.movo.agent.tools.core.UserQuestion
 import io.github.fartown.movo.core.AndroidAgentLogger
+import io.github.fartown.movo.data.repository.AgentMemoryRepository
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -97,8 +98,100 @@ class MemoryToolsTest {
         val p = pipeline(FakeMemory("line a\nkey target\nline c\nline d"))
         val r = p.execute(call("memory_read", """{"query":"target"}"""))
         val data = JSONObject(r.content).getJSONObject("data")
-        assertTrue(data.getString("content").contains("target"))
+        val segment = data.getJSONArray("segments").getJSONObject(0)
+        assertTrue(segment.getString("text").contains("target"))
+        assertEquals(1, segment.getInt("start_line"))
         assertEquals(1, data.getInt("matched_lines"))
+    }
+
+    @Test
+    fun read_query_segmentsCarryLineNumbers() {
+        val lines = (1..40).map { if (it == 10 || it == 30) "第 $it 行 咖啡" else "第 $it 行" }
+        val p = pipeline(FakeMemory(lines.joinToString("\n")))
+        val data = JSONObject(p.execute(call("memory_read", """{"query":"咖啡"}""")).content).getJSONObject("data")
+        val segments = data.getJSONArray("segments")
+        assertEquals(2, segments.length())
+        // 命中行前后各带一行：第 9–11 行、第 29–31 行。
+        assertEquals(9, segments.getJSONObject(0).getInt("start_line"))
+        assertEquals("第 9 行\n第 10 行 咖啡\n第 11 行", segments.getJSONObject(0).getString("text"))
+        assertEquals(29, segments.getJSONObject(1).getInt("start_line"))
+        assertEquals(2, data.getInt("matched_lines"))
+        assertFalse(data.getBoolean("has_more"))
+    }
+
+    @Test
+    fun read_query_overBudget_continuesWithNextOffset() {
+        val lines = (1..300).map { "第 $it 行 咖啡 " + "x".repeat(80) }
+        val p = pipeline(FakeMemory(lines.joinToString("\n")))
+        val first = JSONObject(p.execute(call("memory_read", """{"query":"咖啡","max_chars":2000}""")).content).getJSONObject("data")
+        assertTrue(first.getBoolean("has_more"))
+        val next = first.getInt("next_offset")
+        val shown = first.getJSONArray("segments").getJSONObject(0).getString("text").split('\n').size
+        assertEquals(shown + 1, next)
+        val second = JSONObject(p.execute(call("memory_read", """{"query":"咖啡","max_chars":2000,"offset":$next}""")).content)
+            .getJSONObject("data")
+        assertEquals(next, second.getJSONArray("segments").getJSONObject(0).getInt("start_line"))
+    }
+
+    @Test
+    fun read_maxChars_restoredAndBounded() {
+        val lines = (1..2000).map { "第 $it 行的记忆内容" }
+        val p = pipeline(FakeMemory(lines.joinToString("\n")))
+        val defaultRead = JSONObject(p.execute(call("memory_read", "{}")).content).getJSONObject("data")
+        assertTrue(defaultRead.getString("content").length <= 12_000)
+        assertTrue(defaultRead.getBoolean("has_more"))
+        val bigger = JSONObject(p.execute(call("memory_read", """{"max_chars":20000}""")).content)
+        assertEquals("ok", bigger.getString("status"))
+        val content = bigger.getJSONObject("data").getString("content")
+        assertTrue(content.length > 12_000 && content.length <= 20_000)
+        // 接着读：next_offset 正好是下一行。
+        val nextOffset = bigger.getJSONObject("data").getInt("next_offset")
+        assertEquals(content.split('\n').size + 1, nextOffset)
+    }
+
+    @Test
+    fun read_escapeHeavyContent_staysUnderResultLimit() {
+        // 斜杠、引号、换行转义后变两个字符：整份结果仍要放得进一次工具结果的上限，不被整份降级。
+        val lines = (1..1500).map { "\"https://a/b/c/d/$it\"" }
+        val p = pipeline(FakeMemory(lines.joinToString("\n")))
+        val r = p.execute(call("memory_read", """{"max_chars":20000}"""))
+        assertTrue(r.content.length <= io.github.fartown.movo.agent.tools.core.ToolProjection.MAX_MODEL_CHARS)
+        val data = JSONObject(r.content).getJSONObject("data")
+        assertTrue(data.getBoolean("has_more"))
+    }
+
+    @Test
+    fun androidBackend_usesSameStoreAsSettingsPage() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val backend = AndroidMemoryBackend(context) { null }
+        AgentMemoryRepository.replaceAll("旧内容")
+        val loaded = backend.load(MemoryScopeArg.USER) as MemoryLoad.Ok
+        assertEquals("旧内容", loaded.content)
+        // 设置页在工具读完之后保存：工具按读到的旧版本写入要冲突，不能覆盖设置页的改动。
+        AgentMemoryRepository.replaceAll("设置页改过")
+        assertTrue(backend.write(MemoryScopeArg.USER, "工具写的", loaded.revision) is MemoryCas.Conflict)
+        assertEquals("设置页改过", AgentMemoryRepository.snapshot().content)
+        val fresh = backend.load(MemoryScopeArg.USER) as MemoryLoad.Ok
+        assertTrue(backend.write(MemoryScopeArg.USER, "工具写的", fresh.revision) is MemoryCas.Ok)
+        assertEquals("工具写的", AgentMemoryRepository.snapshot().content)
+    }
+
+    @Test
+    fun read_query_manySmallSegments_staysUnderResultLimit() {
+        // 命中行彼此隔开：每段只有一两行，段数很多时字段开销也要算进去。
+        val lines = (1..6000).map { if (it % 4 == 0) "咖啡$it" else "x" }
+        val p = pipeline(FakeMemory(lines.joinToString("\n")))
+        val r = p.execute(call("memory_read", """{"query":"咖啡","max_chars":20000}"""))
+        assertTrue(r.content.length <= io.github.fartown.movo.agent.tools.core.ToolProjection.MAX_MODEL_CHARS)
+        assertTrue(JSONObject(r.content).getJSONObject("data").getBoolean("has_more"))
+    }
+
+    @Test
+    fun read_longSingleLine_isClipped() {
+        val p = pipeline(FakeMemory("a".repeat(30_000) + "\n第二行"))
+        val data = JSONObject(p.execute(call("memory_read", "{}")).content).getJSONObject("data")
+        assertTrue(data.getString("content").length < 13_000)
+        assertEquals(2, data.getInt("next_offset"))
     }
 
     @Test

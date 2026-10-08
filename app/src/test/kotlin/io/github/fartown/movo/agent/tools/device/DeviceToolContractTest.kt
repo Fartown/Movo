@@ -417,6 +417,52 @@ class DeviceToolContractTest {
     }
 
     @Test
+    fun appOpen_packageAndNameTogether_opensThePackage() {
+        // 重构前 launch_app 允许同时给，包名为准、应用名只当显示名。
+        val launched = mutableListOf<String>()
+        val backend = fakeOpenBackend(
+            foreground = ForegroundOutcome("com.tencent.mm", matched = true),
+            matches = listOf(AppMatch("微信读书", "com.tencent.weread", false)),
+            onLaunch = { launched += it },
+        )
+        val json = pipeline(AppOpenTool(backend), ToolEnvironment())
+            .run("app_open", """{"package":"com.tencent.mm","name":"微信"}""")
+        assertEquals("ok", json.getString("status"))
+        assertEquals(listOf("com.tencent.mm"), launched)
+        val withUri = pipeline(AppOpenTool(backend), ToolEnvironment(), approveAll)
+            .run("app_open", """{"package":"com.tencent.mm","uri":"weixin://"}""")
+        assertEquals("INVALID_ARGUMENTS", withUri.getString("code"))
+    }
+
+    @Test
+    fun appOpen_foregroundUnreadable_isDispatchedWithoutWaiting() {
+        // 没开无障碍、没有 Root：读不到前台，不白等 3 秒报 unknown，按已发出报，也不叫模型去观察。
+        val backend = fakeOpenBackend(foreground = ForegroundOutcome(null, matched = false, readable = false))
+        val result = pipeline(AppOpenTool(backend), ToolEnvironment()).execute(
+            io.github.fartown.movo.agent.model.AgentModelClient.ToolCall("c1", "app_open", """{"package":"com.tencent.mm"}"""),
+        )
+        val json = JSONObject(result.content)
+        assertEquals("ok", json.getString("status"))
+        assertFalse(json.getBoolean("effect_verified"))
+        val note = json.getJSONObject("data").getString("note")
+        assertTrue(note, note.contains("读不到前台") && !note.contains("ui_observe"))
+        assertEquals("已发出打开请求", result.outcome!!.view!!.summary)
+    }
+
+    @Test
+    fun realAppOpenBackend_noAccessibilityNoRoot_returnsAtOnce() {
+        val backend = AndroidAppOpenBackend(
+            ApplicationProvider.getApplicationContext(),
+            io.github.fartown.movo.agent.device.BoundedRootCommandExecutor(AndroidAgentLogger, rootAvailable = { false }),
+            rootAvailable = { false },
+        )
+        val started = System.currentTimeMillis()
+        val outcome = backend.awaitForeground("com.tencent.mm", 3_000)
+        assertFalse(outcome.readable)
+        assertTrue("不等满 wait_ms：${System.currentTimeMillis() - started}ms", System.currentTimeMillis() - started < 1_000)
+    }
+
+    @Test
     fun appOpen_ambiguousName_isAmbiguous() {
         val backend = fakeOpenBackend(
             matches = listOf(AppMatch("微信", "com.tencent.mm", false), AppMatch("微信读书", "com.tencent.weread", false)),
@@ -473,10 +519,14 @@ class DeviceToolContractTest {
     private fun fakeOpenBackend(
         foreground: ForegroundOutcome = ForegroundOutcome(null, matched = false),
         matches: List<AppMatch> = emptyList(),
+        onLaunch: (String) -> Unit = {},
     ) = object : AppOpenBackend {
         override fun resolvePackage(packageName: String) = AppMatch(packageName, packageName, false)
         override fun searchByName(name: String) = matches
-        override fun launchPackage(packageName: String) = true
+        override fun launchPackage(packageName: String): Boolean {
+            onLaunch(packageName)
+            return true
+        }
         override fun launchUri(uri: String) = UriDispatch.Ok("com.example.app")
         override fun awaitForeground(targetPackage: String?, waitMs: Long) = foreground
     }

@@ -294,7 +294,6 @@ internal class AgentMemoryStore(
         const val DEFAULT_READ_CHARS = 12_000
         const val MAX_READ_CHARS = 32_000
         const val MIN_READ_CHARS = 1
-        const val MAX_WRITE_CONTENT_CHARS = 3_500
         private const val DIRECTORY_NAME = "memory"
         private const val FILE_NAME = "MEMORY.md"
         private const val DEFAULT_START_LINE = 1
@@ -334,6 +333,12 @@ internal object AgentMemoryRepository {
     fun replaceAll(content: String): AgentMemorySnapshot {
         ensureInitialized()
         return store.replaceAll(content)
+    }
+
+    /** 版本对得上才整体写入（记忆工具用）；和设置页的保存共用同一个存储与锁。 */
+    fun replaceAllIfRevision(content: String, revision: String): AgentMemoryWriteResult {
+        ensureInitialized()
+        return store.replaceAllIfRevision(content, revision)
     }
 
     fun enabledFlow(): Flow<Boolean> = SettingsDataStore.memoryEnabledFlow()

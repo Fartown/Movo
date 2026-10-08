@@ -142,6 +142,10 @@ internal class AndroidAppOpenBackend(
     }
 
     override fun awaitForeground(targetPackage: String?, waitMs: Long): ForegroundOutcome {
+        // 没有无障碍也没有 Root：前台读不到，等多久都一样，直接按已发出报（重构前派发成功就返回）。
+        if (AgentAccessibilityService.current() == null && !rootAvailable()) {
+            return ForegroundOutcome(null, matched = false, readable = false)
+        }
         val deadline = System.currentTimeMillis() + waitMs.coerceIn(500L, 15_000L)
         var lastForeground: String? = null
         while (System.currentTimeMillis() <= deadline) {

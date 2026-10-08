@@ -5,6 +5,7 @@ import android.app.KeyguardManager
 import android.app.NotificationManager
 import android.content.Context
 import android.hardware.display.DisplayManager
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -15,6 +16,7 @@ import android.os.Environment
 import android.os.PowerManager
 import android.os.StatFs
 import android.os.SystemClock
+import android.view.Display
 import io.github.fartown.movo.agent.device.BoundedRootCommandExecutor
 import io.github.fartown.movo.agent.device.DeviceLocationProvider
 import io.github.fartown.movo.agent.device.RootAccess
@@ -26,7 +28,7 @@ import org.json.JSONObject
 
 /**
  * device_read 的真实后端：组合 deviceStatus / networkInfo / deviceEnvironment / currentLocation 的读法。
- * 迁移自 AgentStructuredDeviceTools（SDT:211-270）与 AgentPersonalContextTools（PCT:106-145）。
+ * 迁移自工具重构前的设备读取工具与 AgentPersonalContextTools（PCT:106-145）。
  */
 internal class AndroidDeviceReadBackend(
     private val context: Context,
@@ -73,6 +75,7 @@ internal class AndroidDeviceReadBackend(
                 .put("age_seconds", result.ageMillis / 1000L)
             is DeviceLocationProvider.Result.Unavailable -> throw locationUnavailable(result.status)
         }
+        DeviceSection.TIME -> deviceTime(java.time.ZonedDateTime.now())
     }
 
     @Suppress("DEPRECATION")
@@ -114,15 +117,15 @@ internal class AndroidDeviceReadBackend(
         val power = context.getSystemService(PowerManager::class.java)
         val keyguard = context.getSystemService(KeyguardManager::class.java)
         val notification = context.getSystemService(NotificationManager::class.java)
+        // 和重构前一样列出全部输出设备：类型给可读名（speaker、bluetooth_audio……），带 is_sink。
         val routes = JSONArray()
         audio?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)?.forEach { device ->
-            if (device.isSink) {
-                routes.put(
-                    JSONObject()
-                        .put("type", device.type)
-                        .put("product_name", device.productName?.toString().orEmpty()),
-                )
-            }
+            routes.put(
+                JSONObject()
+                    .put("type", audioDeviceType(device.type))
+                    .put("product_name", device.productName?.toString().orEmpty())
+                    .put("is_sink", device.isSink),
+            )
         }
         return JSONObject()
             .put("interactive", power?.isInteractive ?: JSONObject.NULL)
@@ -131,6 +134,8 @@ internal class AndroidDeviceReadBackend(
             .put("dnd_filter", interruptionFilter(notification?.currentInterruptionFilter))
             .put("audio_outputs", routes)
             .put("display_count", displays.size)
+            // 投屏、外接显示器：除主屏以外的显示器数。
+            .put("external_display_count", displays.count { it.displayId != Display.DEFAULT_DISPLAY })
     }
 
     private fun ringerMode(mode: Int?): Any = when (mode) {
@@ -149,6 +154,27 @@ internal class AndroidDeviceReadBackend(
     }
 
     internal companion object {
+        /** 音频输出设备类型 → 可读名（重构前的叫法）；不认识的写 other_<类型号>。 */
+        fun audioDeviceType(type: Int): String = when (type) {
+            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "speaker"
+            AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "earpiece"
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_WIRED_HEADSET -> "wired_headset"
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "bluetooth_audio"
+            AudioDeviceInfo.TYPE_USB_DEVICE, AudioDeviceInfo.TYPE_USB_HEADSET -> "usb_audio"
+            AudioDeviceInfo.TYPE_HDMI, AudioDeviceInfo.TYPE_HDMI_ARC, AudioDeviceInfo.TYPE_HDMI_EARC -> "hdmi"
+            AudioDeviceInfo.TYPE_HEARING_AID -> "hearing_aid"
+            AudioDeviceInfo.TYPE_BLE_HEADSET, AudioDeviceInfo.TYPE_BLE_SPEAKER -> "bluetooth_le_audio"
+            // 下面这些是系统内部通路（通话、收音、系统提示音等），不是用户插拔的设备；给出名字免得模型猜。
+            AudioDeviceInfo.TYPE_TELEPHONY -> "telephony"
+            AudioDeviceInfo.TYPE_FM -> "fm"
+            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE -> "speaker_safe"
+            AudioDeviceInfo.TYPE_REMOTE_SUBMIX -> "remote_submix"
+            AudioDeviceInfo.TYPE_BUS -> "bus"
+            AudioDeviceInfo.TYPE_LINE_ANALOG, AudioDeviceInfo.TYPE_LINE_DIGITAL, AudioDeviceInfo.TYPE_AUX_LINE -> "line_out"
+            AudioDeviceInfo.TYPE_DOCK -> "dock"
+            else -> "other_$type"
+        }
+
         val WIFI_STATUS_SSID = Regex("""\bSSID:\s*([^,\r\n]+)""")
         val WIFI_STATUS_RSSI = Regex("""\bRSSI:\s*(-?\d+)""")
 

@@ -134,7 +134,7 @@ internal class MonitorStartTool(
             "立即返回，不等事件。用于定时提醒、状态变化提醒。"
 
     override fun availability(env: ToolEnvironment): ToolAvailability = when {
-        !env.switches.terminal -> ToolAvailability.Unavailable(ToolErrorCode.DISABLED, "需要开启「文件与终端」开关")
+        !env.switches.terminal -> ToolAvailability.Unavailable(ToolErrorCode.DISABLED, "需要开启「终端与文件」开关")
         else -> gate.availability(env)
     }
 
@@ -146,7 +146,12 @@ internal class MonitorStartTool(
         string("command", "持续运行的 shell 命令；只在需要你处理时往 stdout 输出一行，输出要及时（不要缓冲）", required = true, maxLength = 4000)
         // 不设上限：超过用户设置的最长时长时按上限生效，并在结果里写明，而不是报错。
         integer("timeout_ms", "最长运行毫秒数，默认 30 分钟；超过用户设置的上限时按上限生效", min = MonitorRegistryCore.MIN_TIMEOUT_MS)
-        string("identity", "身份，默认 user", enum = listOf("user", "root"))
+        // 没有 Root 时只给 user（与 terminal_run 一致），模型不会去试 root。
+        if (env.rootAvailable) {
+            string("identity", "身份，默认 user", enum = listOf("user", "root"))
+        } else {
+            string("identity", "身份：这台手机没有 Root，只能用 user", enum = listOf("user"))
+        }
     }
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): MonitorStartInput = MonitorStartInput(

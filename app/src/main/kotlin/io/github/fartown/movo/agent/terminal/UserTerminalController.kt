@@ -6,7 +6,7 @@ import kotlin.concurrent.thread
 /**
  * 用户手动终端的会话控制器：多个常驻 shell 会话并存，每个会话的 cwd 与环境变量跨命令保持。
  *
- * 与面向模型的 [RootShellTerminalController] 分层独立：
+ * 与面向模型的终端工具（agent/tools/terminal）分层独立：
  * - 无执行超时——命令何时结束由用户决定（“停止”终止对应会话）；
  * - 输出经 onDelta 流式回调，不走模型工具的 JSON 合同与截断策略；
  * - 生命周期归属 App 级 UI 状态，不随单次 run 回收。
@@ -311,14 +311,24 @@ internal class UserTerminalController(
             while (true) {
                 val stdoutNow = session.stdout.text()
                 val stderrNow = session.stderr.text()
+                // 单条命令输出超过 STREAM_MAX_BYTES 时，超出部分没存下，状态行在收集器留的尾巴里：
+                // 尾巴还没绕回时它紧接在已存内容后面，拼起来找；绕回了就只在尾巴里找。
+                val dropped = session.stdout.droppedBytes()
+                val overflowTail = if (dropped > 0) session.stdout.overflowTail() else ""
+                val contiguous = dropped in 1..session.stdout.tailCapacity.toLong()
+                val scan = when {
+                    dropped == 0L -> stdoutNow
+                    contiguous -> stdoutNow + overflowTail
+                    else -> overflowTail
+                }
                 // 先判状态行再发增量：状态行完整到达后（含结尾换行）不再是"尾部未完成行"，
                 // 若先发出增量会把 marker 整行推给 UI。同时要求状态行以换行结束，
                 // 避免按半行解析出截断的 cwd。
-                val markerStart = stdoutNow.indexOf("\n$marker:")
-                val markerLineEnd = if (markerStart >= 0) stdoutNow.indexOf('\n', markerStart + 1) else -1
+                val markerStart = scan.indexOf("\n$marker:")
+                val markerLineEnd = if (markerStart >= 0) scan.indexOf('\n', markerStart + 1) else -1
                 val status = if (markerLineEnd >= 0) {
                     SessionStatusProtocol.parseStatusLine(
-                        stdoutNow.substring(markerStart + 1, markerLineEnd),
+                        scan.substring(markerStart + 1, markerLineEnd),
                         marker,
                     )
                 } else {
@@ -326,7 +336,15 @@ internal class UserTerminalController(
                 }
                 if (status != null) {
                     if (onDelta != null) {
-                        flushFinalStdout(stdoutNow, stdoutOffset, marker, onDelta)
+                        if (dropped > 0 && !contiguous) {
+                            // 先发完已存的，再注明中间省略了多少，最后给真正的结尾。
+                            if (stdoutNow.length > stdoutOffset) onDelta(stdoutNow.substring(stdoutOffset), false)
+                            val ending = scan.substring(0, markerStart).trimEnd()
+                            val omitted = dropped - overflowTail.encodeToByteArray().size
+                            onDelta("\n…（输出太长，中间省略约 $omitted 字节，下面是结尾）…\n$ending", false)
+                        } else {
+                            flushFinalStdout(scan, stdoutOffset, marker, onDelta)
+                        }
                         if (stderrNow.length > stderrOffset) {
                             onDelta(stderrNow.substring(stderrOffset), true)
                         }

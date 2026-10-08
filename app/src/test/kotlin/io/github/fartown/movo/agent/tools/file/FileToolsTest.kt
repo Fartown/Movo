@@ -70,8 +70,11 @@ class FileToolsTest {
             file.endsWith(".pdf") -> ResolvedFile(FileKind.PDF, file, true, 100, "application/pdf")
             else -> ResolvedFile(FileKind.TEXT, file, true, 50, "text/plain")
         }
-        override fun readText(file: String, offsetLine: Int, limitLines: Int) =
-            TextRead("line1\nline2", "utf-8", totalLines = 10, nextOffsetLine = offsetLine + limitLines)
+        override fun readText(file: String, offsetLine: Int, limitLines: Int, column: Int, checkCancelled: () -> Unit) =
+            TextRead(
+                "line1\nline2", "utf-8", totalLines = 10, nextOffsetLine = offsetLine + 2,
+                startLine = offsetLine, endLine = offsetLine + 1,
+            )
         override fun readImage(file: String) = ImageRead(640, 480, sampleImage)
     }
 
@@ -234,7 +237,7 @@ class FileToolsTest {
         // #22：pages / mode / frames 一律 UNSUPPORTED，不再出现在 schema 里；说明里不再说「默认关闭」。
         val tool = ContractTool(FileReadTool(readBackend))
         val props = tool.parameters(ToolEnvironment()).getJSONObject("properties")
-        assertEquals(setOf("file", "offset", "limit"), props.keys().asSequence().toSet())
+        assertEquals(setOf("file", "offset", "column", "limit"), props.keys().asSequence().toSet())
         assertTrue(tool.description.contains("暂不支持"))
         assertFalse(tool.description.contains("默认关闭"))
     }
@@ -260,6 +263,16 @@ class FileToolsTest {
         val r = pipeline(env).execute(call("file_read", """{"file":"/sdcard/note.txt"}"""))
         assertEquals("error", r.status)
         assertEquals("DISABLED", r.errorCode)
+    }
+
+    @Test
+    fun fileRead_fileUri_onlyNeedsTerminalSwitch() {
+        // file:// 是路径的另一种写法：只开「终端与文件」、关了「读取敏感信息」也能读（与重构前一致）。
+        val env = ToolEnvironment(switches = ToolSwitches(terminal = true, sensitiveRead = false))
+        val r = pipeline(env).execute(call("file_read", """{"file":"file:///sdcard/note.txt"}"""))
+        assertFalse(r.errorCode == "DISABLED")
+        val content = pipeline(env).execute(call("file_read", """{"file":"content://media/external/file/1"}"""))
+        assertEquals("DISABLED", content.errorCode)
     }
 
     @Test

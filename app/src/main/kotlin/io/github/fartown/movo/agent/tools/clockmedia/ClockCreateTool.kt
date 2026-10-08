@@ -7,6 +7,7 @@ import io.github.fartown.movo.agent.tools.core.CallResolution
 import io.github.fartown.movo.agent.tools.core.Evidence
 import io.github.fartown.movo.agent.tools.core.ModelContent
 import io.github.fartown.movo.agent.tools.core.RecoverySpec
+import io.github.fartown.movo.agent.tools.core.Retry
 import io.github.fartown.movo.agent.tools.core.Risk
 import io.github.fartown.movo.agent.tools.core.Sensitivity
 import io.github.fartown.movo.agent.tools.core.ToolArgs
@@ -59,6 +60,8 @@ internal data class ClockCreateOutput(
     val verified: Boolean,
     /** 归因到本次请求的触发时刻（epoch 毫秒），核实不到时为 null。 */
     val matchedTriggerAtMs: Long?,
+    /** 已交给时钟应用但没核实到时，写给模型的说明（怎么如实告诉用户、怎么确认）。 */
+    val note: String? = null,
 ) : ToolOutput
 
 /**
@@ -68,10 +71,15 @@ internal data class ClockCreateOutput(
 internal sealed interface ClockCreateResult {
     /** 核实到归因本次创建的触发项（Root 用 dumpsys alarm，无 Root 用 getNextAlarmClock）。 */
     data class Attributed(val matchedTriggerAtMs: Long, val requestMarker: String) : ClockCreateResult
-    /** 已派发，但核实不到本次的触发项：绝不冒领 ok。 */
+    /**
+     * 已交给时钟应用，但核实不到本次的触发项（已有更早的闹钟时新闹钟成不了「下一个」，计时器多数时钟不登记）：
+     * 按已派发、未核实报（和重构前派发成功就报 ok 一致），不说已确认创建。
+     */
     data object NotAttributed : ClockCreateResult
     /** 设备上没有可处理该请求的时钟应用，连派发都没发生。 */
     data object NoClockApp : ClockCreateResult
+    /** 有时钟应用，但启动它失败了（后台启动被拦等）；[clockPageOpened]：已改为打开时钟的闹钟 / 计时器页。 */
+    data class LaunchFailed(val clockPageOpened: Boolean) : ClockCreateResult
 }
 
 /** 可测后端：真实实现挂透明窗并派发闹钟 Intent，再按证据核实；测试用假实现。 */
@@ -80,7 +88,8 @@ internal interface ClockCreateBackend {
 }
 
 /**
- * clock_create（回读型，方案 a）。只有核实到归因本次创建的触发项才报 Done；核实不到报 Unknown。
+ * clock_create（回读型，方案 a）。核实到归因本次创建的触发项报 Done；已交给时钟应用但核实不到报 Dispatched
+ * （effect_verified=false，说明里写清只是已提交）；启动时钟失败报 SYSTEM_REJECTED，打开了时钟页就请用户自己设。
  * 没有取消闹钟/计时器的能力，取消改走时钟界面。
  */
 internal class ClockCreateTool(
@@ -90,7 +99,7 @@ internal class ClockCreateTool(
     override val domain = ToolDomain.CLOCK_MEDIA
     override val summary =
         "创建闹钟或倒计时。type=alarm 需 hour/minute（取下一次到达该时刻，不能指定日期）；type=timer 需 " +
-            "duration_seconds。相对时间按环境里的当前时间换算。只有 ok 才代表已确认创建，unknown 表示已提交未核实。" +
+            "duration_seconds。相对时间按环境里的当前时间换算。effect_verified=true 才代表已确认创建，false 表示已交给时钟应用但没核实到。" +
             "不能取消，取消改走时钟界面。"
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
@@ -158,9 +167,14 @@ internal class ClockCreateTool(
                 ClockCreateOutput(input.type, verified = true, matchedTriggerAtMs = result.matchedTriggerAtMs),
                 Evidence.AttributedNew(what = describe(input), requestMarker = result.requestMarker),
             )
-            ClockCreateResult.NotAttributed -> Verdict.Unknown(
-                reason = "已提交${label(input.type)}请求，但未能确认是否创建成功",
-                next = "用 clock_read 查看是否已创建，或让用户在时钟界面确认；不要直接重复创建",
+            ClockCreateResult.NotAttributed -> Verdict.Dispatched(
+                ClockCreateOutput(
+                    input.type, verified = false, matchedTriggerAtMs = null,
+                    note = "已把${label(input.type)}交给时钟应用，但没核实到（已有更早的闹钟、或系统拦了后台启动都会这样）；" +
+                        "告诉用户已提交，" +
+                        (if (clockReadUsable(ctx.env)) "可以用 clock_read 查看，" else "请用户在时钟里看一眼，") +
+                        "不要重复创建",
+                ),
             )
             ClockCreateResult.NoClockApp -> Verdict.Failed(
                 ToolError(
@@ -169,7 +183,30 @@ internal class ClockCreateTool(
                     hint = "让用户手动在时钟里创建",
                 ),
             )
+            is ClockCreateResult.LaunchFailed -> Verdict.Failed(
+                if (result.clockPageOpened) {
+                    ToolError(
+                        code = ToolErrorCode.SYSTEM_REJECTED,
+                        message = "没能直接创建${label(input.type)}，已打开时钟的${label(input.type)}页",
+                        hint = "请用户在打开的时钟页里自己设${describeForUser(input)}；不要重复调用",
+                        retry = Retry.USER,
+                    )
+                } else {
+                    ToolError(
+                        code = ToolErrorCode.SYSTEM_REJECTED,
+                        message = "时钟应用没能启动（可能被系统拦了后台启动），${label(input.type)}没有设上",
+                        hint = "请用户给 Movo 打开「后台弹出界面」权限后再试，或自己在时钟里设${describeForUser(input)}",
+                        retry = Retry.USER,
+                    )
+                },
+            )
         }
+    }
+
+    /** 写给用户的这次要设的东西：「07:30 的闹钟」「5 分钟的计时器」。 */
+    private fun describeForUser(input: ClockCreateInput): String = when (input.type) {
+        ClockType.ALARM -> "%02d:%02d 的闹钟".format(input.hour, input.minute)
+        ClockType.TIMER -> "${durationLabel(input.durationSeconds)}的计时器"
     }
 
     override fun uiTitle(input: ClockCreateInput): String = when (input.type) {
@@ -179,7 +216,7 @@ internal class ClockCreateTool(
     } + input.label?.takeIf { it.isNotBlank() }?.let { "「${it.forTitle(12)}」" }.orEmpty()
 
     override fun renderForUi(input: ClockCreateInput, output: ClockCreateOutput): ToolUiView =
-        ToolUiView(summary = if (output.verified) "已创建（已核实）" else "已发出，没能核实")
+        ToolUiView(summary = if (output.verified) "已创建（已核实）" else "已交给时钟，没能核实")
 
     private fun repeatLabel(days: List<WeekDay>): String {
         val set = days.toSet()
@@ -203,6 +240,7 @@ internal class ClockCreateTool(
     override fun renderForModel(output: ClockCreateOutput): ModelContent {
         val json = JSONObject().put("type", output.type.name.lowercase())
         output.matchedTriggerAtMs?.let { json.put("matched_trigger_at", formatIso(it)) }
+        output.note?.let { json.put("note", it) }
         return ModelContent.Json(json)
     }
 
@@ -224,3 +262,7 @@ internal class ClockCreateTool(
             SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ROOT).format(Date(timeMs))
     }
 }
+
+/** clock_read 这次用得上：要 Root，还要开着「读取敏感信息」（[ToolSwitchGate]）。 */
+internal fun clockReadUsable(env: ToolEnvironment): Boolean =
+    env.rootAvailable && io.github.fartown.movo.agent.tools.core.ToolSwitchGate.check("clock_read", env.switches) == null

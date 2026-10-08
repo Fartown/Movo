@@ -166,6 +166,20 @@ internal class ConversationRepository(
         )
     }
 
+    /**
+     * 一个对话的完整模型记录（journal：只追加、不压缩），给 conversation_read 用。
+     * 还没拆成行的旧数据退回旧检查点，再退回发给模型的历史（和 [load] 的退回顺序一致）。
+     */
+    suspend fun journal(conversationId: String): List<AgentModelClient.ConversationMessage> {
+        flush()
+        modelLog(conversationId, ConversationModelMessageEntity.LOG_JOURNAL)?.let { return it }
+        val legacy = dao.contextCheckpoint(conversationId)
+        return AgentConversationCodec.decodeTranscript(legacy?.journalJson).ifEmpty {
+            modelLog(conversationId, ConversationModelMessageEntity.LOG_HISTORY)
+                ?: AgentConversationCodec.decodeTranscript(legacy?.historyJson)
+        }
+    }
+
     /** 这一段还没有任何行时返回 null（交给调用方退回旧数据）。 */
     private suspend fun modelLog(conversationId: String, log: String): List<AgentModelClient.ConversationMessage>? {
         if (dao.modelMessageCount(conversationId, log) == 0) return null

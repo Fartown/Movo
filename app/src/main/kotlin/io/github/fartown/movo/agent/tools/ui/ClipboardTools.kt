@@ -10,7 +10,6 @@ import io.github.fartown.movo.agent.tools.core.ResourceKey
 import io.github.fartown.movo.agent.tools.core.Risk
 import io.github.fartown.movo.agent.tools.core.Sensitivity
 import io.github.fartown.movo.agent.tools.core.ToolArgs
-import io.github.fartown.movo.agent.tools.core.ToolAvailability
 import io.github.fartown.movo.agent.tools.core.ToolContext
 import io.github.fartown.movo.agent.tools.core.ToolContract
 import io.github.fartown.movo.agent.tools.core.ToolDomain
@@ -59,13 +58,7 @@ internal class ClipboardReadTool(
     override val summary =
         "读系统剪贴板文本（最多 8000 字）。Movo 不在前台时系统不让读，会报 SYSTEM_REJECTED（这时分不出剪贴板空不空）。"
 
-    /** 受“敏感读取”开关控制（§16）。 */
-    override fun availability(env: ToolEnvironment): ToolAvailability =
-        if (env.switches.sensitiveRead) {
-            ToolAvailability.Available
-        } else {
-            ToolAvailability.Unavailable(ToolErrorCode.DISABLED, "已关闭敏感读取")
-        }
+    // 和重构前 get_clipboard 一样不受开关管：读当前剪贴板不算「读取敏感信息」（剪贴板历史才算）。
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema { }
 

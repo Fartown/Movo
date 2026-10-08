@@ -25,12 +25,14 @@ import org.json.JSONObject
 
 /**
  * §15 ui_wait。等屏幕出现/消失指定文字，或指定应用到前台，或等一段时间。
- * 超时返回 ok + matched:false（不报 TIMEOUT）。等文字出现时带回命中的节点。
- * 只等时长时等满 duration_ms，不受 timeout_ms 影响，也不占屏幕。
+ * 超时返回 ok + matched:false（不报 TIMEOUT）。等文字出现时带回命中的节点；等应用没等到时带回当时的前台应用。
+ * 只等时长时等满 duration_ms，不受 timeout_ms 影响，不占屏幕，也不需要无障碍、不关入口面板（和重构前的 wait 一样，
+ * 见 [onlyWaitsForTime]、GuiReadinessGuard）。
  */
 
 internal sealed interface UiWaitCondition {
-    data class Text(val text: String, val match: WaitMatch, val gone: Boolean) : UiWaitCondition
+    /** [includeDesc]=false 时只比节点文字，不比描述（图标按钮的名字）。 */
+    data class Text(val text: String, val match: WaitMatch, val gone: Boolean, val includeDesc: Boolean = true) : UiWaitCondition
     data class Package(val packageName: String) : UiWaitCondition
     data class Duration(val durationMs: Int) : UiWaitCondition
 }
@@ -44,6 +46,8 @@ internal data class UiWaitOutput(
     val matched: Boolean,
     val elapsedMs: Long,
     val node: UiNodeProbe?,
+    /** 等应用没等到时，当时在前台的应用。 */
+    val currentPackage: String? = null,
 ) : ToolOutput
 
 internal class UiWaitTool(
@@ -53,7 +57,7 @@ internal class UiWaitTool(
     override val domain = ToolDomain.UI
     override val summary =
         "等条件满足，三选一：text 出现（gone=true 等它消失，match 选匹配方式）、package 到前台、duration_ms 等满时长。" +
-            "等到文字出现时返回命中的节点；超时返回 ok 且 matched=false，不是错误。"
+            "等到文字出现时返回命中的节点；超时返回 ok 且 matched=false，不是错误，等应用超时会写当前前台 current_package。"
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
         string("text", "等这段文字出现（三选一之一；文字或描述匹配即可）")
@@ -62,6 +66,7 @@ internal class UiWaitTool(
             enum = WaitMatch.entries.map { it.name.lowercase() },
         )
         boolean("gone", "改为等这段文字从屏幕上消失（配合 text）")
+        boolean("include_desc", "等文字时是否也比对节点描述（图标按钮的名字），默认 true；只比文字时设 false")
         string("package", "等该应用到前台（三选一之一）")
         integer("duration_ms", "只等一段时间，等满为止，1–60000（三选一之一）", min = 1, max = MAX_DURATION_MS.toLong())
         integer("timeout_ms", "等文字 / 应用的超时毫秒 500–60000，默认 10000；只等时长时不用", min = 500, max = 60000)
@@ -80,7 +85,7 @@ internal class UiWaitTool(
                 if (match == WaitMatch.REGEX) {
                     runCatching { Regex(text) }.getOrElse { invalidArgs("regex 无效：${it.message}") }
                 }
-                UiWaitCondition.Text(text, match, args.bool("gone", false))
+                UiWaitCondition.Text(text, match, args.bool("gone", false), args.bool("include_desc", true))
             }
             hasPackage -> UiWaitCondition.Package(args.nonBlank("package"))
             else -> UiWaitCondition.Duration(args.int("duration_ms", 0, 1..MAX_DURATION_MS))
@@ -107,12 +112,17 @@ internal class UiWaitTool(
             )
         }
         val request = when (val c = input.condition) {
-            is UiWaitCondition.Text -> UiWaitRequest(c.text, c.match, c.gone, null, null, input.timeoutMs)
+            is UiWaitCondition.Text -> UiWaitRequest(c.text, c.match, c.gone, null, null, input.timeoutMs, c.includeDesc)
             is UiWaitCondition.Package -> UiWaitRequest(null, WaitMatch.CONTAINS, false, c.packageName, null, input.timeoutMs)
             is UiWaitCondition.Duration -> UiWaitRequest(null, WaitMatch.CONTAINS, false, null, c.durationMs, input.timeoutMs)
         }
         return when (val result = backend.waitFor(request, ctx.env, ctx::checkCancelled)) {
-            is UiWaitResult.Finished -> Verdict.Read(UiWaitOutput(result.matched, result.elapsedMs, result.node))
+            is UiWaitResult.Finished -> Verdict.Read(
+                UiWaitOutput(
+                    result.matched, result.elapsedMs, result.node,
+                    currentPackage = result.currentPackage.takeIf { !result.matched && input.condition is UiWaitCondition.Package },
+                ),
+            )
             is UiWaitResult.PermissionRequired -> Verdict.Failed(
                 ToolError(ToolErrorCode.PERMISSION_REQUIRED, "无障碍不可用，无法等待屏幕条件"),
             )
@@ -140,11 +150,19 @@ internal class UiWaitTool(
     override fun renderForModel(output: UiWaitOutput): ModelContent {
         val json = JSONObject().put("matched", output.matched).put("elapsed_ms", output.elapsedMs)
         output.node?.let { json.put("node", it.toJson()) }
+        output.currentPackage?.let { json.put("current_package", it) }
         return ModelContent.Json(json)
     }
 
     companion object {
         /** 只等时长的上限：和等文字 / 应用的超时上限一样，一分钟。 */
         const val MAX_DURATION_MS = 60_000
+
+        /**
+         * 这次调用只是等一段时间（只给了 duration_ms）：不看屏幕，不需要无障碍，也不用先关入口面板。
+         * 参数组合不对（比如同时给了 text）时按要看屏幕处理，由 parse 报参数错误。
+         */
+        fun onlyWaitsForTime(args: ToolArgs): Boolean =
+            args.has("duration_ms") && !args.has("text") && !args.has("package")
     }
 }

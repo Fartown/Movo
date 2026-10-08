@@ -22,7 +22,8 @@ import org.json.JSONObject
 
 /**
  * §12 ui_swipe（送达型）。按手指轨迹从 (x,y) 滑到 (x2,y2)：轮播、拖动、解锁。浏览列表用 ui_scroll。
- * 起止点绑最近一次 ui_observe 的坐标系（[coordinateError]）：页面内容刷新不影响，换窗口、应用或横竖屏才要重新观察。
+ * 起止点绑最近一次 ui_observe 的坐标系（[coordinateError]）：页面内容刷新不影响，换窗口、应用或横竖屏才要重新观察；
+ * 本次任务还没观察过就按屏幕像素。
  * hold_ms 先在起点按住再拖（拖动排序）：无障碍用同一根手指的两段连续笔画实现；Root 的 input swipe 做不到
  * 「先按住不动」，只有 Root 时不提供这个参数，带了也直接报不支持。
  * 手动审批时只在用户选的应用里问（见 buildUiActionResolution）。成功后显示滑动指示并配触感（规范 9.5）。
@@ -57,7 +58,7 @@ internal class UiSwipeTool(
         number("y", "起点纵坐标", required = true)
         number("x2", "终点横坐标", required = true)
         number("y2", "终点纵坐标", required = true)
-        integer("duration_ms", "滑动毫秒 100–2000，默认 300", min = 100, max = 2000)
+        integer("duration_ms", "滑动毫秒 100–2000，默认 500", min = 100, max = 2000)
         // 先按住再拖只有无障碍做得到：只有 Root 时不出现。
         if (env.accessibilityUsable) {
             integer(
@@ -69,7 +70,7 @@ internal class UiSwipeTool(
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): UiSwipeInput = UiSwipeInput(
         x = args.double("x"), y = args.double("y"), x2 = args.double("x2"), y2 = args.double("y2"),
-        durationMs = args.int("duration_ms", 300, 100..2000),
+        durationMs = args.int("duration_ms", DEFAULT_DURATION_MS, 100..2000),
         holdMs = args.intOrNull("hold_ms"),
     )
 
@@ -79,7 +80,7 @@ internal class UiSwipeTool(
         val backendKind = backend.backend(env)
         val holding = (input.holdMs ?: 0) > 0
         val rejected = coordinateError(registry, latest?.observationId)
-            ?: coordinateRangeError(latest, input.x to input.y, input.x2 to input.y2)
+            ?: coordinateRangeError(registry, latest, input.x to input.y, input.x2 to input.y2)
             ?: if (holding && backendKind != InjectionBackend.ACCESSIBILITY) {
                 ToolError(
                     ToolErrorCode.UNSUPPORTED,
@@ -91,7 +92,8 @@ internal class UiSwipeTool(
             }
         return buildUiActionResolution(
             backend = backendKind,
-            target = TargetIdentity.Coordinate(latest?.observationId ?: "", latest?.gen ?: -1L),
+            // 没观察过时记下现在的坐标系，确认期间屏幕变了 execute 前照样拦下。
+            target = TargetIdentity.Coordinate(latest?.observationId ?: pinCurrentFrame(registry), latest?.gen ?: -1L),
             pkg = pkg,
             selfPackage = registry.selfPackage,
             // 确认卡写的是「在屏幕上滑动」，用不到起点下的节点：不抓树，readableTarget 只记录没读。
@@ -155,4 +157,9 @@ internal class UiSwipeTool(
 
     override fun renderForModel(output: UiAfter): ModelContent =
         ModelContent.Json(JSONObject().put("after", afterJson(output.packageName, output.windowChanged)))
+
+    companion object {
+        /** 默认滑动时长：和重构前的 swipe 一样 500 毫秒，太快会被当成甩动、在轮播和滚轮上滑过头。 */
+        const val DEFAULT_DURATION_MS = 500
+    }
 }

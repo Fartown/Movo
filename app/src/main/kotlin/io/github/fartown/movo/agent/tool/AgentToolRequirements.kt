@@ -1,8 +1,5 @@
 package io.github.fartown.movo.agent.tool
 
-import org.json.JSONArray
-import org.json.JSONObject
-
 internal enum class RootRequirement { NONE, PARTIAL, REQUIRED }
 internal enum class LsposedRequirement { NONE, OPTIONAL, REQUIRED }
 
@@ -65,14 +62,15 @@ internal object AgentToolRequirements {
             "memory_read", "skill_read", "skill_install", "conversation_read", "ask_user", "tool_search",
             "mcp_find", "mcp_call", "monitor_start", "monitor_stop", "monitor_list", "notify_user",
         )
+        // sms_code_read：有 Root 读短信库，没有 Root 时从短信通知里取（要通知使用权）。
         register(
             RootRequirement.PARTIAL,
             "device_toggle", "setting_read", "personal_search", "file_search", "file_read", "file_write",
-            "file_list", "terminal_run", "terminal_job",
+            "file_list", "terminal_run", "terminal_job", "sms_code_read",
         )
         register(
             RootRequirement.REQUIRED,
-            "setting_write", "app_control", "device_diagnostics", "clock_read", "sms_code_read",
+            "setting_write", "app_control", "device_diagnostics", "clock_read",
             "health_read", "wifi_password_read",
         )
         listOf("ui_observe", "ui_tap", "ui_scroll", "ui_swipe", "ui_input", "ui_key", "ui_wait")
@@ -86,6 +84,7 @@ internal object AgentToolRequirements {
         ).forEach { name -> put(name, getValue(name).copy(accessibility = true)) }
         mapOf(
             "recent_notifications" to ToolSystemAccess.NOTIFICATIONS,
+            "sms_code_read" to ToolSystemAccess.NOTIFICATIONS,
             "search_notification_history" to ToolSystemAccess.NOTIFICATIONS,
             "search_personal_orders" to ToolSystemAccess.NOTIFICATIONS,
             "recent_app_activity" to ToolSystemAccess.USAGE,
@@ -105,76 +104,4 @@ internal object AgentToolRequirements {
     val toolNames: Set<String> get() = definitions.keys
 
     fun find(name: String): LocalToolRequirement? = definitions[name]
-
-    fun rootRequirement(name: String): RootRequirement =
-        requireNotNull(find(name)) { "Missing tool requirements: $name" }.rootRequirement
-
-    fun requiresAccessibility(name: String): Boolean = find(name)?.accessibility == true
-
-    fun rootDenied(name: String, arguments: JSONObject, rootAvailable: Boolean): Boolean {
-        if (rootAvailable) return false
-        if (rootRequirement(name) == RootRequirement.REQUIRED) return true
-        return when (name) {
-            "terminal" -> arguments.optString("identity").equals("root", ignoreCase = true)
-            "press_key" -> arguments.optString("button").equals("PASTE", ignoreCase = true)
-            else -> false
-        }
-    }
-
-    /** 复制后收窄，不能修改下一轮或另一个 run 共用的原始 Schema。 */
-    fun project(tools: JSONArray, rootAvailable: Boolean): JSONArray = JSONArray().also { result ->
-        for (index in 0 until tools.length()) {
-            val original = tools.getJSONObject(index)
-            val name = original.getJSONObject("function").getString("name")
-            val requirement = rootRequirement(name)
-            if (!rootAvailable && requirement == RootRequirement.REQUIRED) continue
-            val tool = JSONObject(original.toString())
-            if (!rootAvailable) projectUnprivileged(tool.getJSONObject("function"))
-            result.put(tool)
-        }
-    }
-
-    private fun projectUnprivileged(function: JSONObject) {
-        val properties = function.getJSONObject("parameters").optJSONObject("properties")
-        when (function.getString("name")) {
-            "terminal" -> {
-                function.put("description", "在当前设备管理普通 Android Shell 或用户选择的 Linux 环境。" +
-                    "以 App UID 执行，支持会话、异步任务和后台服务；Linux 内的模拟身份不提供 Android 系统特权。" +
-                    "使用 open_and_exec 执行单次命令，open/exec 复用会话，daemon_start/list/logs/stop 管理后台服务。")
-                properties?.getJSONObject("identity")
-                    ?.put("enum", JSONArray().put("user"))
-                    ?.put("description", "宿主执行身份；当前仅支持 user，默认 user。")
-                properties?.getJSONObject("environment")?.put("description",
-                    "android 使用普通 Android Shell；linux 使用用户选择的发行版和免 Root 后端。默认 android。")
-                properties?.getJSONObject("cwd")?.put("description",
-                    "工作目录。Android 默认使用 Movo 私有工作区，Linux 默认 /workspace。")
-            }
-            "run_command" -> {
-                function.put("description",
-                    "通过普通 Android Shell 执行单次非交互命令，以 App UID 运行；只能访问当前应用有权访问的资源。")
-                properties?.getJSONObject("cwd")?.put("description", "工作目录，默认使用 Movo 私有工作区。")
-            }
-            "list_directory" -> {
-                function.put("description", "列出当前应用有权访问的目录，默认使用 Movo 私有工作区。")
-                properties?.optJSONObject("path")?.apply {
-                    put("description", "目录路径；未提供时使用 Movo 私有工作区。")
-                    remove("default")
-                }
-            }
-            "read_image" -> properties?.getJSONObject("path")?.put("description",
-                "当前应用有权读取的绝对图片路径、file URI 或已授权的 content URI。")
-            "press_key" -> properties?.getJSONObject("button")?.let { button ->
-                val values = button.getJSONArray("enum")
-                button.put("enum", JSONArray().also { allowed ->
-                    for (i in 0 until values.length()) {
-                        val value = values.getString(i)
-                        if (!value.equals("PASTE", ignoreCase = true)) allowed.put(value)
-                    }
-                })
-                button.put("description", "无障碍支持的系统按键；粘贴文本请使用 paste_text。")
-            }
-            "search_personal_orders" -> function.put("description",
-                "从用户已授权保存的通知历史检索外卖、购物、快递、票券和出行订单。")
-        }
-    }
 }

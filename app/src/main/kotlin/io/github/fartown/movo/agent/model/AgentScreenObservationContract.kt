@@ -7,8 +7,6 @@ internal object AgentScreenObservationContract {
     const val DEFAULT_INCLUDE_SCREENSHOT = false
     const val DEFAULT_INCLUDE_UI_TREE = true
     const val DEFAULT_MAX_NODES = 60
-    const val MIN_MAX_NODES = 1
-    const val MAX_MAX_NODES = 120
 
     data class Options(
         val includeScreenshot: Boolean,

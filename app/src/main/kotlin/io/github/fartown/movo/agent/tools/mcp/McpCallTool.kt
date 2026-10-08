@@ -20,6 +20,7 @@ import io.github.fartown.movo.agent.tools.core.ToolError
 import io.github.fartown.movo.agent.tools.core.ToolErrorCode
 import io.github.fartown.movo.agent.tools.core.ToolInput
 import io.github.fartown.movo.agent.tools.core.ToolOutput
+import io.github.fartown.movo.agent.tools.core.ToolWarning
 import io.github.fartown.movo.agent.tools.core.Verdict
 import io.github.fartown.movo.agent.tools.core.fail
 import io.github.fartown.movo.agent.tools.core.objectSchema
@@ -35,7 +36,9 @@ internal data class McpToolOutput(
     val server: String,
     val tool: String,
     val content: List<String>,
-    val structured: JSONObject?,
+    /** structuredContent：对象或数组。 */
+    val structured: Any?,
+    /** 来源端已截断（文本/结构化超过 64KB、图片超过 2MB、不认识的内容类型）。 */
     val truncated: Boolean,
     val images: List<AgentModelClient.ModelImage>,
 ) : ToolOutput
@@ -84,14 +87,106 @@ internal fun executeMcpCall(
 }
 
 internal fun renderMcpOutput(output: McpToolOutput): ModelContent {
+    val fitted = McpResultFit.fit(output)
     val json = JSONObject()
         .put("server", output.server)
         .put("tool", output.tool)
-        .put("content", JSONArray(output.content))
-    output.structured?.let { json.put("structured", it) }
-    if (output.truncated) json.put("truncated", true)
+        .put("content", JSONArray(fitted.content))
+    fitted.structured?.let { json.put("structured", it) }
+    fitted.structuredText?.let { json.put("structured_text", it) }
+    if (output.truncated || fitted.clipped) json.put("truncated", true)
+    if (fitted.clipped) json.put("shown_chars", fitted.shownChars).put("total_chars", fitted.totalChars)
     if (output.images.isNotEmpty()) json.put("images", output.images.size)
     return ModelContent.Json(json)
+}
+
+/** 结果放不下时告诉模型只给了多少、怎么办。 */
+internal fun mcpWarnings(output: McpToolOutput): List<ToolWarning> {
+    val fitted = McpResultFit.fit(output)
+    return listOfNotNull(
+        fitted.note?.let { ToolWarning(ToolErrorCode.TOO_LARGE, it) },
+        ToolWarning(ToolErrorCode.TOO_LARGE, "MCP 服务器返回的内容超过上限（文本或结构化 64KB、图片 2MB）或含不支持的类型，已截掉一部分")
+            .takeIf { output.truncated },
+    )
+}
+
+/**
+ * 把 MCP 结果压进一次工具结果的上限（[MAX_CHARS]，序列化后计）：先保住 structured（结构化，常和文本是同一份数据），
+ * 文本按顺序给、放不下的截开头；structured 本身放不下时，有文本就只给文本，没有文本就给 structured 的开头（structured_text）。
+ * 不依赖全局投影的整份降级，结构和截断说明都由这里给全。
+ */
+internal object McpResultFit {
+    /** 一次工具结果给模型最多 24000 字（ToolProjection.MAX_MODEL_CHARS），留出状态、告警等字段的余量。 */
+    const val MAX_CHARS = 21_000
+
+    data class Fitted(
+        val content: List<String>,
+        val structured: Any?,
+        val structuredText: String?,
+        val clipped: Boolean,
+        val shownChars: Int,
+        val totalChars: Int,
+        val note: String?,
+    )
+
+    fun fit(output: McpToolOutput, budget: Int = MAX_CHARS): Fitted {
+        val structuredJson = output.structured?.toString()
+        val totalChars = output.content.sumOf { it.length } + (structuredJson?.length ?: 0)
+        var remaining = budget - 200 - JSONObject.quote(output.server).length - JSONObject.quote(output.tool).length
+        var structured: Any? = null
+        var structuredText: String? = null
+        var structuredDropped = false
+        if (structuredJson != null) {
+            if (structuredJson.length <= remaining) {
+                structured = output.structured
+                remaining -= structuredJson.length
+            } else if (output.content.all { it.isBlank() }) {
+                structuredText = clipToQuoted(structuredJson, remaining)
+                remaining -= JSONObject.quote(structuredText).length
+            } else {
+                structuredDropped = true
+            }
+        }
+        val content = mutableListOf<String>()
+        var textClipped = false
+        for (text in output.content) {
+            val quoted = JSONObject.quote(text).length + 1
+            if (quoted <= remaining) {
+                content += text
+                remaining -= quoted
+                continue
+            }
+            val head = clipToQuoted(text, remaining - 1)
+            if (head.isNotEmpty()) content += head
+            textClipped = true
+            break
+        }
+        val clipped = textClipped || structuredDropped || structuredText != null
+        val shownChars = content.sumOf { it.length } + (if (structured != null) structuredJson!!.length else 0) +
+            (structuredText?.length ?: 0)
+        val note = if (!clipped) null else buildString {
+            append("结果共 ").append(totalChars).append(" 字，放不下，只给了开头 ").append(shownChars).append(" 字")
+            if (structuredDropped) {
+                append("；结构化部分（structured，").append(structuredJson!!.length).append(" 字）没有给出，同样的数据一般也在 content 文本里")
+            }
+            append("。工具若有分页或过滤参数，缩小范围再调")
+        }
+        return Fitted(content, structured, structuredText, clipped, shownChars, totalChars, note)
+    }
+
+    /** 取 [text] 的开头，使它转成 JSON 字符串后不超过 [maxQuoted] 字。 */
+    private fun clipToQuoted(text: String, maxQuoted: Int): String {
+        if (maxQuoted <= 2) return ""
+        if (JSONObject.quote(text).length <= maxQuoted) return text
+        var low = 0
+        var high = minOf(text.length, maxQuoted)
+        while (low < high) {
+            val middle = (low + high + 1) / 2
+            if (JSONObject.quote(text.substring(0, middle)).length <= maxQuoted) low = middle else high = middle - 1
+        }
+        if (low in 1 until text.length && text[low - 1].isHighSurrogate()) low--
+        return text.substring(0, low)
+    }
 }
 
 /**
@@ -195,6 +290,8 @@ internal class McpCallTool(
 
     override fun renderForModel(output: McpToolOutput): ModelContent = renderMcpOutput(output)
 
+    override fun warnings(output: McpToolOutput): List<ToolWarning> = mcpWarnings(output)
+
     override fun images(output: McpToolOutput): List<AgentModelClient.ModelImage> = output.images
 
 }
@@ -211,7 +308,9 @@ internal class McpDirectTool(
 ) : ToolContract<McpDirectInput, McpToolOutput> {
     override val name = entry.shortName
     override val domain = ToolDomain.MCP
+    override val thirdPartySchema = true
 
+    /** 第三方描述原样给全（和重构前一样）；总长受目录的 token 预算约束，太长的会改走 mcp_find。 */
     override val summary: String = buildString {
         append("MCP 服务器「").append(entry.server.name).append("」的工具 ")
         append(entry.definition.name).append('。')
@@ -219,7 +318,7 @@ internal class McpDirectTool(
         if (description.isNotBlank()) {
             append("以下为第三方描述：").append(description)
         }
-    }.take(MAX_DESCRIPTION_CHARS)
+    }
 
     override fun schema(env: ToolEnvironment): JSONObject =
         runCatching { JSONObject(entry.definition.inputSchemaJson) }
@@ -245,24 +344,26 @@ internal class McpDirectTool(
 
     override fun renderForModel(output: McpToolOutput): ModelContent = renderMcpOutput(output)
 
-    override fun images(output: McpToolOutput): List<AgentModelClient.ModelImage> = output.images
+    override fun warnings(output: McpToolOutput): List<ToolWarning> = mcpWarnings(output)
 
-    private companion object {
-        const val MAX_DESCRIPTION_CHARS = 200
-    }
+    override fun images(output: McpToolOutput): List<AgentModelClient.ModelImage> = output.images
 }
 
 /** MCP 返回内容：文本开头 + 结构化结果的键值；图片由 ContractTool 加进视图。 */
 internal fun mcpUiView(output: McpToolOutput): ToolUiView {
     val text = output.content.joinToString("\n\n").trim()
+    val structuredObject = output.structured as? JSONObject
+    val structuredArray = output.structured as? JSONArray
     val blocks = listOfNotNull(
         text.takeIf { it.isNotBlank() }?.let { ToolUiBlock.Preview(it, more = output.truncated) },
-        output.structured?.takeIf { it.length() > 0 && text.isBlank() }?.uiFields(),
+        structuredObject?.takeIf { it.length() > 0 && text.isBlank() }?.uiFields(),
+        structuredArray?.takeIf { it.length() > 0 && text.isBlank() }?.let { ToolUiBlock.Preview(it.toString(2), more = output.truncated) },
     )
     return ToolUiView(
         summary = when {
             text.isNotBlank() -> "返回 ${text.length} 字"
-            output.structured != null -> "返回 ${output.structured.length()} 项"
+            structuredObject != null -> "返回 ${structuredObject.length()} 项"
+            structuredArray != null -> "返回 ${structuredArray.length()} 项"
             output.images.isNotEmpty() -> "返回 ${output.images.size} 张图片"
             else -> "完成"
         },

@@ -126,6 +126,40 @@ class PersonalToolsTest {
     }
 
     @Test
+    fun personalSearch_masksVerificationCodesInSubText_too() {
+        val subTexts = listOf("验证码 654321，5 分钟内有效", "骑手已取餐 1234")
+        val backend = object : PersonalSearchBackend {
+            override fun search(input: PersonalSearchInput, env: ToolEnvironment) = PersonalSearchResult(
+                items = subTexts.mapIndexed { index, subText ->
+                    PersonalItem(
+                        id = "$index", timeMillis = 1_700_000_000_000L, title = "通知", text = "内容", from = "com.example.bank", uri = null,
+                        extra = JSONObject().put("sub_text", subText).put("still_in_bar", true),
+                    )
+                },
+            )
+        }
+        val p = ToolPipeline(
+            registry = ToolRegistry(listOf(object : ToolProvider { override val tools = listOf(ContractTool(PersonalSearchTool(backend))) })),
+            environment = { fullEnv },
+            appContext = ApplicationProvider.getApplicationContext(),
+            logger = AndroidAgentLogger,
+            runId = "run1",
+            cancelled = { false },
+        ).also { it.catalog() }
+
+        for (source in listOf("notification_bar", "notifications", "orders")) {
+            val result = p.execute(call("personal_search", """{"source":"$source"}"""))
+            assertFalse(source, result.content.contains("654321"))
+            val items = JSONObject(result.content).getJSONObject("data").getJSONArray("items")
+            val coded = items.getJSONObject(0).getJSONObject("extra")
+            assertEquals("验证码 ******，5 分钟内有效", coded.getString("sub_text"))
+            assertTrue(coded.getBoolean("still_in_bar"))
+            // 没有验证码语境词的副标题原样给（和标题、正文的打码条件一样）。
+            assertEquals("骑手已取餐 1234", items.getJSONObject(1).getJSONObject("extra").getString("sub_text"))
+        }
+    }
+
+    @Test
     fun personalSearch_clipboardHistory_isSecret() {
         val p = pipeline(fullEnv)
         val result = p.execute(call("personal_search", """{"source":"clipboard_history"}"""))

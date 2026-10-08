@@ -2,19 +2,17 @@ package io.github.fartown.movo.agent.tools.memory
 
 import android.content.Context
 import io.github.fartown.movo.data.repository.AgentMemoryException
+import io.github.fartown.movo.data.repository.AgentMemoryRepository
 import io.github.fartown.movo.data.repository.AgentMemorySnapshot
-import io.github.fartown.movo.data.repository.AgentMemoryStore
 import io.github.fartown.movo.data.repository.AgentMemoryWriteResult
 import io.github.fartown.movo.data.repository.CharacterMemoryRepository
 
 /**
  * 真实记忆后端：
- * - user 作用域 → 应用私有 filesDir 下的 MEMORY.md（AgentMemoryStore，带原子写与 revision CAS）。
+ * - user 作用域 → AgentMemoryRepository（应用私有 filesDir 下的 MEMORY.md，原子写 + revision CAS）。
+ *   和设置页编辑记忆走同一个存储实例、同一把锁；工具按版本写入，设置页先存过的内容工具不会悄悄覆盖
+ *   （设置页保存不比版本，和重构前一样）。
  * - character 作用域 → CharacterMemoryRepository，按角色 id 存独立 MEMORY.md。
- *
- * user 这里新建了一份指向同一文件的 AgentMemoryStore 实例，以拿到 AgentMemoryRepository 未对外暴露的
- * replaceAllIfRevision（原子 CAS）。单次运行内记忆写入都经本后端，和全局单例 store 并发写的概率极低；
- * 若后续要彻底消除双实例，由主流程把 CAS 方法提升到 AgentMemoryRepository（见返回报告）。
  *
  * [characterId] 由主流程在角色会话时提供当前角色标识；非角色会话或缺标识时 character 作用域不可读写。
  */
@@ -22,11 +20,10 @@ internal class AndroidMemoryBackend(
     context: Context,
     private val characterId: () -> String?,
 ) : MemoryBackend {
-    private val appContext = context.applicationContext
-    private val userStore by lazy { AgentMemoryStore(appContext.filesDir) }
+    private val appContext = context.applicationContext.also(AgentMemoryRepository::init)
 
     override fun load(scope: MemoryScopeArg): MemoryLoad = when (scope) {
-        MemoryScopeArg.USER -> snapshotToLoad { userStore.snapshot() }
+        MemoryScopeArg.USER -> snapshotToLoad { AgentMemoryRepository.snapshot() }
         MemoryScopeArg.CHARACTER -> {
             val id = characterId() ?: return MemoryLoad.Unavailable
             snapshotToLoad { CharacterMemoryRepository.snapshot(appContext, id) }
@@ -34,7 +31,7 @@ internal class AndroidMemoryBackend(
     }
 
     override fun write(scope: MemoryScopeArg, content: String, expectedRevision: String): MemoryCas = when (scope) {
-        MemoryScopeArg.USER -> casToResult { userStore.replaceAllIfRevision(content, expectedRevision) }
+        MemoryScopeArg.USER -> casToResult { AgentMemoryRepository.replaceAllIfRevision(content, expectedRevision) }
         MemoryScopeArg.CHARACTER -> {
             val id = characterId() ?: return MemoryCas.Unavailable
             casToResult { CharacterMemoryRepository.replaceAllIfRevision(appContext, id, expectedRevision, content) }

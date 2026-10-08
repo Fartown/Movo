@@ -11,9 +11,9 @@ import io.github.fartown.movo.agent.device.RootShellDeviceController
 import io.github.fartown.movo.agent.overlay.GestureIndicator
 import io.github.fartown.movo.agent.tools.core.InjectionBackend
 import io.github.fartown.movo.agent.tools.core.ToolEnvironment
+import io.github.fartown.movo.agent.tools.core.LegacyResults
 import io.github.fartown.movo.core.AgentLogger
 import org.json.JSONObject
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -103,6 +103,27 @@ private data class ObservationEntry(
 )
 
 /**
+ * 最近几次观察的登记：只留最近 [capacity] 次，更早的挤掉（每次都带着节点快照，最多 120 个节点，
+ * 长任务一直攒着会占内存）。被挤掉的 observation_id 按已过期处理，模型重新观察即可。
+ */
+internal class RecentObservations<T>(private val capacity: Int) {
+    private val entries = LinkedHashMap<String, T>()
+
+    @Synchronized
+    operator fun get(id: String): T? = entries[id]
+
+    @Synchronized
+    operator fun set(id: String, value: T) {
+        entries.remove(id)
+        entries[id] = value
+        while (entries.size > capacity) entries.remove(entries.keys.first())
+    }
+
+    @Synchronized
+    fun size(): Int = entries.size
+}
+
+/**
  * 同一对象实现 [UiObserveBackend] 与 [UiActionBackend]：观察登记与动作共享代际状态。
  * 实际观察/注入委托 [RootShellDeviceController]（它已组合无障碍服务 + root uiautomator 兜底 + 动作后 settle），
  * 本类负责把控制器的结果翻译成类型化契约结果，并维护「观察 id → 代际」的新鲜度校验。
@@ -117,7 +138,7 @@ internal class RealUiScreenBackend(
     override val selfPackage: String = context.packageName
 
     private val controller = RootShellDeviceController(logger, screenshotExcludedPackages, rootAvailable)
-    private val observations = ConcurrentHashMap<String, ObservationEntry>()
+    private val observations = RecentObservations<ObservationEntry>(KEPT_OBSERVATIONS)
     private val genCounter = AtomicLong(0L)
     @Volatile private var latest: ObservationRef? = null
     @Volatile private var latestCoordinateSpace: RootShellDeviceController.CoordinateSpace? = null
@@ -186,29 +207,38 @@ internal class RealUiScreenBackend(
         val gen = snapshot?.contentGeneration ?: genCounter.incrementAndGet()
         val observationId = element?.id ?: "obs-${genCounter.incrementAndGet()}"
         val pkg = element?.packageName?.takeIf { it.isNotBlank() }
-        val frame = frameBefore.copy(packageName = pkg ?: frameBefore.packageName)
+        // 只要截图（nodes=false）时没有节点快照：前台应用照样告诉模型（观察前读到的，或控制器读到的焦点窗口）。
+        val foreground = pkg ?: frameBefore.packageName
+            ?: details?.optJSONObject("focus")?.optString("package")?.takeIf { it.isNotBlank() }
+        val frame = frameBefore.copy(packageName = foreground)
+        val shot = details?.optJSONObject("screenshot")
         val screen = runCatching { controller.screenDimensions() }.getOrNull()
         val coordWidth = coord?.screenshotWidth ?: screen?.first ?: 0
         val coordHeight = coord?.screenshotHeight ?: screen?.second ?: 0
         observations[observationId] = ObservationEntry(gen, pkg, element, snapshot, coord, frame)
         latest = ObservationRef(observationId, gen, coordWidth, coordHeight)
         latestCoordinateSpace = coord
+        // 截图只截到部分窗口（多窗口、弹窗、输入法截不到）：标出来，免得模型把缺的内容当成屏幕上没有。
+        val partial = obs.image != null && shot?.optBoolean("partial", false) == true
         return UiObserveResult.Observed(
             observationId = observationId,
             gen = gen,
-            packageName = pkg,
+            packageName = foreground,
             coordWidth = coordWidth,
             coordHeight = coordHeight,
             focusedIndex = element?.nodes?.firstOrNull { it.focused }?.index,
             nodes = element?.nodes.orEmpty().map { it.toObservedNode() },
             nodesTruncated = element?.truncated ?: false,
             screenshotAttached = obs.image != null,
-            screenshotQuality = if (obs.image != null) "default" else null,
+            screenshotQuality = if (obs.image != null) {
+                shot?.optString("quality")?.takeIf { it.isNotBlank() } ?: "complete"
+            } else null,
             screenshot = obs.image,
             screenshotFailure = if (request.screenshot && obs.image == null) {
-                details?.optJSONObject("screenshot")?.optString("failure")
-                    ?.takeIf { it.isNotBlank() } ?: "SCREENSHOT_UNAVAILABLE"
+                shot?.optString("failure")?.takeIf { it.isNotBlank() } ?: "SCREENSHOT_UNAVAILABLE"
             } else null,
+            screenshotPartial = partial,
+            screenshotMissingWindows = if (partial) shot.optJSONArray("missing_window_ids")?.length() ?: 0 else 0,
         )
     }
 
@@ -337,7 +367,10 @@ internal class RealUiScreenBackend(
         return when {
             code.contains("MISMATCH") -> UiScrollResult.DirectionMismatch
             code == "ACTION_OUTCOME_UNKNOWN" -> UiScrollResult.OutcomeUnknown
-            else -> UiScrollResult.NotActionable(obj.optString("message").ifBlank { code.ifBlank { "滚动未生效" } })
+            else -> UiScrollResult.NotActionable(
+                obj.optString("message").ifBlank { code.ifBlank { "滚动未生效" } },
+                stale = LegacyResults.isStale(code),
+            )
         }
     }
 
@@ -447,7 +480,13 @@ internal class RealUiScreenBackend(
         }
         val obj = parse(json)
         val matched = obj?.optBoolean("ok", false) == true && obj.optBoolean("matched", true)
-        return UiWaitResult.Finished(matched = matched, elapsedMs = System.currentTimeMillis() - start, node = null)
+        // 没等到时告诉模型现在前台是谁（权限弹窗、广告页、别的应用截走了），和重构前的 last_package 一样。
+        val current = if (matched) null else {
+            obj?.optString("last_package")?.takeIf { it.isNotBlank() } ?: foregroundPackage()
+        }
+        return UiWaitResult.Finished(
+            matched = matched, elapsedMs = System.currentTimeMillis() - start, node = null, currentPackage = current,
+        )
     }
 
     /**
@@ -460,7 +499,7 @@ internal class RealUiScreenBackend(
         fun elapsed() = (System.nanoTime() - start) / 1_000_000
         while (true) {
             checkCancelled()
-            val check = textCheck(screenNodes(), needle, request.match, request.gone)
+            val check = textCheck(screenNodes(), needle, request.match, request.gone, request.includeDesc)
             if (check.met) return UiWaitResult.Finished(matched = true, elapsedMs = elapsed(), node = check.node)
             val remaining = request.timeoutMs - elapsed()
             if (remaining <= 0) return UiWaitResult.Finished(matched = false, elapsedMs = elapsed(), node = null)
@@ -536,7 +575,10 @@ internal class RealUiScreenBackend(
             code == "ACTION_OUTCOME_UNKNOWN" -> UiInjectResult.OutcomeUnknown
             code == "ACCESSIBILITY_UNAVAILABLE" || code == "PERMISSION_REQUIRED" -> UiInjectResult.PermissionRequired
             code == "SYSTEM_REJECTED" -> UiInjectResult.SystemRejected
-            else -> UiInjectResult.NotActionable(obj.optString("message").ifBlank { code.ifBlank { "未执行" } })
+            else -> UiInjectResult.NotActionable(
+                obj.optString("message").ifBlank { code.ifBlank { "未执行" } },
+                stale = LegacyResults.isStale(code),
+            )
         }
     }
 
@@ -545,5 +587,7 @@ internal class RealUiScreenBackend(
         const val TEXT_POLL_MS = 350L
         /** 等文字、滚动找字时一次读多少个节点。 */
         const val SCREEN_QUERY_NODES = 120
+        /** 观察登记只留最近几次：够模型回头用前几次的 index，又不让长任务一直攒节点快照。 */
+        const val KEPT_OBSERVATIONS = 8
     }
 }

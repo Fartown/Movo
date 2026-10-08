@@ -33,7 +33,11 @@ internal class ToolPipeline(
     private val interaction: UserInteraction = UserInteraction.NONE,
     private val guards: List<ToolGuard> = emptyList(),
     private val approvalTimeoutMs: Long = DEFAULT_APPROVAL_TIMEOUT_MS,
-
+    /**
+     * 每个调用执行前现读用户开关（设置 → 工具、记忆），盖到这一轮的环境快照上：
+     * 任务运行中关掉的，下一次调用就拦下，不等下一轮目录（重构前的行为）。
+     */
+    private val refreshSwitches: (ToolEnvironment) -> ToolEnvironment = { it },
 ) : AgentModelClient.ToolExecutor, ToolConcurrencyOracle, AutoCloseable {
     private val loadedDeferred = ConcurrentHashMap.newKeySet<String>()
 
@@ -78,7 +82,33 @@ internal class ToolPipeline(
         return runCatching { tool.stepTitle(args, currentEnvironment) }.getOrNull()?.takeIf { it.isNotBlank() }
     }
 
+    override fun unavailableReason(toolName: String): Pair<String, String>? {
+        val tool = registry.find(toolName) ?: return null
+        val env = currentEnvironment.let { snapshot -> runCatching { refreshSwitches(snapshot) }.getOrDefault(snapshot) }
+        val unavailable = registry.availability(tool, env) as? ToolAvailability.Unavailable ?: return null
+        return unavailable.code.name to unavailable.reason
+    }
+
+    /** [normalize] 按边界处理过的参数说明，执行时写进这次调用结果的 warnings。 */
+    private val argumentNotes = ConcurrentHashMap<String, List<ToolWarning>>()
+
+    /**
+     * 上限类参数越界时按 Schema 边界处理（[ToolArgBounds]），在合同校验之前做，校验与执行看到的是同一份参数。
+     * 只管 Movo 自己的工具：第三方 Schema 的同名参数（如 MCP 工具的 amount）含义不明，越界照旧交给校验拒绝。
+     */
+    override fun normalize(toolCall: AgentModelClient.ToolCall): AgentModelClient.ToolCall {
+        // 同一个调用 id 可能被上一轮没执行的调用用过（服务商不给 id 时按序号补），先清掉旧说明。
+        argumentNotes.remove(toolCall.id)
+        val tool = registry.find(toolCall.name)?.takeIf { !it.thirdPartySchema } ?: return toolCall
+        val arguments = runCatching { JSONObject(toolCall.argumentsJson.ifBlank { "{}" }) }.getOrNull() ?: return toolCall
+        val notes = runCatching { ToolArgBounds.clamp(arguments, tool.parameters(currentEnvironment)) }.getOrNull()
+        if (notes.isNullOrEmpty()) return toolCall
+        argumentNotes[toolCall.id] = notes
+        return toolCall.copy(argumentsJson = arguments.toString())
+    }
+
     override fun execute(toolCall: AgentModelClient.ToolCall): AgentModelClient.ToolResult {
+        val adjusted = argumentNotes.remove(toolCall.id).orEmpty()
         val tool = registry.find(toolCall.name)
             ?: return result(
                 toolCall,
@@ -99,7 +129,7 @@ internal class ToolPipeline(
         } catch (failure: ToolFailure) {
             return result(toolCall, tool, failure.toOutcome(), Sensitivity.NORMAL)
         }
-        val env = currentEnvironment
+        val env = currentEnvironment.let { snapshot -> runCatching { refreshSwitches(snapshot) }.getOrDefault(snapshot) }
         val declaredSensitivity = runCatching { tool.sensitivity(args, env) }.getOrDefault(Sensitivity.SECRET)
         val ctx = ToolContext(
             appContext = appContext,
@@ -137,7 +167,7 @@ internal class ToolPipeline(
             )
         }
         val sensitivity = maxOf(declaredSensitivity, outcome.sensitivity ?: Sensitivity.NORMAL)
-        return result(toolCall, tool, outcome, sensitivity)
+        return result(toolCall, tool, outcome.withWarnings(adjusted), sensitivity)
     }
 
     /**
@@ -166,6 +196,7 @@ internal class ToolPipeline(
     )
 
     override fun close() {
+        argumentNotes.clear()
         registry.close()
     }
 

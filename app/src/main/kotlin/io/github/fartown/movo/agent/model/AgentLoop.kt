@@ -327,7 +327,13 @@ internal class AgentLoop(
         modelToolCall: AgentModelClient.ToolCall,
     ): ToolOutcome {
         runController.throwIfCancelled()
-        val toolCall = toolCallValidator.normalize(modelToolCall)
+        val toolCall = toolExecutor.normalize(toolCallValidator.normalize(modelToolCall))
+        // 目录里没有、但工具本身存在（如任务中途关了开关）：说清是哪个开关或权限，而不是笼统的「未声明」。
+        if (!toolCallValidator.declares(toolCall.name)) {
+            toolExecutor.unavailableReason(toolCall.name)?.let { (code, reason) ->
+                return rejectedToolOutcome(round = round, toolCall = toolCall, code = code, message = reason)
+            }
+        }
         toolCallValidator.validate(toolCall)?.let { validationError ->
             return rejectedToolOutcome(
                 round = round,

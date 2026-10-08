@@ -58,15 +58,19 @@ class BrowserToolsTest {
             BrowserActResult(navigated = false, url = "https://x/", title = null, targetSummary = "按钮", loadTimedOut = false)
         }
         var performed = false
+        var lastReadCall: BrowserCall? = null
+        var lastOffset: Int? = null
 
         override fun state() = BrowserState(available, "https://x/", "标题", "x", canGoBack = false, canGoForward = false, userControlling = userControlling, navigationGeneration = 1L)
         override fun open(url: String, timeoutMs: Long, call: BrowserCall) = openResult()
         override fun navigate(nav: BrowserNav, call: BrowserCall) = navResult()
-        override fun readReadable(maxChars: Int, cursor: String?) = readResult(cursor)
-        override fun readText(selector: String?, maxChars: Int, cursor: String?) = readResult(cursor)
-        override fun readElements(selector: String?, cursor: String?) = elementsResult()
-        override fun screenshot() = screenshotResult()
-        override fun pageInfo() = JSONObject().put("viewport_width", 360)
+        override fun readReadable(maxChars: Int, cursor: String?, offset: Int?, call: BrowserCall) =
+            readResult(cursor).also { lastReadCall = call; lastOffset = offset }
+        override fun readText(selector: String?, maxChars: Int, cursor: String?, offset: Int?, call: BrowserCall) =
+            readResult(cursor).also { lastReadCall = call; lastOffset = offset }
+        override fun readElements(selector: String?, cursor: String?, call: BrowserCall) = elementsResult().also { lastReadCall = call }
+        override fun screenshot(call: BrowserCall) = screenshotResult().also { lastReadCall = call }
+        override fun pageInfo(call: BrowserCall) = JSONObject().put("viewport_width", 360).also { lastReadCall = call }
         override fun waitForSelector(selector: String, timeoutMs: Long) = true
         override fun inspectActTarget(request: BrowserActRequest) = inspectResult(request)
         override fun performAct(request: BrowserActRequest, call: BrowserCall): BrowserActResult {
@@ -343,6 +347,143 @@ class BrowserToolsTest {
         val r = pipeline().execute(call("browser_act", """{"action":"key","key":"enter"}"""))
         assertEquals("ok", r.status)
         assertTrue(fake.performed)
+    }
+
+    // ---- 重构前后对齐：元素字段、截断、跳读、页面信息、动作细节、入口归属 ----
+
+    @Test
+    fun elements_carryLabelsAndSayWhenTruncated() {
+        fake.elementsResult = {
+            BrowserElementsRead(
+                listOf(
+                    BrowserElement(
+                        "#q", "input", "", "#q", true, null, null,
+                        tag = "input", type = "search", ariaLabel = null, placeholder = "搜索商品",
+                    ),
+                    BrowserElement("#close", "button", "", "#close", false, null, null, tag = "button", ariaLabel = "关闭"),
+                ),
+                nextCursor = null, truncated = true, matchCount = 87,
+            )
+        }
+        val json = JSONObject(pipeline().execute(call("browser_read", """{"mode":"elements"}""")).content)
+        val data = json.getJSONObject("data")
+        val first = data.getJSONArray("elements").getJSONObject(0)
+        assertEquals("search", first.getString("type"))
+        assertEquals("搜索商品", first.getString("placeholder"))
+        assertEquals("input", first.getString("tag"))
+        assertEquals("关闭", data.getJSONArray("elements").getJSONObject(1).getString("aria_label"))
+        assertTrue(data.getBoolean("truncated"))
+        assertEquals(87, data.getInt("match_count"))
+        assertTrue(json.getJSONArray("warnings").getJSONObject(0).getString("message").contains("87"))
+    }
+
+    @Test
+    fun readable_reportsLengthOffsetAndSourceTruncation() {
+        fake.readResult = {
+            BrowserTextRead("正文", "markdown", null, null, 2, null, textLength = 120_000, offset = 4_000, sourceTruncated = true)
+        }
+        val json = JSONObject(pipeline().execute(call("browser_read", """{"mode":"readable","offset":4000}""")).content)
+        val data = json.getJSONObject("data")
+        assertEquals(120_000, data.getInt("text_length"))
+        assertEquals(4_000, data.getInt("offset"))
+        assertTrue(data.getBoolean("source_truncated"))
+        assertFalse("没有语言就不给，不能是字符串 null", data.has("language"))
+        assertTrue(json.getJSONArray("warnings").getJSONObject(0).getString("message").contains("截断"))
+        assertEquals(4_000, fake.lastOffset)
+    }
+
+    @Test
+    fun read_cursorAndOffsetTogether_invalid() {
+        val r = pipeline().execute(call("browser_read", """{"mode":"text","cursor":"abc","offset":10}"""))
+        assertEquals("INVALID_ARGUMENTS", r.errorCode)
+    }
+
+    @Test
+    fun reads_passTheirOwnCall_forBrowserEntryAttribution() {
+        listOf("readable", "text", "elements", "screenshot", "info").forEach { mode ->
+            fake.lastReadCall = null
+            pipeline().execute(AgentModelClient.ToolCall("call-$mode", "browser_read", """{"mode":"$mode"}"""))
+            assertEquals(mode, BrowserCall("run1", "call-$mode"), fake.lastReadCall)
+        }
+    }
+
+    @Test
+    fun act_hiddenCheckbox_isClicked_hiddenDiv_isNot() {
+        fake.inspectResult = {
+            BrowserActTarget(true, false, visible = false, editable = false, summary = "同意", submitPoint = false, searchRole = false, tag = "input", type = "checkbox")
+        }
+        assertEquals("ok", pipeline().execute(call("browser_act", """{"action":"click","selector":"#agree"}""")).status)
+        assertTrue(fake.performed)
+        fake.performed = false
+        fake.inspectResult = {
+            BrowserActTarget(true, false, visible = false, editable = false, summary = "菜单", submitPoint = false, searchRole = false, tag = "div")
+        }
+        val r = pipeline().execute(call("browser_act", """{"action":"click","selector":"#menu"}"""))
+        assertEquals("NOT_ACTIONABLE", r.errorCode)
+        assertFalse(fake.performed)
+    }
+
+    @Test
+    fun act_scrollAndType_returnDetails() {
+        fake.actResult = {
+            BrowserActResult(false, "https://x/", null, "页面", loadTimedOut = false, scrollBefore = 3200, scrollAfter = 3200)
+        }
+        val scroll = JSONObject(pipeline().execute(call("browser_act", """{"action":"scroll","direction":"down"}""")).content)
+            .getJSONObject("data")
+        assertEquals(3200, scroll.getInt("scroll_before"))
+        assertFalse(scroll.getBoolean("scrolled"))
+        fake.actResult = {
+            BrowserActResult(false, "https://x/", null, "搜索框", loadTimedOut = false, typedChars = 4, submitted = true)
+        }
+        val type = JSONObject(pipeline().execute(call("browser_act", """{"action":"type","selector":"#q","text":"耳机降噪","submit":true}""")).content)
+            .getJSONObject("data")
+        assertEquals(4, type.getInt("typed_chars"))
+        assertTrue(type.getBoolean("submitted"))
+    }
+
+    @Test
+    fun parser_dropsNullsAndConvertsBounds() {
+        val json = JSONObject(
+            """{"ok":true,"truncated":true,"match_count":40,"elements":[{"selector":"#a","tag":"a","role":null,"text":"首页",""" +
+                """"aria_label":"","placeholder":"","href":null,"type":null,"bounds":{"x":10,"y":20,"width":100,"height":40}}]}""",
+        )
+        val read = BrowserResultParser.elements(json, scale = 2.0)
+        val element = read.elements.single()
+        assertEquals("a", element.role)
+        assertEquals(null, element.href)
+        assertEquals(null, element.type)
+        assertEquals(null, element.ariaLabel)
+        val bounds = element.bounds!!
+        assertEquals(20, bounds.getInt("x"))
+        assertEquals(200, bounds.getInt("width"))
+        assertEquals(120, bounds.getInt("center_x"))
+        assertTrue(read.truncated)
+        assertEquals(40, read.matchCount)
+
+        val text = BrowserResultParser.textRead(
+            JSONObject("""{"text":"abc","language":null,"canonical_url":null,"text_length":3,"offset":0,"truncated":false,"next_offset":null}"""),
+            generation = 1, defaultFormat = "text",
+        )
+        assertEquals(null, text.language)
+        assertEquals(null, text.canonicalUrl)
+        assertEquals(3, text.textLength)
+    }
+
+    @Test
+    fun parser_pageInfoKeepsLoadingAndHistoryState() {
+        val info = BrowserResultParser.pageInfo(
+            JSONObject(
+                """{"ok":true,"tool":"browser_use","url":"https://x/","title":"t","is_loading":false,"can_go_back":true,""" +
+                    """"can_go_forward":false,"http_status":404,"viewport_width":360,"language":null,"canonical_url":null}""",
+            ),
+        )
+        assertEquals(404, info.getInt("http_status"))
+        assertTrue(info.getBoolean("can_go_back"))
+        assertFalse(info.getBoolean("is_loading"))
+        assertEquals(360, info.getInt("viewport_width"))
+        assertFalse(info.has("language"))
+        assertFalse(info.has("ok"))
+        assertFalse(info.has("url"))
     }
 
     // ---- 执行卡标题：网页输入框可能是密码框，只写字数 ----

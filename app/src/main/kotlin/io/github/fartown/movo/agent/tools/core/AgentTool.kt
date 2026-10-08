@@ -85,6 +85,9 @@ internal interface AgentTool {
     /** 给模型的描述：只写契约（做什么、返回什么、关键上限），1–3 句。 */
     val description: String
 
+    /** 参数 Schema 是第三方给的（MCP 直接暴露的工具）：同名参数含义不明，管线不做上限夹紧。 */
+    val thirdPartySchema: Boolean get() = false
+
     /** 按当前环境投影参数 Schema（例如只列出可用的 source、section）。 */
     fun parameters(env: ToolEnvironment): JSONObject
 

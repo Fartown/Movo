@@ -28,6 +28,8 @@ internal class AgentToolSubsystem(
     characterId: () -> String? = { null },
     conversationLoader: () -> List<AgentModelClient.ConversationMessage> = { emptyList() },
     guards: List<ToolGuard> = emptyList(),
+    /** 每个调用执行前现读用户开关（见 [ToolPipeline] 同名参数）。 */
+    refreshSwitches: (ToolEnvironment) -> ToolEnvironment = { it },
 ) : AutoCloseable {
     private val meta = MetaToolProvider()
 
@@ -46,7 +48,7 @@ internal class AgentToolSubsystem(
         cancelled = cancelled,
         interaction = interaction,
         guards = guards,
-
+        refreshSwitches = refreshSwitches,
     ).also { meta.pipeline = it }
 
     private fun buildProviders(
@@ -63,8 +65,11 @@ internal class AgentToolSubsystem(
             ),
         ) + meta
 
+    private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** 按停止（后台线程）和运行结束（finally）都会调：只关一次。 */
     override fun close() {
-        pipeline.close()
+        if (closed.compareAndSet(false, true)) pipeline.close()
     }
 }
 

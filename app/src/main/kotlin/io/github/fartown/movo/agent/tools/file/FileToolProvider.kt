@@ -31,6 +31,8 @@ internal class FileToolProvider(
         domain = ToolDomain.FILE,
         text = "用户说的是 Movo 工作区里的文件（例如刚写的、只给了文件名）时，直接用 file_read 读相对路径（相对路径就在工作区），" +
             "或先 file_list 看工作区；在手机共享存储里找文件才用 file_search 拿句柄再交给 file_read，不要猜路径。" +
-            "读文本给 offset/limit 分页；写文件用 file_write（默认工作区，写系统位置要确认）；列目录用 file_list。",
+            "读文本给 offset/limit 分页；写文件用 file_write（默认工作区，写系统位置要确认）；列目录用 file_list。" +
+            "读图片内容也用 file_read（图片会直接附给你）：同一轮回复最多读一张，要看多张就等这张返回、看过内容后，" +
+            "下一轮再读下一张，不要在同一轮并行或批量读多张。",
     )
 }

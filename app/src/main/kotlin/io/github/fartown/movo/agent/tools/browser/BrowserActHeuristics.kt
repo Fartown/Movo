@@ -1,5 +1,7 @@
 package io.github.fartown.movo.agent.tools.browser
 
+import org.json.JSONObject
+
 /**
  * 网页动作的纯逻辑：截图像素↔CSS 像素换算、提交点判定、跳转判定、续读游标编解码。
  *
@@ -21,6 +23,22 @@ internal object BrowserCoordinates {
     /** 把截图像素坐标换算回 CSS 像素（供 document.elementFromPoint 使用）。 */
     fun toCssPixel(screenshotPx: Int, scale: Double): Int =
         if (scale > 0.0 && scale.isFinite()) Math.round(screenshotPx / scale).toInt() else screenshotPx
+
+    /**
+     * 元素位置（DOM 脚本给的 CSS 像素 x/y/width/height）换成截图像素，和 browser_act 的 x/y 同一单位；
+     * 另给中心点 center_x/center_y，模型按坐标点时直接用它。
+     */
+    fun toScreenshotBounds(cssBounds: JSONObject, scale: Double): JSONObject {
+        val factor = if (scale > 0.0 && scale.isFinite()) scale else 1.0
+        fun px(key: String) = Math.round(cssBounds.optDouble(key, 0.0) * factor).toInt()
+        val x = px("x")
+        val y = px("y")
+        val width = px("width")
+        val height = px("height")
+        return JSONObject()
+            .put("x", x).put("y", y).put("width", width).put("height", height)
+            .put("center_x", x + width / 2).put("center_y", y + height / 2)
+    }
 }
 
 /** inspectActTarget 从 DOM 抓到的目标信号（纯数据，方便单测分类规则）。 */

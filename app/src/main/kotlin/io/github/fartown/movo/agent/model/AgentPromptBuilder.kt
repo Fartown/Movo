@@ -76,7 +76,8 @@ internal object AgentPromptBuilder {
                     "当前配置的模型：${JSONObject.quote(config.model)}。询问所用模型时按当前配置的模型回答。" +
                     "模型名称可能是服务商别名，不据此推断未确认的部署版本、知识截止日期或能力；历史消息中的模型身份不代表当前配置。\n" +
                     "你可以回答日常问题，也可以操作${device.device}。${device.guidance}不需要设备上下文的问答直接回答。" +
-                    "当前时间见 Movo 提供的「环境信息」，按它换算今天、明天等相对时间；涉及所在位置时调用 device_read（sections 含 location）。" +
+                    "当前时间见 Movo 提供的「环境信息」，按它换算今天、明天等相对时间；它是任务开始时的时间，只到分钟，" +
+                    "任务进行中要准确的当前时间（到秒）时调用 device_read（sections 含 time）；涉及所在位置时调用 device_read（sections 含 location）。" +
                     "用户要求执行任务时，主动推进到完成。只要用户目标会因${device.deviceNoun}中的真实上下文而明显受益，" +
                     "就主动调用当前已公开的只读工具获取证据，不要先凭常识猜测、给出模板答案、要求用户逐项指定数据源或重复询问授权；" +
                     "用户目标明确且已经具备可靠执行参数时，立即调用工具，不要先输出计划、解释或中间进度；" +
@@ -126,46 +127,7 @@ internal object AgentPromptBuilder {
                     "不要自己去系统设置里授权，也不要用终端或界面操作绕过去。"
             )
         )
-        if (toolGuide == null && config.terminalTools) {
-            messages.put(
-                systemMessage(
-                    "任务需要在手机上执行命令、查看 Linux/Android 系统信息、查询包名或使用 shell 时，调用 terminal_run；" +
-                        "读写文件用 file_read、file_write、file_list，找文件用 file_search。" +
-                        "Android 应用与当前身份可访问的设备文件使用 environment=android；" +
-                        "用户选择的 Alpine 或 Debian 工具环境统一使用 environment=linux；不要自行改用另一发行版。" +
-                        "如果返回 Linux 环境尚未就绪（linux_not_ready），" +
-                        "准确告知用户先到设置安装对应的 Linux 工具环境，不要把 Android 缺少命令误报成设备不支持。" +
-                        "若 Linux 基础命令不存在，准确告知用户先在 Linux 工具环境页面完成“安装基础工具”；Python/uv、Node.js、SSH 与 APK 分析都在当前选中的发行版中分别按需安装。不要在 Android 环境冒充或自行下载工具。" +
-                        "Linux 环境默认在 /workspace 工作；它映射到当前环境的宿主工作区，实际路径以终端返回为准；" +
-                        "只有已经获得文件访问权限的共享目录才可读写，不要假定 /sdcard 或其他 Android 路径一定可访问。" +
-                        "用户配置的共享文件夹挂载在 Linux 环境 /workspace/mounts/ 下，每个子目录对应一个 Android 目录；" +
-                        "用户提到共享文件、手机目录或要处理设备上的文件时，先 ls /workspace/mounts/ 确认已有共享，再读写对应子目录。" +
-                        "分析 APK 时优先在 linux 环境使用 jadx、apktool、smali 或 baksmali；若命令不存在，" +
-                        "准确告知用户在 Linux 工具环境页面安装“APK 分析”，不要自行下载不受校验的工具。" +
-                        "当前 Apktool 只支持解码与检查，不支持 build/回编译；不要绕过该限制或宣称已经生成可安装 APK。" +
-                        (if (rootAvailable) {
-                            "用户说‘执行命令 xxx’且未指定环境时，用 terminal_run 的 environment=android 执行；需要 Android 特权时设 identity=root；"
-                        } else {
-                            "当前终端只支持 identity=user，以 Movo 的 App UID 执行；Linux 内模拟 root 不授予 Android 特权。用户未指定环境的命令使用 environment=android；"
-                        }) +
-                        "长时间命令设 mode=background 启动后用 terminal_job 查看输出，不要 sleep 轮询；" +
-                        "需要在任务结束后继续运行的服务（监听端口、Web 面板等）用 mode=keep_alive，用 terminal_job 查看或停止，" +
-                        "不要用 nohup 或 & 手工后台化。不要调用 app_search 查询“终端”或“Termux”。" +
-                        "Movo 已内置终端，不要回答‘没有终端应用’或要求另装终端 App。" +
-                        "读取图片内容用 file_read（图片会直接附给你）。同一轮模型回复最多读一张图片；需要查看多张图片时，" +
-                        "必须等待当前图片返回并观察内容，再在下一轮读下一张，禁止在同一轮并行或批量读取多张图片。"
-                )
-            )
-        }
-        if (toolGuide == null && config.browserTools) {
-            messages.put(
-                systemMessage(
-                    "网页浏览、读取、交互和截图使用 browser_open、browser_read、browser_act：它们共用 Agent 的离屏浏览器，不会把页面交给外部应用。" +
-                        "通常先 browser_open 打开网址，再用 browser_read 的 mode=readable 提取正文，或 mode=elements 找到可交互元素后用 browser_act 操作。" +
-                        "只有需要把链接交给外部应用时才用 app_open 的 uri；app_open 不用于读取网页。"
-                )
-            )
-        }
+        // 终端、文件、浏览器等领域的用法写在各工具 Provider 的分节里，只在对应工具这次可用时出现。
         // Keep the typed-tool system slot stable when capability-dependent sections change.
         if (toolGuide != null) messages.put(systemMessage("各类工具的用法：\n" + toolGuide.ifBlank { "以当前公开的工具目录为准。" }))
         roleplayContext?.personaMessage()?.let(messages::put)

@@ -1,15 +1,17 @@
 package io.github.fartown.movo.ui.app
 
 import androidx.compose.material.icons.Icons
-import io.github.fartown.movo.agent.model.AgentToolCatalog
-import io.github.fartown.movo.agent.tool.AgentToolCapabilities
 import io.github.fartown.movo.agent.tool.RootRequirement
+import io.github.fartown.movo.agent.tools.AgentToolSubsystem
+import io.github.fartown.movo.agent.tools.ToolServices
+import io.github.fartown.movo.agent.tools.core.MemoryScope
+import io.github.fartown.movo.agent.tools.core.ToolEnvironment
+import io.github.fartown.movo.core.AndroidAgentLogger
 import io.github.fartown.movo.ui.components.toolIcon
 import io.github.fartown.movo.ui.theme.MovoIcons
 import io.github.fartown.movo.ui.model.projectToolGroups
 import io.github.fartown.movo.ui.model.toolCardRequirement
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -22,24 +24,28 @@ import org.robolectric.annotation.Config
 class ToolCatalogUiTest {
     @Test
     fun everyRuntimeToolAndDisplayedCardHasASpecificIcon() {
-        val tools = AgentToolCatalog.build(
-            terminalTools = true,
-            browserTools = true,
-            deviceSensitiveReadTools = true,
-            deviceSensitiveActionTools = true,
-            skillGitHubDiscovery = true,
-            skillGitHubInstall = true,
-            memoryTools = true,
-            capabilities = AgentToolCapabilities(rootAvailable = true, lsposedAvailable = true),
+        // 运行时工具名取手机版的完整目录（全部能力都可用），工具卡上不能出现通用扳手图标。
+        val env = ToolEnvironment(
+            rootAvailable = true, accessibilityAvailable = true, notificationAccess = true,
+            usageAccess = true, locationAccess = true, colorOs = true, linuxReady = true,
+            conversationBound = true, memoryScope = MemoryScope.REAL, interactive = true,
         )
-        val runtimeNames = (0 until tools.length()).map {
-            tools.getJSONObject(it).getJSONObject("function").getString("name")
-        }
+        val runtimeNames = AgentToolSubsystem(
+            services = ToolServices(
+                context = RuntimeEnvironment.getApplication(),
+                logger = AndroidAgentLogger,
+                runId = "run-icons",
+                rootAvailable = { true },
+            ),
+            environment = { env },
+        ).pipeline.registryView.tools.map { it.name }
+            // ui_focus 是电视遥控焦点工具，触屏设备上不可用，手机界面不会出现。
+            .filter { it != "ui_focus" }
         val cardIds = buildToolsState(RuntimeEnvironment.getApplication()).groups
             .flatMap { it.tools }.map { it.id }
-        (runtimeNames + cardIds).distinct().forEach { name ->
-            assertNotEquals(name, MovoIcons.Wrench, toolIcon(name))
-        }
+        assertTrue(runtimeNames.isNotEmpty())
+        val generic = (runtimeNames + cardIds).distinct().filter { toolIcon(it) == MovoIcons.Wrench }
+        assertEquals(emptyList<String>(), generic)
     }
 
     @Test

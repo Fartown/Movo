@@ -25,6 +25,8 @@ import io.github.fartown.movo.agent.tools.core.invalidArgs
 import io.github.fartown.movo.agent.tools.core.objectSchema
 import org.json.JSONArray
 import org.json.JSONObject
+import io.github.fartown.movo.agent.tools.core.parseToolTime
+import io.github.fartown.movo.agent.tools.core.TOOL_TIME_FORMATS
 
 internal enum class UsageView { RECENT, SUMMARY }
 
@@ -49,6 +51,9 @@ internal data class UsageItem(
 internal data class UsageReadOutput(
     val view: UsageView,
     val items: List<UsageItem>,
+    /** 实际查的时间窗（不传 since/until 时是最近 24 小时），回给模型。 */
+    val sinceMillis: Long = 0,
+    val untilMillis: Long = 0,
 ) : ToolOutput
 
 /** 可测后端：读应用使用情况。summary 按事件累计，不用 INTERVAL_DAILY 桶（避免小时级误差）。 */
@@ -83,8 +88,8 @@ internal class UsageReadTool(
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
         string("view", "recent 或 summary", required = true, enum = UsageView.entries.map { it.name.lowercase() })
-        string("since", "起始时间（ISO 8601 或毫秒），默认 24 小时前")
-        string("until", "结束时间（ISO 8601 或毫秒），默认现在")
+        string("since", "起始时间（$TOOL_TIME_FORMATS），默认 24 小时前")
+        string("until", "结束时间（写法同 since；只给日期时包含这一天），默认现在")
         string("package", "只看某个应用的包名")
         integer("limit", "返回条数，1–50，默认 20", min = 1, max = MAX_LIMIT.toLong())
     }
@@ -92,10 +97,10 @@ internal class UsageReadTool(
     override fun parse(args: ToolArgs, env: ToolEnvironment): UsageReadInput {
         val now = System.currentTimeMillis()
         val since = args.stringOrNull("since")?.let {
-            parseIsoOrMillis(it) ?: invalidArgs("since 不是有效的时间：$it")
+            parseToolTime(it) ?: invalidArgs("since 不是有效的时间：$it", TOOL_TIME_FORMATS)
         } ?: (now - DEFAULT_WINDOW_MS)
         val until = args.stringOrNull("until")?.let {
-            parseIsoOrMillis(it) ?: invalidArgs("until 不是有效的时间：$it")
+            parseToolTime(it, endOfDay = true) ?: invalidArgs("until 不是有效的时间：$it", TOOL_TIME_FORMATS)
         } ?: now
         if (since >= until) invalidArgs("since 必须早于 until")
         return UsageReadInput(
@@ -129,7 +134,7 @@ internal class UsageReadTool(
         }.getOrElse {
             return Verdict.Failed(ToolError(ToolErrorCode.SOURCE_UNAVAILABLE, "系统未返回应用使用记录"))
         }
-        return Verdict.Read(UsageReadOutput(input.view, items))
+        return Verdict.Read(UsageReadOutput(input.view, items, input.sinceMillis, input.untilMillis))
     }
 
     override fun uiTitle(input: UsageReadInput): String {
@@ -185,17 +190,23 @@ internal class UsageReadTool(
             }
             array.put(obj)
         }
-        return ModelContent.Json(
-            JSONObject()
-                .put("view", output.view.name.lowercase())
-                .put("items", array)
-                .put("count", output.items.size),
-        )
+        val json = JSONObject()
+            .put("view", output.view.name.lowercase())
+            .put("items", array)
+            .put("count", output.items.size)
+        // 写明查的是哪段时间（旧版回 window_hours）：模型不会把「最近 24 小时没打开」说成「今天没用过」。
+        if (output.untilMillis > output.sinceMillis) {
+            json.put("since", isoOf(output.sinceMillis))
+                .put("until", isoOf(output.untilMillis))
+                .put("window_hours", (output.untilMillis - output.sinceMillis + HOUR_MS / 2) / HOUR_MS)
+        }
+        return ModelContent.Json(json)
     }
 
     private companion object {
         const val DEFAULT_LIMIT = 20
         const val MAX_LIMIT = 50
-        const val DEFAULT_WINDOW_MS = 24L * 60 * 60 * 1_000
+        const val HOUR_MS = 60L * 60 * 1_000
+        const val DEFAULT_WINDOW_MS = 24 * HOUR_MS
     }
 }

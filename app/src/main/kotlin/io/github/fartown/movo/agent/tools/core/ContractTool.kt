@@ -17,6 +17,7 @@ internal class ContractTool<I : ToolInput, O : ToolOutput>(
     override val name: String get() = contract.name
     override val domain: ToolDomain get() = contract.domain
     override val description: String get() = contract.summary
+    override val thirdPartySchema: Boolean get() = contract.thirdPartySchema
 
     override fun parameters(env: ToolEnvironment): JSONObject = contract.schema(env)
 

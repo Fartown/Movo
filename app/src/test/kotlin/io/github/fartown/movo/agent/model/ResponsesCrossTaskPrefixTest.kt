@@ -82,6 +82,7 @@ class ResponsesCrossTaskPrefixTest {
     ): List<AgentModelClient.ConversationMessage> {
         val result = AgentModelClient.complete(
             config = runConfig,
+            typedCatalog = TestToolCatalog::build,
             prompt = prompt,
             history = history,
             toolExecutor = AgentModelClient.ToolExecutor { AgentModelClient.ToolResult("""{"status":"ok"}""") },

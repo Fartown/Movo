@@ -8,7 +8,7 @@ Movo 的 Agent Runtime 负责把一次用户输入组织为模型回合、工具
 - `AgentLoop`：单次 run 的状态机，不依赖 Android Service、Room 或 Compose。
 - `AgentPromptBuilder`：系统约束、Skill 索引、历史和当前用户输入。
 - `AgentConversationCodec`：Provider JSON 与稳定会话 DTO 的转换。
-- `AgentToolCatalog` 及分组目录：模型可见的工具 schema，不执行工具。
+- `agent/tools/core/ToolRegistry`（经 `ToolPipeline.catalog()`）：模型可见的工具 schema；`AgentModelClient.complete` 通过 `typedCatalog` 每轮取用。
 - `AgentTraceFormatter`：只生成可展示、可记录的脱敏摘要。
 - `AgentProviderClient`：OpenAI-compatible、Anthropic 等协议边界。
 - `AgentRunController`：取消、暂停和 steering 队列。
@@ -126,9 +126,10 @@ Root 探测在 IO 线程执行：存在 `su` 时首次自动请求一次，最�
 
 ## 终端环境
 
-`terminal` 的 `environment` 明确区分设备控制与通用 Linux 工具，默认值为 `android`：
+`terminal_run` 的 `environment` 明确区分设备控制与通用 Linux 工具，默认值为 `android`：
 
-- `android` 继续使用系统 Shell。`user` 身份不升级权限；`root` 身份在 `su` 内探测 Magisk、KernelSU、APatch 或系统 BusyBox，并优先进入 standalone `ash`，因此 BusyBox applet 不要求预先加入 PATH。旧 `run_command`、文件读写和目录操作保持这一环境，避免改变既有 Android 路径与命令语义。
+- `android` 继续使用系统 Shell。`user` 身份不升级权限；`root` 身份在 `su` 内探测 Magisk、KernelSU、APatch 或系统 BusyBox，并优先进入 standalone `ash`，因此 BusyBox applet 不要求预先加入 PATH。`file_*` 工具和非 Linux 的 `terminal_run` 使用这一环境，保持既有 Android 路径与命令语义。
+- `terminal_run` 默认一次一条命令；`session` 让同名命令在同一个 shell 里接着跑（cd、export 保留，本次任务内有效）；`mode=background` 的后台命令随任务结束；`mode=keep_alive` 交给 `DetachedTaskSupervisor`，之后的任务和终端页都能查看、停止，App 重启后认回。
 - `linux` 解析用户选择的发行版和后端。chroot 保持原有 rootfs、独立 mount namespace、`/data/local/tmp/movo` 工作区与特权挂载。新建 PRoot 环境和普通工作区使用 App UID 独占的 `filesDir/terminal-user` 目录，避开旧 Root 目录的属主限制；已有普通环境继续使用原位置，路径统一由 `TerminalPrivateStorage` 解析，`/workspace` 映射该私有工作区。仅映射有权访问的共享目录，拒绝“所有文件访问”后仍可导入导出。Linux 内的模拟 root 不意味着 Android Root，两个后端都不构成隔离安全沙箱。
 - 已建立会话和任务保存后端与实际 rootfs/工作区，不因 Root 变化自动切换。持久任务记录的后端与宿主工作区字段为可选，兼容旧记录。获得 Root 不迁移 PRoot，失去 Root 不删除 chroot 或改变文件属主。
 - 普通 Android Shell、文件读写与图片读取使用 App UID；Root 用户保留原有特权路径。无法直接访问的选择器文件经有界复制导入工作区；目录选择不能冒充可实时访问的路径。
@@ -172,7 +173,7 @@ App 在发起请求前已经把当前用户消息写入会话 history，因此 R
 
 上下文替换快照保存版本、操作标识、用户轮次和覆盖的 transcript 边界。完整工具批次的脱敏 transcript 独立写入在途检查点；快照先落盘，再替换运行上下文。快照后产生的增量在恢复时按边界接回，避免崩溃后遗漏已完成步骤。终态结果和归档保留完整 transcript 与快照；批量 drain 每批只列出有限条结果和引用，客户端校验 run 与 handoff 归属后单独读取完整结果。App 串行提交历史、模型投影及已应用标记，成功落盘后才 ACK。未确认结果和待导入归档不按年龄或数量淘汰。
 
-App 会话提供 `conversation_history` 工具，搜索或分页读取当前会话的完整脱敏原文。工具由 Runtime 绑定会话身份，模型不能指定其他会话；单次输出有界并返回续读游标，大消息可按字符偏移继续读取。它不依赖 MEMORY.md 开关，也不向模型暴露数据库路径。摘要仍然有损，历史工具让模型能按需核对摘要省略的细节；完整存储不代表每次请求都把所有历史塞入模型窗口。编辑或删除旧轮次时从完整历史重建对应前缀，旧版本已缺失的前缀沿用明确提示。
+App 会话提供 `conversation_read` 工具，搜索或分页读取当前会话的完整原文（数据库里没压缩过的 journal 加本次任务已做的步骤，含工具调用与结果）。工具由 Runtime 绑定会话身份，模型不能指定其他会话；单次输出有界并返回续读游标，大消息可按字符偏移继续读取。它不依赖 MEMORY.md 开关，也不向模型暴露数据库路径。摘要仍然有损，历史工具让模型能按需核对摘要省略的细节；完整存储不代表每次请求都把所有历史塞入模型窗口。编辑或删除旧轮次时从完整历史重建对应前缀，旧版本已缺失的前缀沿用明确提示。
 
 空闲会话可从上下文用量提示框手动压缩，执行期间本会话禁止发送、模型切换和历史编辑，可停止或浏览其他会话。手动操作不生成虚构用户消息或模型回答；摘要正文不进入思考流、事件或日志，只展示压缩状态及前后估算用量。
 
@@ -212,9 +213,7 @@ App 恢复时以 `checkpoint + outbox + active session` 统一对账，不再用
 - `AgentRuntimeSessionTest`
 - `AgentRunCheckpointStoreTest`
 - `AgentRunMessageProjectorTest`
-- `AgentToolCatalogTest`
 - `McpProtocolValidationTest`
-- `McpRunContextTest`
 - `AgentMemoryStoreTest`
 - `AgentMemoryContextBuilderTest`
 - `MovoDatabaseMigrationTest`

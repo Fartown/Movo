@@ -91,10 +91,9 @@ internal object AgentModelClient {
         runController: AgentRunController = AgentRunController(),
         skillContext: SkillContext = SkillContext.EMPTY,
         memoryContext: AgentMemoryContext = AgentMemoryContext.DISABLED,
-        additionalTools: JSONArray = JSONArray(),
         capabilitiesProvider: () -> AgentToolCapabilities = { AgentToolCapabilities(rootAvailable = false) },
-        // S4 非 UI 接线（默认 null=走旧目录组装）：非空时每轮用类型化工具子系统的目录，toolExecutor 由调用方传子系统 pipeline。
-        typedCatalog: ((AgentToolCapabilities) -> JSONArray)? = null,
+        /** 每轮的工具目录（类型化工具子系统给出），toolExecutor 由调用方传子系统 pipeline；默认不给工具。 */
+        typedCatalog: (AgentToolCapabilities) -> JSONArray = { JSONArray() },
         /** 类型化工具各领域的用法分节；作为一条系统消息注入（工具重构实施方案：去掉写死的工具规则、注入领域分节）。 */
         toolGuide: (() -> String)? = null,
         sessionId: String = java.util.UUID.randomUUID().toString(),
@@ -153,23 +152,7 @@ internal object AgentModelClient {
         ).length()
         fun toolsFor(capabilities: AgentToolCapabilities): JSONArray {
             if (rewriteReply) return JSONArray()
-            typedCatalog?.let { return it(capabilities) }   // S4 类型化子系统目录（flag 开时注入）
-            val tools = AgentToolCatalog.build(
-                terminalTools = config.terminalTools,
-                browserTools = config.browserTools,
-                deviceDirectTools = config.deviceDirectTools,
-                deviceSensitiveReadTools = config.deviceSensitiveReadTools,
-                deviceSensitiveActionTools = config.deviceSensitiveActionTools,
-                skillGitHubDiscovery = true,
-                skillGitHubInstall = true,
-                memoryTools = memoryContext.enabled,
-                memoryWritable = roleplayContext == null,
-                capabilities = capabilities,
-            )
-            for (index in 0 until additionalTools.length()) {
-                tools.put(additionalTools.opt(index))
-            }
-            return tools
+            return typedCatalog(capabilities)
         }
         val tools = toolsFor(initialCapabilities)
         onEvent(
@@ -203,6 +186,9 @@ internal object AgentModelClient {
             finishingTools = if (rewriteReply) emptySet() else io.github.fartown.movo.flavor.FlavorModule.finishingTools,
             toolsForRound = {
                 val capabilities = capabilitiesProvider()
+                // 先出目录（会刷新这一轮的工具环境，含现读的开关），再按同一份环境出用法说明：
+                // 任务中途关掉开关时，目录和说明同一轮一起变。
+                val roundTools = toolsFor(capabilities)
                 val nextToolGuide = if (rewriteReply) "" else toolGuide?.let { runCatching(it).getOrDefault("") }
                 if (capabilities.rootAvailable != promptRootAvailable || nextToolGuide != currentToolGuide) {
                     val systemMessages = AgentPromptBuilder.buildSystemMessages(
@@ -215,7 +201,7 @@ internal object AgentModelClient {
                     promptRootAvailable = capabilities.rootAvailable
                     currentToolGuide = nextToolGuide
                 }
-                toolsFor(capabilities)
+                roundTools
             },
         )
         val result = try {
@@ -321,6 +307,15 @@ internal object AgentModelClient {
 
         /** 执行卡这一步的标题（动作 + 对象，工具可视化方案 §5.1）；为空时由 [AgentTraceFormatter] 兜底。 */
         fun stepTitle(toolCall: ToolCall): String? = null
+
+        /** 合同校验前整理参数（例如上限类参数越界按边界处理），返回实际执行的调用。 */
+        fun normalize(toolCall: ToolCall): ToolCall = toolCall
+
+        /**
+         * 工具存在、但这一轮不在目录里时说明原因（错误码 to 原因），例如任务中途在设置里关掉了开关；
+         * 不认识的工具返回 null，按「未在目录中声明」处理。
+         */
+        fun unavailableReason(toolName: String): Pair<String, String>? = null
     }
 
     data class ToolCall(

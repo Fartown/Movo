@@ -5,16 +5,13 @@ import java.io.IOException
 import java.util.UUID
 
 /**
- * 持久 shell 会话的状态行协议：每条命令结束后向同一 stdin 追加一个随机 marker 的 printf，
+ * 持久 shell 会话的状态行协议：每条命令结束后用一个随机 marker 的 printf
  * 输出退出码与执行后的 PWD。宿主侧据此切分输出、跟踪 cwd；marker 含随机 UUID，
  * 正常命令输出不会与之混淆。
  */
 internal object SessionStatusProtocol {
 
     fun newMarker(): String = "__MOVO_STATUS_${UUID.randomUUID().toString().replace("-", "")}"
-
-    fun statusCommand(marker: String): String =
-        "printf '\\n$marker:%s:%s\\n' \"\$?\" \"\$PWD\""
 
     /**
      * 单逻辑行协议：命令经 eval 执行，状态 printf 与命令在同一行，由 shell 在命令退出后自己输出。
@@ -41,11 +38,16 @@ internal object SessionStatusProtocol {
     data class Status(val exitCode: Int, val cwd: String?)
 }
 
-/** 有界输出收集器：读取线程持续排空管道，超过上限后丢弃后续内容并标记截断。 */
-internal class ByteArrayOutputCollector {
+/**
+ * 有界输出收集器：读取线程持续排空管道，超过上限后不再存，只留最后 [tailBytes] 字节（[overflowTail]）。
+ * 会话靠输出末尾的状态行判断命令结束：单条命令输出超过上限时，状态行就在这段尾巴里。
+ */
+internal class ByteArrayOutputCollector(private val tailBytes: Int = DEFAULT_TAIL_BYTES) {
     private val output = ByteArrayOutputStream()
-    private var totalBytesRead = 0L
-    private var truncated = false
+    private val tail = ByteArray(tailBytes)
+    private var tailStart = 0
+    private var tailLength = 0
+    private var dropped = 0L
 
     fun readFrom(input: java.io.InputStream, maxBytes: Int = Int.MAX_VALUE) {
         runCatching {
@@ -54,14 +56,9 @@ internal class ByteArrayOutputCollector {
                 val read = input.read(buffer)
                 if (read < 0) break
                 synchronized(this) {
-                    totalBytesRead += read.toLong()
-                    val allowed = (maxBytes - output.size()).coerceAtLeast(0)
-                    if (allowed > 0) {
-                        output.write(buffer, 0, read.coerceAtMost(allowed))
-                    }
-                    if (read > allowed) {
-                        truncated = true
-                    }
+                    val allowed = (maxBytes - output.size()).coerceAtLeast(0).coerceAtMost(read)
+                    if (allowed > 0) output.write(buffer, 0, allowed)
+                    if (read > allowed) keepTail(buffer, allowed, read - allowed)
                 }
             }
         }.onFailure { throwable ->
@@ -69,19 +66,39 @@ internal class ByteArrayOutputCollector {
         }
     }
 
+    private fun keepTail(buffer: ByteArray, from: Int, count: Int) {
+        dropped += count
+        for (i in from until from + count) {
+            tail[(tailStart + tailLength) % tailBytes] = buffer[i]
+            if (tailLength < tailBytes) tailLength++ else tailStart = (tailStart + 1) % tailBytes
+        }
+    }
+
     fun bytes(): ByteArray = synchronized(this) { output.toByteArray() }
 
     fun text(): String = bytes().decodeToString()
 
-    fun totalBytesRead(): Long = synchronized(this) { totalBytesRead }
+    /** [overflowTail] 最多保留的字节数。 */
+    val tailCapacity: Int get() = tailBytes
 
-    fun isTruncated(): Boolean = synchronized(this) { truncated }
+    /** 超过上限后没存下的字节数。 */
+    fun droppedBytes(): Long = synchronized(this) { dropped }
+
+    /** 超过上限后最后收到的那段（最多 [tailBytes] 字节）；没超过时为空。 */
+    fun overflowTail(): String = synchronized(this) {
+        ByteArray(tailLength) { tail[(tailStart + it) % tailBytes] }.decodeToString()
+    }
 
     fun clear() {
         synchronized(this) {
             output.reset()
-            totalBytesRead = 0
-            truncated = false
+            tailStart = 0
+            tailLength = 0
+            dropped = 0
         }
+    }
+
+    private companion object {
+        const val DEFAULT_TAIL_BYTES = 16 * 1024
     }
 }

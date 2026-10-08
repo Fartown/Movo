@@ -1,6 +1,7 @@
 package io.github.fartown.movo.agent.tools.personal
 
 import io.github.fartown.movo.core.getApplicationInfoCompat
+import android.app.Notification
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
@@ -15,9 +16,12 @@ import io.github.fartown.movo.agent.tools.core.ToolEnvironment
 import io.github.fartown.movo.agent.tools.core.ToolError
 import io.github.fartown.movo.agent.tools.core.ToolErrorCode
 import io.github.fartown.movo.agent.tools.core.ToolWarning
+import io.github.fartown.movo.agent.tools.device.AppMatch
+import io.github.fartown.movo.agent.tools.device.LauncherAppIndex
 import io.github.fartown.movo.data.repository.NotificationHistoryRepository
 import java.util.Base64
 import java.util.Locale
+import org.json.JSONArray
 import org.json.JSONObject
 
 // ---------------------------------------------------------------------------
@@ -51,13 +55,14 @@ internal object PersonalCursor {
         return parts[3].toIntOrNull()
     }
 
-    // 锚点游标：供双来源合并（如订单）稳定翻页用。编码「上一页末尾的 时间 + 去重 key」，
-    // identity 可能含分隔符，单独 Base64 一层再拼。
+    // 锚点游标：供双来源合并（如订单）和通知历史稳定翻页用。编码「上一页末尾的 时间 + 去重 key」，
+    // 通知历史再带上第一页的查询时间；identity 可能含分隔符，单独 Base64 一层再拼。
     private const val ANCHOR_VERSION = "a1"
 
     fun encodeAnchor(input: PersonalSearchInput, anchor: PageAnchor): String {
         val identity = Base64.getUrlEncoder().withoutPadding().encodeToString(anchor.identity.toByteArray())
-        val raw = "$ANCHOR_VERSION|${input.source.name}|${queryKey(input)}|${anchor.timeMillis}|$identity"
+        val firstPage = anchor.firstPageMillis?.let { "|$it" }.orEmpty()
+        val raw = "$ANCHOR_VERSION|${input.source.name}|${queryKey(input)}|${anchor.timeMillis}|$identity$firstPage"
         return Base64.getUrlEncoder().withoutPadding().encodeToString(raw.toByteArray())
     }
 
@@ -65,11 +70,12 @@ internal object PersonalCursor {
     fun decodeAnchor(cursor: String, input: PersonalSearchInput): PageAnchor? {
         val decoded = runCatching { String(Base64.getUrlDecoder().decode(cursor)) }.getOrNull() ?: return null
         val parts = decoded.split("|")
-        if (parts.size != 5 || parts[0] != ANCHOR_VERSION) return null
+        if (parts.size !in 5..6 || parts[0] != ANCHOR_VERSION) return null
         if (parts[1] != input.source.name || parts[2] != queryKey(input)) return null
         val time = parts[3].toLongOrNull() ?: return null
         val identity = runCatching { String(Base64.getUrlDecoder().decode(parts[4])) }.getOrNull() ?: return null
-        return PageAnchor(time, identity)
+        val firstPage = if (parts.size == 6) parts[5].toLongOrNull() ?: return null else null
+        return PageAnchor(time, identity, firstPage)
     }
 }
 
@@ -94,7 +100,7 @@ private data class ProviderSpec(
     val uriTemplate: String? = null,
 )
 
-/** 从通知里认订单：外卖、快递、出行、酒店、票务等订单状态通知里常见的字（沿用旧 AgentStructuredDeviceTools.ORDER_KEYWORDS）。 */
+/** 从通知里认订单：外卖、快递、出行、酒店、票务等订单状态通知里常见的字（沿用工具重构前的关键词表）。 */
 internal object OrderNotifications {
     val KEYWORDS = listOf(
         "订单", "外卖", "取餐", "配送", "骑手", "送达", "商家", "快递", "车票", "机票",
@@ -108,10 +114,73 @@ internal object OrderNotifications {
     }
 }
 
+/** 通知栏里现在挂着的一条通知（只取模型要的字段）。 */
+internal data class ActiveNotification(
+    val key: String,
+    val packageName: String,
+    val title: String?,
+    val text: String?,
+    val subText: String?,
+    val postTime: Long,
+)
+
+/** 通知栏现在挂着的通知；通知监听没连上时为 null。 */
+internal fun currentBarNotifications(): List<ActiveNotification>? =
+    AgentNotificationHistoryService.currentNotifications()?.map { sbn ->
+        val extras = sbn.notification.extras
+        ActiveNotification(
+            key = sbn.key,
+            packageName = sbn.packageName,
+            title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString(),
+            text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString(),
+            subText = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString(),
+            postTime = sbn.postTime,
+        )
+    }
+
+/**
+ * personal_search 的 app 参数怎么变成包名：
+ * 1. 是已装应用的包名，就用它；
+ * 2. 否则当应用名，按桌面上的应用名匹配——名字完全一样的优先，没有再取名字里含这几个字的（最多 [MAX_PARTIAL] 个，
+ *    多出来的放进 [Match.skipped]，结果里说明）。「Booking.com」「Trip.com」这类应用名长得像包名，也在这一步按名字找到；
+ * 3. 都对不上但长得像包名，才原样当包名（可能是卸载了的应用留下的通知）。
+ * 以前只认精确包名，传「微信」安静地得到 0 条；后来像包名的一律原样用，「Booking.com」又是安静的 0 条。
+ */
+internal object AppFilter {
+    private val PACKAGE = Regex("""^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$""")
+    const val MAX_PARTIAL = 10
+
+    enum class By { INSTALLED_PACKAGE, NAME, PACKAGE_NOT_INSTALLED, NONE }
+
+    /** 要按哪些包名筛（一个应用都对不上时为空）、是怎么对上的、按名字部分匹配时超出上限没算进去的应用。 */
+    data class Match(val packages: List<String>, val by: By, val skipped: List<AppMatch> = emptyList())
+
+    fun looksLikePackage(value: String): Boolean = PACKAGE.matches(value.trim())
+
+    fun resolve(app: String, installed: () -> List<AppMatch>): Match {
+        val value = app.trim()
+        val apps = runCatching(installed).getOrDefault(emptyList())
+        if (apps.any { it.packageName == value }) return Match(listOf(value), By.INSTALLED_PACKAGE)
+        val exact = apps.filter { it.name.trim().equals(value, ignoreCase = true) }
+        if (exact.isNotEmpty()) return Match(exact.map { it.packageName }.distinct(), By.NAME)
+        val lower = value.lowercase(Locale.ROOT)
+        val partial = apps.filter { it.name.lowercase(Locale.ROOT).contains(lower) }.distinctBy { it.packageName }
+        if (partial.isNotEmpty()) {
+            return Match(partial.take(MAX_PARTIAL).map { it.packageName }, By.NAME, skipped = partial.drop(MAX_PARTIAL))
+        }
+        if (looksLikePackage(value)) return Match(listOf(value), By.PACKAGE_NOT_INSTALLED)
+        return Match(emptyList(), By.NONE)
+    }
+}
+
 internal class AndroidPersonalSearchBackend(
     private val context: Context,
     private val root: BoundedRootCommandExecutor,
     private val rootAvailable: () -> Boolean = { RootAccess.isGranted },
+    // 下面三个是给单测换掉系统依赖用的：当前通知栏、已装应用、通知监听是否连着。
+    private val barNotifications: () -> List<ActiveNotification>? = ::currentBarNotifications,
+    private val installedApps: () -> List<AppMatch> = { LauncherAppIndex(context).installed() },
+    private val listenerConnected: () -> Boolean = { AgentNotificationHistoryService.currentNotifications() != null },
 ) : PersonalSearchBackend {
 
     private val colorOsMemory by lazy { AgentColorOsMemoryTools(context, root) }
@@ -128,6 +197,7 @@ internal class AndroidPersonalSearchBackend(
             PersonalSource.CALENDAR -> calendar(input)
             PersonalSource.RECORDING_SUMMARIES -> recordingSummaries(input)
             PersonalSource.NOTIFICATIONS -> notifications(input)
+            PersonalSource.NOTIFICATION_BAR -> notificationBar(input)
             PersonalSource.CLIPBOARD_HISTORY -> clipboardHistory(input)
             PersonalSource.COLOROS_MEMORY -> colorOsMemorySearch(input)
             PersonalSource.PLACES -> places(input)
@@ -265,7 +335,7 @@ internal class AndroidPersonalSearchBackend(
         )
     }
 
-    // ---- 通知：当前通知栏 + 最近 7 天历史（通知权）；Root `cmd notification` 路径留 TODO ----
+    // ---- 通知历史：Movo 在有通知使用权后记下的最近 7 天通知（含已划掉的）；Root `cmd notification` 路径留 TODO ----
 
     private fun notifications(input: PersonalSearchInput): PersonalSearchResult {
         // TODO(Root 通知)：有 Root 无通知权时可走 `cmd notification list/get`；当前只用通知监听历史。
@@ -274,32 +344,174 @@ internal class AndroidPersonalSearchBackend(
                 error = ToolError(ToolErrorCode.PERMISSION_REQUIRED, "请先授予 Movo 通知使用权"),
             )
         }
-        val maxAgeHours = ageHours(input.sinceMillis)
-        val raw = runCatching {
-            JSONObject(
-                notificationHistory.search(
-                    query = input.query.orEmpty(),
-                    packageName = input.app.orEmpty(),
-                    maxAgeHours = maxAgeHours,
-                    limit = 50,
-                ),
-            )
-        }.getOrElse {
+        // 锚点游标：从上一页最后一条（时间、通知 key）后面接着取。以前按偏移翻页，翻页期间来了新通知或旧通知更新后排到最前面，
+        // 后面的行整体往后挪，下一页开头会重复上一页末尾的几条。游标里还记着第一页是什么时候查的。
+        val anchor = input.cursor?.let { PersonalCursor.decodeAnchor(it, input) }
+        if (input.cursor != null && anchor?.firstPageMillis == null) return staleCursor()
+        val apps = appPackages(input)
+        apps.error?.let { return PersonalSearchResult(error = it) }
+        val now = System.currentTimeMillis()
+        val firstPageAt = anchor?.firstPageMillis ?: now
+        // 不给 since 时从第一页查询时往前算，翻页期间时间窗不跟着挪。
+        val since = input.sinceMillis ?: (firstPageAt - NOTIFICATION_DEFAULT_WINDOW_MS)
+        // 时间窗、应用、关键词都在库里筛，再取锚点后面的这一页（多取一条判断有没有下一页）：
+        // 以前先取最新 50 条再按 until 筛，往前查容易全被筛光、误报「没找到」，取满 50 条也不说。
+        val query = NotificationHistoryRepository.Query(
+            sinceMillis = since,
+            untilMillis = input.untilMillis,
+            text = input.query.orEmpty(),
+            packages = apps.packages,
+            after = anchor?.let { NotificationHistoryRepository.Position(it.timeMillis, it.identity) },
+            limit = input.limit + 1,
+        )
+        val rows = runCatching { notificationHistory.rows(query) }.getOrElse {
             return PersonalSearchResult(error = ToolError(ToolErrorCode.SOURCE_UNAVAILABLE, "通知历史暂时读不到"))
         }
-        val items = jsonItems(raw).map { row ->
+        // 翻页期间新来的、内容更新了的通知时间都晚于第一页，排到了第一页前面，后面的页里不会有：数出来告诉模型。
+        val newerSinceFirstPage = if (anchor == null) {
+            0
+        } else {
+            runCatching {
+                notificationHistory.count(query.copy(sinceMillis = maxOf(since, firstPageAt + 1), after = null))
+            }.getOrDefault(0)
+        }
+        // 每条标上是否还挂在通知栏：历史里也有已经划掉的，模型要分得清。监听没连上时不知道，不标。
+        val activeKeys = barNotifications()?.mapTo(HashSet()) { it.key }
+        val items = rows.take(input.limit).map { row ->
+            val extra = JSONObject()
+            row.subText?.takeIf(String::isNotEmpty)?.let { extra.put("sub_text", it) }
+            activeKeys?.let { extra.put("still_in_bar", row.key in it) }
             PersonalItem(
-                id = row.optString("key").takeIf(String::isNotEmpty),
-                timeMillis = row.optLong("posted_at").takeIf { it > 0 },
-                title = row.optString("title").takeIf(String::isNotEmpty),
-                text = row.optString("text").takeIf(String::isNotEmpty),
-                from = row.optString("package_name").takeIf(String::isNotEmpty),
+                id = row.key,
+                timeMillis = row.postedAt,
+                title = row.title?.takeIf(String::isNotEmpty),
+                text = row.text?.takeIf(String::isNotEmpty),
+                from = row.packageName,
                 uri = null,
-                extra = row.optString("sub_text").takeIf(String::isNotEmpty)?.let { JSONObject().put("sub_text", it) },
+                extra = extra.takeIf { it.length() > 0 },
             )
-        }.filter { it.beforeUntil(input.untilMillis) }
-        val offset = input.cursor?.let { PersonalCursor.decodeOffset(it, input) } ?: 0
-        return window(items, input, offset)
+        }
+        val warnings = buildList {
+            addAll(apps.warnings)
+            if (newerSinceFirstPage > 0) {
+                add(
+                    ToolWarning(
+                        ToolErrorCode.STALE_OBSERVATION,
+                        "翻页期间有 $newerSinceFirstPage 条通知是新来的或内容更新了，排到了第一页前面，后面的页里不会出现；要看就去掉 cursor 重新查",
+                    ),
+                )
+            }
+            val oldest = now - NotificationHistoryRepository.RETENTION_DAYS * DAY_MS
+            if (input.sinceMillis != null && input.sinceMillis < oldest) {
+                add(
+                    ToolWarning(
+                        ToolErrorCode.SOURCE_UNAVAILABLE,
+                        "通知历史只保留最近 ${NotificationHistoryRepository.RETENTION_DAYS} 天，更早的查不到",
+                    ),
+                )
+            }
+            if (!listenerConnected()) {
+                add(ToolWarning(ToolErrorCode.SOURCE_UNAVAILABLE, "通知服务现在没连上，最近的通知可能没记下"))
+            }
+        }
+        val meta = (apps.meta ?: JSONObject())
+            .put("retention_days", NotificationHistoryRepository.RETENTION_DAYS)
+            .put("since", isoOf(since))
+        val last = rows.take(input.limit).lastOrNull()
+        return PersonalSearchResult(
+            items = items,
+            nextCursor = if (rows.size > input.limit && last != null) {
+                PersonalCursor.encodeAnchor(input, PageAnchor(last.postedAt, last.key, firstPageMillis = firstPageAt))
+            } else {
+                null
+            },
+            warnings = warnings,
+            meta = meta,
+        )
+    }
+
+    // ---- 通知栏：现在还挂着的通知（通知监听的 activeNotifications，旧 recent_notifications）----
+
+    private fun notificationBar(input: PersonalSearchInput): PersonalSearchResult {
+        if (!AgentNotificationHistoryService.isEnabled(context)) {
+            return PersonalSearchResult(
+                error = ToolError(ToolErrorCode.PERMISSION_REQUIRED, "请先授予 Movo 通知使用权"),
+            )
+        }
+        val offset = offsetOrStale(input) ?: return staleCursor()
+        val apps = appPackages(input)
+        apps.error?.let { return PersonalSearchResult(error = it) }
+        val current = runCatching { barNotifications() }.getOrNull()
+            ?: return PersonalSearchResult(
+                error = ToolError(ToolErrorCode.SOURCE_UNAVAILABLE, "通知服务尚未连接，请稍后重试"),
+            )
+        val query = input.query?.lowercase(Locale.ROOT)
+        val items = current.asSequence()
+            .filter { apps.packages.isEmpty() || it.packageName in apps.packages }
+            .filter { input.sinceMillis == null || it.postTime >= input.sinceMillis }
+            .filter { input.untilMillis == null || it.postTime <= input.untilMillis }
+            // 只有图标、没有字的（分组摘要、常驻服务）不算。
+            .filter { !it.title.isNullOrBlank() || !it.text.isNullOrBlank() || !it.subText.isNullOrBlank() }
+            .filter { n ->
+                query == null || listOf(n.title, n.text, n.subText).any { it?.lowercase(Locale.ROOT)?.contains(query) == true }
+            }
+            .sortedByDescending { it.postTime }
+            .map { n ->
+                PersonalItem(
+                    id = n.key,
+                    timeMillis = n.postTime,
+                    title = n.title?.take(MAX_NOTIFICATION_FIELD_CHARS)?.takeIf(String::isNotEmpty),
+                    text = n.text?.take(MAX_NOTIFICATION_FIELD_CHARS)?.takeIf(String::isNotEmpty),
+                    from = n.packageName,
+                    uri = null,
+                    extra = n.subText?.take(MAX_NOTIFICATION_FIELD_CHARS)?.takeIf(String::isNotEmpty)
+                        ?.let { JSONObject().put("sub_text", it) },
+                )
+            }
+            .toList()
+        return window(items, input, offset).copy(meta = apps.meta, warnings = apps.warnings)
+    }
+
+    /** app 参数解析成的包名；没给 app 时为空（不筛）。 */
+    private data class AppPackages(
+        val packages: List<String>,
+        val meta: JSONObject? = null,
+        val warnings: List<ToolWarning> = emptyList(),
+        val error: ToolError? = null,
+    )
+
+    private fun appPackages(input: PersonalSearchInput): AppPackages {
+        val app = input.app?.trim()?.takeIf { it.isNotEmpty() } ?: return AppPackages(emptyList())
+        val match = AppFilter.resolve(app, installedApps)
+        return when (match.by) {
+            AppFilter.By.NONE -> AppPackages(
+                emptyList(),
+                error = ToolError(ToolErrorCode.NOT_FOUND, "没找到叫「$app」的应用", hint = "用 app_search 查到包名再传，或去掉 app"),
+            )
+            AppFilter.By.INSTALLED_PACKAGE -> AppPackages(match.packages)
+            // 按应用名匹配时写明对上了哪些包名，模型能看出有没有匹配错；名字里含这几个字的应用太多时说清哪些没算进去。
+            AppFilter.By.NAME -> AppPackages(
+                match.packages,
+                meta = JSONObject().put("app_packages", JSONArray(match.packages)),
+                warnings = listOfNotNull(
+                    match.skipped.takeIf { it.isNotEmpty() }?.let { skipped ->
+                        ToolWarning(
+                            ToolErrorCode.AMBIGUOUS,
+                            "名字里含「$app」的应用有 ${match.packages.size + skipped.size} 个，只查了 app_packages 里的 " +
+                                "${match.packages.size} 个，没算进去：" +
+                                skipped.joinToString("、", limit = MAX_LISTED_APPS, truncated = "等 ${skipped.size} 个") {
+                                    "${it.name}（${it.packageName}）"
+                                } +
+                                "；要查它们请给完整的应用名或包名",
+                        )
+                    },
+                ),
+            )
+            AppFilter.By.PACKAGE_NOT_INSTALLED -> AppPackages(
+                match.packages,
+                meta = JSONObject().put("app_note", "已装应用里没有这个包名或应用名，按包名 $app 查（卸载了的应用留下的通知也查得到）"),
+            )
+        }
     }
 
     // ---- 剪贴板历史：复用私有数据库快照读取 ----
@@ -390,38 +602,38 @@ internal class AndroidPersonalSearchBackend(
             warnings += ToolWarning(ToolErrorCode.ROOT_REQUIRED, "系统记忆订单来源需要 Root；仅查询通知历史")
         }
 
+        val apps = appPackages(input)
+        apps.error?.let { return PersonalSearchResult(error = it) }
         if (AgentNotificationHistoryService.isEnabled(context)) {
-            val raw = runCatching {
-                JSONObject(
-                    notificationHistory.search(
-                        query = input.query.orEmpty(),
-                        packageName = input.app.orEmpty(),
-                        maxAgeHours = ageHours(input.sinceMillis),
-                        limit = 50,
+            // 不给 since 时查最近 7 天（与旧 search_personal_orders 一样）；时间窗、应用、关键词都在库里筛。
+            // 没给关键词时只留像订单的通知（恢复旧 search_personal_orders 的 ORDER_KEYWORDS 过滤）：
+            // 以前直接把时间窗里的所有通知都当订单返回，聊天、系统通知全混进来。给了关键词就按关键词查，不再二次过滤。
+            val keywordless = input.query.isNullOrBlank()
+            val rows = runCatching {
+                notificationHistory.rows(
+                    NotificationHistoryRepository.Query(
+                        sinceMillis = input.sinceMillis ?: (System.currentTimeMillis() - ORDERS_DEFAULT_WINDOW_MS),
+                        untilMillis = input.untilMillis,
+                        text = input.query.orEmpty(),
+                        packages = apps.packages,
+                        anyKeywords = if (keywordless) OrderNotifications.KEYWORDS else emptyList(),
+                        limit = NotificationHistoryRepository.MAX_RECORDS,
                     ),
                 )
             }.getOrNull()
-            if (raw != null) {
-                // 没给关键词时只留像订单的通知（恢复旧 search_personal_orders 的 ORDER_KEYWORDS 过滤）：
-                // 以前直接把时间窗里的所有通知都当订单返回，聊天、系统通知全混进来。给了关键词就按关键词查，不再二次过滤。
-                val keywordless = input.query.isNullOrBlank()
-                jsonItems(raw).forEach { row ->
-                    if (keywordless && !OrderNotifications.looksLikeOrder(
-                            row.optString("title"), row.optString("text"), row.optString("sub_text"),
-                        )
-                    ) {
-                        return@forEach
-                    }
+            if (rows != null) {
+                rows.forEach { row ->
                     notifItems += PersonalItem(
-                        id = row.optString("key").takeIf(String::isNotEmpty),
-                        timeMillis = row.optLong("posted_at").takeIf { it > 0 },
-                        title = row.optString("title").takeIf(String::isNotEmpty),
-                        text = row.optString("text").takeIf(String::isNotEmpty),
-                        from = row.optString("package_name").takeIf(String::isNotEmpty),
+                        id = row.key,
+                        timeMillis = row.postedAt,
+                        title = row.title?.takeIf(String::isNotEmpty),
+                        text = row.text?.takeIf(String::isNotEmpty),
+                        from = row.packageName,
                         uri = null,
+                        // 有些应用把状态（如「骑手已取餐」）放在副标题里。
+                        extra = row.subText?.takeIf(String::isNotEmpty)?.let { JSONObject().put("sub_text", it) },
                     )
                 }
-                notifItems.retainAll { it.beforeUntil(input.untilMillis) }
             } else {
                 warnings += ToolWarning(ToolErrorCode.SOURCE_UNAVAILABLE, "通知历史订单来源读取失败")
             }
@@ -438,7 +650,8 @@ internal class AndroidPersonalSearchBackend(
         return PersonalSearchResult(
             items = page.items,
             nextCursor = page.nextAnchor?.let { PersonalCursor.encodeAnchor(input, it) },
-            warnings = warnings,
+            warnings = apps.warnings + warnings,
+            meta = apps.meta,
         )
     }
 
@@ -486,18 +699,12 @@ internal class AndroidPersonalSearchBackend(
         )
     }
 
-    /** 通知历史只能按「最近几小时」取，until 在取回后按发出时间筛（没有时间的条目不算在窗内）。 */
+    /** 系统记忆的订单查询不带时间条件，取回后按时间筛（没有时间的条目不算在窗内）。 */
     private fun PersonalItem.beforeUntil(untilMillis: Long?): Boolean =
         untilMillis == null || (timeMillis != null && timeMillis <= untilMillis)
 
     private fun PersonalItem.afterSince(sinceMillis: Long?): Boolean =
         sinceMillis == null || (timeMillis != null && timeMillis >= sinceMillis)
-
-    private fun ageHours(sinceMillis: Long?): Int {
-        if (sinceMillis == null) return 24
-        val hours = ((System.currentTimeMillis() - sinceMillis) / (60L * 60 * 1000)).toInt() + 1
-        return hours.coerceIn(1, 168)
-    }
 
     private fun timeWhere(timeColumn: String?, since: Long?, until: Long?): String? {
         if (timeColumn == null) return null
@@ -524,6 +731,18 @@ internal class AndroidPersonalSearchBackend(
     private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
     private companion object {
+        const val DAY_MS = 24L * 60 * 60 * 1000
+
+        // 不给 since 时：通知查最近 24 小时（与旧 search_notification_history 一样），订单查最近 7 天（与旧 search_personal_orders 一样）。
+        const val NOTIFICATION_DEFAULT_WINDOW_MS = DAY_MS
+        const val ORDERS_DEFAULT_WINDOW_MS = 7 * DAY_MS
+
+        // 通知栏每条标题/正文/副标题最多给这么多字（与通知历史库一致）。
+        const val MAX_NOTIFICATION_FIELD_CHARS = 4_000
+
+        // app 按名字匹配到的应用太多时，提醒里最多列出这么多个没算进去的。
+        const val MAX_LISTED_APPS = 20
+
         const val QUERY_TIMEOUT_MS = 15_000L
         const val MAX_OUTPUT_BYTES = 512 * 1024
 
@@ -671,29 +890,29 @@ internal class AndroidSmsCodeBackend(
      * 无 Root 时从短信通知历史抽验证码。短信通知的发送方包名各 ROM 不一，不按包名过滤，
      * 只对正文含验证码语境词的通知抽码。HyperOS 等是否对验证码通知做了隐藏/脱敏未核实，
      * 此处按通用通知处理（见报告的验证限制）。
+     * 先在库里按语境词筛（[OTP_KEYWORDS]，再由 [PersonalSecretPatterns.extractOtp] 精确判断）：
+     * 以前取最新 50 条通知再找，时间窗一长（最多 24 小时）验证码就落在 50 条之外。
      */
     private fun readFromNotifications(cutoffMillis: Long): List<SmsCode>? {
         val repo = notificationHistory ?: return null
-        val maxAgeHours = (((System.currentTimeMillis() - cutoffMillis) / 3_600_000L) + 1)
-            .toInt().coerceIn(1, 168)
-        val json = runCatching {
-            JSONObject(repo.search(query = "", packageName = "", maxAgeHours = maxAgeHours, limit = 50))
+        val rows = runCatching {
+            repo.rows(
+                NotificationHistoryRepository.Query(
+                    sinceMillis = cutoffMillis,
+                    anyKeywords = OTP_KEYWORDS,
+                    limit = NotificationHistoryRepository.MAX_RECORDS,
+                ),
+            )
         }.getOrNull() ?: return null
-        if (!json.optBoolean("ok")) return null
-        val array = json.optJSONArray("items") ?: return emptyList()
         val codes = mutableListOf<SmsCode>()
-        for (index in 0 until array.length()) {
+        for (row in rows) {
             if (codes.size >= MAX_CODES) break
-            val row = array.optJSONObject(index) ?: continue
-            val postedAt = row.optLong("posted_at").takeIf { it > 0 } ?: continue
-            if (postedAt < cutoffMillis) continue
-            val text = listOf("title", "text", "sub_text")
-                .joinToString(" ") { row.optString(it) }.trim()
+            val text = listOfNotNull(row.title, row.text, row.subText).joinToString(" ").trim()
             val code = PersonalSecretPatterns.extractOtp(text) ?: continue
             codes += SmsCode(
                 code = code,
-                from = row.optString("package_name").takeIf(String::isNotEmpty),
-                timeMillis = postedAt,
+                from = row.packageName.takeIf(String::isNotEmpty),
+                timeMillis = row.postedAt,
             )
         }
         return codes
@@ -701,6 +920,11 @@ internal class AndroidSmsCodeBackend(
 
     private companion object {
         const val MAX_CODES = 10
+
+        /** 库里粗筛用的验证码语境词（SQLite 的 LIKE 对英文不分大小写），与 [PersonalSecretPatterns.OTP_CONTEXT] 对应。 */
+        val OTP_KEYWORDS = listOf(
+            "验证码", "校验码", "动态码", "确认码", "一次性密码", "verification", "one-time", "one time", "otp",
+        )
         val SMS_ADDRESS = Regex("""(?:^|,\s*)address=([^,]*)""")
         val SMS_BODY = Regex("""(?:^|,\s*)body=(.*?)(?:,\s*date=|$)""")
         val SMS_DATE = Regex("""(?:^|,\s*)date=(\d+)""")
@@ -710,6 +934,30 @@ internal class AndroidSmsCodeBackend(
 // ---------------------------------------------------------------------------
 // usage_read 真实后端
 // ---------------------------------------------------------------------------
+
+/** 一次 ACTIVITY_RESUMED（按时间先后）。 */
+internal data class ResumedActivity(val packageName: String, val activity: String?, val timeMillis: Long)
+
+/**
+ * 最近打开顺序：同一应用连续的多次 resume（应用里换页面）合成一次，留最早那次的页面和时间（即打开的时刻）；
+ * 「连续」按全部应用的打开顺序判断，再按 [packageName] 筛——先筛再判断的话，同一应用的每次打开都算连续，
+ * 只剩窗口里最早的一次（问「最近一次打开抖音是几点」会答成最早那次）。最新的在前，最多 [limit] 条。
+ */
+internal object RecentOpenings {
+    fun of(events: List<ResumedActivity>, packageName: String?, limit: Int): List<ResumedActivity> {
+        val openings = ArrayDeque<ResumedActivity>()
+        var lastPackage: String? = null
+        for (event in events) {
+            val consecutive = event.packageName == lastPackage
+            lastPackage = event.packageName
+            if (consecutive) continue
+            if (packageName != null && event.packageName != packageName) continue
+            openings.addFirst(event)
+            while (openings.size > limit) openings.removeLast()
+        }
+        return openings.toList()
+    }
+}
 
 @Suppress("DEPRECATION")
 internal class AndroidUsageReadBackend(
@@ -721,27 +969,21 @@ internal class AndroidUsageReadBackend(
 
     override fun recent(startMillis: Long, endMillis: Long, packageName: String?, limit: Int): List<UsageItem> {
         val events = usageManager()?.queryEvents(startMillis, endMillis) ?: return emptyList()
-        val rows = ArrayDeque<UsageItem>()
+        val resumed = mutableListOf<ResumedActivity>()
         val event = UsageEvents.Event()
-        var lastPackage: String? = null
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
             if (event.eventType != UsageEvents.Event.ACTIVITY_RESUMED) continue
-            if (packageName != null && event.packageName != packageName) continue
-            // 合并同一 App 连续记录。
-            if (event.packageName == lastPackage) continue
-            lastPackage = event.packageName
-            rows.addFirst(
-                UsageItem(
-                    packageName = event.packageName,
-                    appName = appName(event.packageName),
-                    activity = event.className,
-                    resumedAtMillis = event.timeStamp,
-                ),
-            )
-            while (rows.size > limit) rows.removeLast()
+            resumed += ResumedActivity(event.packageName, event.className, event.timeStamp)
         }
-        return rows.toList()
+        return RecentOpenings.of(resumed, packageName, limit).map { opened ->
+            UsageItem(
+                packageName = opened.packageName,
+                appName = appName(opened.packageName),
+                activity = opened.activity,
+                resumedAtMillis = opened.timeMillis,
+            )
+        }
     }
 
     override fun summary(startMillis: Long, endMillis: Long, packageName: String?, limit: Int): List<UsageItem> {

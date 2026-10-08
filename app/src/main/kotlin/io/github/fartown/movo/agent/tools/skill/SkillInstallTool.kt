@@ -32,9 +32,17 @@ import java.util.concurrent.ConcurrentHashMap
 
 internal enum class SkillInstallAction { CURATED, INSPECT, INSTALL }
 
-internal data class SkillCatalogItem(val name: String, val path: String, val installed: Boolean)
+/** [installed] 含已停用的技能；停用的 [enabled] 为 false（要用得先在设置里打开，不必重装）。 */
+internal data class SkillCatalogItem(val name: String, val path: String, val installed: Boolean, val enabled: Boolean = true)
 internal data class InstalledSkillView(val id: String, val name: String)
-internal data class SkillConflictView(val id: String, val name: String, val existingSource: String)
+
+/** 同名冲突：[existingSource] 是已装那份的来源（builtin 内置 / user 用户装的）；[replaceAllowed] 为 false 时带 replace 也装不上。 */
+internal data class SkillConflictView(
+    val id: String,
+    val name: String,
+    val existingSource: String,
+    val replaceAllowed: Boolean = existingSource != "builtin",
+)
 
 /** curated/inspect 的发现结果。 */
 internal sealed interface SkillDiscoverResult {
@@ -284,19 +292,31 @@ internal class SkillInstallTool(
                 SkillInstallOutput(SkillInstallAction.INSTALL, null, o.items),
                 Evidence.ReadBack("installed=${o.items.joinToString(",") { it.id }}"),
             )
-            is SkillInstallOutcome.Conflict -> Verdict.Failed(
-                ToolError(
-                    ToolErrorCode.CONFLICT,
-                    "与已安装技能同名：${o.conflicts.joinToString("、") { it.name }}",
-                    hint = "用户要更新它时带 replace=true 重试；不清楚就先问用户",
-                ),
-            )
+            is SkillInstallOutcome.Conflict -> Verdict.Failed(conflictError(o.conflicts))
             SkillInstallOutcome.CommitUncertain -> Verdict.Unknown(
                 reason = "提交阶段失败，技能目录状态不确定",
                 next = "用 skill_read 或技能索引核对是否已安装，不要直接重装",
             )
             is SkillInstallOutcome.Failed -> Verdict.Failed(ToolError(o.code, o.message))
         }
+    }
+
+    /** 冲突写明每个技能的 id、来源和能不能替换：内置技能不能替换，带 replace=true 重试也没用。 */
+    private fun conflictError(conflicts: List<SkillConflictView>): ToolError {
+        val listed = conflicts.joinToString("、") { c ->
+            val source = when (c.existingSource) {
+                "builtin" -> "内置技能"
+                "user" -> "用户安装的"
+                else -> "来源不明"
+            }
+            "${c.name}（id ${c.id}，$source，${if (c.replaceAllowed) "可以替换" else "不能替换"}）"
+        }
+        val hint = when {
+            conflicts.all { it.replaceAllowed } -> "用户要更新它时带 replace=true 重试；不清楚就先问用户"
+            conflicts.none { it.replaceAllowed } -> "这些不能替换，带 replace=true 也装不上；告诉用户已经有同名技能"
+            else -> "可以替换的那些，用户要更新时 paths 只选它们、带 replace=true 重试；不能替换的告诉用户已经有同名技能"
+        }
+        return ToolError(ToolErrorCode.CONFLICT, "与已安装技能同名：$listed", hint = hint)
     }
 
     override fun uiTitle(input: SkillInstallInput): String = when (input.action) {
@@ -316,7 +336,7 @@ internal class SkillInstallTool(
         return ToolUiView(
             summary = if (items.isEmpty()) "没有技能" else "${items.size} 个技能",
             blocks = listOf(
-                ToolUiBlock.Items(items.map { ToolUiBlock.Item(it.name, it.path, trailing = "已装".takeIf { _ -> it.installed }) }),
+                ToolUiBlock.Items(items.map { ToolUiBlock.Item(it.name, it.path, trailing = if (!it.installed) null else if (it.enabled) "已装" else "已装 · 停用") }),
             ).filter { items.isNotEmpty() },
         )
     }
@@ -329,7 +349,8 @@ internal class SkillInstallTool(
                 "items",
                 JSONArray().apply {
                     d.items.forEach {
-                        put(JSONObject().put("name", it.name).put("path", it.path).put("installed", it.installed))
+                        put(JSONObject().put("name", it.name).put("path", it.path).put("installed", it.installed)
+                            .apply { if (it.installed && !it.enabled) put("enabled", false) })
                     }
                 },
             )

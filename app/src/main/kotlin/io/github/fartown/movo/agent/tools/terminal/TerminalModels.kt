@@ -8,7 +8,8 @@ internal enum class TerminalIdentity { USER, ROOT }
 
 /**
  * 运行方式：wait=前台等 wait_ms；background=直接转后台，本次任务结束时停止；
- * keep_alive=直接转后台，本次任务结束时不停止进程，但之后的任务看不到、也停不了它（跨任务守护没有实现）。
+ * keep_alive=常驻任务，交给 [io.github.fartown.movo.agent.terminal.DetachedTaskSupervisor]（与重构前 daemon_start 同一套）：
+ * 脱离本次任务一直运行，输出写日志文件，记录落盘；之后的任务、终端页「后台任务」都能看到和停止，App 重启后认得回来。
  */
 internal enum class TerminalMode { WAIT, BACKGROUND, KEEP_ALIVE }
 
@@ -30,6 +31,8 @@ internal data class TerminalRunSpec(
     val mode: TerminalMode,
     /** 本次运行是否已被取消：前台等待期间按它检查，取消就立刻结束命令（不等 wait_ms 跑完）。 */
     val cancelled: () -> Boolean = { false },
+    /** 会话名：同名的命令在同一个常驻 shell 里接着跑，cd、export、变量都保留（本次任务内有效）。 */
+    val session: String? = null,
 )
 
 internal sealed interface TerminalRunResult {
@@ -42,8 +45,16 @@ internal sealed interface TerminalRunResult {
         /** 缓冲区是否在中间丢过输出（丢过时正文接缝处已注明省略了多少字）。 */
         val stdoutTruncated: Boolean,
         val stderrTruncated: Boolean,
-        /** 命令实际在哪个目录里跑（没传 cwd 时是工作区）；为空时按传入的 cwd 显示。 */
+        /** 命令实际在哪个目录里跑（没传 cwd 时是工作区）；为空时按传入的 cwd 显示。在会话里跑时是跑完后的目录。 */
         val cwd: String? = null,
+        /** 在哪个会话里跑的（没用会话时为空）。 */
+        val session: String? = null,
+        /** 会话已经结束（超时被结束、命令里 exit 了），之后同名会话会重新开一个 shell。 */
+        val sessionClosed: Boolean = false,
+        /** 会话里的命令到 wait_ms 还没结束，被结束了。 */
+        val timedOut: Boolean = false,
+        /** 同名会话之前开过、但已经结束了，这次是新开的 shell（之前的 cd、export 不在了）。 */
+        val sessionReopened: Boolean = false,
     ) : TerminalRunResult
 
     /** 到 wait_ms 未结束，或 background/keep_alive：转后台。 */
@@ -54,6 +65,8 @@ internal sealed interface TerminalRunResult {
         val keepAlive: Boolean,
         /** 同 [Completed.cwd]。 */
         val cwd: String? = null,
+        /** keep_alive 常驻任务的日志文件。 */
+        val logPath: String? = null,
     ) : TerminalRunResult
 }
 
@@ -76,8 +89,10 @@ internal data class TerminalJobInfo(
     val exitCode: Int?,
     val startedAtMillis: Long,
     val endedAtMillis: Long?,
-    /** keep_alive 合并日志时标注。 */
+    /** stderr 与 stdout 是同一路（伪终端、keep_alive 的日志）。 */
     val streamsMerged: Boolean = false,
+    /** keep_alive 常驻任务的日志文件。 */
+    val logPath: String? = null,
 )
 
 internal data class TerminalJobReadResult(
@@ -119,9 +134,9 @@ internal enum class TerminalWake {
 internal enum class TerminalStopOutcome {
     /** 已确认停止。 */
     STOPPED,
-    /** 任务不存在（非 keep_alive 已随任务结束清理）。 */
+    /** 任务不存在（普通后台命令随启动它的那次任务结束清理）。 */
     NOT_FOUND,
-    /** 要求 Root 才能停（root 守护任务）。 */
+    /** 要求 Root 才能停（root 身份的常驻任务）。 */
     ROOT_REQUIRED,
     /** 发了停止但未能确认已停。 */
     STILL_RUNNING,

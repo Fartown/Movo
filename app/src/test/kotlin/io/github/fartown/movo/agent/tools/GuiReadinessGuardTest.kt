@@ -135,6 +135,35 @@ class GuiReadinessGuardTest {
             .forEach { name -> assertTrue(name, !AgentOverlayVisibilityPolicy.requiresEntrySurfaceDismissal(name)) }
     }
 
+    @Test
+    fun waitingOnlyForTimeNeedsNoAccessibility() {
+        // 重构前的 wait 不要无障碍；入口面板照样先收起（等待一律按名单收起，和 main 一致）。
+        accessibilityAvailable = false
+        val wait = tool("ui_wait", ToolDomain.UI)
+        assertNull(guard.check(wait, ToolArgs.parse("""{"duration_ms":2000}"""), context()))
+        assertEquals(0, accessibilityChecks)
+        assertEquals(1, dismissals)
+    }
+
+    @Test
+    fun waitingForTextOrAppNeedsAccessibilityAndDismissesTheEntrySurfaceFirst() {
+        // 等文字时面板还盖在前面，不先收起就会在 Movo 自己的界面上「等到」那段文字。
+        accessibilityAvailable = false
+        val wait = tool("ui_wait", ToolDomain.UI)
+        assertEquals(
+            ToolErrorCode.PERMISSION_REQUIRED,
+            guard.check(wait, ToolArgs.parse("""{"text":"完成"}"""), context())?.error?.code,
+        )
+        assertEquals(
+            ToolErrorCode.PERMISSION_REQUIRED,
+            guard.check(wait, ToolArgs.parse("""{"package":"com.tencent.mm"}"""), context())?.error?.code,
+        )
+        assertEquals("操作不了时不白白关掉面板", 0, dismissals)
+        accessibilityAvailable = true
+        assertNull(guard.check(wait, ToolArgs.parse("""{"text":"完成"}"""), context()))
+        assertEquals(1, dismissals)
+    }
+
     private fun check(tool: AgentTool, env: ToolEnvironment = ToolEnvironment()): ToolOutcome? =
         guard.check(tool, ToolArgs.parse("{}"), context(env))
 

@@ -11,7 +11,7 @@ import org.json.JSONObject
  *   正文超过 [MAX_TEXT_BODY_CHARS] 时每段保留开头和结尾（[clipTextBody]），完整正文仍在界面与日志中。
  */
 internal object ToolProjection {
-    /** 给模型的 JSON 内容上限；超出时保留开头并注明截断，完整结构化结果仍在界面与日志中。 */
+    /** 给模型的 JSON 内容上限；超出时按字段截短（[JsonResultClip]）并注明，完整结构化结果仍在界面与日志中。 */
     const val MAX_MODEL_CHARS = 24_000
 
     /** 纯文本正文（终端输出）给模型的上限，与重构前终端输出上限一致。 */
@@ -42,13 +42,8 @@ internal object ToolProjection {
         outcome.truncation?.let { json.put("truncated", truncationJson(it)) }
         val text = json.toString()
         if (text.length <= MAX_MODEL_CHARS) return text
-        // 结构化结果过大时退化：保留状态与截断说明，data 以文本形式截断。
-        val dataText = outcome.data?.toString().orEmpty()
-        return JSONObject().put("status", outcome.status.wire)
-            .put("data_text", dataText.take(MAX_MODEL_CHARS - 400))
-            .put("truncated", JSONObject().put("shown", MAX_MODEL_CHARS - 400).put("total", dataText.length)
-                .put("unit", "chars").put("note", "结果过大，只保留了开头；请缩小查询范围或分页读取"))
-            .toString()
+        // 结构化结果过大：按字段截短 data，保留结构、错误码、warnings 与续读游标，并写明截了哪些字段。
+        return JsonResultClip.fit(json, MAX_MODEL_CHARS)
     }
 
     private fun renderText(outcome: ToolOutcome): String = buildString {

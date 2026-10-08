@@ -36,6 +36,8 @@ internal data class FileReadInput(
     /** 只对文本生效：读到图片时不静默忽略，报 INVALID_ARGUMENTS。 */
     val offsetLine: Int?,
     val limitLines: Int?,
+    /** 从 offset 那一行的第几个字开始（0 起），续读超长的行用；只对文本生效。 */
+    val column: Int? = null,
 ) : ToolInput
 
 internal data class FileReadOutput(
@@ -56,9 +58,16 @@ internal data class ResolvedFile(
 internal data class TextRead(
     val content: String,
     val encoding: String,
-    val totalLines: Int,
+    /** 文件总行数；文件太大没数完、或是 content:// 这一页没读到末尾时为 null。 */
+    val totalLines: Int?,
     /** 还有后续时给下一段起始行号，否则 null。 */
     val nextOffsetLine: Int?,
+    /** 这一段停在一行中间时，下一段从 [nextOffsetLine] 那一行的第几个字开始（0 起）；停在行尾时为 null。 */
+    val nextColumn: Int? = null,
+    /** 这一段从哪一行、这一行的第几个字开始，到哪一行（含，可能只有半行）。 */
+    val startLine: Int = 1,
+    val startColumn: Int = 0,
+    val endLine: Int = startLine,
 )
 
 /** 读到的图片：尺寸 + 已编码成模型输入的图片（由 [FileReadTool.images] 附给模型）。 */
@@ -69,7 +78,11 @@ internal interface FileReadBackend {
     /** 解析来源（句柄、URI、绝对路径），判定类型；文件不存在返回 null。 */
     fun resolve(file: String): ResolvedFile?
 
-    fun readText(file: String, offsetLine: Int, limitLines: Int): TextRead
+    /**
+     * 从第 [offsetLine] 行第 [column] 个字起，最多 [limitLines] 行、[TextPager.MAX_CHARS] 字；不把整个文件读进内存。
+     * 读大文件时会反复调 [checkCancelled]，用户停止时不用等这一页读完。
+     */
+    fun readText(file: String, offsetLine: Int, limitLines: Int, column: Int = 0, checkCancelled: () -> Unit = {}): TextRead
 
     /** 读图并编码成模型输入；App 读不到时用 Root 复制到缓存再读。读不出图片时抛 ToolFailure。 */
     fun readImage(file: String): ImageRead
@@ -82,23 +95,26 @@ internal class FileReadTool(
     override val name = "file_read"
     override val domain = ToolDomain.FILE
     override val summary =
-        "读文件：文本按行返回并给续读 offset；图片直接附给模型（需模型支持看图）。没有扩展名的文件按内容判断是文本还是图片；" +
+        "读文件：文本按行返回，一次最多约 ${TextPager.MAX_CHARS} 字，没读完时给续读位置 next_offset（停在一行中间时还给 next_column）；" +
+            "UTF-8 以外的 GBK 等编码自动识别。图片直接附给模型（需模型支持看图）。是文本还是图片按文件内容判断；" +
             "PDF、视频、音频暂不支持。file 可传 file_search 的句柄、附件 URI 或绝对路径。"
 
     override fun schema(env: ToolEnvironment): JSONObject = objectSchema {
         string("file", "句柄、附件 URI、绝对路径、file://、content://", required = true, maxLength = 1024)
         integer("offset", "文本起始行号（从 1 开始），仅文本", min = 1)
-        integer("limit", "文本返回行数，仅文本", min = 1, max = 20_000)
+        integer("column", "从 offset 那一行的第几个字开始（从 0 开始），续读超长的行时用上次返回的 next_column，仅文本", min = 0)
+        integer("limit", "文本最多返回行数，默认 $DEFAULT_TEXT_LINES，仅文本；不管行数，一次最多约 ${TextPager.MAX_CHARS} 字", min = 1, max = 20_000)
     }
 
     override fun parse(args: ToolArgs, env: ToolEnvironment): FileReadInput = FileReadInput(
         file = args.nonBlank("file"),
         offsetLine = args.intOrNull("offset"),
         limitLines = args.intOrNull("limit"),
+        column = args.intOrNull("column"),
     )
 
     /**
-     * 开关按来源管（定义清单 §0.5，见 [execute]）：读任意路径要「终端与文件」，读句柄和附件要「读取敏感信息」。
+     * 开关按来源管（定义清单 §0.5，见 [execute]）：读任意路径（含 file://）要「终端与文件」，读句柄和 content:// 附件要「读取敏感信息」。
      * 两个都关着时什么都读不了，不进目录（以前仍在目录里，调用了才报 DISABLED）。
      * 只关「终端与文件」时还能读 file_search 的句柄和附件，留在目录里。
      */
@@ -127,10 +143,10 @@ internal class FileReadTool(
         val switches = ctx.env.switches
         when (sourceClass(input.file)) {
             SourceClass.PATH -> if (!switches.terminal) {
-                return disabled("读取任意路径需要开启「文件与终端」开关")
+                return disabled("读取任意路径需要开启「终端与文件」开关")
             }
             SourceClass.HANDLE, SourceClass.ATTACHMENT -> if (!switches.sensitiveRead) {
-                return disabled("读取句柄与附件需要开启「读取个人数据」开关")
+                return disabled("读取句柄与附件需要开启「读取敏感信息」开关")
             }
         }
 
@@ -142,7 +158,7 @@ internal class FileReadTool(
 
         // PDF、视频、音频没有实现读取：schema 不再暴露 pages/mode/frames，这里如实回不支持。
         return when (resolved.kind) {
-            FileKind.TEXT -> readTextVerdict(input, resolved)
+            FileKind.TEXT -> readTextVerdict(input, resolved, ctx)
             FileKind.IMAGE -> readImageVerdict(resolved, ctx.env)
             FileKind.PDF -> unsupported("暂不支持读取 PDF", "pdf_unsupported")
             FileKind.VIDEO -> unsupported("暂不支持读取视频", "video_unsupported")
@@ -151,18 +167,40 @@ internal class FileReadTool(
         }
     }
 
-    private fun readTextVerdict(input: FileReadInput, resolved: ResolvedFile): Verdict<FileReadOutput> {
+    private fun readTextVerdict(input: FileReadInput, resolved: ResolvedFile, ctx: ToolContext): Verdict<FileReadOutput> {
         val offset = input.offsetLine ?: 1
         val limit = input.limitLines ?: DEFAULT_TEXT_LINES
-        val read = backend.readText(resolved.path, offset, limit)
+        val read = backend.readText(resolved.path, offset, limit, input.column ?: 0, ctx::checkCancelled)
         val data = JSONObject()
             .put("kind", "text")
             .put("path", resolved.path)
             .put("encoding", read.encoding)
             .put("content", read.content)
-        read.nextOffsetLine?.let {
-            data.put("next_offset", it)
-            data.put("truncated", JSONObject().put("shown", limit).put("total", read.totalLines).put("unit", "lines"))
+            .put("start_line", read.startLine)
+            .put("end_line", read.endLine)
+        if (read.startColumn > 0) data.put("start_column", read.startColumn)
+        read.totalLines?.let { data.put("total_lines", it) }
+        if (read.content.contains('\uFFFD')) {
+            data.put("encoding_note", "有按 ${read.encoding} 解不出的字节，显示成了 �")
+        }
+        // 没读完就一定给续读位置：停在行尾给下一行，停在一行中间再给这一行里的位置。
+        read.nextOffsetLine?.let { next ->
+            data.put("next_offset", next)
+            read.nextColumn?.let { data.put("next_column", it) }
+            val shown = (read.endLine - read.startLine + 1).coerceAtLeast(0)
+            data.put(
+                "truncated",
+                JSONObject().put("shown", shown).put("unit", "lines")
+                    .apply { read.totalLines?.let { put("total", it) } }
+                    .put(
+                        "note",
+                        if (read.nextColumn != null) {
+                            "一次最多约 ${TextPager.MAX_CHARS} 字，停在第 $next 行中间；用 offset=$next、column=${read.nextColumn} 接着读"
+                        } else {
+                            "用 offset=$next 接着读"
+                        },
+                    ),
+            )
         }
         return Verdict.Read(FileReadOutput(data))
     }
@@ -216,11 +254,13 @@ internal class FileReadTool(
             fail(ToolErrorCode.INVALID_ARGUMENTS, "参数 $param 只适用于文本文件，当前是 ${kind.name.lowercase()}")
         if (input.offsetLine != null && kind != FileKind.TEXT) reject("offset")
         if (input.limitLines != null && kind != FileKind.TEXT) reject("limit")
+        if (input.column != null && kind != FileKind.TEXT) reject("column")
     }
 
     private fun sourceClass(file: String): SourceClass = when {
         FileSupport.decodeHandlePath(file) != null -> SourceClass.HANDLE
-        file.startsWith("content://") || file.startsWith("file://") -> SourceClass.ATTACHMENT
+        // file:// 只是路径的另一种写法，和直接写路径一样看「终端与文件」（与重构前一致）。
+        file.startsWith("content://") -> SourceClass.ATTACHMENT
         else -> SourceClass.PATH
     }
 

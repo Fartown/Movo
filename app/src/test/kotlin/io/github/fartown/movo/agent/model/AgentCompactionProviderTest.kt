@@ -89,7 +89,7 @@ class AgentCompactionProviderTest {
                 )
                 val request = ProviderRequest(config,
                     JSONArray().put(AgentConversationCodec.userTextMessage("总结以下历史")),
-                    AgentToolCatalog.build(terminalTools = false, browserTools = false), purpose = purpose)
+                    TestToolCatalog.build(), purpose = purpose)
                 assertThrows(AgentModelFailure::class.java) {
                     provider.complete(request, AgentRunController())
                 }

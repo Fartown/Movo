@@ -37,9 +37,17 @@ class TerminalWorkdirTest {
 
     @Test
     fun command_entersTheDirectoryFirst_andCreatesTheAndroidWorkspace() {
-        assertEquals("mkdir -p '/ws' && cd '/ws' && ls -la", commandInDirectory("ls -la", "/ws", TerminalEnv.ANDROID, "/ws"))
-        assertEquals("cd '/sdcard' && ls", commandInDirectory("ls", "/sdcard", TerminalEnv.ANDROID, "/ws"))
+        // Android 的非 tty 命令设 TERM=dumb、NO_COLOR=1（与重构前一样）；Linux 由启动器设，tty 用伪终端自己的 TERM。
+        assertEquals(
+            "mkdir -p '/ws' && cd '/ws' && export TERM=dumb NO_COLOR=1 && ls -la",
+            commandInDirectory("ls -la", "/ws", TerminalEnv.ANDROID, "/ws"),
+        )
+        assertEquals("cd '/sdcard' && export TERM=dumb NO_COLOR=1 && ls", commandInDirectory("ls", "/sdcard", TerminalEnv.ANDROID, "/ws"))
+        assertEquals("cd '/sdcard' && top", commandInDirectory("top", "/sdcard", TerminalEnv.ANDROID, "/ws", tty = true))
         assertEquals("cd '/workspace' && ls", commandInDirectory("ls", "/workspace", TerminalEnv.LINUX, "/workspace"))
-        assertEquals("cd '/ws/it'\\''s' && ls", commandInDirectory("ls", "/ws/it's", TerminalEnv.ANDROID, "/ws"))
+        assertEquals(
+            "cd '/ws/it'\\''s' && export TERM=dumb NO_COLOR=1 && ls",
+            commandInDirectory("ls", "/ws/it's", TerminalEnv.ANDROID, "/ws"),
+        )
     }
 }
