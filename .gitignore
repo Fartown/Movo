@@ -41,3 +41,6 @@ google-services.json
 
 # Local Android SDK installs (never commit)
 .android-sdk/
+
+# 原始证据（日志、截图、APK、缓存网页），只留本地；文档按路径引用
+/.docs/
