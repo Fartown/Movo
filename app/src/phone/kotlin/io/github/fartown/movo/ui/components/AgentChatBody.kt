@@ -1,5 +1,7 @@
 package io.github.fartown.movo.ui.components
 
+import io.github.fartown.movo.agent.model.InteractionMode
+import io.github.fartown.movo.agent.model.OpenAiResponsesProvider
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
@@ -159,6 +161,10 @@ internal fun AgentChatBody(
     pendingFileReferences: List<PendingFileReferenceUi>,
     messageEdit: MessageEditUiState?,
     onReasoningEffortChange: (ReasoningEffort) -> Unit,
+    interactionMode: InteractionMode = InteractionMode.AGENT,
+    onInteractionModeChange: (InteractionMode) -> Unit = {},
+    chatWebSearch: Boolean = false,
+    onChatWebSearchChange: (Boolean) -> Unit = {},
     onCompactContext: () -> Unit,
     canCompactContext: Boolean,
     onModelSelected: (String) -> Unit,
@@ -308,6 +314,8 @@ internal fun AgentChatBody(
         }
     }
 
+    val modeSwitches = remember(messages) { modeSwitchesOf(messages) }
+    androidx.compose.runtime.CompositionLocalProvider(LocalModeSwitches provides modeSwitches) {
     AgentChatScaffold(
         visibleMessages = visibleMessages,
         timelineMessages = timelineMessages,
@@ -339,6 +347,10 @@ internal fun AgentChatBody(
             onSubmit(text)
         },
         onReasoningEffortChange = onReasoningEffortChange,
+        interactionMode = interactionMode,
+        onInteractionModeChange = onInteractionModeChange,
+        chatWebSearch = chatWebSearch,
+        onChatWebSearchChange = onChatWebSearchChange,
         onCompactContext = onCompactContext,
         canCompactContext = canCompactContext,
         onModelSelected = onModelSelected,
@@ -364,6 +376,7 @@ internal fun AgentChatBody(
         currentBrowserMessageId = currentBrowserMessageId,
         modifier = modifier,
     )
+    }
 }
 
 @Composable
@@ -394,6 +407,10 @@ private fun AgentChatScaffold(
     onBottomAnchorChanged: (Boolean) -> Unit,
     onSubmit: (String) -> Unit,
     onReasoningEffortChange: (ReasoningEffort) -> Unit,
+    interactionMode: InteractionMode = InteractionMode.AGENT,
+    onInteractionModeChange: (InteractionMode) -> Unit = {},
+    chatWebSearch: Boolean = false,
+    onChatWebSearchChange: (Boolean) -> Unit = {},
     onCompactContext: () -> Unit,
     canCompactContext: Boolean,
     onModelSelected: (String) -> Unit,
@@ -474,6 +491,10 @@ private fun AgentChatScaffold(
                 messageEdit = messageEdit,
                 onSubmit = onSubmit,
                 onReasoningEffortChange = onReasoningEffortChange,
+                interactionMode = interactionMode,
+                onInteractionModeChange = onInteractionModeChange,
+                chatWebSearch = chatWebSearch,
+                onChatWebSearchChange = onChatWebSearchChange,
                 onCompactContext = onCompactContext,
                 canCompactContext = canCompactContext,
                 onModelSelected = onModelSelected,
@@ -1462,7 +1483,7 @@ internal sealed interface AgentTimelineEntry {
 
     /**
      * 一轮结束后，最终回答上方的过程收成的一行（定稿 24），排在这一轮开头那条消息后面。
-     * [toolCount] 为 0 时写「已思考 N 秒」，否则「已完成 N 个步骤 · 用时」。
+     * [toolCount] 为 0 时写「已思考 N 秒」，否则「已完成 N 个步骤 · 用时」；[searchOnly] 时写「已搜索 N 次 · 用时」。
      */
     data class TurnSummary(
         override val key: String,
@@ -1477,6 +1498,8 @@ internal sealed interface AgentTimelineEntry {
         val ending: WorkOutcome.Kind? = null,
         /** 收起时钉住不动的那一条（留下的那段正文，或收起部分后面的第一条）。 */
         val anchorKey: Any? = null,
+        /** 对话模式开着联网、这一轮的步骤全是服务商网页搜索（定稿 25-12）。 */
+        val searchOnly: Boolean = false,
     ) : AgentTimelineEntry
 }
 
@@ -1579,6 +1602,8 @@ internal fun foldFinishedTurns(entries: List<AgentTimelineEntry>, isStreaming: B
             toolFinishedAt = tools.mapNotNull { it.finishedAtMillis }.maxOrNull(),
             ending = ending,
             anchorKey = anchorKey,
+            searchOnly = (startMessage as? UserMessageUi)?.interactionMode == InteractionMode.CHAT &&
+                tools.isNotEmpty() && tools.all { it.toolName == OpenAiResponsesProvider.WEB_SEARCH_STEP_NAME },
         )
         body.forEachIndexed { index, entry ->
             result += if (index in folds) {
@@ -1721,6 +1746,10 @@ private fun AgentChatBottomBar(
     messageEdit: MessageEditUiState?,
     onSubmit: (String) -> Unit,
     onReasoningEffortChange: (ReasoningEffort) -> Unit,
+    interactionMode: InteractionMode = InteractionMode.AGENT,
+    onInteractionModeChange: (InteractionMode) -> Unit = {},
+    chatWebSearch: Boolean = false,
+    onChatWebSearchChange: (Boolean) -> Unit = {},
     onCompactContext: () -> Unit,
     canCompactContext: Boolean,
     onModelSelected: (String) -> Unit,
@@ -1833,6 +1862,10 @@ private fun AgentChatBottomBar(
                     onSubmit(text)
                 },
                 onReasoningEffortChange = onReasoningEffortChange,
+                interactionMode = interactionMode,
+                onInteractionModeChange = onInteractionModeChange,
+                chatWebSearch = chatWebSearch,
+                onChatWebSearchChange = onChatWebSearchChange,
                 onCompactContext = onCompactContext,
                 canCompactContext = canCompactContext,
                 onModelSelected = onModelSelected,

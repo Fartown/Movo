@@ -1,5 +1,6 @@
 package io.github.fartown.movo.ui.model
 
+import io.github.fartown.movo.agent.model.InteractionMode
 import androidx.compose.runtime.Immutable
 import io.github.fartown.movo.agent.model.AgentFileReference
 import io.github.fartown.movo.agent.model.AgentModelClient
@@ -27,6 +28,13 @@ internal data class AgentChatUiState(
     val messageEdit: MessageEditUiState? = null,
     val roleplay: RoleplayBinding? = null,
     val roleplayMessages: RoleplayMessageState = RoleplayMessageState(),
+    /**
+     * 下一条消息用哪种模式（规范 8.2.2）。不单独落库：打开旧对话时取最后一条用户消息的模式（「恢复它最后用的模式」），
+     * 新对话是 Agent。
+     */
+    val interactionMode: InteractionMode = InteractionMode.AGENT,
+    /** 对话模式的「联网」开关（定稿 25-9～25-12）：每个对话默认关；打开旧对话时取最后一条对话模式消息的开关。 */
+    val chatWebSearch: Boolean = false,
 ) {
     val canCompactContext: Boolean get() = !isStreaming && messageEdit == null && history.any {
         !it.contextSummary && (it.role == "assistant" || it.role == "tool")
@@ -50,6 +58,10 @@ data class UserMessageUi(
      */
     val runStartedAtMillis: Long? = null,
     val runFinishedAtMillis: Long? = null,
+    /** 这条消息发出时的模式：切换处的说明行由相邻两条用户消息推导（定稿 25-4 / 25-5），重新生成、编辑沿用它。 */
+    val interactionMode: InteractionMode = InteractionMode.AGENT,
+    /** 对话模式发出时「联网」开着（只对对话模式有意义）。 */
+    val webSearch: Boolean = false,
 ) : AgentChatMessageUi
 
 @Immutable

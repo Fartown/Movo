@@ -38,6 +38,7 @@ import io.github.fartown.movo.agent.model.AgentFileReferencePolicy
 import io.github.fartown.movo.agent.model.AgentFileReferencePromptCodec
 import io.github.fartown.movo.agent.model.AgentFollowUpSuggester
 import io.github.fartown.movo.agent.model.AgentModelClient
+import io.github.fartown.movo.agent.model.InteractionMode
 import io.github.fartown.movo.agent.roleplay.RoleplayBinding
 import io.github.fartown.movo.agent.roleplay.CharacterMacros
 import io.github.fartown.movo.agent.roleplay.CharacterCardCodec
@@ -386,6 +387,7 @@ internal class AgentAppState(
                     withContext(Dispatchers.Main) {
                         modelPickerState = pickerState.copy(
                             isChanging = modelPickerState.isChanging,
+                            webSearchAvailable = runtimeConfig?.supportsHostedWebSearch() == true,
                         )
                         applyReasoningCapabilities(capabilities)
                     }
@@ -995,6 +997,33 @@ internal class AgentAppState(
         updateReasoningEffort(ReasoningEffort.fromLegacy(enabled))
     }
 
+    /**
+     * 切换 Agent / 对话模式（规范 8.2.2）：从下一条消息生效；回答中不能切。不单独落库（打开旧对话时按最后一条用户消息恢复）。
+     * 输入框里已有文件时不能切到对话：文件要靠 Agent 的工具读。
+     */
+    fun updateInteractionMode(mode: InteractionMode) {
+        if (homeState.isStreaming || homeState.interactionMode == mode) return
+        if (mode == InteractionMode.CHAT && homeState.pendingFileReferences.isNotEmpty()) {
+            showComposerNotice(
+                MovoIcons.MessageSquare,
+                appContext.getString(R.string.movo_notice_chat_mode_files_title),
+                appContext.getString(R.string.movo_notice_chat_mode_files_desc),
+            )
+            return
+        }
+        updateCurrentConversation(homeState.copy(interactionMode = mode))
+    }
+
+    /** 对话模式的「联网」开关（定稿 25-9）：从下一条消息生效，回答中不能切；跟着对话记住（按最后一条对话模式消息恢复）。 */
+    fun updateChatWebSearch(enabled: Boolean) {
+        if (homeState.isStreaming || homeState.chatWebSearch == enabled) return
+        updateCurrentConversation(homeState.copy(chatWebSearch = enabled))
+    }
+
+    /** 这条消息是否开联网：只在对话模式、开关开着、当前服务商支持时（Agent 模式按服务商自己的联网设置）。 */
+    private fun AgentChatHomeUiState.sendsWithWebSearch(mode: InteractionMode = interactionMode): Boolean =
+        mode == InteractionMode.CHAT && chatWebSearch && modelPickerState.webSearchAvailable
+
     fun updateReasoningEffort(effort: ReasoningEffort) {
         val normalized = currentReasoningCapabilities?.normalize(effort) ?: ReasoningEffort.OFF
         updateCurrentConversation(
@@ -1280,7 +1309,10 @@ internal class AgentAppState(
         if (conversationTitles[conversationId].isNullOrBlank()) {
             conversationTitles = conversationTitles + (conversationId to prompt.defaultConversationTitle())
         }
-        val userMessage = UserMessageUi(id = "user-$runId", content = prompt, images = images.map { it.dataUrl })
+        val userMessage = UserMessageUi(
+            id = "user-$runId", content = prompt, images = images.map { it.dataUrl }, interactionMode = state.interactionMode,
+            webSearch = state.sendsWithWebSearch(),
+        )
         launchConversationRun(
             conversationId = conversationId, runId = runId, prompt = prompt, images = images,
             history = state.history,
@@ -1288,6 +1320,8 @@ internal class AgentAppState(
             messages = state.messages + userMessage,
             state = state.copy(pendingImages = state.pendingImages.filterNot { candidate -> images.any { it.id == candidate.id } }),
             reasoningEffort = state.reasoningEffort, voiceSessionId = voiceSessionId,
+            interactionMode = state.interactionMode,
+            webSearch = userMessage.webSearch,
         )
     }
 
@@ -1357,6 +1391,14 @@ internal class AgentAppState(
             return
         }
         val fileReferences = pendingFileReferences.map { it.reference }
+        if (fileReferences.isNotEmpty() && homeState.messageEdit == null && homeState.interactionMode == InteractionMode.CHAT) {
+            showComposerNotice(
+                MovoIcons.MessageSquare,
+                appContext.getString(R.string.movo_notice_chat_mode_files_title),
+                appContext.getString(R.string.movo_notice_chat_mode_files_desc),
+            )
+            return
+        }
         if (
             !AgentFileReferencePolicy.canSend(
                 references = fileReferences,
@@ -1372,7 +1414,9 @@ internal class AgentAppState(
         }
         // 规范 8.4：执行中再发的话不排队、不开新任务，作为补充交给当前任务（下一步生效）。
         // 只适用于当前会话自己的这一轮、纯文字、不在编辑；带附件或补充未被接收时按原来的排队处理。
+        // 对话模式没有「当前任务」可补充：回答中再发的话排成「下一条」（定稿 25-6）。
         val steerRunId = currentRunId?.takeIf { runId ->
+            homeState.interactionMode == InteractionMode.AGENT &&
             homeState.isStreaming &&
                 runConversationIds[runId] == selectedConversationId &&
                 pendingImages.isEmpty() &&
@@ -1418,11 +1462,15 @@ internal class AgentAppState(
             selectedConversationId = it
         }
         val runId = "run-${UUID.randomUUID()}"
+        // 编辑沿用那条消息当时的模式，否则用输入框当前的模式（规范 8.2.2）。
+        val interactionMode = editBoundary?.userMessage?.interactionMode ?: homeState.interactionMode
         val userMessage = UserMessageUi(
             id = editBoundary?.userMessage?.id ?: "user-$runId",
             content = runtimePrompt,
             images = pendingImages.map { it.dataUrl },
             isEdited = editBoundary != null,
+            interactionMode = interactionMode,
+            webSearch = editBoundary?.userMessage?.webSearch ?: homeState.sendsWithWebSearch(interactionMode),
         )
         val history = editBoundary?.historyPrefix ?: homeState.history
         val messages = if (editBoundary == null) {
@@ -1469,6 +1517,8 @@ internal class AgentAppState(
                 messageEdit = null,
             ),
             reasoningEffort = homeState.reasoningEffort,
+            interactionMode = interactionMode,
+            webSearch = userMessage.webSearch,
         )
     }
 
@@ -1501,12 +1551,17 @@ internal class AgentAppState(
         queuedTextSubmission = null
         val prompt = AgentFileReferencePromptCodec.format(queued.text, queued.files.map { it.reference })
         val runId = "run-${UUID.randomUUID()}"
-        val message = UserMessageUi("user-$runId", prompt, queued.images.map { it.dataUrl })
+        val message = UserMessageUi(
+            "user-$runId", prompt, queued.images.map { it.dataUrl },
+            interactionMode = state.interactionMode, webSearch = state.sendsWithWebSearch(),
+        )
         launchConversationRun(
             conversationId = queued.conversationId, runId = runId, prompt = prompt, images = queued.images,
             history = state.history,
             userHistoryMessage = AgentModelClient.buildUserHistoryMessage(prompt, queued.images.toHistoryImages()).copy(messageId = message.id),
             messages = state.messages + message, state = state, reasoningEffort = state.reasoningEffort,
+            interactionMode = state.interactionMode,
+            webSearch = message.webSearch,
         )
     }
 
@@ -1665,6 +1720,8 @@ internal class AgentAppState(
             messages = homeState.messages.take(boundary.userMessageIndex + 1),
             state = homeState.copy(journal = boundary.journalPrefix),
             reasoningEffort = homeState.reasoningEffort,
+            interactionMode = turnMessage.interactionMode,
+            webSearch = turnMessage.webSearch,
         )
     }
 
@@ -1694,6 +1751,8 @@ internal class AgentAppState(
         rewriteTargetMessageId: String? = null,
         voiceSessionId: String = "",
         origin: String = "",
+        interactionMode: InteractionMode = InteractionMode.AGENT,
+        webSearch: Boolean = false,
     ) {
         runConversationIds[runId] = conversationId
         runLaunchedAtMillis[runId] = System.currentTimeMillis()
@@ -1777,7 +1836,14 @@ internal class AgentAppState(
                     agentBooleanForUi(Prefs.Keys.AGENT_DEVICE_SENSITIVE_ACTION_TOOLS),
                 thinkingEnabled = permittedReasoningEffort.enablesReasoning,
                 reasoningEffort = permittedReasoningEffort,
-            )
+            )?.let { base ->
+                // 对话模式联网听输入框的开关，不看服务商设置（定稿 25-9）；Agent 模式和事件轮照旧。
+                if (interactionMode == InteractionMode.CHAT && origin != AgentRuntimeWire.ORIGIN_MONITOR) {
+                    base.copy(hostedWebSearchEnabled = webSearch)
+                } else {
+                    base
+                }
+            }
             if (config == null) {
                 withContext(Dispatchers.Main) {
                     applyRunResult(
@@ -1801,8 +1867,9 @@ internal class AgentAppState(
                 )
             }
             // 语音对话靠说不靠点、角色扮演是剧情而非设备动作，这两类不出推荐追问。
+            // 对话模式只和模型聊，也不出（推荐追问是让 Agent 去做的事）。
             if (operation == AgentRuntimeWire.OP_CHAT && voiceSessionId.isBlank() && state.roleplay == null &&
-                origin != AgentRuntimeWire.ORIGIN_MONITOR) {
+                origin != AgentRuntimeWire.ORIGIN_MONITOR && interactionMode == InteractionMode.AGENT) {
                 followUpRunConfigs[runId] = config
             }
             if (withContext(Dispatchers.Main) { runId in stopRequestedRunIds }) {
@@ -1821,6 +1888,7 @@ internal class AgentAppState(
                         config = config,
                         voiceSessionId = voiceSessionId,
                         origin = origin,
+                        interactionMode = if (origin == AgentRuntimeWire.ORIGIN_MONITOR) InteractionMode.AGENT else interactionMode,
                         modelSessionId = conversationId,
                         images = modelImages,
                         history = history,

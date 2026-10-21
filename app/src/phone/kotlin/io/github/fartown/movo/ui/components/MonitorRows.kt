@@ -45,6 +45,9 @@ import io.github.fartown.movo.ui.theme.MovoColors
 import io.github.fartown.movo.ui.theme.MovoIcon
 import io.github.fartown.movo.ui.theme.MovoIcons
 import io.github.fartown.movo.ui.theme.MovoMotion
+import io.github.fartown.movo.ui.theme.LocalReducedMotion
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.snap
 import io.github.fartown.movo.ui.theme.MovoTypography
 
 /**
@@ -194,6 +197,8 @@ internal val LocalMonitorConversationId = androidx.compose.runtime.staticComposi
 @Composable
 internal fun AgentMonitorChip(
     popupAnchorTopPx: Int,
+    /** 工具栏放不下时只留图标（定稿 25-11：对话模式 + 联网 + 有监听）。 */
+    iconOnly: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val conversationId = LocalMonitorConversationId.current ?: return
@@ -215,20 +220,25 @@ internal fun AgentMonitorChip(
                     .movoClickable(PressKind.Solid, shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp)) { showList = !showList }
                     .clip(androidx.compose.foundation.shape.RoundedCornerShape(20.dp))
                     .background(MovoColors.bgSurfaceMuted)
-                    .padding(start = 12.dp, end = 14.dp),
+                    .animateContentSize(if (LocalReducedMotion.current) snap() else MovoMotion.standard())
+                    .padding(horizontal = ToolbarChipIconPadding),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                MovoIcon(MovoIcons.Clock, contentDescription = null, size = 16.dp, tint = MovoColors.amberFg)
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    text = if (monitors.size > 1) {
-                        stringResource(R.string.monitor_chip_count, monitors.size)
-                    } else {
-                        stringResource(R.string.monitor_chip)
-                    },
-                    style = MovoTypography.labelMedium,
-                    color = MovoColors.textSecondary,
+                val label = if (monitors.size > 1) {
+                    stringResource(R.string.monitor_chip_count, monitors.size)
+                } else {
+                    stringResource(R.string.monitor_chip)
+                }
+                MovoIcon(
+                    MovoIcons.Clock,
+                    // 只留图标时文字不在了，读屏仍读「监听 N」。
+                    contentDescription = if (iconOnly) label else null,
+                    size = 16.dp,
+                    tint = MovoColors.amberFg,
                 )
+                ToolbarChipLabel(visible = !iconOnly, trailing = 2.dp) {
+                    Text(text = label, style = MovoTypography.labelMedium, color = MovoColors.textSecondary)
+                }
             }
             io.github.fartown.movo.ui.components.movo.MovoPopover(
                 show = showList && monitors.isNotEmpty(),

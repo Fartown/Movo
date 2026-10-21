@@ -35,9 +35,14 @@ internal enum class EndpointKind {
 internal enum class ProviderRequestPurpose {
     CHAT, COMPACTION, REPLY_REWRITE,
     /** 回答结束后的推荐追问：不带工具的独立小请求，见 [AgentFollowUpSuggester]。 */
-    FOLLOW_UP_SUGGESTIONS;
+    FOLLOW_UP_SUGGESTIONS,
+    /** 对话模式（[InteractionMode.CHAT]）：不带工具，但服务商配置（自定义请求体、联网搜索开关）照常生效。 */
+    PLAIN_CHAT;
 
     val allowsTools: Boolean get() = this == CHAT
+
+    /** 用户在服务商里配的请求体、额外参数和联网搜索是否生效；内部小请求（压缩、改写、追问）不带。 */
+    val keepsProviderConfig: Boolean get() = this == CHAT || this == PLAIN_CHAT
 }
 
 internal data class ProviderRequest(
@@ -47,7 +52,7 @@ internal data class ProviderRequest(
     val sessionId: String = java.util.UUID.randomUUID().toString(),
     val purpose: ProviderRequestPurpose = ProviderRequestPurpose.CHAT,
 ) {
-    val effectiveConfig: AgentModelClient.ModelConfig get() = if (!purpose.allowsTools) {
+    val effectiveConfig: AgentModelClient.ModelConfig get() = if (!purpose.keepsProviderConfig) {
         config.copy(hostedWebSearchEnabled = false, extraBodyJson = "", customBody = emptyList())
     } else config
     val effectiveTools: JSONArray get() = if (purpose.allowsTools) tools else JSONArray()

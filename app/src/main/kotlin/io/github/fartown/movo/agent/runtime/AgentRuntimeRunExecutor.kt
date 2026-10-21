@@ -111,9 +111,11 @@ internal class AgentRuntimeRunExecutor(
                     MovoAssistantVoiceService.dismissForForegroundOperation(appContext)
                 },
             )
-            val skillIndexService = SkillRuntime.createIndexService(appContext)
-            val skillContext = SkillContext(
-                installedSkills = skillIndexService.listInstalledSkills()
+            // 对话模式（规范 8.2.2）：只把对话发给模型，技能、现实记忆、MCP、工具子系统都不准备。
+            val chatMode = request.interactionMode == io.github.fartown.movo.agent.model.InteractionMode.CHAT &&
+                request.operation == AgentRuntimeWire.OP_CHAT && !request.isMonitorOrigin
+            val skillContext = if (chatMode) SkillContext.EMPTY else SkillContext(
+                installedSkills = SkillRuntime.createIndexService(appContext).listInstalledSkills()
                     .filter { SkillCompatibilityChecker.evaluate(it).available },
             )
             val memoryEnabled = runBlocking { AgentMemoryRepository.isEnabled() }
@@ -133,7 +135,7 @@ internal class AgentRuntimeRunExecutor(
                     MovoDatabase.get(appContext).conversationDao().hasAssistantMessage(conversationId, target)
                 }) { "角色回复目标不存在或不属于当前会话" }
             }
-            val memoryContext = if (memoryEnabled) {
+            val memoryContext = if (memoryEnabled && !chatMode) {
                 runCatching {
                     AgentMemoryContextBuilder.build(
                         snapshot = AgentMemoryRepository.snapshot(),
@@ -157,9 +159,9 @@ internal class AgentRuntimeRunExecutor(
                     acceptEvent(session, ev, archivedEvents, entrySurfaceGuard)
                 }
             }
-            AgentInteractionRegistry.register(request.runId, interactionBroker)
+            if (!chatMode) AgentInteractionRegistry.register(request.runId, interactionBroker)
             // run 开始快照一次 MCP 目录（用户已添加可用 MCP 时暴露 mcp_* 工具；为空则不暴露）。
-            val mcpCatalog = runBlocking {
+            val mcpCatalog = if (chatMode) McpCatalog.EMPTY else runBlocking {
                 runCatching { McpCatalogLoader.load() }.getOrElse { throwable ->
                     AndroidAgentLogger.warnThrottled("agent_mcp_catalog_failed") {
                         "MCP catalog unavailable: type=${throwable.safeLogType()}"
@@ -179,7 +181,7 @@ internal class AgentRuntimeRunExecutor(
                     else -> MemoryScope.REAL
                 }
             }
-            val typedSubsystem = AgentToolSubsystem(
+            val typedSubsystem = if (chatMode) null else AgentToolSubsystem(
                 services = ToolServices(
                     appContext,
                     AndroidAgentLogger,
@@ -255,8 +257,10 @@ internal class AgentRuntimeRunExecutor(
                 // 按停止时立刻关掉工具（重构前的行为）；正常结束时在 finally 里关。
                 toolsBinding = runController.closeOnStop(built)
             }
-            val effectiveExecutor = typedSubsystem.pipeline
-            val typedCatalog: (AgentToolCapabilities) -> org.json.JSONArray = { _ -> typedSubsystem.pipeline.catalog() }
+            val effectiveExecutor: AgentModelClient.ToolExecutor =
+                typedSubsystem?.pipeline ?: AgentModelClient.ToolExecutor { call -> error("对话模式没有工具：${call.name}") }
+            val typedCatalog: (AgentToolCapabilities) -> org.json.JSONArray =
+                { _ -> typedSubsystem?.pipeline?.catalog() ?: org.json.JSONArray() }
             val completedResponse = AgentModelClient.complete(
                 config = request.config,
                 sessionId = request.effectiveModelSessionId,
@@ -288,15 +292,22 @@ internal class AgentRuntimeRunExecutor(
                 prompt = request.prompt,
                 toolExecutor = effectiveExecutor,
                 typedCatalog = typedCatalog,
-                toolGuide = {
-                    val switches = liveSwitches()
-                    val liveConfig = request.config.copy(
-                        deviceSensitiveReadTools = switches.sensitiveRead,
-                        deviceSensitiveActionTools = switches.sensitiveAction,
-                    )
-                    (typedSubsystem.pipeline.promptSections().map { it.text.trim() } + switchNotes(liveConfig))
-                        .filter { it.isNotBlank() }
-                        .joinToString("\n\n")
+                toolGuide = typedSubsystem?.let { subsystem ->
+                    {
+                        val switches = liveSwitches()
+                        val liveConfig = request.config.copy(
+                            deviceSensitiveReadTools = switches.sensitiveRead,
+                            deviceSensitiveActionTools = switches.sensitiveAction,
+                        )
+                        (subsystem.pipeline.promptSections().map { it.text.trim() } + switchNotes(liveConfig))
+                            .filter { it.isNotBlank() }
+                            .joinToString("\n\n")
+                    }
+                },
+                interactionMode = if (chatMode) {
+                    io.github.fartown.movo.agent.model.InteractionMode.CHAT
+                } else {
+                    io.github.fartown.movo.agent.model.InteractionMode.AGENT
                 },
                 environmentExtra = { recentAppEnvironment(appContext) },
                 images = request.images,

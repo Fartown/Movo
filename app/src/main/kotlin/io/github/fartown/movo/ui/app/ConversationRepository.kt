@@ -13,6 +13,7 @@ import io.github.fartown.movo.data.db.MovoDatabase
 import io.github.fartown.movo.data.model.ReasoningEffort
 import io.github.fartown.movo.ui.model.AgentChatHomeUiState
 import io.github.fartown.movo.ui.model.AgentChatMessageUi
+import io.github.fartown.movo.ui.model.UserMessageUi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -145,12 +146,19 @@ internal class ConversationRepository(
         val journal = storedJournal
             ?: AgentConversationCodec.decodeTranscript(legacy?.journalJson).ifEmpty { history }
         val effort = ReasoningEffort.fromWireValue(entity.reasoningEffort) ?: ReasoningEffort.DEFAULT
+        val messages = rows.mapNotNull { it.toChatMessage() }
         val state = AgentChatHomeUiState(
             roleplay = entity.roleplayJson.takeIf(String::isNotBlank)?.let { json.decodeFromString<RoleplayBinding>(it) },
             roleplayMessages = entity.revisionsJson.takeIf(String::isNotBlank)
                 ?.let { json.decodeFromString<RoleplayMessageState>(it) } ?: RoleplayMessageState(),
             journal = journal,
-            messages = rows.mapNotNull { it.toChatMessage() },
+            messages = messages,
+            // 打开旧对话恢复它最后用的模式（规范 8.2.2）。
+            interactionMode = messages.filterIsInstance<UserMessageUi>().lastOrNull()?.interactionMode
+                ?: io.github.fartown.movo.agent.model.InteractionMode.AGENT,
+            // 对话模式的「联网」开关跟着对话走：取最后一条对话模式消息当时的开关（定稿 25-9）。
+            chatWebSearch = messages.filterIsInstance<UserMessageUi>()
+                .lastOrNull { it.interactionMode == io.github.fartown.movo.agent.model.InteractionMode.CHAT }?.webSearch == true,
             history = history,
             appliedRuntimeRunIds = entity.appliedRuntimeRunIdsJson.toStringList(),
             input = "",

@@ -108,9 +108,18 @@ internal object AgentModelClient {
         onTranscript: (List<ConversationMessage>) -> Unit = {},
         /** 环境信息里时间之后的补充行（例如用户最近在用的其他应用），每次任务算一次。 */
         environmentExtra: () -> String = { "" },
+        /** 对话模式（[InteractionMode.CHAT]）：最干净的模型调用，见 [AgentPromptBuilder.buildChatMessages]。 */
+        interactionMode: InteractionMode = InteractionMode.AGENT,
         onEvent: (AgentEvent) -> Unit = {}
     ): ModelResponse.Text {
         config.validate()
+        val chatMode = interactionMode == InteractionMode.CHAT && !rewriteReply && !compactOnly
+        if (chatMode) {
+            return completeChat(
+                config, prompt, images, history, provider, runController, sessionId, operationId,
+                initialUserMessageId, roleplayContext, spokenReply, onContextSnapshot, onTranscript, onEvent,
+            )
+        }
         val initialCapabilities = capabilitiesProvider()
         val guide = if (rewriteReply) "" else toolGuide?.let { runCatching(it).getOrDefault("") }
         // 环境信息每次任务算一次，重建系统消息时沿用同一份（系统消息条数、前缀都不变）。
@@ -222,6 +231,82 @@ internal object AgentModelClient {
         )
     }
 
+    /**
+     * 对话模式的一轮（方案 §3.2–3.4）：不带工具、Movo 的系统提示词、记忆、技能和环境信息；
+     * 历史只发文字（[ChatModeHistory]）；服务商的请求体、思考参数、联网搜索开关照常（[ProviderRequestPurpose.PLAIN_CHAT]）。
+     * 服务商的系统提示词只带用户自己填的，默认文案写着「可以用工具」，不带。
+     */
+    private fun completeChat(
+        config: ModelConfig,
+        prompt: String,
+        images: List<ModelImage>,
+        history: List<ConversationMessage>,
+        provider: AgentProviderClient,
+        runController: AgentRunController,
+        sessionId: String,
+        operationId: String,
+        initialUserMessageId: String,
+        roleplayContext: RoleplayRunContext?,
+        spokenReply: SpokenReply,
+        onContextSnapshot: (AgentContextSnapshot) -> Unit,
+        onTranscript: (List<ConversationMessage>) -> Unit,
+        onEvent: (AgentEvent) -> Unit,
+    ): ModelResponse.Text {
+        val chatConfig = config.copy(
+            systemPrompt = config.systemPrompt.takeIf { it.trim() != BuiltinProviders.DEFAULT_SYSTEM_PROMPT }.orEmpty(),
+        )
+        val chatRoleplay = roleplayContext?.copy(chatMode = true)
+        val messages = AgentPromptBuilder.buildChatMessages(chatConfig, prompt, images, history, chatRoleplay, spokenReply)
+        messages.getJSONObject(messages.length() - 1).put("_movo_message_id", initialUserMessageId)
+        val systemCount = AgentPromptBuilder.buildChatSystemMessages(chatConfig, chatRoleplay, spokenReply).length()
+        val transcript = JSONArray()
+        onEvent(
+            AgentEvent.RunStarted(
+                initialImages = images.size,
+                initialImageBytes = images.sumOf { it.bytes },
+                toolCount = 0,
+                terminalTools = false,
+            )
+        )
+        val loop = AgentLoop(
+            transcript = transcript,
+            systemCount = systemCount,
+            operationId = operationId,
+            onContextSnapshot = onContextSnapshot,
+            onTranscript = onTranscript,
+            sessionId = sessionId,
+            config = chatConfig,
+            messages = messages,
+            tools = JSONArray(),
+            provider = provider,
+            toolExecutor = NO_TOOLS,
+            runController = runController,
+            traceFormatter = traceFormatter,
+            onEvent = onEvent,
+            purpose = ProviderRequestPurpose.PLAIN_CHAT,
+            roleplayContext = chatRoleplay,
+        )
+        val result = try {
+            loop.run()
+        } catch (throwable: Throwable) {
+            throw AgentModelExecutionException(
+                cause = throwable,
+                contextSnapshot = loop.contextSnapshot(),
+                reasoningContent = loop.reasoningSnapshot(),
+                transcript = AgentConversationCodec.transcript(transcript, 0),
+            )
+        }
+        return ModelResponse.Text(
+            content = result.content,
+            contextSnapshot = loop.contextSnapshot(),
+            reasoningContent = result.reasoningContent,
+            transcript = AgentConversationCodec.transcript(transcript, 0),
+        )
+    }
+
+    /** 对话模式没有工具：请求里不带工具，模型也就不会调用；万一调用了，AgentLoop 在执行前就停下。 */
+    private val NO_TOOLS = ToolExecutor { call -> error("对话模式没有工具：${call.name}") }
+
     private fun ModelConfig.validate() {
         require(baseUrl.isNotBlank()) { "请先配置 API 地址" }
         require(apiKey.isNotBlank() || ChatGptCodexRequest.isChatGpt(this)) { "请先配置 API Key" }
@@ -282,6 +367,10 @@ internal object AgentModelClient {
     ) {
         val effectiveReasoningEffort: ReasoningEffort
             get() = reasoningEffort ?: ReasoningEffort.fromLegacy(thinkingEnabled)
+
+        /** 服务商网页搜索只走 Responses 接口（和服务商详情页里「服务端网页搜索」开关出现的条件一致）。 */
+        fun supportsHostedWebSearch(): Boolean =
+            providerType == ProviderTypes.OPENAI_COMPATIBLE && openAiEndpointMode == OpenAiEndpointMode.RESPONSES
     }
 
     @Serializable

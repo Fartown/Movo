@@ -37,6 +37,9 @@ sealed interface AgentChatAction {
     data object CompactContext : AgentChatAction
     data object NavigateBack : AgentChatAction
     data class ReasoningEffortChanged(val effort: ReasoningEffort) : AgentChatAction
+    /** 切换 Agent / 对话模式（规范 8.2.2），从下一条消息生效。 */
+    data class InteractionModeChanged(val mode: io.github.fartown.movo.agent.model.InteractionMode) : AgentChatAction
+    data class ChatWebSearchChanged(val enabled: Boolean) : AgentChatAction
     data class ModelSelected(val modelId: String) : AgentChatAction
     data class SubmitMessage(val text: String) : AgentChatAction
     data object StopRun : AgentChatAction

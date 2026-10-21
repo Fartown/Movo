@@ -427,6 +427,7 @@ internal object DiagnosticTraceBuilder {
         "COMPACTION" -> "上下文压缩"
         "REPLY_REWRITE" -> "改写回复"
         "FOLLOW_UP_SUGGESTIONS" -> "推荐追问"
+        "PLAIN_CHAT" -> "对话模式"
         else -> purpose.lowercase()
     }
 

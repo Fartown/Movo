@@ -19,7 +19,8 @@ internal object ResponsesRequestBuilder {
 
         // 这些字段决定协议正确性、隐私边界和 Movo 本轮行为，必须由运行时最终写入。
         request.put("model", config.model)
-        request.put("instructions", instructions)
+        // 对话模式可能一条系统消息都没有（只把对话发给模型）：这时不写 instructions，也不拿默认文案补上。
+        if (instructions.isNotBlank()) request.put("instructions", instructions) else request.remove("instructions")
         request.put("input", input)
         request.put("stream", true)
         request.put("store", false)

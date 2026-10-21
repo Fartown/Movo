@@ -39,6 +39,38 @@ internal object AgentPromptBuilder {
         return messages
     }
 
+    /**
+     * 对话模式（[InteractionMode.CHAT]）的系统消息，方案 §3.2：只带用户在服务商里自己填的系统提示词（[config] 里已去掉默认文案）、
+     * 角色对话的人设、语音对话的简短回复段；没有 Movo 身份、工具用法、记忆、技能和环境信息。
+     */
+    fun buildChatSystemMessages(
+        config: AgentModelClient.ModelConfig,
+        roleplayContext: RoleplayRunContext? = null,
+        spokenReply: SpokenReply = SpokenReply.NONE,
+    ): JSONArray = JSONArray().also { messages ->
+        if (roleplayContext == null && config.systemPrompt.isNotBlank()) messages.put(systemMessage(config.systemPrompt))
+        roleplayContext?.personaMessage()?.let(messages::put)
+        spokenReplyMessage(spokenReply, roleplay = roleplayContext != null)?.let(messages::put)
+    }
+
+    /** 对话模式的完整请求：系统消息 + 投影成纯文字的历史（[ChatModeHistory]）+ 这次的话。 */
+    fun buildChatMessages(
+        config: AgentModelClient.ModelConfig,
+        prompt: String,
+        images: List<AgentModelClient.ModelImage>,
+        history: List<AgentModelClient.ConversationMessage>,
+        roleplayContext: RoleplayRunContext? = null,
+        spokenReply: SpokenReply = SpokenReply.NONE,
+    ): JSONArray {
+        val messages = buildChatSystemMessages(config, roleplayContext, spokenReply)
+        val responsesOrigin = ResponsesEphemeralState.origin(config)
+        ChatModeHistory.project(history).forEach { item ->
+            runCatching { AgentConversationCodec.toJsonObject(item, responsesOrigin) }.getOrNull()?.let(messages::put)
+        }
+        messages.put(AgentConversationCodec.userMessage(prompt, images))
+        return messages
+    }
+
     /** 「当前时间：2026-10-06 星期二 09:30（Asia/Shanghai，UTC+08:00）」。 */
     fun environmentLine(now: java.time.ZonedDateTime = java.time.ZonedDateTime.now()): String {
         val weekday = arrayOf("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")[now.dayOfWeek.value - 1]

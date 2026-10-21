@@ -108,9 +108,11 @@ internal class AgentLoop(
                             controller = runController,
                             onEvent = onEvent,
                             onProviderEvent = { attemptRound, providerEvent ->
-                                if (!purpose.allowsTools && (providerEvent is ProviderEvent.HostedToolStarted ||
+                                // 对话模式照常用服务商自带的联网搜索（跟随服务商开关）；只拦请求我们这边工具的调用。
+                                if (!purpose.allowsTools && (
+                                        providerEvent is ProviderEvent.HostedToolStarted && purpose != ProviderRequestPurpose.PLAIN_CHAT ||
                                         providerEvent is ProviderEvent.BlockStart && providerEvent.kind == AssistantBlockKind.TOOL_CALL)) {
-                                    throw AgentModelFailure("REPLY_REWRITE_TOOL_CALL", false, "改写回复时模型请求了工具，已停止；原回复未改变。")
+                                    throw unexpectedToolCall()
                                 }
                                 if (providerEvent is ProviderEvent.Usage) {
                                 roundInputTokens = providerEvent.contextInputTokens ?: roundInputTokens
@@ -153,9 +155,7 @@ internal class AgentLoop(
             runController.throwIfCancelled()
             val assistantMessage = providerResponse.assistantMessage
             val toolCalls = AgentConversationCodec.parseToolCalls(assistantMessage)
-            if (!purpose.allowsTools && toolCalls.isNotEmpty()) {
-                throw AgentModelFailure("REPLY_REWRITE_TOOL_CALL", false, "改写回复时模型请求了工具，已停止；原回复未改变。")
-            }
+            if (!purpose.allowsTools && toolCalls.isNotEmpty()) throw unexpectedToolCall()
             if (purpose == ProviderRequestPurpose.REPLY_REWRITE && providerResponse.stopReason != AssistantStopReason.END_TURN) {
                 throw AgentModelFailure("REPLY_REWRITE_INCOMPLETE", false, "模型未返回完整的改写回复；原回复未改变。")
             }
@@ -233,13 +233,19 @@ internal class AgentLoop(
             }
 
             publishTranscript()
-            if (purpose.allowsTools) context.compact(roundTools, final = true)
+            if (purpose.allowsTools || purpose == ProviderRequestPurpose.PLAIN_CHAT) context.compact(roundTools, final = true)
             onEvent(AgentEvent.RunFinished(round = round, contentChars = content.length))
             return Result(
                 content = content,
                 reasoningContent = reasoningSnapshot(),
             )
         }
+    }
+
+    private fun unexpectedToolCall(): AgentModelFailure = if (purpose == ProviderRequestPurpose.PLAIN_CHAT) {
+        AgentModelFailure("CHAT_MODE_TOOL_CALL", false, "对话模式下模型请求了工具，已停止；切回 Agent 模式才能使用工具。")
+    } else {
+        AgentModelFailure("REPLY_REWRITE_TOOL_CALL", false, "改写回复时模型请求了工具，已停止；原回复未改变。")
     }
 
     /** 给 [finishingTools] 里的工具加上可选的 [FINISH_REPLY_ARG]；其他工具原样不动。 */

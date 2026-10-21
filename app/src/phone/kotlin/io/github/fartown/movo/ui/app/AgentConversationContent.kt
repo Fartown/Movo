@@ -84,6 +84,8 @@ internal fun AgentConversationContent(
             when (action) {
                 AgentChatAction.NavigateBack -> onNavigateBack()
                 is AgentChatAction.ReasoningEffortChanged -> agentState.updateReasoningEffort(action.effort)
+                is AgentChatAction.InteractionModeChanged -> agentState.updateInteractionMode(action.mode)
+                is AgentChatAction.ChatWebSearchChanged -> agentState.updateChatWebSearch(action.enabled)
                 AgentChatAction.CompactContext -> agentState.compactCurrentContext()
                 is AgentChatAction.ModelSelected -> agentState.selectModel(action.modelId)
                 is AgentChatAction.SubmitMessage -> {

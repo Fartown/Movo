@@ -43,7 +43,11 @@ import io.github.fartown.movo.agent.model.AgentFileReference
 import io.github.fartown.movo.agent.model.AgentFileReferenceKind
 import io.github.fartown.movo.ui.components.movo.MovoConfirmDialog
 import io.github.fartown.movo.ui.components.movo.MovoPopover
+import io.github.fartown.movo.ui.components.movo.MovoPopoverDivider
 import io.github.fartown.movo.ui.components.movo.MovoPopoverItem
+import io.github.fartown.movo.ui.theme.MovoMotion
+import io.github.fartown.movo.agent.model.InteractionMode
+import androidx.compose.runtime.LaunchedEffect
 import io.github.fartown.movo.ui.components.movo.TextField
 import io.github.fartown.movo.ui.model.PendingFileReferenceUi
 import io.github.fartown.movo.ui.theme.MovoColors
@@ -72,9 +76,24 @@ internal fun AgentAttachmentPickerButton(
     onAttachFolder: (String) -> Unit,
     onAttachFilePath: (String) -> Unit,
     modifier: Modifier = Modifier,
+    interactionMode: InteractionMode = InteractionMode.AGENT,
+    /** 菜单顶部两行选模式（定稿 25-1）；执行中、编辑消息时不出。 */
+    showModeRows: Boolean = false,
+    onInteractionModeChange: (InteractionMode) -> Unit = {},
 ) {
     val context = LocalContext.current
     var showPopup by remember { mutableStateOf(false) }
+    // 单选：先更新 ✓，停留 `fast` + 160ms 再关闭（规范 9.3.1「单选」，同思考档位菜单）；等菜单淡出完再切换模式，
+    // 否则菜单还在时附件行先消失、标签先出现，菜单在输入框上方缩一下（真机 25 验收）。
+    var pendingMode by remember { mutableStateOf<InteractionMode?>(null) }
+    LaunchedEffect(pendingMode) {
+        val chosen = pendingMode ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(MovoMotion.FAST.toLong() + MovoMotion.MENU_CLOSE_DELAY)
+        showPopup = false
+        kotlinx.coroutines.delay(MovoMotion.FAST_EXIT.toLong())
+        pendingMode = null
+        if (chosen != interactionMode) onInteractionModeChange(chosen)
+    }
     var showPathDialog by remember { mutableStateOf(false) }
     var pathInput by remember { mutableStateOf("") }
     val photoPicker = rememberLauncherForActivityResult(
@@ -107,7 +126,7 @@ internal fun AgentAttachmentPickerButton(
             icon = MovoIcons.Plus,
             contentDescription = stringResource(R.string.ui_add_attachment_dba9e8),
             // 菜单开着时再点按钮是关闭（点按钮本身不算「点外面」，菜单不会自己关）。
-            onClick = { showPopup = !showPopup },
+            onClick = { if (pendingMode == null) showPopup = !showPopup },
         )
         // 附件菜单（`Popover/Menu`，出现在输入框上方）：点一项即关闭菜单并打开对应的选择器（规范 9.3.1「松手即执行」）。
         MovoPopover(
@@ -116,6 +135,24 @@ internal fun AgentAttachmentPickerButton(
             aboveYPx = popupAnchorTopPx,
             maxHeight = popupMaxHeight,
         ) {
+            if (showModeRows) {
+                val selected = pendingMode ?: interactionMode
+                MovoPopoverItem(
+                    label = stringResource(R.string.movo_mode_agent),
+                    caption = stringResource(R.string.movo_mode_agent_desc),
+                    icon = MovoIcons.MousePointerClick,
+                    selected = selected == InteractionMode.AGENT,
+                    onClick = { if (pendingMode == null) pendingMode = InteractionMode.AGENT },
+                )
+                MovoPopoverItem(
+                    label = stringResource(R.string.movo_mode_chat),
+                    caption = stringResource(R.string.movo_mode_chat_desc),
+                    icon = MovoIcons.MessageSquare,
+                    selected = selected == InteractionMode.CHAT,
+                    onClick = { if (pendingMode == null) pendingMode = InteractionMode.CHAT },
+                )
+                MovoPopoverDivider()
+            }
             MovoPopoverItem(
                 label = stringResource(R.string.attachment_image),
                 icon = MovoIcons.Image,
@@ -124,7 +161,8 @@ internal fun AgentAttachmentPickerButton(
                     photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                 },
             )
-            MovoPopoverItem(
+            // 文件、文件夹、路径要靠 Agent 的工具去读：对话模式里不出现（定稿 25-8）。
+            if (interactionMode == InteractionMode.AGENT) MovoPopoverItem(
                 label = stringResource(R.string.attachment_file),
                 icon = MovoIcons.File,
                 onClick = {
@@ -132,7 +170,7 @@ internal fun AgentAttachmentPickerButton(
                     filePicker.launch(arrayOf("*/*"))
                 },
             )
-            MovoPopoverItem(
+            if (interactionMode == InteractionMode.AGENT) MovoPopoverItem(
                 label = stringResource(R.string.attachment_folder),
                 icon = MovoIcons.Folder,
                 onClick = {
@@ -140,7 +178,7 @@ internal fun AgentAttachmentPickerButton(
                     folderPicker.launch(null)
                 },
             )
-            MovoPopoverItem(
+            if (interactionMode == InteractionMode.AGENT) MovoPopoverItem(
                 label = stringResource(R.string.attachment_enter_path),
                 icon = MovoIcons.Terminal,
                 onClick = {

@@ -66,6 +66,25 @@ class ConversationStorageRoundTripTest {
     }
 
     @Test
+    fun modeAndWebSearchSwitchComeBackFromTheMessages() = runBlocking {
+        // 定稿 25-9：模式取最后一条用户消息，联网取最后一条对话模式消息（中间切回过 Agent 也记得）。
+        val state = AgentChatHomeUiState(
+            messages = listOf(
+                UserMessageUi(id = "u1", content = "今天杭州天气", interactionMode = io.github.fartown.movo.agent.model.InteractionMode.CHAT, webSearch = true),
+                AgentMessageUi(id = "assistant-run-1-1", content = "多云，18～24 度。", isStreaming = false),
+                UserMessageUi(id = "u2", content = "帮我设个明早带伞的提醒"),
+                AgentMessageUi(id = "assistant-run-2-1", content = "好了。", isStreaming = false),
+            ),
+            input = "", isStreaming = false, thinkingEnabled = false,
+        )
+        ConversationStoreTestDriver.save(context, "c1", mapOf("c1" to state), mapOf("c1" to "天气"), mapOf("c1" to 1L))
+        val restored = ConversationStoreTestDriver.load(context).conversationsById.getValue("c1")
+        assertEquals(io.github.fartown.movo.agent.model.InteractionMode.AGENT, restored.interactionMode)
+        assertTrue(restored.chatWebSearch)
+        assertTrue(restored.messages.filterIsInstance<UserMessageUi>().first().webSearch)
+    }
+
+    @Test
     fun repeatedSavePreservesRoleBindingRevisionsPendingRewriteAndOriginalJournal() = runBlocking {
         val original = AgentModelClient.ConversationMessage(
             role = "assistant", content = "原始回答", messageId = "assistant-role-1",
