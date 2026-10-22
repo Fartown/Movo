@@ -1,5 +1,6 @@
 package io.github.fartown.movo.ui.components
 
+import io.github.fartown.movo.agent.model.InteractionMode
 import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.compose.animation.AnimatedContent
@@ -423,14 +424,28 @@ internal fun ChatMessageItem(
     stoppedWithoutWork: Boolean = false,
 ) {
     when (message) {
-        is UserMessageUi -> UserMessageBubble(
-            message = message,
-            actionsEnabled = messageActionsEnabled,
-            isEditing = isEditing,
-            onEdit = { onEditMessage(message.id) },
-            onDelete = { onDeleteMessage(message.id) },
-            modifier = modifier,
-        )
+        is UserMessageUi -> {
+            // 模式跟上一条用户消息不同：气泡上方插一行说明（`Message/ModeSwitch`，定稿 25-4 / 25-5），和气泡同一项，不另起列表项。
+            val switchedTo = LocalModeSwitches.current[message.id]
+            val bubble: @Composable (Modifier) -> Unit = { bubbleModifier ->
+                UserMessageBubble(
+                    message = message,
+                    actionsEnabled = messageActionsEnabled,
+                    isEditing = isEditing,
+                    onEdit = { onEditMessage(message.id) },
+                    onDelete = { onDeleteMessage(message.id) },
+                    modifier = bubbleModifier,
+                )
+            }
+            if (switchedTo == null) {
+                bubble(modifier)
+            } else {
+                Column(modifier) {
+                    ModeSwitchRow(switchedTo)
+                    bubble(Modifier)
+                }
+            }
+        }
         is AgentMessageUi -> AgentMessageBlock(
             message = message,
             retainedStreamingState = retainedStreamingState,
@@ -969,6 +984,7 @@ internal fun TurnSummaryBar(
     val status = when {
         summary.ending == WorkOutcome.Kind.Stopped -> stringResource(R.string.movo_work_stopped_steps, summary.toolCount)
         summary.ending == WorkOutcome.Kind.Unfinished -> stringResource(R.string.movo_work_unfinished_steps, summary.toolCount)
+        summary.searchOnly -> stringResource(R.string.movo_work_done_searches, summary.toolCount)
         summary.toolCount > 0 -> stringResource(R.string.movo_work_done_steps, summary.toolCount)
         summary.hasThinking && summary.thinkingSeconds > 0 -> stringResource(R.string.movo_thought_seconds, summary.thinkingSeconds)
         summary.hasThinking -> stringResource(R.string.movo_thought)
@@ -1698,6 +1714,49 @@ private fun Modifier.workStepConnector(progress: () -> Float = { 1f }): Modifier
 }
 
 // ── 用户消息：轻盈美观气泡 ──────────────────────────────────────────────
+
+/** 用户消息 id → 这条换成的模式（只有跟上一条用户消息不同的才在里面），由 [modeSwitchesOf] 算出。 */
+internal val LocalModeSwitches = androidx.compose.runtime.compositionLocalOf<Map<String, InteractionMode>> { emptyMap() }
+
+/** 按发出顺序比较相邻两条用户消息的模式；第一条不算切换（对话一开始就是对话模式时不插行）。 */
+internal fun modeSwitchesOf(messages: List<AgentChatMessageUi>): Map<String, InteractionMode> {
+    var previous: InteractionMode? = null
+    val result = HashMap<String, InteractionMode>()
+    messages.forEach { message ->
+        if (message !is UserMessageUi) return@forEach
+        if (previous != null && previous != message.interactionMode) result[message.id] = message.interactionMode
+        previous = message.interactionMode
+    }
+    return result
+}
+
+/**
+ * 切换处的说明行（`Message/ModeSwitch`，定稿 25-4 / 25-5）：左对齐边距线 20，16 图标 + 6 + `Label/Regular` 三级色；
+ * 上方比普通消息多 8，下方到气泡 16（气泡自带上 7）。
+ */
+@Composable
+private fun ModeSwitchRow(mode: InteractionMode) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = io.github.fartown.movo.ui.theme.MovoSpacing.pageEdge, end = io.github.fartown.movo.ui.theme.MovoSpacing.pageEdge, top = io.github.fartown.movo.ui.theme.MovoSpacing.sm, bottom = 9.dp)
+            .semantics(mergeDescendants = true) {},
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        io.github.fartown.movo.ui.theme.MovoIcon(
+            if (mode == InteractionMode.CHAT) io.github.fartown.movo.ui.theme.MovoIcons.MessageSquare else io.github.fartown.movo.ui.theme.MovoIcons.MousePointerClick,
+            null,
+            size = io.github.fartown.movo.ui.theme.MovoSize.iconSmall,
+            tint = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            stringResource(if (mode == InteractionMode.CHAT) R.string.movo_mode_switched_chat else R.string.movo_mode_switched_agent),
+            style = io.github.fartown.movo.ui.theme.MovoTypography.labelRegular,
+            color = io.github.fartown.movo.ui.theme.MovoColors.textTertiary,
+        )
+    }
+}
 
 @Composable
 private fun UserMessageBubble(

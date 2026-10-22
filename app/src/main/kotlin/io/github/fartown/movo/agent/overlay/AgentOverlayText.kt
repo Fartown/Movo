@@ -134,6 +134,8 @@ internal fun toolDisplayNameResource(name: String): Int? = when (name) {
     "app_state_control" -> R.string.tool_app_state_control
     "get_logcat" -> R.string.tool_get_logcat
     // 类型化工具子系统的工具名（悬浮层「第 N 步·动作」与诊断用）
+    // 服务商网页搜索没有我们这边的工具名，步骤名是 OpenAiResponsesProvider 写的中文，显示时按界面语言换。
+    io.github.fartown.movo.agent.model.OpenAiResponsesProvider.WEB_SEARCH_STEP_NAME -> R.string.tool_hosted_web_search
     "ui_observe" -> R.string.tool_observe_screen
     "ui_tap" -> R.string.tool_tap
     "ui_swipe" -> R.string.tool_swipe

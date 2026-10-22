@@ -18,6 +18,9 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
 
     override val id: String = "openai_responses"
 
+    /** 服务商网页搜索在执行卡里的步骤名（托管工具没有我们这边的工具名）。 */
+    const val WEB_SEARCH_STEP_NAME = "网页搜索"
+
     override val capabilities = ProviderCapabilities(
         endpoint = EndpointKind.RESPONSES,
         streamingText = true,
@@ -395,15 +398,15 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
                 "response.web_search_call.in_progress",
                 "response.web_search_call.searching" -> {
                     val itemId = event.hostedToolId("web_search")
-                    startHostedTool(itemId, "网页搜索")
+                    startHostedTool(itemId, WEB_SEARCH_STEP_NAME)
                 }
                 "response.web_search_call.completed" -> {
                     val itemId = event.hostedToolId("web_search")
-                    finishHostedTool(itemId, "网页搜索", success = true)
+                    finishHostedTool(itemId, WEB_SEARCH_STEP_NAME, success = true)
                 }
                 "response.web_search_call.failed" -> {
                     val itemId = event.hostedToolId("web_search")
-                    finishHostedTool(itemId, "网页搜索", success = false)
+                    finishHostedTool(itemId, WEB_SEARCH_STEP_NAME, success = false)
                 }
                 "response.completed", "response.incomplete", "response.failed" -> {
                     terminalType = type
@@ -500,7 +503,7 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
             }
         }
         hostedTools.filterValues { !it }.forEach { (id, _) ->
-            onEvent(ProviderEvent.HostedToolFinished(id, "网页搜索", success = true))
+            onEvent(ProviderEvent.HostedToolFinished(id, WEB_SEARCH_STEP_NAME, success = true))
         }
 
         parseUsage(finalResponse.optJSONObject("usage"))?.let { onEvent(ProviderEvent.Usage(it)) }
@@ -728,7 +731,7 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
             .ifBlank { "${fallbackPrefix}_${optInt("output_index", 0)}" }
 
     private fun String.hostedToolDisplayName(): String? = when (this) {
-        "web_search_call" -> "网页搜索"
+        "web_search_call" -> WEB_SEARCH_STEP_NAME
         "file_search_call" -> "文件搜索"
         "code_interpreter_call" -> "代码执行"
         "computer_call" -> "计算机操作"

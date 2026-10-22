@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.github.fartown.movo.data.model.ReasoningEffort
@@ -193,9 +194,15 @@ class DesignShotsTest {
     }
 
     @Composable
-    private fun composer(running: Boolean, text: String = "") {
+    private fun composer(
+        running: Boolean,
+        text: String = "",
+        mode: io.github.fartown.movo.agent.model.InteractionMode = io.github.fartown.movo.agent.model.InteractionMode.AGENT,
+        /** null = 服务商不支持网页搜索（不出「联网」）。 */
+        webSearch: Boolean? = null,
+    ) {
         AgentChatInputBar(
-            input = text, modelPickerState = AgentModelPickerUiState(), isCompacting = false,
+            input = text, modelPickerState = AgentModelPickerUiState(webSearchAvailable = webSearch != null), isCompacting = false,
             contextUsage = AgentContextUsageUi(40_000, 128_000), showContextUsage = !running && text.isEmpty(),
             isStreaming = running, reasoningEffort = ReasoningEffort.DEFAULT,
             availableReasoningEfforts = listOf(ReasoningEffort.OFF, ReasoningEffort.DEFAULT, ReasoningEffort.HIGH),
@@ -203,8 +210,48 @@ class DesignShotsTest {
             editHasLaterTurns = false, preserveFollowingMessages = false, onReasoningEffortChange = {},
             onCompactContext = {}, canCompactContext = false, onModelSelected = {}, onSubmit = {}, onStop = {},
             onAttachImage = {}, onRemoveImage = {}, onAttachFiles = {}, onAttachFolder = {}, onAttachFilePath = {},
-            onRemoveFileReference = {}, onCancelMessageEdit = {}, onToggleListen = {},
+            onRemoveFileReference = {}, onCancelMessageEdit = {}, onToggleListen = {}, interactionMode = mode,
+            chatWebSearch = webSearch == true,
         )
+    }
+
+    /** 定稿 25-9 / 25-10：对话模式的「联网」关 / 开 / 回答中（淡出、保留位置）；Agent 模式不出现。 */
+    @Test
+    fun chatWebSearch() = shot("25-chat-web") {
+        val chat = io.github.fartown.movo.agent.model.InteractionMode.CHAT
+        Column(Modifier.fillMaxSize().background(MovoColors.bgCanvas).padding(top = 56.dp), verticalArrangement = Arrangement.Bottom) {
+            Box(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp)) { composer(running = false, mode = chat, webSearch = false) }
+            Box(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp)) { composer(running = false, mode = chat, webSearch = true) }
+            Box(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp)) { composer(running = true, mode = chat, webSearch = true) }
+            Box(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp)) { composer(running = false, webSearch = true) }
+            // 25-11：360dp 宽的手机、对话里已有消息（有用量环）时带文字放不下，只留图标。
+            Box(Modifier.width(360.dp).padding(start = 20.dp, end = 20.dp, bottom = 8.dp)) { composer(running = false, mode = chat, webSearch = true) }
+        }
+    }
+
+    /** 定稿 25：切换处的说明行、对话标签（可点 / 回答中）。 */
+    @Test
+    fun chatMode() = shot("25-chat-mode") {
+        val chat = io.github.fartown.movo.agent.model.InteractionMode.CHAT
+        Column(Modifier.fillMaxSize().background(MovoColors.bgCanvas).padding(top = 56.dp), verticalArrangement = Arrangement.Top) {
+            androidx.compose.runtime.CompositionLocalProvider(
+                io.github.fartown.movo.ui.components.LocalModeSwitches provides mapOf(
+                    "u2" to chat, "u3" to io.github.fartown.movo.agent.model.InteractionMode.AGENT,
+                ),
+            ) {
+                ChatMessageItem(
+                    message = UserMessageUi("u2", "快递柜超时一般怎么收费？", interactionMode = chat),
+                    onSuggestionClick = {}, onRunTraceClick = {}, onOpenBrowser = {}, showBrowserShortcut = false,
+                )
+                ChatMessageItem(
+                    message = UserMessageUi("u3", "看看手机现在的电量"),
+                    onSuggestionClick = {}, onRunTraceClick = {}, onOpenBrowser = {}, showBrowserShortcut = false,
+                )
+            }
+            Box(Modifier.weight(1f))
+            Box(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp)) { composer(running = false, mode = chat) }
+            Box(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp)) { composer(running = true, mode = chat) }
+        }
     }
 
     @Test

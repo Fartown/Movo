@@ -3,6 +3,7 @@
 package io.github.fartown.movo.ui.pages.providers
 
 import io.github.fartown.movo.ui.components.movo.movoAnimateItem
+import io.github.fartown.movo.ui.components.localizedName
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -945,7 +946,7 @@ private fun ModelEditDialog(
                 )
                 if (reasoningEnabled) {
                     ReasoningEffortRow(
-                        title = ReasoningEffort.DEFAULT.displayName,
+                        title = ReasoningEffort.DEFAULT.localizedName(),
                         summary = stringResource(R.string.ui_determined_by_model_or_provider_06c326),
                         checked = true,
                         enabled = false,
@@ -954,7 +955,7 @@ private fun ModelEditDialog(
                     )
                     editableReasoningEfforts.forEachIndexed { index, effort ->
                         ReasoningEffortRow(
-                            title = effort.displayName,
+                            title = effort.localizedName(),
                             summary = if (effort == ReasoningEffort.OFF) {
                                 context.getString(R.string.page_allow_thinking_to_be_turned_off_during_conversations_5a32a9)
                             } else {

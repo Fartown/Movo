@@ -28,6 +28,7 @@ import io.github.fartown.movo.ui.components.LocalConversationSwitchFade
 import io.github.fartown.movo.ui.model.AgentChatAction
 import io.github.fartown.movo.ui.model.AgentChatUiState
 import io.github.fartown.movo.ui.model.AgentModelPickerUiState
+import io.github.fartown.movo.ui.model.UserMessageUi
 import io.github.fartown.movo.ui.share.ShareIntro
 import io.github.fartown.movo.ui.theme.LocalReducedMotion
 import io.github.fartown.movo.ui.theme.MovoMotion
@@ -202,6 +203,13 @@ private fun ChatBody(
             pendingFileReferences = state.pendingFileReferences,
             messageEdit = state.messageEdit,
             characterName = state.roleplay?.characterName,
+            // 编辑消息时按那条消息当时的模式重发，输入框的标签与占位也跟着它（规范 8.2.2）。
+            interactionMode = state.messageEdit?.let { edit ->
+                (state.messages.firstOrNull { it.id == edit.targetMessageId } as? UserMessageUi)?.interactionMode
+            } ?: state.interactionMode,
+            onInteractionModeChange = { onAction(AgentChatAction.InteractionModeChanged(it)) },
+            chatWebSearch = state.chatWebSearch,
+            onChatWebSearchChange = { onAction(AgentChatAction.ChatWebSearchChanged(it)) },
             onReasoningEffortChange = { onAction(AgentChatAction.ReasoningEffortChanged(it)) },
             onCompactContext = { onAction(AgentChatAction.CompactContext) },
             canCompactContext = state.canCompactContext,

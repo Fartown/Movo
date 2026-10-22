@@ -1,5 +1,6 @@
 package io.github.fartown.movo.ui.app
 
+import io.github.fartown.movo.agent.model.InteractionMode
 import io.github.fartown.movo.agent.model.AgentModelClient
 import io.github.fartown.movo.data.db.ConversationMessageEntity
 import io.github.fartown.movo.ui.model.AgentChatMessageUi
@@ -25,6 +26,10 @@ import org.json.JSONArray
 /** 旧版本给未命名对话存的标题；读出时当作没有标题。 */
 internal const val LEGACY_UNNAMED_CONVERSATION_TITLE = "新对话"
 
+/** 对话模式发出的用户消息在工具列里的标记（定稿 25）；「联网」开着时再记 `web_search`。 */
+internal const val USER_CHAT_MODE_EXTRA = "{\"interaction_mode\":\"chat\"}"
+internal const val USER_CHAT_MODE_WEB_EXTRA = "{\"interaction_mode\":\"chat\",\"web_search\":true}"
+
 internal fun AgentChatMessageUi.toConversationRow(
     conversationId: String,
     sortIndex: Long,
@@ -41,6 +46,12 @@ internal fun AgentChatMessageUi.toConversationRow(
             // 用户消息借用步骤时刻两列存这一轮的起止时刻（不改表结构）。
             startedAt = runStartedAtMillis,
             finishedAt = runFinishedAtMillis,
+            // 对话模式发出的消息借用工具列记模式（不改表结构；旧版本读到的仍是普通用户消息）。
+            toolsJson = when {
+                interactionMode != InteractionMode.CHAT -> "[]"
+                webSearch -> USER_CHAT_MODE_WEB_EXTRA
+                else -> USER_CHAT_MODE_EXTRA
+            },
         )
 
         is AgentMessageUi -> {
@@ -160,6 +171,12 @@ internal fun ConversationMessageEntity.toChatMessage(): AgentChatMessageUi? =
             isEdited = isEdited,
             runStartedAtMillis = startedAt,
             runFinishedAtMillis = finishedAt,
+            interactionMode = if (toolsJson == USER_CHAT_MODE_EXTRA || toolsJson == USER_CHAT_MODE_WEB_EXTRA) {
+                InteractionMode.CHAT
+            } else {
+                InteractionMode.AGENT
+            },
+            webSearch = toolsJson == USER_CHAT_MODE_WEB_EXTRA,
         )
 
         TYPE_ASSISTANT -> AgentMessageUi(

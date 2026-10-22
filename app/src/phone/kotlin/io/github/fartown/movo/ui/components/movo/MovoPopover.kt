@@ -187,6 +187,8 @@ internal fun MovoPopoverItem(
     icon: MovoIconData? = null,
     selected: Boolean? = null,
     enabled: Boolean = true,
+    /** 第二行说明（`Label/Regular` 次要色）：两行项上下 10、图标对齐第一行（同运行日志导出菜单，定稿 23 / 25）。 */
+    caption: String? = null,
 ) {
     val itemShape = RoundedCornerShape(MovoRadius.sm)
     val isSelected = selected == true
@@ -214,26 +216,49 @@ internal fun MovoPopoverItem(
                 onClick = onClick,
             )
             .then(if (selected != null) Modifier.semantics { this.selected = isSelected } else Modifier)
-            .padding(horizontal = MovoSpacing.md),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = MovoSpacing.md, vertical = if (caption != null) 10.dp else 0.dp),
+        verticalAlignment = if (caption != null) Alignment.Top else Alignment.CenterVertically,
     ) {
         if (icon != null) {
-            MovoIcon(icon, null, size = MovoSize.iconMedium, tint = tint)
+            MovoIcon(
+                icon, null, size = MovoSize.iconMedium, tint = tint,
+                modifier = if (caption != null) Modifier.padding(top = 1.dp) else Modifier,
+            )
             Spacer(Modifier.width(MovoSpacing.md))
         }
-        Text(
-            label,
-            style = MovoTypography.bodyRegular,
-            color = tint,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        if (caption == null) {
+            Text(
+                label,
+                style = MovoTypography.bodyRegular,
+                color = tint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        } else {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(label, style = MovoTypography.bodyRegular, color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(2.dp))
+                Text(caption, style = MovoTypography.labelRegular, color = MovoColors.textSecondary)
+            }
+        }
         if (selected != null) {
             Spacer(Modifier.width(MovoSpacing.sm))
             PopoverCheck(visible = isSelected)
         }
     }
+}
+
+/** 菜单里的分隔线：0.5 发丝线，左右 12、上下 4（同上下文用量浮层）。 */
+@Composable
+internal fun MovoPopoverDivider() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = MovoSpacing.md, vertical = MovoSpacing.xs)
+            .height(0.5.dp)
+            .background(MovoColors.borderHairline),
+    )
 }
 
 /**

@@ -1,5 +1,6 @@
 package io.github.fartown.movo.ui.components
 
+import io.github.fartown.movo.agent.model.InteractionMode
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -10,6 +11,8 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.expandVertically
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
@@ -42,6 +45,7 @@ import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -88,6 +92,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import io.github.fartown.movo.ui.components.movo.MovoCircleButton
@@ -151,6 +157,12 @@ internal fun AgentChatInputBar(
     onAttachFilePath: (String) -> Unit,
     onRemoveFileReference: (String) -> Unit,
     onCancelMessageEdit: () -> Unit,
+    /** Agent / 对话模式（规范 8.2.2）：入口在「+」菜单顶部，对话模式时文字行左侧出现「对话 ×」标签。 */
+    interactionMode: InteractionMode = InteractionMode.AGENT,
+    onInteractionModeChange: (InteractionMode) -> Unit = {},
+    /** 对话模式的「联网」开关（定稿 25-9）：服务商支持网页搜索时出现在思考按钮右边。 */
+    chatWebSearch: Boolean = false,
+    onChatWebSearchChange: (Boolean) -> Unit = {},
     isListening: Boolean = false,
     onToggleListen: (() -> Unit)? = null,
     dictationText: String? = null,
@@ -480,6 +492,20 @@ internal fun AgentChatInputBar(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Bottom,
             ) {
+                // 对话模式标签（`Composer/ModeTag`，定稿 25-2）：文字行第一项、对齐第一行；出现 / 消失横向展开 + 淡入 `fast`，
+                // 后面的文字跟着平移，不跳。回答中只作状态（去掉 ✕、不可点）。
+                AnimatedVisibility(
+                    visible = interactionMode == InteractionMode.CHAT,
+                    enter = expandHorizontally(MovoMotion.fast(), expandFrom = Alignment.Start) + fadeIn(MovoMotion.fast()),
+                    exit = shrinkHorizontally(MovoMotion.fastExit(), shrinkTowards = Alignment.Start) + fadeOut(MovoMotion.fastExit()),
+                    modifier = Modifier.align(Alignment.Top),
+                ) {
+                    ChatModeTag(
+                        removable = !isStreaming && !isEditingMessage,
+                        onRemove = { onInteractionModeChange(InteractionMode.AGENT) },
+                        modifier = Modifier.padding(start = MovoSpacing.sm, top = 2.dp),
+                    )
+                }
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -488,7 +514,12 @@ internal fun AgentChatInputBar(
                     contentAlignment = Alignment.TopStart,
                 ) {
                     val placeholderText = stringResource(
-                        if (isStreaming) R.string.movo_composer_placeholder_running else R.string.movo_composer_placeholder,
+                        when {
+                            interactionMode == InteractionMode.CHAT && isStreaming -> R.string.movo_composer_placeholder_chat_running
+                            interactionMode == InteractionMode.CHAT -> R.string.movo_composer_placeholder_chat
+                            isStreaming -> R.string.movo_composer_placeholder_running
+                            else -> R.string.movo_composer_placeholder
+                        },
                     )
                     // 编辑切换的残影：不参与测量（输入框高度按新内容走），超出部分裁掉。
                     if (settledEditing != isEditingMessage || swapProgress.isRunning) {
@@ -592,167 +623,205 @@ internal fun AgentChatInputBar(
 
             Spacer(Modifier.height(MovoSpacing.sm))
 
-            Row(
-                modifier = Modifier.fillMaxWidth().height(MovoSize.controlMedium),
-                horizontalArrangement = Arrangement.spacedBy(MovoSpacing.sm),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (voice.active) {
-                    // 退出语音 / 临时键盘输入 + 一行提示（Micro/Medium 三级色）；切换时原地淡入 `fast`。
-                    io.github.fartown.movo.ui.components.movo.MovoEntrance(shift = 0.dp, durationMillis = MovoMotion.FAST) {
-                        VoiceModeSplitControl(
-                            onExitVoice = onEndVoice,
-                            onKeyboardInput = ::enterText,
-                        )
-                    }
-                    io.github.fartown.movo.ui.components.movo.MovoEntrance(
-                        shift = 0.dp,
-                        durationMillis = MovoMotion.FAST,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text(
-                            text = voice.hint(isStreaming),
-                            style = MovoTypography.microMedium,
-                            color = MovoColors.textTertiary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                } else {
-                    // 编辑消息进出：左侧「+」↔「×」按图标切换（9.3「图标切换」）：旧的缩到 0.72 淡出、新的从 0.72 放大淡入，
-                    // 同时进行，不会先空几帧再跳出来。
-                    androidx.compose.animation.AnimatedContent(
-                        targetState = isEditingMessage,
-                        transitionSpec = {
-                            if (reducedMotion) {
-                                fadeIn(MovoMotion.fast()) togetherWith fadeOut(MovoMotion.fastExit())
-                            } else {
-                                (fadeIn(MovoMotion.fast()) + scaleIn(MovoMotion.fast(), initialScale = 0.72f)) togetherWith
-                                    (fadeOut(MovoMotion.fastExit()) + scaleOut(MovoMotion.fastExit(), targetScale = 0.72f))
-                            }.using(androidx.compose.animation.SizeTransform(clip = false))
-                        },
-                        contentAlignment = Alignment.Center,
-                        label = "composerLeading",
-                    ) { editing ->
-                        if (editing) {
-                            MovoCircleButton(
-                                icon = MovoIcons.X,
-                                contentDescription = stringResource(R.string.ui_cancel_edit_c698df),
-                                onClick = onCancelMessageEdit,
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val showWebSearchChip = interactionMode == InteractionMode.CHAT && modelPickerState.webSearchAvailable
+                // 左侧放不下时「思考」「联网」「监听」只留图标（定稿 25-11）。按带文字的宽度和空闲时右侧（用量环、模型、发送）算：
+                // 与当前是否只留图标、是否在回答无关，回答开始收起右侧按钮时不会来回切。
+                val compactToolbarChips = toolbarChipsOverflow(
+                    toolbarWidth = maxWidth,
+                    thinkingLabel = reasoningEffort.chipLabel().takeIf { availableReasoningEfforts.isNotEmpty() },
+                    showWebSearchChip = showWebSearchChip,
+                    showContextUsage = showContextUsage,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(MovoSize.controlMedium),
+                    horizontalArrangement = Arrangement.spacedBy(MovoSpacing.sm),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (voice.active) {
+                        // 退出语音 / 临时键盘输入 + 一行提示（Micro/Medium 三级色）；切换时原地淡入 `fast`。
+                        io.github.fartown.movo.ui.components.movo.MovoEntrance(shift = 0.dp, durationMillis = MovoMotion.FAST) {
+                            VoiceModeSplitControl(
+                                onExitVoice = onEndVoice,
+                                onKeyboardInput = ::enterText,
                             )
-                        } else {
-                            // 从语音切回文字时附件「+」原地淡入（首次出现时直接显示）。
-                            io.github.fartown.movo.ui.components.movo.MovoEntrance(play = cameFromVoice, shift = 0.dp, durationMillis = MovoMotion.FAST) {
-                                AgentAttachmentPickerButton(
-                                    popupAnchorTopPx = inputContainerTopPx,
-                                    popupMaxHeight = thinkingPopupMaxHeight,
-                                    onAttachImage = onAttachImage,
-                                    onAttachFiles = onAttachFiles,
-                                    onAttachFolder = onAttachFolder,
-                                    onAttachFilePath = onAttachFilePath,
+                        }
+                        io.github.fartown.movo.ui.components.movo.MovoEntrance(
+                            shift = 0.dp,
+                            durationMillis = MovoMotion.FAST,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(
+                                text = voice.hint(isStreaming),
+                                style = MovoTypography.microMedium,
+                                color = MovoColors.textTertiary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    } else {
+                        // 编辑消息进出：左侧「+」↔「×」按图标切换（9.3「图标切换」）：旧的缩到 0.72 淡出、新的从 0.72 放大淡入，
+                        // 同时进行，不会先空几帧再跳出来。
+                        androidx.compose.animation.AnimatedContent(
+                            targetState = isEditingMessage,
+                            transitionSpec = {
+                                if (reducedMotion) {
+                                    fadeIn(MovoMotion.fast()) togetherWith fadeOut(MovoMotion.fastExit())
+                                } else {
+                                    (fadeIn(MovoMotion.fast()) + scaleIn(MovoMotion.fast(), initialScale = 0.72f)) togetherWith
+                                        (fadeOut(MovoMotion.fastExit()) + scaleOut(MovoMotion.fastExit(), targetScale = 0.72f))
+                                }.using(androidx.compose.animation.SizeTransform(clip = false))
+                            },
+                            contentAlignment = Alignment.Center,
+                            label = "composerLeading",
+                        ) { editing ->
+                            if (editing) {
+                                MovoCircleButton(
+                                    icon = MovoIcons.X,
+                                    contentDescription = stringResource(R.string.ui_cancel_edit_c698df),
+                                    onClick = onCancelMessageEdit,
                                 )
+                            } else {
+                                // 从语音切回文字时附件「+」原地淡入（首次出现时直接显示）。
+                                io.github.fartown.movo.ui.components.movo.MovoEntrance(play = cameFromVoice, shift = 0.dp, durationMillis = MovoMotion.FAST) {
+                                    AgentAttachmentPickerButton(
+                                        popupAnchorTopPx = inputContainerTopPx,
+                                        popupMaxHeight = thinkingPopupMaxHeight,
+                                        onAttachImage = onAttachImage,
+                                        onAttachFiles = onAttachFiles,
+                                        onAttachFolder = onAttachFolder,
+                                        onAttachFilePath = onAttachFilePath,
+                                        interactionMode = interactionMode,
+                                        showModeRows = !isStreaming,
+                                        onInteractionModeChange = onInteractionModeChange,
+                                    )
+                                }
                             }
                         }
+                        AnimatedVisibility(
+                            visible = availableReasoningEfforts.isNotEmpty(),
+                            enter = fadeIn(MovoMotion.fast()),
+                            exit = fadeOut(MovoMotion.fastExit()),
+                        ) {
+                            // 运行中 / 编辑消息时「思考」照常淡出，但保留它的位置：后面的「监听」胶囊不会在淡出后左跳
+                            // （规范 9.0「界面不跳闪」、8.12 入口在「思考」之后）。隐藏期间不可点、不读屏。
+                            val hidden = isEditingMessage || isStreaming
+                            val thinkingAlpha by androidx.compose.animation.core.animateFloatAsState(
+                                targetValue = if (hidden) 0f else 1f,
+                                animationSpec = if (hidden) MovoMotion.fastExit() else MovoMotion.fast(),
+                                label = "thinkingChipAlpha",
+                            )
+                            ThinkingEffortChip(
+                                effort = reasoningEffort,
+                                options = availableReasoningEfforts,
+                                enabled = !hidden,
+                                popupAnchorTopPx = inputContainerTopPx,
+                                popupMaxHeight = thinkingPopupMaxHeight,
+                                onEffortChange = onReasoningEffortChange,
+                                iconOnly = compactToolbarChips,
+                                modifier = Modifier
+                                    .graphicsLayer { alpha = thinkingAlpha }
+                                    .then(if (hidden) Modifier.clearAndSetSemantics {} else Modifier),
+                            )
+                        }
+                        // 对话模式的「联网」（定稿 25-9）：切模式时横向展开 / 收起，后面的「监听」跟着平移、不跳。
+                        AnimatedVisibility(
+                            visible = showWebSearchChip,
+                            enter = expandHorizontally(MovoMotion.standard(), expandFrom = Alignment.Start) + fadeIn(MovoMotion.fast()),
+                            exit = shrinkHorizontally(MovoMotion.standard(), shrinkTowards = Alignment.Start) + fadeOut(MovoMotion.fastExit()),
+                        ) {
+                            // 和「思考」一样：回答中、编辑中淡出但保留位置。
+                            val hidden = isEditingMessage || isStreaming
+                            val webAlpha by androidx.compose.animation.core.animateFloatAsState(
+                                targetValue = if (hidden) 0f else 1f,
+                                animationSpec = if (hidden) MovoMotion.fastExit() else MovoMotion.fast(),
+                                label = "webChipAlpha",
+                            )
+                            WebSearchChip(
+                                enabled = chatWebSearch,
+                                clickable = !hidden,
+                                iconOnly = compactToolbarChips,
+                                onToggle = { onChatWebSearchChange(!chatWebSearch) },
+                                modifier = Modifier
+                                    .graphicsLayer { alpha = webAlpha }
+                                    .then(if (hidden) Modifier.clearAndSetSemantics {} else Modifier),
+                            )
+                        }
+                        // 后台监听入口（规范 8.12）：本对话有运行中的监听时出现；语音模式不在这个分支里，自然隐藏。
+                        AgentMonitorChip(popupAnchorTopPx = inputContainerTopPx, iconOnly = compactToolbarChips)
                     }
-                    AnimatedVisibility(
-                        visible = availableReasoningEfforts.isNotEmpty(),
-                        enter = fadeIn(MovoMotion.fast()),
-                        exit = fadeOut(MovoMotion.fastExit()),
-                    ) {
-                        // 运行中 / 编辑消息时「思考」照常淡出，但保留它的位置：后面的「监听」胶囊不会在淡出后左跳
-                        // （规范 9.0「界面不跳闪」、8.12 入口在「思考」之后）。隐藏期间不可点、不读屏。
-                        val hidden = isEditingMessage || isStreaming
-                        val thinkingAlpha by androidx.compose.animation.core.animateFloatAsState(
-                            targetValue = if (hidden) 0f else 1f,
-                            animationSpec = if (hidden) MovoMotion.fastExit() else MovoMotion.fast(),
-                            label = "thinkingChipAlpha",
+
+                    if (!voice.active) Spacer(modifier = Modifier.weight(1f))
+
+                    // 手动压缩也是一轮执行：压缩中留着用量环，浮层里显示「正在压缩…」。
+                    if (showContextUsage && (!isStreaming || isCompacting) && !voice.active) {
+                        AgentContextUsageButton(
+                            usage = contextUsage,
+                            onCompact = onCompactContext,
+                            canCompact = canCompactContext,
+                            isCompacting = isCompacting,
+                            popupAnchorTopPx = inputContainerTopPx,
                         )
-                        ThinkingEffortChip(
-                            effort = reasoningEffort,
-                            options = availableReasoningEfforts,
-                            enabled = !hidden,
+                    }
+                    if (!isStreaming && !voice.active) {
+                        AgentModelPickerButton(
+                            state = modelPickerState,
+                            isStreaming = false,
                             popupAnchorTopPx = inputContainerTopPx,
                             popupMaxHeight = thinkingPopupMaxHeight,
-                            onEffortChange = onReasoningEffortChange,
-                            modifier = Modifier
-                                .graphicsLayer { alpha = thinkingAlpha }
-                                .then(if (hidden) Modifier.clearAndSetSemantics {} else Modifier),
+                            onModelSelected = onModelSelected,
                         )
                     }
-                    // 后台监听入口（规范 8.12）：本对话有运行中的监听时出现；语音模式不在这个分支里，自然隐藏。
-                    AgentMonitorChip(popupAnchorTopPx = inputContainerTopPx)
-                }
-
-                if (!voice.active) Spacer(modifier = Modifier.weight(1f))
-
-                // 手动压缩也是一轮执行：压缩中留着用量环，浮层里显示「正在压缩…」。
-                if (showContextUsage && (!isStreaming || isCompacting) && !voice.active) {
-                    AgentContextUsageButton(
-                        usage = contextUsage,
-                        onCompact = onCompactContext,
-                        canCompact = canCompactContext,
-                        isCompacting = isCompacting,
-                        popupAnchorTopPx = inputContainerTopPx,
-                    )
-                }
-                if (!isStreaming && !voice.active) {
-                    AgentModelPickerButton(
-                        state = modelPickerState,
-                        isStreaming = false,
-                        popupAnchorTopPx = inputContainerTopPx,
-                        popupMaxHeight = thinkingPopupMaxHeight,
-                        onModelSelected = onModelSelected,
-                    )
-                }
-                // 语音模式下同一个状态机：Agent 忙（执行 / 回答播报）= 停止 ■；播报时 ■ 即停止这次回答。
-                val voiceBusy = voice.active && (isStreaming || voice.speaking)
-                if (voice.active) AutoSendRing(pending = voice.autoSendPending, generation = voice.autoSendGeneration) {
-                    MainActionButton(
-                        running = voiceBusy,
-                        hasContent = false,
-                        contentDescription = stringResource(
-                            if (isStreaming) R.string.movo_main_stop else R.string.movo_main_stop_speaking,
-                        ),
+                    // 语音模式下同一个状态机：Agent 忙（执行 / 回答播报）= 停止 ■；播报时 ■ 即停止这次回答。
+                    val voiceBusy = voice.active && (isStreaming || voice.speaking)
+                    if (voice.active) AutoSendRing(pending = voice.autoSendPending, generation = voice.autoSendGeneration) {
+                        MainActionButton(
+                            running = voiceBusy,
+                            hasContent = false,
+                            contentDescription = stringResource(
+                                if (isStreaming) R.string.movo_main_stop else R.string.movo_main_stop_speaking,
+                            ),
+                            onClick = {
+                                dispatchVoiceModeStop(
+                                    isStreaming = isStreaming,
+                                    isSpeaking = voice.speaking,
+                                    onStopStreaming = onStop,
+                                    onStopSpeaking = onStopSpeaking,
+                                )
+                            },
+                        )
+                    } else MainActionButton(
+                        running = isStreaming,
+                        hasContent = canSend,
+                        paused = runControls.isPaused,
+                        contentDescription = when {
+                            runControls.isPaused && !canSend -> stringResource(R.string.movo_main_resume)
+                            isStreaming && !canSend -> stringResource(R.string.movo_main_stop)
+                            isStreaming || queued.busy -> stringResource(R.string.movo_main_supplement)
+                            isEditingMessage && preserveFollowingMessages -> "保存消息"
+                            else -> stringResource(R.string.movo_main_send)
+                        },
                         onClick = {
-                            dispatchVoiceModeStop(
-                                isStreaming = isStreaming,
-                                isSpeaking = voice.speaking,
-                                onStopStreaming = onStop,
-                                onStopSpeaking = onStopSpeaking,
-                            )
+                            // 正在听时直接点发送 = 先停止再发送（已识别的文字随这次发送）。
+                            if (dictation.listening) dictation.cancel()
+                            when {
+                                canSend -> {
+                                    val text = textFieldState.text.toString()
+                                    // 新的一轮（不是执行中的补充、编辑重发或带附件）：文字按 Q1 飞成用户气泡。
+                                    val start = textLineRect
+                                    if (chatFlight != null && start != null && !isStreaming && !queued.busy && !isEditingMessage &&
+                                        pendingImages.isEmpty() && pendingFileReferences.isEmpty()
+                                    ) {
+                                        chatFlight.launch(text, start, filled = false)
+                                    }
+                                    onSubmit(text)
+                                }
+                                runControls.isPaused -> runControls.onResume()
+                                isStreaming -> onStop()
+                            }
                         },
                     )
-                } else MainActionButton(
-                    running = isStreaming,
-                    hasContent = canSend,
-                    paused = runControls.isPaused,
-                    contentDescription = when {
-                        runControls.isPaused && !canSend -> stringResource(R.string.movo_main_resume)
-                        isStreaming && !canSend -> stringResource(R.string.movo_main_stop)
-                        isStreaming || queued.busy -> stringResource(R.string.movo_main_supplement)
-                        isEditingMessage && preserveFollowingMessages -> "保存消息"
-                        else -> stringResource(R.string.movo_main_send)
-                    },
-                    onClick = {
-                        // 正在听时直接点发送 = 先停止再发送（已识别的文字随这次发送）。
-                        if (dictation.listening) dictation.cancel()
-                        when {
-                            canSend -> {
-                                val text = textFieldState.text.toString()
-                                // 新的一轮（不是执行中的补充、编辑重发或带附件）：文字按 Q1 飞成用户气泡。
-                                val start = textLineRect
-                                if (chatFlight != null && start != null && !isStreaming && !queued.busy && !isEditingMessage &&
-                                    pendingImages.isEmpty() && pendingFileReferences.isEmpty()
-                                ) {
-                                    chatFlight.launch(text, start, filled = false)
-                                }
-                                onSubmit(text)
-                            }
-                            runControls.isPaused -> runControls.onResume()
-                            isStreaming -> onStop()
-                        }
-                    },
-                )
+                }
             }
         }
     }
@@ -827,6 +896,66 @@ private val LineButtonTouchInset = 6.dp
  * 只扩热区、不占布局：内层按 [start] / [end] / [vertical] 加大后测量与响应点击，对外只报告原来的尺寸，
  * 多出来的部分向四周溢出（外层不裁切，点击命中照常落到内层）。
  */
+/**
+ * 对话模式标签（`Composer/ModeTag`，定稿 25-2）：高 28、圆角 14、Indigo 浅底；16 message-square + 4 +「对话」`Label/Medium` + 4 + 16 ✕，
+ * 都是 Indigo 深色；左 8 右 6（不可点时没有 ✕，右 10）。点按回到 Agent；热区上下各扩 8 到 44（溢出，不占布局）。
+ */
+@Composable
+private fun ChatModeTag(
+    removable: Boolean,
+    onRemove: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val shape = RoundedCornerShape(14.dp)
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val reduced = io.github.fartown.movo.ui.theme.LocalReducedMotion.current
+    val scale by animateFloatAsState(
+        targetValue = if (pressed && !reduced) 0.95f else 1f,
+        animationSpec = if (pressed) MovoMotion.instant() else MovoMotion.fast(),
+        label = "chatModeTagScale",
+    )
+    val description = stringResource(if (removable) R.string.movo_mode_tag_desc else R.string.movo_mode_chat)
+    val vertical = (MovoSize.touchTarget - 28.dp) / 2
+    Box(
+        modifier = modifier
+            .expandedTouchArea(start = 0.dp, end = 0.dp, vertical = vertical)
+            .then(
+                if (removable) {
+                    Modifier.clickable(
+                        interactionSource = interaction,
+                        indication = null,
+                        role = androidx.compose.ui.semantics.Role.Button,
+                        onClick = onRemove,
+                    )
+                } else {
+                    Modifier
+                },
+            )
+            .semantics(mergeDescendants = true) { contentDescription = description }
+            .padding(vertical = vertical),
+    ) {
+        Row(
+            modifier = Modifier
+                .height(28.dp)
+                .graphicsLayer { scaleX = scale; scaleY = scale }
+                .clip(shape)
+                .background(MovoColors.indigoBg)
+                .animateContentSize(MovoMotion.fast())
+                .padding(start = MovoSpacing.sm, end = if (removable) 6.dp else 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MovoIcon(MovoIcons.MessageSquare, null, size = MovoSize.iconSmall, tint = MovoColors.indigoFg)
+            Spacer(Modifier.width(MovoSpacing.xs))
+            Text(stringResource(R.string.movo_mode_chat), style = MovoTypography.labelMedium, color = MovoColors.indigoFg, maxLines = 1)
+            if (removable) {
+                Spacer(Modifier.width(MovoSpacing.xs))
+                MovoIcon(MovoIcons.X, null, size = MovoSize.iconSmall, tint = MovoColors.indigoFg)
+            }
+        }
+    }
+}
+
 internal fun Modifier.expandedTouchArea(start: Dp, end: Dp, vertical: Dp): Modifier = layout { measurable, constraints ->
     val s = start.roundToPx()
     val e = end.roundToPx()
@@ -1084,6 +1213,124 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMainActionGlyph
     }
 }
 
+/** 工具栏芯片的左右内边距：只留图标时正好是 40 圆（12 + 16 + 12）。 */
+internal val ToolbarChipIconPadding = 12.dp
+
+/**
+ * 工具栏芯片的文字部分：只留图标时（定稿 25-11）先淡出再由芯片外层的 animateContentSize 收窄，
+ * 宽度只由外层过渡、这里不另起尺寸动画。[trailing] 补齐芯片原来的右内边距（思考 16、监听 14）。
+ */
+@Composable
+internal fun ToolbarChipLabel(visible: Boolean, trailing: Dp, content: @Composable () -> Unit) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(MovoMotion.fast()),
+        exit = fadeOut(MovoMotion.fastExit()),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.width(6.dp))
+            content()
+            Spacer(Modifier.width(trailing))
+        }
+    }
+}
+
+/** 本对话运行中的监听数（和「监听」入口出现的条件一致）。 */
+@Composable
+private fun conversationMonitorCount(): Int {
+    val conversationId = LocalMonitorConversationId.current ?: return 0
+    val all by io.github.fartown.movo.agent.monitor.MonitorRegistry.active.collectAsState()
+    return all.count { it.conversationId == conversationId }
+}
+
+/**
+ * 工具栏带文字时放不下：左侧「+」与各胶囊（带文字）+ 空闲时的右侧（用量环、模型、发送，各 40）超过工具栏宽度。
+ * 只有一个胶囊或没有胶囊时不收（没有可省的）。
+ */
+@Composable
+private fun toolbarChipsOverflow(
+    toolbarWidth: Dp,
+    thinkingLabel: String?,
+    showWebSearchChip: Boolean,
+    showContextUsage: Boolean,
+): Boolean {
+    val monitors = conversationMonitorCount()
+    val labels = buildList {
+        thinkingLabel?.let { add(it to 4.dp) }
+        if (showWebSearchChip) add(stringResource(R.string.movo_chat_web_search) to 4.dp)
+        if (monitors > 0) {
+            val label = if (monitors > 1) stringResource(R.string.monitor_chip_count, monitors) else stringResource(R.string.monitor_chip)
+            add(label to 2.dp)
+        }
+    }
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    if (labels.size < 2) return false
+    val gap = MovoSpacing.sm
+    val chips = labels.fold(0.dp) { sum, (label, trailing) ->
+        val text = with(density) { measurer.measure(label, MovoTypography.labelMedium).size.width.toDp() }
+        sum + gap + ToolbarChipIconPadding * 2 + MovoSize.iconSmall + 6.dp + text + trailing
+    }
+    val rightButtons = if (showContextUsage) 3 else 2
+    // 「+」、各胶囊、右侧按钮之间都隔 8；左右之间的弹性空白也占一个间距。
+    val needed = ChatInputActionSize + chips + gap + (gap + ChatInputActionSize) * rightButtons
+    return needed > toolbarWidth
+}
+
+/**
+ * 对话模式的「联网」开关 `Chip/Web`（定稿 25-9～25-12）：骨架与「思考」相同；关 = 透明底 + 描边 + 二级色，
+ * 开 = Indigo 浅底；点一下切换，底色、描边与文字颜色 `fast`（9.3.1「芯片开关」）。
+ */
+@Composable
+private fun WebSearchChip(
+    enabled: Boolean,
+    clickable: Boolean,
+    iconOnly: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val reduced = LocalReducedMotion.current
+    val chipShape = RoundedCornerShape(MovoRadius.lg)
+    val contentColor by animateColorAsState(
+        if (enabled) MovoColors.indigoFg else MovoColors.textSecondary,
+        MovoMotion.fast(),
+        label = "web_content",
+    )
+    val chipBg by animateColorAsState(
+        if (enabled) MovoColors.indigoBg else Color.Transparent,
+        MovoMotion.fast(),
+        label = "web_bg",
+    )
+    val chipBorder by animateColorAsState(
+        if (enabled) Color.Transparent else MovoColors.borderStrong,
+        MovoMotion.fast(),
+        label = "web_border",
+    )
+    val label = stringResource(R.string.movo_chat_web_search)
+    val stateDescription = stringResource(if (enabled) R.string.movo_chat_web_search_on else R.string.movo_chat_web_search_off)
+    Row(
+        modifier = modifier
+            .height(MovoSize.controlMedium)
+            .movoClickable(PressKind.Solid, shape = chipShape, enabled = clickable, onClick = onToggle)
+            .clip(chipShape)
+            .background(chipBg)
+            .border(1.dp, chipBorder, chipShape)
+            .animateContentSize(if (reduced) snap() else MovoMotion.standard())
+            .padding(horizontal = ToolbarChipIconPadding)
+            .semantics {
+                contentDescription = label
+                this.stateDescription = stateDescription
+                role = androidx.compose.ui.semantics.Role.Switch
+            },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        MovoIcon(MovoIcons.Globe, null, size = MovoSize.iconSmall, tint = contentColor)
+        ToolbarChipLabel(visible = !iconOnly, trailing = 4.dp) {
+            Text(label, style = MovoTypography.labelMedium, color = contentColor, maxLines = 1)
+        }
+    }
+}
+
 /**
  * 思考芯片（规范 8 组件表）：高 40；关 = 透明底 + 1 宽 border/strong +「思考」次要色；默认 = Indigo 浅底 +「思考」；
  * 指定档位 = Indigo 浅底，只显示档位名。关 ↔ 开：底色、描边（淡出）、图标与文字颜色 `fast`（9.3.1「芯片开关」）；
@@ -1098,6 +1345,7 @@ private fun ThinkingEffortChip(
     popupAnchorTopPx: Int,
     popupMaxHeight: Dp,
     onEffortChange: (ReasoningEffort) -> Unit,
+    iconOnly: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var showPopup by remember { mutableStateOf(false) }
@@ -1132,6 +1380,7 @@ private fun ThinkingEffortChip(
         label = "thinking_border",
     )
     val chipLabel = effort.chipLabel()
+    val effortDescription = stringResource(R.string.chat_reasoning_effort, effort.localizedName())
     Box(modifier = modifier) {
         Row(
             modifier = Modifier
@@ -1151,22 +1400,23 @@ private fun ThinkingEffortChip(
                 .border(1.dp, chipBorder, chipShape)
                 // 换档时宽度变化 `standard`（规范 9.3「思考芯片」）；减少动画时直接到位。
                 .animateContentSize(if (reduced) snap() else MovoMotion.standard())
-                .padding(start = 12.dp, end = 16.dp)
-                .semantics { contentDescription = "思考强度：${effort.chipLabelPlain()}" },
+                .padding(horizontal = ToolbarChipIconPadding)
+                .semantics { contentDescription = effortDescription },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             MovoIcon(MovoIcons.Atom, null, size = MovoSize.iconSmall, tint = contentColor)
-            Spacer(Modifier.width(6.dp))
-            AnimatedContent(
-                targetState = chipLabel,
-                transitionSpec = {
-                    (fadeIn(MovoMotion.fast()) togetherWith fadeOut(MovoMotion.fastExit()))
-                        // 宽度只由外层 animateContentSize 过渡，这里不再另起一个尺寸动画。
-                        .using(null)
-                },
-                label = "thinking_label",
-            ) { label ->
-                Text(label, style = MovoTypography.labelMedium, color = contentColor, maxLines = 1)
+            ToolbarChipLabel(visible = !iconOnly, trailing = 4.dp) {
+                AnimatedContent(
+                    targetState = chipLabel,
+                    transitionSpec = {
+                        (fadeIn(MovoMotion.fast()) togetherWith fadeOut(MovoMotion.fastExit()))
+                            // 宽度只由外层 animateContentSize 过渡，这里不再另起一个尺寸动画。
+                            .using(null)
+                    },
+                    label = "thinking_label",
+                ) { label ->
+                    Text(label, style = MovoTypography.labelMedium, color = contentColor, maxLines = 1)
+                }
             }
         }
         io.github.fartown.movo.ui.components.movo.MovoPopover(
@@ -1178,7 +1428,7 @@ private fun ThinkingEffortChip(
             val selected = pendingEffort ?: effort
             options.forEach { option ->
                 io.github.fartown.movo.ui.components.movo.MovoPopoverItem(
-                    label = option.displayName,
+                    label = option.localizedName(),
                     selected = option == selected,
                     onClick = { if (pendingEffort == null) pendingEffort = option },
                 )
@@ -1295,7 +1545,13 @@ private fun ReasoningEffort.chipLabel(): String = when (this) {
     ReasoningEffort.MAX -> stringResource(R.string.movo_effort_max)
 }
 
-private fun ReasoningEffort.chipLabelPlain(): String = displayName
+/** 档位的完整名称（档位菜单、读屏、模型设置页），跟界面语言走；`displayName` 是协议里的英文名。 */
+@Composable
+internal fun ReasoningEffort.localizedName(): String = when (this) {
+    ReasoningEffort.OFF -> stringResource(R.string.movo_effort_off)
+    ReasoningEffort.DEFAULT -> stringResource(R.string.movo_effort_default)
+    else -> chipLabel()
+}
 
 /** 语音模式工具栏中间的提示（规范 8.3）；控制器给出的说明（如已记下待发送）优先。 */
 @Composable

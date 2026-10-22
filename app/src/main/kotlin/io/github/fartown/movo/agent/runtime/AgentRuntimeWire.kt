@@ -186,6 +186,8 @@ internal object AgentRuntimeWire {
         val voiceSessionId: String = "",
         /** 由谁发起：空 = 用户；[ORIGIN_MONITOR] = 后台监听事件唤醒，忙时不得取代正在执行的任务。 */
         val origin: String = "",
+        /** 这一轮的模式（规范 8.2.2）：对话模式只把对话发给模型；监听唤醒的一轮总是 Agent。 */
+        val interactionMode: io.github.fartown.movo.agent.model.InteractionMode = io.github.fartown.movo.agent.model.InteractionMode.AGENT,
     ) {
         val isMonitorOrigin: Boolean get() = origin == ORIGIN_MONITOR
 
@@ -327,6 +329,7 @@ internal object AgentRuntimeWire {
         putString("operation", request.operation)
         putString("voice_session_id", request.voiceSessionId)
         putString("origin", request.origin)
+        putString("interaction_mode", request.interactionMode.wireValue)
         request.rewriteTargetMessageId?.let { putString("rewrite_target_message_id", it) }
         request.config.contextWindow?.let { putInt(KEY_CONTEXT_WINDOW, it) }
         AgentWireText.put(this, KEY_SYSTEM_PROMPT, request.config.systemPrompt, payloadDirectory)
@@ -446,6 +449,7 @@ internal object AgentRuntimeWire {
             modelSessionId = bundle.getString(KEY_MODEL_SESSION_ID).orEmpty(),
             voiceSessionId = bundle.getString("voice_session_id").orEmpty(),
             origin = bundle.getString("origin").orEmpty(),
+            interactionMode = io.github.fartown.movo.agent.model.InteractionMode.fromWire(bundle.getString("interaction_mode")),
             config = AgentModelClient.ModelConfig(
                 providerId = bundle.getString(KEY_PROVIDER_ID).orEmpty(),
                 providerName = bundle.getString(KEY_PROVIDER_NAME).orEmpty(),

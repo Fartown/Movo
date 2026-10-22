@@ -15,6 +15,8 @@ internal data class AgentModelPickerUiState(
     val isChanging: Boolean = false,
     /** 已按模型设置算过一次；首次加载前为 false，避免「未配置模型」提示在启动时闪一下。 */
     val loaded: Boolean = false,
+    /** 当前模型的服务商支持网页搜索（Responses 接口的 web_search）：对话模式才出现「联网」开关（定稿 25-9）。 */
+    val webSearchAvailable: Boolean = false,
 ) {
     /** 没有任何可用模型（没有已启用、带凭据、含已启用模型的服务商）：输入框上方提示去配置（7.3），模型按钮置灰。 */
     val missingModel: Boolean

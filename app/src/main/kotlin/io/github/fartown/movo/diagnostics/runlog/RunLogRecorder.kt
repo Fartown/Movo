@@ -37,6 +37,7 @@ internal object RunLogRecorder {
             put("effort", config.effectiveReasoningEffort.name)
             put("voice", request.spokenReply.name)
             put("monitor", request.isMonitorOrigin)
+            put("mode", request.interactionMode.wireValue)
         }
     }
 

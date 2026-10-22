@@ -20,10 +20,15 @@ import org.json.JSONObject
  */
 @Keep
 internal object VoiceInstrumentationAccess {
-    fun begin(context: Context): String? {
+    fun begin(
+        context: Context,
+        /** 新对话用的模式：对话模式下的语音验收（定稿 25）先切到对话再开语音。 */
+        interactionMode: io.github.fartown.movo.agent.model.InteractionMode = io.github.fartown.movo.agent.model.InteractionMode.AGENT,
+    ): String? {
         val state = AgentAppSession.get(context)
         val previous = state.conversationPaneState.selectedConversationId
         state.createConversation()
+        state.updateInteractionMode(interactionMode)
         VoiceEntry.startFromSystemEntry(context, autoListen = true)
         return previous
     }

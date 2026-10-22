@@ -27,6 +27,20 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [36])
 class AgentRuntimeWireTest {
     @Test
+    fun chatModeSurvivesTheWire() {
+        val request = AgentRuntimeWire.RunRequest(
+            runId = "chat-1", prompt = "你好", images = emptyList(),
+            config = AgentModelClient.ModelConfig(baseUrl = "https://example.invalid", apiKey = "test", model = "test", systemPrompt = "",
+                reasoningEffort = ReasoningEffort.OFF),
+            interactionMode = io.github.fartown.movo.agent.model.InteractionMode.CHAT,
+        )
+        assertEquals(request, AgentRuntimeWire.runRequestFromBundle(AgentRuntimeWire.toLegacyBundle(request)))
+        // 旧版本发来的请求没有这一项：按 Agent。
+        val legacy = AgentRuntimeWire.toLegacyBundle(request).apply { remove("interaction_mode") }
+        assertEquals(io.github.fartown.movo.agent.model.InteractionMode.AGENT, AgentRuntimeWire.runRequestFromBundle(legacy).interactionMode)
+    }
+
+    @Test
     fun replyRewriteTargetSurvivesRequestResultAndDrain() {
         val request = AgentRuntimeWire.RunRequest(
             runId = "rewrite-1", prompt = "原回复", images = emptyList(),
