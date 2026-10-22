@@ -90,7 +90,11 @@ class VoiceAcceptanceInstrumentation : Instrumentation() {
                 oldConversation = if (mode == "overlay_voice_fixture" || mode == "running_voice_boundary_fixture") {
                     VoiceInstrumentationAccess.beginFixture(targetContext)
                 } else {
-                    VoiceInstrumentationAccess.begin(targetContext)
+                    // `-e interaction_mode chat`：在对话模式的新对话里跑（定稿 25），默认 Agent。
+                    VoiceInstrumentationAccess.begin(
+                        targetContext,
+                        io.github.fartown.movo.agent.model.InteractionMode.fromWire(options.getString("interaction_mode")),
+                    )
                 }
             }
             stage("after_voice_begin")

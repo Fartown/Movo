@@ -503,7 +503,7 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
             }
         }
         hostedTools.filterValues { !it }.forEach { (id, _) ->
-            onEvent(ProviderEvent.HostedToolFinished(id, "网页搜索", success = true))
+            onEvent(ProviderEvent.HostedToolFinished(id, WEB_SEARCH_STEP_NAME, success = true))
         }
 
         parseUsage(finalResponse.optJSONObject("usage"))?.let { onEvent(ProviderEvent.Usage(it)) }
@@ -731,7 +731,7 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
             .ifBlank { "${fallbackPrefix}_${optInt("output_index", 0)}" }
 
     private fun String.hostedToolDisplayName(): String? = when (this) {
-        "web_search_call" -> "网页搜索"
+        "web_search_call" -> WEB_SEARCH_STEP_NAME
         "file_search_call" -> "文件搜索"
         "code_interpreter_call" -> "代码执行"
         "computer_call" -> "计算机操作"

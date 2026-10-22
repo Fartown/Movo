@@ -229,6 +229,7 @@
   <string name="overlay_resume">继续</string>
   <string name="tool_observe_screen">观察屏幕</string>
   <string name="tool_tap">点击</string>
+  <string name="tool_hosted_web_search">网页搜索</string>
   <string name="tool_tap_element">点击元素</string>
   <string name="tool_long_press">长按</string>
   <string name="tool_long_press_element">长按元素</string>
