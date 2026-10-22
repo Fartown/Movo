@@ -50,6 +50,33 @@ class ChatModeLiveBackendTest {
         roundTrip(config(ProviderTypes.ANTHROPIC, anthropicBaseUrl, ""))
     }
 
+    /** 对话模式开联网、真的搜了网，再切回 Agent：历史里带着 web_search_call / reasoning 原始项，不能 400（定稿 25-9）。 */
+    @Test
+    fun responsesWebSearchThenAgent() {
+        assumeTrue(baseUrl.isNotBlank() && apiKey.isNotBlank() && model.isNotBlank())
+        val config = config(ProviderTypes.OPENAI_COMPATIBLE, baseUrl, OpenAiEndpointMode.RESPONSES)
+        val prompt = "请先联网搜索，再用一句话告诉我今天国际新闻里的一条标题。"
+        val chat = AgentModelClient.complete(
+            config = config.copy(hostedWebSearchEnabled = true),
+            prompt = prompt,
+            history = agentTurn,
+            interactionMode = InteractionMode.CHAT,
+            toolExecutor = { error("对话模式不应执行本地工具") },
+        )
+        assertTrue("对话模式联网回答为空", chat.content.isNotBlank())
+        val searched = chat.transcript.any { it.responsesOutputJson.contains("web_search_call") }
+        println("live web search: searched=$searched answer=${chat.content.take(80)}")
+        assertTrue("这一轮没有触发网页搜索，测不到带搜索记录的历史", searched)
+        val agent = AgentModelClient.complete(
+            config = config,
+            prompt = "不用调用工具，直接告诉我：顺丰那个要在几点前取？",
+            history = agentTurn + AgentModelClient.ConversationMessage(role = "user", content = prompt) + chat.transcript,
+            typedCatalog = TestToolCatalog::build,
+            toolExecutor = { AgentModelClient.ToolResult("{\"ok\":false,\"error\":\"本测试不执行工具\"}") },
+        )
+        assertTrue("切回 Agent 后接不上上下文：${agent.content}", agent.content.contains("18"))
+    }
+
     private fun roundTrip(config: AgentModelClient.ModelConfig) {
         assumeTrue(baseUrl.isNotBlank() && apiKey.isNotBlank() && model.isNotBlank())
         // 1. Agent → 对话：历史里有工具调用和工具结果，这一轮不带工具。
