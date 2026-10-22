@@ -89,7 +89,7 @@
   <string name="movo_enhance_group_status">Status</string>
   <string name="movo_enhance_footer_1">Enable Movo in LSPosed and check its scope. The connection may remain after the module is turned off.</string>
   <string name="movo_enhance_footer_2">Whether it takes effect depends on the target process loading the hook.</string>
-  <string name="movo_drawer_settings_summary">Models, voice, tools and permissions</string>
+  <string name="movo_drawer_settings_summary">Models, voice, tools &amp; access</string>
   <string name="movo_drawer_empty_hint">Say something on the home page and it shows up here</string>
   <string name="movo_drawer_roleplay">%1$s · Roleplay</string>
   <string name="movo_drawer_clear_search">Clear search</string>
@@ -153,6 +153,8 @@
   <string name="movo_notice_chat_mode_files_desc">Files are read by Agent tools. Remove them, or send in Agent mode.</string>
   <string name="movo_home_story_start">The story starts here</string>
   <string name="movo_thinking">Thinking</string>
+  <string name="movo_effort_off">Off</string>
+  <string name="movo_effort_default">Default</string>
   <string name="movo_effort_minimal">Minimal</string>
   <string name="movo_effort_low">Low</string>
   <string name="movo_effort_medium">Medium</string>

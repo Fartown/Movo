@@ -152,6 +152,8 @@
   <string name="movo_notice_chat_mode_files_desc">文件要靠 Agent 的工具去读：先移除文件，或留在 Agent 发送。</string>
   <string name="movo_home_story_start">故事从这里开始</string>
   <string name="movo_thinking">思考</string>
+  <string name="movo_effort_off">关闭</string>
+  <string name="movo_effort_default">默认</string>
   <string name="movo_effort_minimal">极低</string>
   <string name="movo_effort_low">低</string>
   <string name="movo_effort_medium">中</string>

@@ -271,7 +271,8 @@ internal fun AgentMonitorChip(
                                 ),
                                 style = MovoTypography.labelRegular,
                                 color = MovoColors.textSecondary,
-                                maxLines = 1,
+                                // 12 小时制（「下午12:21」）时一行放不下：换行，不截断。
+                                maxLines = 2,
                             )
                         }
                         Spacer(Modifier.width(12.dp))

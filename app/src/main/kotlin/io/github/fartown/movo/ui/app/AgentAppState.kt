@@ -1510,6 +1510,9 @@ internal class AgentAppState(
             userHistoryMessage = userHistoryMessage,
             messages = messages,
             state = homeState.copy(
+                // 编辑重发：两份记录一起退回到这一轮之前。只退 journal 时，编辑第一轮（前缀为空）会被
+                // launchConversationRun 当成「没有 journal」退回整段旧历史，旧问答留在记录里，之后重新生成又发给模型。
+                history = editBoundary?.historyPrefix ?: homeState.history,
                 journal = editBoundary?.journalPrefix ?: homeState.journal,
                 input = remainingDraft,
                 pendingImages = emptyList(),
@@ -1718,7 +1721,8 @@ internal class AgentAppState(
             history = boundary.historyPrefix,
             userHistoryMessage = userHistoryMessage,
             messages = homeState.messages.take(boundary.userMessageIndex + 1),
-            state = homeState.copy(journal = boundary.journalPrefix),
+            // 与编辑重发同理：两份记录一起退回到这一轮之前。
+            state = homeState.copy(history = boundary.historyPrefix, journal = boundary.journalPrefix),
             reasoningEffort = homeState.reasoningEffort,
             interactionMode = turnMessage.interactionMode,
             webSearch = turnMessage.webSearch,

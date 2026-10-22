@@ -1380,6 +1380,7 @@ private fun ThinkingEffortChip(
         label = "thinking_border",
     )
     val chipLabel = effort.chipLabel()
+    val effortDescription = stringResource(R.string.chat_reasoning_effort, effort.localizedName())
     Box(modifier = modifier) {
         Row(
             modifier = Modifier
@@ -1400,7 +1401,7 @@ private fun ThinkingEffortChip(
                 // 换档时宽度变化 `standard`（规范 9.3「思考芯片」）；减少动画时直接到位。
                 .animateContentSize(if (reduced) snap() else MovoMotion.standard())
                 .padding(horizontal = ToolbarChipIconPadding)
-                .semantics { contentDescription = "思考强度：${effort.chipLabelPlain()}" },
+                .semantics { contentDescription = effortDescription },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             MovoIcon(MovoIcons.Atom, null, size = MovoSize.iconSmall, tint = contentColor)
@@ -1427,7 +1428,7 @@ private fun ThinkingEffortChip(
             val selected = pendingEffort ?: effort
             options.forEach { option ->
                 io.github.fartown.movo.ui.components.movo.MovoPopoverItem(
-                    label = option.displayName,
+                    label = option.localizedName(),
                     selected = option == selected,
                     onClick = { if (pendingEffort == null) pendingEffort = option },
                 )
@@ -1544,7 +1545,13 @@ private fun ReasoningEffort.chipLabel(): String = when (this) {
     ReasoningEffort.MAX -> stringResource(R.string.movo_effort_max)
 }
 
-private fun ReasoningEffort.chipLabelPlain(): String = displayName
+/** 档位的完整名称（档位菜单、读屏、模型设置页），跟界面语言走；`displayName` 是协议里的英文名。 */
+@Composable
+internal fun ReasoningEffort.localizedName(): String = when (this) {
+    ReasoningEffort.OFF -> stringResource(R.string.movo_effort_off)
+    ReasoningEffort.DEFAULT -> stringResource(R.string.movo_effort_default)
+    else -> chipLabel()
+}
 
 /** 语音模式工具栏中间的提示（规范 8.3）；控制器给出的说明（如已记下待发送）优先。 */
 @Composable
