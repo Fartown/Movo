@@ -32,10 +32,13 @@ fun javaStringLiteral(value: String): String = "\"" + value
     .replace("\r", "\\r")
     .replace("\t", "\\t") + "\""
 
-val releaseStoreFile = System.getenv("MOVO_RELEASE_STORE_FILE")
-val releaseStorePassword = System.getenv("MOVO_RELEASE_STORE_PASSWORD")
-val releaseKeyAlias = System.getenv("MOVO_RELEASE_KEY_ALIAS")
-val releaseKeyPassword = System.getenv("MOVO_RELEASE_KEY_PASSWORD")
+// Release signing: CI passes MOVO_RELEASE_* as environment variables; locally they can live in .env
+// (same precedence as the packaged model values). A relative store path resolves from the repo root.
+val releaseStoreFile = packagedModelValue("MOVO_RELEASE_STORE_FILE").takeIf { it.isNotBlank() }
+    ?.let { rootProject.file(it).path }
+val releaseStorePassword = packagedModelValue("MOVO_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = packagedModelValue("MOVO_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = packagedModelValue("MOVO_RELEASE_KEY_PASSWORD")
 val hasReleaseSigning = listOf(
     releaseStoreFile,
     releaseStorePassword,
