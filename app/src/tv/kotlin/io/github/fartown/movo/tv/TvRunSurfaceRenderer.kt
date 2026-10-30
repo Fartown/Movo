@@ -86,6 +86,5 @@ internal object TvRunSurfaceRenderer : RunSurfaceRenderer {
         onApprove: () -> Unit,
         onDecline: () -> Unit,
         onAnswer: (text: String, optionIndex: Int?) -> Unit,
-        onCancel: () -> Unit,
     ) = Unit
 }

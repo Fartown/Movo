@@ -9,10 +9,12 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -60,6 +62,8 @@ internal data class MovoMenuItem(
     val destructive: Boolean = false,
     val enabled: Boolean = true,
     val confirmIcon: MovoIconData? = null,
+    /** 标签下一行小字说明（`Label/Regular` 次要色，间距 2）；有说明的项上下各 10，高度随内容。 */
+    val description: String? = null,
     val onClick: () -> Unit,
 )
 
@@ -126,7 +130,7 @@ internal fun MovoPopoverMenu(
                     Row(
                         modifier = Modifier
                             .widthIn(min = MenuMinWidth - MovoSpacing.lg)
-                            .height(MovoSize.touchTarget)
+                            .then(if (item.description == null) Modifier.height(MovoSize.touchTarget) else Modifier.heightIn(min = MovoSize.touchTarget))
                             .clip(itemShape)
                             .movoClickable(PressKind.Row, shape = itemShape, enabled = item.enabled) {
                                 if (confirmedIndex >= 0) return@movoClickable
@@ -138,7 +142,7 @@ internal fun MovoPopoverMenu(
                                     item.onClick()
                                 }
                             }
-                            .padding(horizontal = MovoSpacing.md),
+                            .padding(horizontal = MovoSpacing.md, vertical = if (item.description == null) 0.dp else 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         // 图标状态切换：交叉淡化 + 缩放 0.72 ↔ 1，`fast`（规范 9.3.1）；✓ 用 Green（完成）。
@@ -158,7 +162,15 @@ internal fun MovoPopoverMenu(
                             }
                         }
                         Spacer(Modifier.width(MovoSpacing.md))
-                        Text(item.label, style = MovoTypography.bodyRegular, color = tint)
+                        val description = item.description
+                        if (description == null) {
+                            Text(item.label, style = MovoTypography.bodyRegular, color = tint)
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(item.label, style = MovoTypography.bodyRegular, color = tint)
+                                Text(description, style = MovoTypography.labelRegular, color = MovoColors.textSecondary)
+                            }
+                        }
                     }
                 }
             }

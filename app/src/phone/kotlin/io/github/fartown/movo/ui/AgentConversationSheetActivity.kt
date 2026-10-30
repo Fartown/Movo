@@ -247,6 +247,7 @@ internal class AgentConversationSheetActivity : ComponentActivity() {
                         LaunchedEffect(ready, autoListen, keyguardGate.locked) {
                             if (ready && autoListen && !keyguardGate.locked) {
                                 autoListen = false
+                                agentState.useAgentForSystemVoiceEntry()
                                 startVoiceInput()
                             }
                         }

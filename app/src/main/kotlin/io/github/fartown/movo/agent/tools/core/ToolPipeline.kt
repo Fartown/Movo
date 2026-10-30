@@ -82,6 +82,12 @@ internal class ToolPipeline(
         return runCatching { tool.stepTitle(args, currentEnvironment) }.getOrNull()?.takeIf { it.isNotBlank() }
     }
 
+    override fun readOnly(toolCall: AgentModelClient.ToolCall): Boolean? {
+        val tool = registry.find(toolCall.name) ?: return null
+        val args = runCatching { ToolArgs.parse(toolCall.argumentsJson) }.getOrNull() ?: return null
+        return runCatching { tool.risk(args, currentEnvironment) == Risk.READ }.getOrNull()
+    }
+
     override fun unavailableReason(toolName: String): Pair<String, String>? {
         val tool = registry.find(toolName) ?: return null
         val env = currentEnvironment.let { snapshot -> runCatching { refreshSwitches(snapshot) }.getOrDefault(snapshot) }

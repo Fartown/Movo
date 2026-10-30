@@ -162,6 +162,8 @@ internal fun AgentAppRoot(
     }
     var conversationRenameTarget by remember { mutableStateOf<ConversationSummaryUi?>(null) }
     var conversationDeleteTarget by remember { mutableStateOf<ConversationSummaryUi?>(null) }
+    // 删除确认框的说明按打开时定：关闭淡出时目标已清空，跟着它变会让说明在淡出中换一句。
+    var conversationDeleteRunning by remember { mutableStateOf(false) }
     var conversationExportTarget by remember { mutableStateOf<ConversationSummaryUi?>(null) }
     // 需要用户知情的失败（规范 8.11「不用 Toast」）：`Dialog/Info`，标题写哪件事没成，说明写原因。成功不再提示。
     var failureNotice by remember { mutableStateOf<AppFailureNotice?>(null) }
@@ -336,6 +338,7 @@ internal fun AgentAppRoot(
             },
             onConversationDelete = { conversation ->
                 conversationDeleteTarget = conversation
+                conversationDeleteRunning = conversation.isActiveRun
             },
             onOpenSettings = { pushRoute(AppRoute.Settings) },
             settingsAttention = agentState.permissionHealthState.attentionLabel(
@@ -829,7 +832,10 @@ internal fun AgentAppRoot(
     MovoConfirmDialog(
         show = conversationDeleteTarget != null,
         title = stringResource(R.string.conversation_delete_title),
-        message = stringResource(R.string.conversation_delete_message),
+        // 任务还在跑时写明会一起结束（删除时会先停掉它）。
+        message = stringResource(
+            if (conversationDeleteRunning) R.string.conversation_delete_message_running else R.string.conversation_delete_message,
+        ),
         confirmText = stringResource(R.string.action_delete),
         destructive = true,
         onDismissRequest = { conversationDeleteTarget = null },

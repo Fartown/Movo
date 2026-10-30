@@ -31,7 +31,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +45,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
@@ -63,6 +67,7 @@ import io.github.fartown.movo.ui.theme.MovoRadius
 import io.github.fartown.movo.ui.theme.MovoSize
 import io.github.fartown.movo.ui.theme.MovoSpacing
 import io.github.fartown.movo.ui.theme.MovoTypography
+import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Text
 
 /**
@@ -70,7 +75,8 @@ import top.yukonga.miuix.kmp.basic.Text
  *
  * 由 [AgentInteractionUiState] 驱动：审批卡（手动审批模式，只有允许 / 拒绝，灰底块下写为什么问你；
  * 付款深色确认，定稿 16、19）、提问卡（选项 + 可选自由文本），以及解锁提示（前向兼容）。
- * 作答经回调回传给正在等待的 run；用户点遮罩或取消按取消处理（审批=拒绝、提问=拒绝，安全侧）。
+ * 作答经回调回传给正在等待的 run。点遮罩、按返回都不算作答（定稿 26-5）：卡片左右轻晃一下提示要先回答，
+ * 审批只有点「拒绝」才拒绝；不想答可以等超时，或在通知里结束任务。
  */
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
@@ -79,7 +85,6 @@ internal fun AgentInteractionCard(
     onApprove: () -> Unit,
     onDecline: () -> Unit,
     onAnswer: (text: String, optionIndex: Int?) -> Unit,
-    onCancel: () -> Unit,
 ) {
     val transition = remember { MutableTransitionState(false) }
     transition.targetState = state != null
@@ -89,9 +94,11 @@ internal fun AgentInteractionCard(
     if (state != null) shown.value = state
     val model = shown.value ?: return
     val reduced = LocalReducedMotion.current
+    val nudge = rememberCardNudge()
+    CardArrivalHaptic(state?.requestId)
 
     Dialog(
-        onDismissRequest = onCancel,
+        onDismissRequest = nudge::play,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
         val window = (LocalView.current.parent as? DialogWindowProvider)?.window
@@ -113,7 +120,7 @@ internal fun AgentInteractionCard(
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                            onClick = onCancel,
+                            onClick = nudge::play,
                         ),
                 )
             }
@@ -129,6 +136,7 @@ internal fun AgentInteractionCard(
                     onApprove = onApprove,
                     onDecline = onDecline,
                     onAnswer = onAnswer,
+                    modifier = Modifier.graphicsLayer { translationX = nudge.offsetPx },
                 )
             }
         }
@@ -137,7 +145,7 @@ internal fun AgentInteractionCard(
 
 /**
  * 悬浮态内容（系统悬浮窗里用，不走 Dialog）：轻度压暗遮罩（目标应用仍可见）+ 底部锚定的卡体（复用 [InteractionCardBody]）。
- * 跨应用操作时由 Service 的悬浮窗宿主渲染；点遮罩=取消。背景（目标应用）不动。
+ * 跨应用操作时由 Service 的悬浮窗宿主渲染；点遮罩不作答、卡片轻晃一下（定稿 26-5）。背景（目标应用）不动。
  */
 @Composable
 internal fun AgentInteractionOverlayContent(
@@ -145,8 +153,9 @@ internal fun AgentInteractionOverlayContent(
     onApprove: () -> Unit,
     onDecline: () -> Unit,
     onAnswer: (text: String, optionIndex: Int?) -> Unit,
-    onCancel: () -> Unit,
 ) {
+    val nudge = rememberCardNudge()
+    CardArrivalHaptic(model.requestId)
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -155,11 +164,11 @@ internal fun AgentInteractionOverlayContent(
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-                onClick = onCancel,
+                onClick = nudge::play,
             ),
         contentAlignment = Alignment.BottomCenter,
     ) {
-        // 卡体区域吞掉点击，避免点卡片空白处穿透到遮罩触发取消。
+        // 卡体区域吞掉点击，点卡片空白处不算点到遮罩。
         Box(
             modifier = Modifier.clickable(
                 interactionSource = remember { MutableInteractionSource() },
@@ -167,10 +176,66 @@ internal fun AgentInteractionOverlayContent(
                 onClick = {},
             ),
         ) {
-            InteractionCardBody(model, onApprove, onDecline, onAnswer)
+            InteractionCardBody(
+                model, onApprove, onDecline, onAnswer,
+                modifier = Modifier.graphicsLayer { translationX = nudge.offsetPx },
+            )
         }
     }
 }
+
+/**
+ * 点到遮罩时卡片左右轻晃一下（±6，`fast`，定稿 26-5）：告诉用户要先回答，不收起、不作答。减少动画时不晃。
+ */
+@Stable
+internal class CardNudge(
+    private val scope: kotlinx.coroutines.CoroutineScope,
+    private val density: Float,
+    private val reduced: Boolean,
+) {
+    private val offset = androidx.compose.animation.core.Animatable(0f)
+    val offsetPx: Float get() = offset.value * density
+
+    fun play() {
+        if (reduced) return
+        scope.launch {
+            offset.snapTo(0f)
+            offset.animateTo(0f, androidx.compose.animation.core.keyframes {
+                durationMillis = MovoMotion.FAST
+                NUDGE_DP at MovoMotion.FAST / 4
+                -NUDGE_DP at MovoMotion.FAST * 3 / 4
+            })
+        }
+    }
+
+    private companion object {
+        const val NUDGE_DP = 6f
+    }
+}
+
+@Composable
+internal fun rememberCardNudge(): CardNudge {
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current.density
+    val reduced = LocalReducedMotion.current
+    return remember(scope, density, reduced) { CardNudge(scope, density, reduced) }
+}
+
+/**
+ * 卡片弹出时短震一次（同长按触感，定稿 26-5）：在别的应用里也能察觉 Movo 在等你。
+ * 每张卡只震一次：卡片在悬浮窗和 App 内之间迁移时不再震（两处宿主都在主进程，按请求 id 记）。
+ */
+@Composable
+private fun CardArrivalHaptic(requestId: String?) {
+    val view = LocalView.current
+    LaunchedEffect(requestId) {
+        if (requestId == null || requestId == lastHapticRequestId) return@LaunchedEffect
+        lastHapticRequestId = requestId
+        view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+    }
+}
+
+private var lastHapticRequestId: String? = null
 
 @Composable
 internal fun InteractionCardBody(
@@ -178,10 +243,11 @@ internal fun InteractionCardBody(
     onApprove: () -> Unit,
     onDecline: () -> Unit,
     onAnswer: (String, Int?) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val shape = RoundedCornerShape(MovoRadius.xl)
     Column(
-        modifier = Modifier
+        modifier = modifier
             .padding(horizontal = MovoSpacing.lg)
             .navigationBarsPadding()
             .imePadding()

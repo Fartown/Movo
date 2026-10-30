@@ -155,14 +155,12 @@ internal object PhoneRunSurfaceRenderer : RunSurfaceRenderer {
         onApprove: () -> Unit,
         onDecline: () -> Unit,
         onAnswer: (text: String, optionIndex: Int?) -> Unit,
-        onCancel: () -> Unit,
     ) {
         AgentInteractionOverlayContent(
             model = model,
             onApprove = onApprove,
             onDecline = onDecline,
             onAnswer = onAnswer,
-            onCancel = onCancel,
         )
     }
 }

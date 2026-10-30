@@ -252,6 +252,10 @@ internal class AgentAppState(
     @androidx.annotation.VisibleForTesting
     internal val loadedConversationIdsForTests: Set<String> get() = conversationsById.keys
 
+    /** 测试用：已经请求停止的任务。 */
+    @androidx.annotation.VisibleForTesting
+    internal val stopRequestedRunIdsForTests: Set<String> get() = stopRequestedRunIds.toSet()
+
     private fun isKnownConversation(conversationId: String) =
         conversationId in conversationsById || conversationId in storedConversationIds
 
@@ -1014,6 +1018,12 @@ internal class AgentAppState(
         updateCurrentConversation(homeState.copy(interactionMode = mode))
     }
 
+    /**
+     * 唤醒词、长按悬浮球开始的语音一律用 Agent（规范 8.2.2）：语音模式下看不到「对话」标签，
+     * 这时说的多半是要它去做的事。在输入框里点声波不走这里，沿用当前模式。
+     */
+    fun useAgentForSystemVoiceEntry() = updateInteractionMode(InteractionMode.AGENT)
+
     /** 对话模式的「联网」开关（定稿 25-9）：从下一条消息生效，回答中不能切；跟着对话记住（按最后一条对话模式消息恢复）。 */
     fun updateChatWebSearch(enabled: Boolean) {
         if (homeState.isStreaming || homeState.chatWebSearch == enabled) return
@@ -1165,6 +1175,8 @@ internal class AgentAppState(
     }
 
     fun deleteConversation(conversationId: String) {
+        // 这个对话的任务还在跑（含暂停）就一起结束：否则对话删了，Agent 还在操作手机，App 里也找不到停止键。
+        if (currentRunId?.let(runConversationIds::get) == conversationId) stopCurrentRun("app.delete_conversation")
         // 完整运行日志随对话一起删除。
         io.github.fartown.movo.diagnostics.runlog.RunLog.deleteConversation(conversationId)
         forgetMonitorsOf(conversationId)
@@ -1681,10 +1693,20 @@ internal class AgentAppState(
         persistConversations()
     }
 
-    fun regenerateMessage(messageId: String) {
+    /** 重新生成 / 重试会从头再做一遍的步骤（定稿 26-1）；有的话界面先弹危险确认。角色对话没有设备操作。 */
+    fun turnDeviceOperations(messageId: String): List<io.github.fartown.movo.ui.model.ToolActivityMessageUi> =
+        if (homeState.roleplay != null) emptyList()
+        else AgentConversationRevisionReducer.deviceOperations(homeState, messageId)
+
+    /**
+     * 重新生成这一轮。[mode] 不为空时是「⋯」里的「换成 Agent 重做 / 换成对话重答」（定稿 26-2）：
+     * 这一轮的用户消息改记成新模式（切换说明行照常由相邻两条用户消息推导），对话的当前模式也跟着切过去。
+     */
+    fun regenerateMessage(messageId: String, mode: InteractionMode? = null) {
         if (homeState.isStreaming || homeState.messageEdit != null) return
         val conversationId = selectedConversationId ?: return
         if (homeState.roleplay != null) {
+            if (mode != null) return
             val target = homeState.messages.filterIsInstance<AgentMessageUi>().firstOrNull { it.id == messageId } ?: return
             val prefix = RoleplayConversationReducer.rewriteHistory(homeState, messageId) ?: return
             val runId = "run-${UUID.randomUUID()}"
@@ -1699,7 +1721,10 @@ internal class AgentAppState(
         }
         // 回到这一轮里用户自己说的话（跳过运行中并入的监听事件行）；事件轮没有用户原话，界面上也不提供这个按钮。
         val boundary = AgentConversationRevisionReducer.regenerationBoundary(homeState, messageId) ?: return
-        val turnMessage = boundary.userMessage ?: return
+        val turnMessage = boundary.userMessage?.let { original ->
+            if (mode == null || mode == original.interactionMode) original
+            else original.copy(interactionMode = mode, webSearch = homeState.sendsWithWebSearch(mode))
+        } ?: return
         val images = turnMessage.images.mapIndexed { index, dataUrl ->
             PendingImageUi(
                 id = "regenerate-${turnMessage.id}-$index",
@@ -1720,9 +1745,13 @@ internal class AgentAppState(
             images = images,
             history = boundary.historyPrefix,
             userHistoryMessage = userHistoryMessage,
-            messages = homeState.messages.take(boundary.userMessageIndex + 1),
+            messages = homeState.messages.take(boundary.userMessageIndex) + turnMessage,
             // 与编辑重发同理：两份记录一起退回到这一轮之前。
-            state = homeState.copy(history = boundary.historyPrefix, journal = boundary.journalPrefix),
+            state = homeState.copy(
+                history = boundary.historyPrefix,
+                journal = boundary.journalPrefix,
+                interactionMode = mode ?: homeState.interactionMode,
+            ),
             reasoningEffort = homeState.reasoningEffort,
             interactionMode = turnMessage.interactionMode,
             webSearch = turnMessage.webSearch,

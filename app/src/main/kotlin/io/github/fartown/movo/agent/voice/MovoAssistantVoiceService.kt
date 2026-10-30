@@ -129,7 +129,10 @@ internal class MovoAssistantVoiceService : Service(), VoiceSessionOwner.ServiceH
         fun showAssistant(context: Context, autoListen: Boolean) {
             if (FlavorModule.surfaces.showAssistant(context, autoListen)) return
             if (VoiceSurfaceTracker.chatVisible) {
-                if (autoListen) VoiceEntry.startInPlace(context)
+                if (autoListen) {
+                    io.github.fartown.movo.ui.app.AgentAppSession.peek()?.useAgentForSystemVoiceEntry()
+                    VoiceEntry.startInPlace(context)
+                }
                 return
             }
             runCatching {

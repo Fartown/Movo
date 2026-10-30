@@ -17,12 +17,17 @@ import io.github.fartown.movo.R
 import io.github.fartown.movo.core.AndroidAgentLogger
 import io.github.fartown.movo.core.safeLogType
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 
 /**
  * 只在用户任务存活期间持有前台执行生命周期；进程被系统停止后不重放任务。
  *
  * 后台监听的租约单独登记（[monitorLeases]）。常驻通知只有一个按钮「结束任务」（规范 8.12「22」）：
  * 任务马上停，后台监听一起结束、5 秒内可撤销（通知原位变成「已结束任务·撤销」）。
+ * 审批卡、提问卡等你作答时，标题换成「等你确认」/「需要你选择」、正文是卡片的问题；点通知打开 Movo，卡片在 App 里显示（定稿 26-5）。
  */
 internal class AgentExecutionService : Service() {
     private val stopQueue = ExecutionStopQueue { failure ->
@@ -30,6 +35,8 @@ internal class AgentExecutionService : Service() {
     }
     private val owner = ownerSequence.incrementAndGet()
     private var foregroundActive = false
+    private val mainScope = kotlinx.coroutines.MainScope()
+    private var waitingJob: kotlinx.coroutines.Job? = null
     @Volatile private var startRejected = false
 
     override fun onCreate() {
@@ -41,6 +48,13 @@ internal class AgentExecutionService : Service() {
             NotificationChannel(CHANNEL, getString(R.string.execution_channel), NotificationManager.IMPORTANCE_LOW),
         )
         ensureForeground()
+        waitingJob = mainScope.launch {
+            io.github.fartown.movo.agent.overlay.InteractionCardCoordinator.pending
+                .map { it?.let { card -> card.isApproval to card.title } }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect { if (foregroundActive) refreshNotification() }
+        }
     }
 
     private fun ensureForeground() {
@@ -85,6 +99,7 @@ internal class AgentExecutionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        waitingJob?.cancel()
         io.github.fartown.movo.diagnostics.DiagnosticsEnvironment.executionService = false
         io.github.fartown.movo.diagnostics.MemoryDiagnostics.record("lifecycle", "execution_service.destroyed")
         if (instance === this) instance = null
@@ -132,13 +147,20 @@ internal class AgentExecutionService : Service() {
         val registry = io.github.fartown.movo.agent.monitor.MonitorRegistry
         val monitors = registry.active.value
         val endings = registry.endings.value
+        val waiting = io.github.fartown.movo.agent.overlay.InteractionCardCoordinator.pending.value
         val content = ExecutionNotificationContent.of(
             taskCount = leases.taskCount(), monitorCount = monitors.size, endingCount = endings.size,
+            waiting = waiting != null,
         )
         val separator = getString(R.string.monitor_names_separator)
         val title: String
         val text: String
         when (content.mode) {
+            // 有卡等你作答：「等你确认」/「需要你选择」+ 卡片的问题。
+            ExecutionNotificationContent.Mode.WAITING -> {
+                title = getString(if (waiting?.isApproval == true) R.string.execution_waiting_approval else R.string.execution_waiting_question)
+                text = waiting?.title.orEmpty()
+            }
             // 刚结束、还能撤销：「已结束任务 / 喝水提醒也停了」+「撤销」。
             ExecutionNotificationContent.Mode.ENDED -> {
                 title = getString(R.string.monitor_execution_ended_title)
@@ -254,8 +276,8 @@ internal data class ExecutionNotificationContent(
     val taskCount: Int,
     val monitorCount: Int,
 ) {
-    /** [ENDED]：任务和监听都结束了，监听还在等待撤销期满。 */
-    enum class Mode { TASKS_ONLY, MONITORS_ONLY, MIXED, ENDED }
+    /** [ENDED]：任务和监听都结束了，监听还在等待撤销期满。[WAITING]：任务停在审批卡 / 提问卡上等你作答。 */
+    enum class Mode { TASKS_ONLY, MONITORS_ONLY, MIXED, ENDED, WAITING }
 
     enum class Action { END_TASK, UNDO }
 
@@ -263,9 +285,10 @@ internal data class ExecutionNotificationContent(
     val action: Action get() = if (mode == Mode.ENDED) Action.UNDO else Action.END_TASK
 
     companion object {
-        /** [monitorCount] 只算运行中的监听；[endingCount] 是等待撤销期满的结束次数。 */
-        fun of(taskCount: Int, monitorCount: Int, endingCount: Int = 0): ExecutionNotificationContent = ExecutionNotificationContent(
+        /** [monitorCount] 只算运行中的监听；[endingCount] 是等待撤销期满的结束次数；[waiting] = 有卡等你作答。 */
+        fun of(taskCount: Int, monitorCount: Int, endingCount: Int = 0, waiting: Boolean = false): ExecutionNotificationContent = ExecutionNotificationContent(
             mode = when {
+                waiting && taskCount > 0 -> Mode.WAITING
                 taskCount == 0 && monitorCount == 0 && endingCount > 0 -> Mode.ENDED
                 monitorCount > 0 && taskCount == 0 -> Mode.MONITORS_ONLY
                 monitorCount > 0 -> Mode.MIXED

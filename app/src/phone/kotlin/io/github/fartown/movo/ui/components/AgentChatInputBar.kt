@@ -652,7 +652,7 @@ internal fun AgentChatInputBar(
                             modifier = Modifier.weight(1f),
                         ) {
                             Text(
-                                text = voice.hint(isStreaming),
+                                text = voice.hint(isStreaming, chatMode = interactionMode == InteractionMode.CHAT),
                                 style = MovoTypography.microMedium,
                                 color = MovoColors.textTertiary,
                                 maxLines = 1,
@@ -898,7 +898,8 @@ private val LineButtonTouchInset = 6.dp
  */
 /**
  * 对话模式标签（`Composer/ModeTag`，定稿 25-2）：高 28、圆角 14、Indigo 浅底；16 message-square + 4 +「对话」`Label/Medium` + 4 + 16 ✕，
- * 都是 Indigo 深色；左 8 右 6（不可点时没有 ✕，右 10）。点按回到 Agent；热区上下各扩 8 到 44（溢出，不占布局）。
+ * 都是 Indigo 深色；左 8 右 6（不可点时没有 ✕，右 10）。只有 ✕ 回到 Agent（定稿 26-4）：热区 44 以 ✕ 为中心（溢出，不占布局），
+ * 点「对话」两个字没反应，想点进输入框开头时不会误退出。
  */
 @Composable
 private fun ChatModeTag(
@@ -915,26 +916,9 @@ private fun ChatModeTag(
         animationSpec = if (pressed) MovoMotion.instant() else MovoMotion.fast(),
         label = "chatModeTagScale",
     )
-    val description = stringResource(if (removable) R.string.movo_mode_tag_desc else R.string.movo_mode_chat)
-    val vertical = (MovoSize.touchTarget - 28.dp) / 2
-    Box(
-        modifier = modifier
-            .expandedTouchArea(start = 0.dp, end = 0.dp, vertical = vertical)
-            .then(
-                if (removable) {
-                    Modifier.clickable(
-                        interactionSource = interaction,
-                        indication = null,
-                        role = androidx.compose.ui.semantics.Role.Button,
-                        onClick = onRemove,
-                    )
-                } else {
-                    Modifier
-                },
-            )
-            .semantics(mergeDescendants = true) { contentDescription = description }
-            .padding(vertical = vertical),
-    ) {
+    val tagDescription = stringResource(R.string.movo_mode_chat)
+    val removeDescription = stringResource(R.string.movo_mode_tag_desc)
+    Box(modifier = modifier) {
         Row(
             modifier = Modifier
                 .height(28.dp)
@@ -942,6 +926,7 @@ private fun ChatModeTag(
                 .clip(shape)
                 .background(MovoColors.indigoBg)
                 .animateContentSize(MovoMotion.fast())
+                .clearAndSetSemantics { contentDescription = tagDescription }
                 .padding(start = MovoSpacing.sm, end = if (removable) 6.dp else 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -952,6 +937,24 @@ private fun ChatModeTag(
                 Spacer(Modifier.width(MovoSpacing.xs))
                 MovoIcon(MovoIcons.X, null, size = MovoSize.iconSmall, tint = MovoColors.indigoFg)
             }
+        }
+        // ✕ 的热区单独叠在上面：标签有裁切（圆角、展开动画），热区放在里面会被裁掉。按下时整个标签缩到 0.95。
+        if (removable) {
+            val expand = (MovoSize.touchTarget - MovoSize.iconSmall) / 2
+            Box(
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 6.dp)
+                    .expandedTouchArea(start = expand, end = expand, vertical = expand)
+                    .size(MovoSize.touchTarget)
+                    .clickable(
+                        interactionSource = interaction,
+                        indication = null,
+                        role = androidx.compose.ui.semantics.Role.Button,
+                        onClick = onRemove,
+                    )
+                    .semantics { contentDescription = removeDescription },
+            )
         }
     }
 }
@@ -1553,13 +1556,17 @@ internal fun ReasoningEffort.localizedName(): String = when (this) {
     else -> chipLabel()
 }
 
-/** 语音模式工具栏中间的提示（规范 8.3）；控制器给出的说明（如已记下待发送）优先。 */
+/**
+ * 语音模式工具栏中间的提示（规范 8.3）；控制器给出的说明（如已记下待发送）优先。
+ * 对话模式里语音行盖住了「对话」标签，聆听时提示写上模式（定稿 26-6）。
+ */
 @Composable
-private fun VoiceSessionUiState.hint(agentBusy: Boolean): String = when {
+private fun VoiceSessionUiState.hint(agentBusy: Boolean, chatMode: Boolean): String = when {
     channel == io.github.fartown.movo.agent.voice.session.VoiceChannel.Thinking && statusText.isNotBlank() -> statusText
     channel == io.github.fartown.movo.agent.voice.session.VoiceChannel.Connecting -> stringResource(R.string.movo_voice_hint_connecting)
     speaking -> stringResource(R.string.movo_voice_hint_speaking)
     agentBusy -> stringResource(R.string.movo_voice_hint_busy)
+    chatMode -> stringResource(R.string.movo_voice_hint_listening_chat)
     else -> stringResource(R.string.movo_voice_hint_listening)
 }
 

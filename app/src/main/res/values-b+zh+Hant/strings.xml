@@ -176,6 +176,7 @@
   <string name="conversation_rename_hint">對話名稱</string>
   <string name="conversation_delete_title">要刪除對話嗎？</string>
   <string name="conversation_delete_message">此對話及其中的訊息將永久刪除。</string>
+  <string name="conversation_delete_message_running">此對話及其中的訊息將永久刪除，正在執行的任務會一起結束。</string>
   <string name="conversation_delete_message_title">要刪除訊息嗎？</string>
   <string name="conversation_delete_message_body">此訊息將被刪除。</string>
   <plurals name="conversation_delete_later_turns">
@@ -185,6 +186,14 @@
   <plurals name="conversation_regenerate_later_turns">
     <item quantity="other">將刪除後續 %d 輪對話，並從此訊息重新產生。</item>
   </plurals>
+  <string name="conversation_redo_device_title">要重新執行這一輪嗎？</string>
+  <string name="conversation_redo_device_message">這一輪操作過手機：%1$s。重新執行會從頭再做一遍，這些操作可能再來一次；已經做了的不會撤回。</string>
+  <string name="conversation_redo_device_separator">、</string>
+  <string name="conversation_redo_device_steps_more">%1$s 等 %2$d 步</string>
+  <plurals name="conversation_redo_device_later_turns">
+    <item quantity="other">之後的 %d 輪對話也會刪除。</item>
+  </plurals>
+  <string name="conversation_redo_device_confirm">重新執行</string>
   <string name="time_yesterday">昨日</string>
   <string name="time_recent">最近</string>
   <string name="overlay_received">收到指令，準備模型</string>

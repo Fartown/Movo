@@ -397,6 +397,9 @@ internal object AgentModelClient {
         /** 执行卡这一步的标题（动作 + 对象，工具可视化方案 §5.1）；为空时由 [AgentTraceFormatter] 兜底。 */
         fun stepTitle(toolCall: ToolCall): String? = null
 
+        /** 这一步是不是只读（看屏幕、查通知、搜索）；判断不了时为 null。重新生成前据此判断这一轮动没动过手机。 */
+        fun readOnly(toolCall: ToolCall): Boolean? = null
+
         /** 合同校验前整理参数（例如上限类参数越界按边界处理），返回实际执行的调用。 */
         fun normalize(toolCall: ToolCall): ToolCall = toolCall
 

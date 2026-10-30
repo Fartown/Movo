@@ -209,6 +209,11 @@ data class ToolActivityMessageUi(
     val finishedAtMillis: Long? = null,
     /** 展开后的结构化内容（工具可视化方案）；旧数据、非类型化工具、重启后的临时视图为 null。 */
     val view: io.github.fartown.movo.agent.tools.core.ToolUiView? = null,
+    /**
+     * 这一步只读（看屏幕、查通知、搜索）。重新生成前看这一轮有没有不是只读的步骤（定稿 26-1）；
+     * 旧数据没有记录时为 null，按「动过手机」处理。
+     */
+    val readOnly: Boolean? = null,
 ) : AgentChatMessageUi
 
 enum class ToolActivityStatusUi {

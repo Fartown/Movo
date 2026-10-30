@@ -530,6 +530,9 @@ class AgentRuntimeWireTest {
                 argsPreview = "执行命令 · Android · root",
                 command = "pm list packages | head",
             ),
+            // 是否只读（重新生成前判断这一轮动没动过手机）：两种取值都要往返。
+            AgentEvent.ToolStarted(round = 2, toolCallId = "call_read", name = "ui_observe", argsPreview = "看屏幕", readOnly = true),
+            AgentEvent.ToolStarted(round = 2, toolCallId = "call_tap", name = "ui_tap", argsPreview = "点按「发送」", readOnly = false),
             AgentEvent.ToolFinished(
                 round = 2,
                 toolCallId = "call_abc",

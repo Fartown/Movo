@@ -1,6 +1,8 @@
 package io.github.fartown.movo.ui.app
 
 import io.github.fartown.movo.agent.model.InteractionMode
+import io.github.fartown.movo.ui.model.ToolActivityMessageUi
+import io.github.fartown.movo.ui.model.ToolActivityStatusUi
 import io.github.fartown.movo.ui.model.UserMessageUi
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -32,5 +34,18 @@ class ChatModeRowsTest {
         val agentRow = UserMessageUi(id = "user-4", content = "查天气", webSearch = true).toConversationRow("c1", 4096)!!
         assertEquals("[]", agentRow.toolsJson)
         assertEquals(false, (agentRow.toChatMessage() as UserMessageUi).webSearch)
+    }
+
+    @Test
+    fun stepReadOnlyFlagSurvivesTheRow() {
+        // 步骤行借工具列记是否只读（定稿 26-1，不改表结构）；旧数据没有记录时读回 null。
+        listOf(true, false, null).forEachIndexed { index, readOnly ->
+            val step = ToolActivityMessageUi(
+                id = "tool-$index", toolName = "ui_tap", status = ToolActivityStatusUi.Success,
+                argumentsSummary = "点按「发送」", readOnly = readOnly,
+            )
+            val restored = step.toConversationRow("c1", index.toLong())!!.toChatMessage() as ToolActivityMessageUi
+            assertEquals(readOnly, restored.readOnly)
+        }
     }
 }
