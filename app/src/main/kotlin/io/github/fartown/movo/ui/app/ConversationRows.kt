@@ -111,6 +111,12 @@ internal fun AgentChatMessageUi.toConversationRow(
             finishedAt = finishedAtMillis,
             // 截图、个人数据等临时视图只在本次运行中显示，不存（工具可视化方案 §6）。
             toolViewJson = view?.takeUnless { it.transient }?.toJson()?.toString(),
+            // 步骤行不用工具列：借它记这一步是不是只读（不改表结构）。
+            toolsJson = when (readOnly) {
+                true -> TOOL_READ_ONLY_EXTRA
+                false -> TOOL_WRITES_EXTRA
+                null -> "[]"
+            },
         )
 
         is ToolSummaryMessageUi -> ConversationMessageEntity(
@@ -222,6 +228,11 @@ internal fun ConversationMessageEntity.toChatMessage(): AgentChatMessageUi? =
             startedAtMillis = startedAt,
             finishedAtMillis = finishedAt,
             view = io.github.fartown.movo.agent.tools.core.ToolUiView.fromJsonString(toolViewJson),
+            readOnly = when (toolsJson) {
+                TOOL_READ_ONLY_EXTRA -> true
+                TOOL_WRITES_EXTRA -> false
+                else -> null
+            },
         )
 
         TYPE_TOOL_SUMMARY -> ToolSummaryMessageUi(
@@ -313,6 +324,8 @@ private const val TYPE_SYSTEM_NOTICE = "system_notice"
 private const val TYPE_THINKING = "thinking"
 private const val NARRATION_EXTRA = "{\"narration\":true}"
 private const val TYPE_TOOL = "tool"
+private const val TOOL_READ_ONLY_EXTRA = "{\"read_only\":true}"
+private const val TOOL_WRITES_EXTRA = "{\"read_only\":false}"
 private const val TYPE_TOOL_SUMMARY = "tool_summary"
 private const val TYPE_SUGGESTIONS = "suggestions"
 private const val TYPE_MONITOR = "monitor"

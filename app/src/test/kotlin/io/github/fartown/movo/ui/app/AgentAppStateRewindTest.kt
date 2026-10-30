@@ -3,6 +3,7 @@ package io.github.fartown.movo.ui.app
 import android.app.Application
 import android.content.Context
 import io.github.fartown.movo.agent.model.AgentModelClient
+import io.github.fartown.movo.agent.model.InteractionMode
 import io.github.fartown.movo.data.db.MovoDatabase
 import io.github.fartown.movo.ui.components.AgentConversationDraftStore
 import io.github.fartown.movo.ui.model.AgentChatHomeUiState
@@ -87,5 +88,18 @@ class AgentAppStateRewindTest {
         state.regenerateMessage("a1")
         assertEquals(listOf("今天的科技新闻"), state.homeState.history.map { it.content })
         assertEquals(listOf("今天的科技新闻"), state.homeState.journal.map { it.content })
+    }
+
+    @Test
+    fun redoingInTheOtherModeSwitchesTheTurnAndTheConversation() {
+        // 「⋯」里「换成对话重答」（定稿 26-2）：这一轮的用户消息改记成对话模式，对话的当前模式也跟着切过去。
+        val state = AgentAppState(context, scope)
+        assertEquals(InteractionMode.AGENT, state.homeState.interactionMode)
+        state.regenerateMessage("a1", InteractionMode.CHAT)
+        val turn = state.homeState.messages.filterIsInstance<UserMessageUi>().single()
+        assertEquals("u1", turn.id)
+        assertEquals(InteractionMode.CHAT, turn.interactionMode)
+        assertEquals(InteractionMode.CHAT, state.homeState.interactionMode)
+        assertEquals(listOf("今天的科技新闻"), state.homeState.history.map { it.content })
     }
 }

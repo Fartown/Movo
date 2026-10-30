@@ -179,6 +179,8 @@ internal sealed interface AgentEvent {
         val name: String,
         val argsPreview: String,
         val command: String? = null,
+        /** 这一步只读（风险为 READ）；没执行就被拦下的也算只读。旧版本 Runtime 不发送、判断不了时为 null。 */
+        val readOnly: Boolean? = null,
     ) : AgentEvent, AgentEvent.Timed {
         /** 事件发生时刻（毫秒）；0 表示旧版本 Runtime 未记录。不参与相等比较，用于执行卡与执行详情的每步用时。 */
         override var atMillis: Long = 0L

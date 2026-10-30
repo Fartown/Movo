@@ -184,6 +184,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     /** 悬浮卡当前显示的是锁屏解锁提示（窗口只有卡片大小、不拦截卡片外的触摸，用户仍可在锁屏上解锁）。 */
     private val interactionLocked = mutableStateOf(false)
     private var interactionFocusable = false
+    /** 悬浮卡因通知栏、控制中心拉下而暂时藏起（定稿 26-5）。 */
+    private var interactionHidden = false
+    /** 悬浮球、展开卡、光边因通知栏、控制中心拉下而暂时藏起（定稿 26-5）。 */
+    private var overlaysHiddenBySystem = false
+    /** 藏起前各浮窗是否接触摸；藏着时 [setWindowTouchable] 只改这里。窗口撤掉后自动清掉。 */
+    private val touchableBeforeSystemHide = java.util.WeakHashMap<View, Boolean>()
     /** 亮屏 / 息屏 / 解锁：锁屏状态变了，悬浮卡在审批卡与解锁提示之间切换。 */
     private val keyguardReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -324,6 +330,12 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         lifecycleScope.launch { InteractionCardCoordinator.pending.collect { syncInteractionOverlay() } }
         lifecycleScope.launch { InteractionCardCoordinator.activeHost.collect { syncInteractionOverlay() } }
         lifecycleScope.launch { InteractionCardCoordinator.unlockInProgress.collect { syncInteractionOverlay() } }
+        lifecycleScope.launch {
+            AgentAccessibilityService.systemSurfaceOpen.collect {
+                syncInteractionOverlay()
+                syncSystemSurfaceHiding()
+            }
+        }
         // 后台监听增减：悬浮球在「监听中」与待命 / 完成之间切换（规范 8.12「22」）。
         lifecycleScope.launch { MonitorRegistry.active.collect(::onMonitorsChanged) }
         // 在别处撤销（App 里的结束行、常驻通知）或期满：展开卡上的「已结束·撤销」随之收掉。
@@ -1496,6 +1508,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         orbView = orb
         orbParams = orbLp
         orb.visibility = View.VISIBLE
+        applySystemSurfaceHiding(orb, orbLp)
         publishOrbRect()
 
         // ── 小气泡窗口：展开态显示，跟随光球，窗口外触摸穿透 ─────────
@@ -1613,6 +1626,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
         glowView = glow
         glowParams = glowLp
+        applySystemSurfaceHiding(glow, glowLp)
     }
 
     /** 光晕随这一轮结束淡出（`standard`），播完移除窗口；期间再有前台操作会撤销（[unretireGlow]）。 */
@@ -1809,6 +1823,11 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     private fun setWindowTouchable(view: View?, lp: WindowManager.LayoutParams?, touchable: Boolean) {
         val wm = windowManager ?: return
         if (view == null || lp == null || !view.isAttachedToWindow) return
+        // 通知栏拉下、窗口藏着时只记下来，收起后再按它还原（[applySystemSurfaceHiding]）。
+        if (overlaysHiddenBySystem && view in touchableBeforeSystemHide) {
+            touchableBeforeSystemHide[view] = touchable
+            return
+        }
         val nextFlags = if (touchable) {
             lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
         } else {
@@ -1933,6 +1952,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         }
         bubbleView = bubble
         bubbleParams = lp
+        applySystemSurfaceHiding(bubble, lp)
         bubbleBaseY = lp.y
         bubbleTargetY = lp.y
         return true
@@ -2087,6 +2107,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
     /**
      * 悬浮卡显隐（跨应用审批 / 提问）：有待作答的卡、且 App 内没有可显示它的页面（主界面 / 对话浮层 resumed）时浮在目标应用上，
      * 否则撤下——同一张卡任何时候只在一处。锁屏时不给出「允许」，改显示解锁提示；「去解锁」进行中先撤下，不挡住系统解锁界面。
+     * 拉下通知栏、控制中心时先藏起来（不撤窗口，输入到一半的回答还在），收起后再显示（定稿 26-5）。
      * 无障碍重连后旧实例名下的窗口已被系统移除，按新 context 重建。
      */
     private fun syncInteractionOverlay() {
@@ -2112,6 +2133,55 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         } else if (interactionFocusable != focusable) {
             updateInteractionFocusable(focusable)
         }
+        setInteractionHidden(!locked && AgentAccessibilityService.systemSurfaceOpen.value)
+    }
+
+    /**
+     * 通知栏、控制中心拉下时（定稿 26-5）：悬浮球、展开卡、光边也是无障碍浮窗，层级比通知栏高，会盖在通知上。
+     * 这时把它们的窗口透明度设成 0、不接触摸，收起后还原。用窗口透明度而不是 View 的可见性，
+     * 不和悬浮球自己的显隐、淡出打架；锁屏时不藏。
+     */
+    private fun syncSystemSurfaceHiding() {
+        val hide = AgentAccessibilityService.systemSurfaceOpen.value && !isKeyguardLocked()
+        if (hide == overlaysHiddenBySystem) return
+        overlaysHiddenBySystem = hide
+        applySystemSurfaceHiding(orbView, orbParams)
+        applySystemSurfaceHiding(bubbleView, bubbleParams)
+        applySystemSurfaceHiding(glowView, glowParams)
+    }
+
+    /** 按 [overlaysHiddenBySystem] 藏起或还原一个浮窗；新加的窗口也调一次，拉下通知栏期间出现的窗口同样藏着。 */
+    private fun applySystemSurfaceHiding(view: View?, lp: WindowManager.LayoutParams?) {
+        val wm = windowManager ?: return
+        if (view == null || lp == null) return
+        val notTouchable = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        if (overlaysHiddenBySystem) {
+            if (view in touchableBeforeSystemHide) return
+            touchableBeforeSystemHide[view] = lp.flags and notTouchable == 0
+            lp.flags = lp.flags or notTouchable
+            lp.alpha = 0f
+        } else {
+            val touchable = touchableBeforeSystemHide.remove(view) ?: return
+            lp.flags = if (touchable) lp.flags and notTouchable.inv() else lp.flags or notTouchable
+            lp.alpha = 1f
+        }
+        runCatching { wm.updateViewLayout(view, lp) }
+    }
+
+    /** 藏起 / 恢复悬浮卡：看不见、点击穿透到通知栏，窗口和卡片内容都留着。 */
+    private fun setInteractionHidden(hidden: Boolean) {
+        val view = interactionView ?: return
+        val lp = interactionParams ?: return
+        val wm = interactionWindowManager ?: return
+        if (interactionHidden == hidden) return
+        lp.flags = if (hidden) {
+            lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        } else {
+            lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        }
+        view.visibility = if (hidden) View.INVISIBLE else View.VISIBLE
+        runCatching { wm.updateViewLayout(view, lp) }
+        interactionHidden = hidden
     }
 
     private fun showInteractionOverlay(locked: Boolean, focusable: Boolean) {
@@ -2134,7 +2204,6 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                         onApprove = { replyFromFloatingCard(model, InteractionReply.Approval(approved = true)) },
                         onDecline = { InteractionCardCoordinator.reply(model, InteractionReply.Approval(approved = false)) },
                         onAnswer = { text, idx -> replyFromFloatingCard(model, InteractionReply.Answer(text, idx)) },
-                        onCancel = { InteractionCardCoordinator.reply(model, InteractionReply.Cancelled) },
                     )
                 }
             }
@@ -2184,13 +2253,14 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
         interactionParams = null
         interactionOwner = null
         interactionFocusable = false
+        interactionHidden = false
     }
 
     private fun interactionLayoutParams(locked: Boolean, focusable: Boolean): WindowManager.LayoutParams =
         WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             // 锁屏解锁提示：窗口只有卡片大小，卡片外的触摸交给锁屏（用户仍可直接滑动解锁）；
-            // 平时全屏：轻度压暗的遮罩点一下 = 取消。
+            // 平时铺满状态栏以下：轻度压暗的遮罩点一下卡片轻晃、不作答（定稿 26-5）。
             if (locked) WindowManager.LayoutParams.WRAP_CONTENT else WindowManager.LayoutParams.MATCH_PARENT,
             overlayType(),
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
@@ -2198,13 +2268,20 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
                 // 审批卡不可获焦：可获焦的全屏窗口会抢走目标窗口的焦点、收起输入法，目标界面内容随之变化，
                 // 批准后工具执行时观察已过期，要再批一次。提问卡要自由输入时才可获焦。
                 (if (focusable) 0 else WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) or
-                (if (locked) WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL else 0),
+                // 窗口外的触摸交给后面的窗口：锁屏时交给锁屏；平时窗口从状态栏下沿开始，状态栏那一条交给系统，
+                // 手指才能从顶部拉下通知栏（不加的话系统把触摸范围扩到整屏，真机上状态栏照样被接走）。
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.BOTTOM
             // 可获焦（提问卡自由输入）时 IME 弹出缩放布局。
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
             windowAnimations = 0
+            // 不盖状态栏（定稿 26-5）：无障碍浮窗层级比状态栏高，盖住的话手指从顶部下拉落在遮罩上，通知栏拉不下来（真机）。
+            // 拉下来以后由 [setInteractionHidden] 把卡片藏起。
+            if (!locked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                fitInsetsTypes = android.view.WindowInsets.Type.statusBars()
+            }
         }
 
     private fun isKeyguardLocked(): Boolean =
@@ -2238,6 +2315,7 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     /** 亮屏 / 息屏 / 解锁：解锁成功或息屏时解锁界面已不在，放开「解锁进行中」，卡片按当前锁屏状态重新显示。 */
     private fun onKeyguardStateChanged(action: String?) {
+        syncSystemSurfaceHiding()
         if (action == Intent.ACTION_USER_PRESENT || action == Intent.ACTION_SCREEN_OFF) {
             mainHandler.removeCallbacksAndMessages(unlockTimeoutToken)
             InteractionCardCoordinator.setUnlockInProgress(false)

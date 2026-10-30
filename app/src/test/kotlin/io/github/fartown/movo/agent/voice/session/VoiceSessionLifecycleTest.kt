@@ -248,6 +248,27 @@ class VoiceSessionLifecycleTest {
         assertTrue(state.voiceRuntimeBusy)
     }
 
+    @Test fun deletingTheConversationWhoseTaskIsRunningStopsTheTask() {
+        val state = app(); val id = state.voiceConversationId()
+        state.sendCurrentMessage("正在执行")
+        val runId = state.homeState.messages.filterIsInstance<UserMessageUi>().single().id.removePrefix("user-")
+        // 删的是别的对话：任务照常。
+        state.deleteConversation("另一个对话")
+        assertTrue(state.stopRequestedRunIdsForTests.isEmpty())
+        // 删的是正在执行的这个：先结束任务，否则 Agent 还在操作手机、App 里也找不到停止键。
+        state.deleteConversation(id)
+        assertEquals(setOf(runId), state.stopRequestedRunIdsForTests)
+    }
+
+    @Test fun systemVoiceEntrySwitchesTheConversationBackToAgent() {
+        // 规范 8.2.2：唤醒词、长按悬浮球开始的语音一律用 Agent（语音模式下看不到「对话」标签）。
+        val state = app(); state.voiceConversationId()
+        state.updateInteractionMode(io.github.fartown.movo.agent.model.InteractionMode.CHAT)
+        assertEquals(io.github.fartown.movo.agent.model.InteractionMode.CHAT, state.homeState.interactionMode)
+        state.useAgentForSystemVoiceEntry()
+        assertEquals(io.github.fartown.movo.agent.model.InteractionMode.AGENT, state.homeState.interactionMode)
+    }
+
     @Test fun busyTextBecomesASupplementWhenTheRuntimeAcceptsIt() {
         // 规范 8.4：执行中再发的话作为补充交给当前任务，不排队、不开新一轮。
         steerAccepted = true

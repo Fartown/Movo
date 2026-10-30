@@ -143,7 +143,11 @@
   <string name="movo_mode_agent_desc">Uses your phone and finishes tasks step by step</string>
   <string name="movo_mode_chat">Chat</string>
   <string name="movo_mode_chat_desc">Just chat with the model, no phone actions</string>
-  <string name="movo_mode_tag_desc">Chat mode. Tap to switch back to Agent</string>
+  <string name="movo_mode_tag_desc">Leave chat mode and go back to Agent</string>
+  <string name="movo_redo_as_agent">Redo with Agent</string>
+  <string name="movo_redo_as_agent_desc">Run this again; it can use your phone</string>
+  <string name="movo_redo_as_chat">Answer again in Chat</string>
+  <string name="movo_redo_as_chat_desc">Answer this again without using your phone</string>
   <string name="movo_mode_switched_chat">Switched to chat · just the model, no phone actions</string>
   <string name="movo_mode_switched_agent">Back to Agent · can use your phone</string>
   <string name="movo_chat_web_search">Web</string>
@@ -208,6 +212,7 @@
   <string name="movo_voice_speaking">Speaking · talk to interrupt</string>
   <string name="movo_voice_connecting">Connecting…</string>
   <string name="movo_voice_hint_listening">Sends when you pause</string>
+  <string name="movo_voice_hint_listening_chat">Chat mode · sends when you pause</string>
   <string name="movo_voice_hint_busy">Task in progress · exiting won’t stop it</string>
   <string name="movo_voice_hint_speaking">Say "stop reading" to stop</string>
   <string name="movo_voice_hint_connecting">Waits up to 5 seconds</string>

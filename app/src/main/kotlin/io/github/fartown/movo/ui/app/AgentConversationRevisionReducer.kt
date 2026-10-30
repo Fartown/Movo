@@ -1,12 +1,16 @@
 package io.github.fartown.movo.ui.app
 
+import io.github.fartown.movo.agent.model.AgentFileReferencePromptCodec
 import io.github.fartown.movo.agent.model.AgentModelClient
+import io.github.fartown.movo.agent.model.InteractionMode
 import io.github.fartown.movo.ui.model.AgentChatMessageUi
 import io.github.fartown.movo.ui.model.AgentChatUiState
 import io.github.fartown.movo.ui.model.AgentMessageUi
 import io.github.fartown.movo.ui.model.MonitorEventMessageUi
 import io.github.fartown.movo.ui.model.SystemNoticeMessageUi
+import io.github.fartown.movo.ui.model.ToolActivityMessageUi
 import io.github.fartown.movo.ui.model.UserMessageUi
+import io.github.fartown.movo.ui.model.isTurnStart
 
 /**
  * 在模型历史里对应一条 user 条目的消息：用户消息（含执行中的补充），以及后台监听行里每批的第一行
@@ -64,6 +68,44 @@ internal object AgentConversationRevisionReducer {
                 message is UserMessageUi -> inEventTurn = false
                 message is MonitorEventMessageUi && message.startsTurn -> inEventTurn = true
                 inEventTurn && (message is AgentMessageUi || message is SystemNoticeMessageUi) -> result += message.id
+            }
+        }
+        return result
+    }
+
+    /**
+     * 重新生成 / 重试会从头再做一遍的步骤（定稿 26-1）：从这一轮用户的话到下一轮开始之间，不是只读的步骤
+     * （点按、输入、发送、改设置、建闹钟等）。旧数据没记是否只读的也算进来，宁可多问一次。
+     */
+    fun deviceOperations(state: AgentChatUiState, targetMessageId: String): List<ToolActivityMessageUi> {
+        val boundary = regenerationBoundary(state, targetMessageId) ?: return emptyList()
+        return state.messages.asSequence()
+            .drop(boundary.userMessageIndex + 1)
+            .takeWhile { !it.isTurnStart() }
+            .filterIsInstance<ToolActivityMessageUi>()
+            .filter { it.readOnly != true }
+            .toList()
+    }
+
+    /**
+     * 「⋯」里「换成 Agent 重做 / 换成对话重答」（定稿 26-2）：每个回答换成哪种模式。
+     * 按这一轮用户的话发出时的模式取另一种；事件轮没有用户原话，不给；带文件的话不能换成对话（文件要靠 Agent 的工具读）。
+     */
+    fun redoModeTargets(messages: List<AgentChatMessageUi>): Map<String, InteractionMode> {
+        val result = HashMap<String, InteractionMode>()
+        var turnMessage: UserMessageUi? = null
+        for (message in messages) {
+            when {
+                message is UserMessageUi -> turnMessage = message
+                message is MonitorEventMessageUi && message.startsTurn -> turnMessage = null
+                message is AgentMessageUi -> {
+                    val user = turnMessage ?: continue
+                    val target = if (user.interactionMode == InteractionMode.CHAT) InteractionMode.AGENT else InteractionMode.CHAT
+                    if (target == InteractionMode.CHAT &&
+                        AgentFileReferencePromptCodec.parse(user.content).references.isNotEmpty()
+                    ) continue
+                    result[message.id] = target
+                }
             }
         }
         return result

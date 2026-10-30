@@ -356,6 +356,7 @@ internal class AgentLoop(
             argsPreview = runCatching { toolExecutor.stepTitle(toolCall) }.getOrNull()
                 ?: traceFormatter.summarizeArguments(toolCall),
             command = traceFormatter.displayCommand(toolCall),
+            readOnly = runCatching { toolExecutor.readOnly(toolCall) }.getOrNull(),
         ).stamped()
         val executedCall = withoutFinishReply(toolCall)
         io.github.fartown.movo.diagnostics.runlog.RunLogRecorder.toolStarted(round, modelToolCall, executedCall, started.argsPreview)
@@ -397,6 +398,8 @@ internal class AgentLoop(
             name = toolCall.name,
             argsPreview = traceFormatter.summarizeArguments(toolCall),
             command = traceFormatter.displayCommand(toolCall),
+            // 没执行就被拦下：什么也没做。
+            readOnly = true,
         ).stamped()
         io.github.fartown.movo.diagnostics.runlog.RunLogRecorder.toolStarted(round, toolCall, toolCall, started.argsPreview)
         onEvent(started)

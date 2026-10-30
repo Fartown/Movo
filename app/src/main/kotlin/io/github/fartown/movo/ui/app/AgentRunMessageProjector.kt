@@ -318,6 +318,7 @@ internal class AgentRunMessageProjector(
             argumentsSummary = event.argsPreview,
             command = event.command,
             startedAtMillis = event.atMillis.takeIf { it > 0L },
+            readOnly = event.readOnly,
         )
         if (marked.any { it.id == message.id }) return marked
         return marked + message
@@ -368,6 +369,8 @@ internal class AgentRunMessageProjector(
             status = ToolActivityStatusUi.Running,
             argumentsSummary = "",
             startedAtMillis = event.atMillis.takeIf { it > 0L },
+            // 托管工具只有服务商那边的网页搜索。
+            readOnly = true,
         )
         // 托管工具（网页搜索）之后同一轮里接着写的正文才可能是回答，此前写出的是中途说的话。
         val marked = markNarration(runId, event.round, messages)

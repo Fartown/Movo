@@ -826,6 +826,7 @@ internal object AgentRuntimeWire {
                 putString("name", event.name)
                 putString("args_preview", event.argsPreview)
                 event.command?.let { putString("command", it) }
+                event.readOnly?.let { putBoolean("read_only", it) }
             }
 
             is AgentEvent.ToolFinished -> {
@@ -1005,6 +1006,7 @@ internal object AgentRuntimeWire {
             name = bundle.getString("name").orEmpty(),
             argsPreview = bundle.getString("args_preview").orEmpty(),
             command = bundle.getString("command"),
+            readOnly = if (bundle.containsKey("read_only")) bundle.getBoolean("read_only") else null,
         ).apply { atMillis = bundle.getLong("at_millis") }
 
         "tool_finished" -> AgentEvent.ToolFinished(

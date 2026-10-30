@@ -81,13 +81,12 @@ internal interface RunSurfaceRenderer {
     @Composable
     fun RemoveZone(visible: Boolean)
 
-    /** 跨应用的审批 / 提问卡。 */
+    /** 跨应用的审批 / 提问卡。点遮罩不作答（定稿 26-5），所以没有「取消」回调。 */
     @Composable
     fun Interaction(
         model: AgentInteractionUiState,
         onApprove: () -> Unit,
         onDecline: () -> Unit,
         onAnswer: (text: String, optionIndex: Int?) -> Unit,
-        onCancel: () -> Unit,
     )
 }

@@ -1713,6 +1713,17 @@ private fun Modifier.workStepConnector(progress: () -> Float = { 1f }): Modifier
     }
 }
 
+/**
+ * 回答「⋯」里的「换成 Agent 重做 / 换成对话重答」（定稿 26-2）：[targets] 是回答 id → 换成的模式
+ * （事件轮、带文件换对话、角色对话不在里面），[redo] 按另一种模式重新生成这一轮。
+ */
+internal data class RedoInOtherMode(
+    val targets: Map<String, InteractionMode> = emptyMap(),
+    val redo: (messageId: String, mode: InteractionMode) -> Unit = { _, _ -> },
+)
+
+internal val LocalRedoInOtherMode = androidx.compose.runtime.compositionLocalOf { RedoInOtherMode() }
+
 // ── 用户消息：轻盈美观气泡 ──────────────────────────────────────────────
 
 /** 用户消息 id → 这条换成的模式（只有跟上一条用户消息不同的才在里面），由 [modeSwitchesOf] 算出。 */
@@ -2130,10 +2141,23 @@ private fun AgentMessageBlock(
                             enabled = messageActionsEnabled,
                             onClick = { showMore = true },
                         )
+                        val redoInOtherMode = LocalRedoInOtherMode.current
+                        val redoMode = redoInOtherMode.targets[message.id]?.takeIf { canRegenerate }
                         io.github.fartown.movo.ui.components.movo.MovoPopoverMenu(
                             show = showMore && messageActionsEnabled,
                             onDismiss = { showMore = false },
                             items = buildList {
+                                if (redoMode != null) {
+                                    val toAgent = redoMode == InteractionMode.AGENT
+                                    add(
+                                        io.github.fartown.movo.ui.components.movo.MovoMenuItem(
+                                            if (toAgent) io.github.fartown.movo.ui.theme.MovoIcons.MousePointerClick else io.github.fartown.movo.ui.theme.MovoIcons.MessageSquare,
+                                            stringResource(if (toAgent) R.string.movo_redo_as_agent else R.string.movo_redo_as_chat),
+                                            description = stringResource(if (toAgent) R.string.movo_redo_as_agent_desc else R.string.movo_redo_as_chat_desc),
+                                            onClick = { redoInOtherMode.redo(message.id, redoMode) },
+                                        ),
+                                    )
+                                }
                                 if (message.characterEditable) {
                                     add(
                                         io.github.fartown.movo.ui.components.movo.MovoMenuItem(

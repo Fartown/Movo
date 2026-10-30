@@ -124,6 +124,7 @@ open class AgentAccessibilityService : AccessibilityService() {
     private fun clearCurrentInstance() {
         if (instance === this) {
             instance = null
+            SYSTEM_SURFACE_OPEN.value = false
             notifyInstanceChanged()
         }
         scrollEventObservationGate.clear()
@@ -144,6 +145,7 @@ open class AgentAccessibilityService : AccessibilityService() {
                 if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
                     RecentAppTracker.record(event.packageName?.toString(), SystemClock.elapsedRealtime(), ::notAUserApp)
                 }
+                refreshSystemSurface()
                 signalWindowChanged()
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
@@ -158,6 +160,32 @@ open class AgentAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() = Unit
+
+    /**
+     * 窗口变化时看系统界面（通知栏、控制中心等）是不是铺在屏幕上，见 [SystemSurfacePolicy]。
+     * 只有过半屏的系统窗口才取根节点看包名；变化时记一行窗口概况，方便在不同系统上核对。
+     */
+    private fun refreshSystemSurface() {
+        val screenHeight = runCatching {
+            getSystemService(WindowManager::class.java).currentWindowMetrics.bounds.height()
+        }.getOrDefault(0)
+        val samples = runCatching {
+            windows.map { window ->
+                val height = Rect().also(window::getBoundsInScreen).height()
+                val pkg = if (SystemSurfacePolicy.isCandidate(window.type, height, screenHeight)) {
+                    window.root?.packageName?.toString()
+                } else null
+                SystemSurfacePolicy.Window(window.type, height, pkg)
+            }
+        }.getOrDefault(emptyList())
+        val open = SystemSurfacePolicy.covers(samples, screenHeight)
+        if (SYSTEM_SURFACE_OPEN.value == open) return
+        AndroidAgentLogger.info(
+            "System surface ${if (open) "open" else "closed"}: screen=$screenHeight, " +
+                "windows=${samples.joinToString { "${it.type}/${it.height}/${it.packageName ?: "-"}" }}",
+        )
+        SYSTEM_SURFACE_OPEN.value = open
+    }
 
     /**
      * 「用户最近在用的应用」不算的包：Movo 自己、系统界面、输入法、系统权限弹窗
@@ -2588,6 +2616,11 @@ open class AgentAccessibilityService : AccessibilityService() {
         fun isAvailable(): Boolean = instance != null
 
         private val instanceListeners = java.util.concurrent.CopyOnWriteArraySet<() -> Unit>()
+
+        private val SYSTEM_SURFACE_OPEN = kotlinx.coroutines.flow.MutableStateFlow(false)
+
+        /** 通知栏、控制中心等系统界面铺在屏幕上（[SystemSurfacePolicy]）；悬浮审批卡 / 提问卡这时先藏起来（定稿 26-5）。 */
+        val systemSurfaceOpen: kotlinx.coroutines.flow.StateFlow<Boolean> = SYSTEM_SURFACE_OPEN
 
         /**
          * 服务实例变化（连上 / 解绑 / 重连成新实例）时回调，在主线程。系统会移除旧实例名下的

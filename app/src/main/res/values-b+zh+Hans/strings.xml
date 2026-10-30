@@ -177,6 +177,7 @@
   <string name="conversation_rename_hint">对话名称</string>
   <string name="conversation_delete_title">删除对话？</string>
   <string name="conversation_delete_message">该对话及其中的消息将被永久删除。</string>
+  <string name="conversation_delete_message_running">该对话及其中的消息将被永久删除，正在执行的任务会一起结束。</string>
   <string name="conversation_delete_message_title">删除消息？</string>
   <string name="conversation_delete_message_body">这条消息将被删除。</string>
   <plurals name="conversation_delete_later_turns">
@@ -186,6 +187,14 @@
   <plurals name="conversation_regenerate_later_turns">
     <item quantity="other">将删除之后 %d 轮对话，并从这条消息重新生成。</item>
   </plurals>
+  <string name="conversation_redo_device_title">重新执行这一轮？</string>
+  <string name="conversation_redo_device_message">这一轮操作过手机：%1$s。重新执行会从头再做一遍，这些操作可能再来一次；已经做了的不会撤回。</string>
+  <string name="conversation_redo_device_separator">、</string>
+  <string name="conversation_redo_device_steps_more">%1$s 等 %2$d 步</string>
+  <plurals name="conversation_redo_device_later_turns">
+    <item quantity="other">之后的 %d 轮对话也会删除。</item>
+  </plurals>
+  <string name="conversation_redo_device_confirm">重新执行</string>
   <string name="conversation_exported">已导出</string>
   <string name="conversation_export_failed">导出失败</string>
   <string name="conversation_export_user">用户</string>

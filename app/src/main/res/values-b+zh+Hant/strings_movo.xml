@@ -142,7 +142,11 @@
   <string name="movo_mode_agent_desc">能操作手機，一步步幫你做完</string>
   <string name="movo_mode_chat">對話</string>
   <string name="movo_mode_chat_desc">只和模型聊天，不會操作手機</string>
-  <string name="movo_mode_tag_desc">對話模式，點按回到 Agent</string>
+  <string name="movo_mode_tag_desc">退出對話模式，回到 Agent</string>
+  <string name="movo_redo_as_agent">換成 Agent 重做</string>
+  <string name="movo_redo_as_agent_desc">用這句話重新做，能操作手機</string>
+  <string name="movo_redo_as_chat">換成對話重答</string>
+  <string name="movo_redo_as_chat_desc">用這句話重新回答，不操作手機</string>
   <string name="movo_mode_switched_chat">已切到對話模式 · 只和模型聊天，不操作手機</string>
   <string name="movo_mode_switched_agent">已切回 Agent 模式 · 可以操作手機</string>
   <string name="movo_chat_web_search">聯網</string>
@@ -207,6 +211,7 @@
   <string name="movo_voice_speaking">正在播報·說話即可打斷</string>
   <string name="movo_voice_connecting">正在連線…</string>
   <string name="movo_voice_hint_listening">停頓後自動傳送</string>
+  <string name="movo_voice_hint_listening_chat">對話模式 · 停頓後自動傳送</string>
   <string name="movo_voice_hint_busy">任務執行中 · 退出不停止</string>
   <string name="movo_voice_hint_speaking">說「別念了」也能停</string>
   <string name="movo_voice_hint_connecting">最多等待 5 秒</string>

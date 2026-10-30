@@ -178,6 +178,7 @@
   <string name="conversation_rename_hint">Conversation name</string>
   <string name="conversation_delete_title">Delete conversation?</string>
   <string name="conversation_delete_message">This conversation and its messages will be permanently deleted.</string>
+  <string name="conversation_delete_message_running">This conversation and its messages will be permanently deleted, and the task in progress will end.</string>
   <string name="conversation_delete_message_title">Delete message?</string>
   <string name="conversation_delete_message_body">This message will be deleted.</string>
   <plurals name="conversation_delete_later_turns">
@@ -189,6 +190,15 @@
     <item quantity="one">This will delete %d later turn and regenerate from this message.</item>
     <item quantity="other">This will delete %d later turns and regenerate from this message.</item>
   </plurals>
+  <string name="conversation_redo_device_title">Run this turn again?</string>
+  <string name="conversation_redo_device_message">This turn used your phone: %1$s. Running it again starts over and may repeat these actions. What\'s already done won\'t be undone.</string>
+  <string name="conversation_redo_device_separator">,\u0020</string>
+  <string name="conversation_redo_device_steps_more">%1$s, %2$d steps in all</string>
+  <plurals name="conversation_redo_device_later_turns">
+    <item quantity="one">\u0020The %d later turn will also be deleted.</item>
+    <item quantity="other">\u0020The %d later turns will also be deleted.</item>
+  </plurals>
+  <string name="conversation_redo_device_confirm">Run again</string>
   <string name="conversation_regenerate_current_turn">The current turn will be replaced with a newly generated response.</string>
   <string name="conversation_exported">Exported</string>
   <string name="conversation_export_failed">Export failed</string>

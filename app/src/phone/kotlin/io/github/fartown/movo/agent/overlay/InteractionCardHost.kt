@@ -48,6 +48,5 @@ internal fun InteractionCardHost(enabled: Boolean = true) {
         onAnswer = { text, optionIndex ->
             shown?.let { InteractionCardCoordinator.reply(it, InteractionReply.Answer(text, optionIndex)) }
         },
-        onCancel = { shown?.let { InteractionCardCoordinator.reply(it, InteractionReply.Cancelled) } },
     )
 }
