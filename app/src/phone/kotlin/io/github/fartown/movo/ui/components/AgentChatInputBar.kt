@@ -127,6 +127,23 @@ private val ThinkingIconSize = 21.dp
 private val InputContainerShape = RoundedCornerShape(20.dp)
 
 /**
+ * 首页能力卡把指令交给输入框（规范 8.0）：输入框整段换成这句，按 9.3「值变化」先出后进；不获焦、不弹键盘，
+ * 要改由用户自己点输入框。只交给当时在屏幕上的输入框一次。
+ */
+internal object ComposerPrefill {
+    var generation by mutableIntStateOf(0)
+        private set
+    private var pending: String? = null
+
+    fun offer(text: String) {
+        pending = text
+        generation++
+    }
+
+    fun consume(): String? = pending.also { pending = null }
+}
+
+/**
  * Agent 输入器始终保持同一空间结构，聚焦、输入和执行过程只改变状态，不搬动操作入口。
  */
 @Composable
@@ -211,6 +228,15 @@ internal fun AgentChatInputBar(
     val runControls = LocalRunControls.current
     val textFieldState = conversationComposer ?: rememberTextFieldState(initialText = input)
     var wasEditingMessage by remember { mutableStateOf(isEditingMessage) }
+    // 能力卡预填次数：和进 / 出编辑一样整段替换文字（见下方 swapKey）。
+    var prefillSwaps by remember { mutableIntStateOf(0) }
+    LaunchedEffect(ComposerPrefill.generation) {
+        val text = ComposerPrefill.consume() ?: return@LaunchedEffect
+        textFieldState.setTextAndPlaceCursorAtEnd(text)
+        prefillSwaps++
+        // 语音模式下文字行不在屏幕上：切回文字，填进去的指令才看得见。
+        onEndVoice()
+    }
     LaunchedEffect(dictationText) {
         // Dictation is an external edit; initialText alone does not update an existing field.
         // Null means no new transcript, so errors/cancellation retain the editable draft.
@@ -240,19 +266,20 @@ internal fun AgentChatInputBar(
     }.minus(ChatInputPopupMargin * 2)
         .coerceAtLeast(MovoSize.touchTarget + MovoSpacing.lg)
 
-    // 进 / 出编辑时输入框文字整段替换（规范 9.3「值变化」先出后进）：旧文字（或占位文字）先淡出 120ms，新内容再淡入 `fast`，
-    // 不一帧硬切。对话页的文字由 App 状态直接改写，这里拿不到「改之前」的时机，所以在切换那次组合里记下上一次组合时
-    // 显示的文字，作为残影盖在原位淡出；新内容在切换那一帧起就是透明的。
+    // 进 / 出编辑、点能力卡预填时输入框文字整段替换（规范 9.3「值变化」先出后进）：旧文字（或占位文字）先淡出 120ms，
+    // 新内容再淡入 `fast`，不一帧硬切。对话页的文字由 App 状态直接改写，这里拿不到「改之前」的时机，所以在切换那次组合里
+    // 记下上一次组合时显示的文字，作为残影盖在原位淡出；新内容在切换那一帧起就是透明的。
+    val swapKey = isEditingMessage to prefillSwaps
     val composedText = textFieldState.text.toString()
     val lastComposedText = remember { arrayOf(composedText) }
     SideEffect { lastComposedText[0] = composedText }
-    val swapGhost = remember(isEditingMessage) { lastComposedText[0] }
-    var settledEditing by remember { mutableStateOf(isEditingMessage) }
+    val swapGhost = remember(swapKey) { lastComposedText[0] }
+    var settledSwap by remember { mutableStateOf(swapKey) }
     val swapProgress = remember { androidx.compose.animation.core.Animatable(1f) }
     val swapTotalMs = MovoMotion.FAST_EXIT + MovoMotion.FAST
     // 切换那一帧效果还没开始：按进度 0 画（残影不透明、新内容透明）。
     val swapElapsedMs: () -> Float = {
-        if (settledEditing != isEditingMessage) 0f else swapProgress.value * swapTotalMs
+        if (settledSwap != swapKey) 0f else swapProgress.value * swapTotalMs
     }
     val ghostAlpha: () -> Float = {
         1f - MovoMotion.EasingExit.transform((swapElapsedMs() / MovoMotion.FAST_EXIT).coerceIn(0f, 1f))
@@ -273,9 +300,11 @@ internal fun AgentChatInputBar(
         if (swapText && textFieldState.text.toString() != input) {
             textFieldState.setTextAndPlaceCursorAtEnd(input)
         }
-        if (settledEditing == isEditingMessage) return@LaunchedEffect
+    }
+    LaunchedEffect(swapKey) {
+        if (settledSwap == swapKey) return@LaunchedEffect
         swapProgress.snapTo(0f)
-        settledEditing = isEditingMessage
+        settledSwap = swapKey
         if (reducedMotion) {
             swapProgress.snapTo(1f)
         } else {
@@ -522,7 +551,7 @@ internal fun AgentChatInputBar(
                         },
                     )
                     // 编辑切换的残影：不参与测量（输入框高度按新内容走），超出部分裁掉。
-                    if (settledEditing != isEditingMessage || swapProgress.isRunning) {
+                    if (settledSwap != swapKey || swapProgress.isRunning) {
                         Text(
                             text = swapGhost.ifBlank { placeholderText },
                             style = if (swapGhost.isBlank()) {
@@ -812,7 +841,7 @@ internal fun AgentChatInputBar(
                                     if (chatFlight != null && start != null && !isStreaming && !queued.busy && !isEditingMessage &&
                                         pendingImages.isEmpty() && pendingFileReferences.isEmpty()
                                     ) {
-                                        chatFlight.launch(text, start, filled = false)
+                                        chatFlight.launch(text, start)
                                     }
                                     onSubmit(text)
                                 }
