@@ -68,13 +68,11 @@ internal class ChatFlightController(private val reducedMotion: Boolean) {
         homeOrb = rect
     }
 
-    /**
-     * 发送：[start] 为起点框（输入框文字行时是文字本身的位置；能力卡时是整张卡），[filled] 表示起点本身有底色（能力卡）。
-     */
-    fun launch(text: String, start: Rect, filled: Boolean) {
+    /** 发送：[start] 为起点框，即输入框文字本身的位置。 */
+    fun launch(text: String, start: Rect) {
         val request = text.trim()
         if (request.isEmpty() || reducedMotion) return
-        bubble = BubbleFlight(request, start, filled)
+        bubble = BubbleFlight(request, start)
         // 从首页发出（首页光球在屏幕上）时，光球按 Q6 同时飞向等待位置。
         orb = homeOrb?.let { OrbFlight(it) }
     }
@@ -117,7 +115,7 @@ internal class ChatFlightController(private val reducedMotion: Boolean) {
 }
 
 @Stable
-internal class BubbleFlight(val text: String, val start: Rect, val startFilled: Boolean) {
+internal class BubbleFlight(val text: String, val start: Rect) {
     var targetId: String? = null
     var target by mutableStateOf<Rect?>(null)
     var landed by mutableStateOf(false)
@@ -172,19 +170,12 @@ private fun BubbleFlightLayer(controller: ChatFlightController, flight: BubbleFl
     val padX = with(density) { 16.dp.toPx() }
     val padY = with(density) { 11.dp.toPx() }
     val hairline = with(density) { MovoSize.hairline.toPx() }
-    val startRadius = with(density) { if (flight.startFilled) 28.dp.toPx() else 20.dp.toPx() }
-    val endRadius = with(density) { 20.dp.toPx() }
+    val radius = with(density) { 20.dp.toPx() }
     val endTail = with(density) { 8.dp.toPx() }
     // 当前外框（窗口坐标）。输入框起点：文字第一行与输入框文字重合，所以起点框 = 文字位置向外扩出气泡内边距，
     // 尺寸取气泡最终尺寸（最终排版）。
-    fun currentBox(end: Rect): Rect {
-        val startBox = if (flight.startFilled) {
-            flight.start
-        } else {
-            Rect(Offset(flight.start.left - padX, flight.start.top - padY), end.size)
-        }
-        return lerp(startBox, end, flight.progress.value)
-    }
+    fun currentBox(end: Rect): Rect =
+        lerp(Rect(Offset(flight.start.left - padX, flight.start.top - padY), end.size), end, flight.progress.value)
     val fillPath = remember { Path() }
     val strokePath = remember { Path() }
     Box(
@@ -197,11 +188,10 @@ private fun BubbleFlightLayer(controller: ChatFlightController, flight: BubbleFl
             }
             .drawBehind {
                 val t = flight.progress.value
-                // 底色与描边在前 50% 淡入（能力卡起点本来就有底色）。
-                val fill = if (flight.startFilled) 1f else (t / 0.5f).coerceIn(0f, 1f)
+                // 底色与描边在前 50% 淡入。
+                val fill = (t / 0.5f).coerceIn(0f, 1f)
                 if (fill <= 0f) return@drawBehind
-                val radius = lerp(startRadius, endRadius, t)
-                val tail = lerp(startRadius, endTail, t)
+                val tail = lerp(radius, endTail, t)
                 fillPath.reset()
                 fillPath.addRoundRect(bubbleRoundRect(0f, 0f, size.width, size.height, radius, tail))
                 drawPath(fillPath, MovoColors.bgSurface, alpha = fill)
@@ -230,11 +220,7 @@ private fun BubbleFlightLayer(controller: ChatFlightController, flight: BubbleFl
             color = MovoColors.textPrimary,
             modifier = Modifier
                 .padding(horizontal = 16.dp, vertical = 11.dp)
-                .fillMaxSize()
-                .graphicsLayer {
-                    // 能力卡起点：文字在 30%–100% 淡入（卡片文字随首页淡出）。
-                    alpha = if (flight.startFilled) ((flight.progress.value - 0.3f) / 0.7f).coerceIn(0f, 1f) else 1f
-                },
+                .fillMaxSize(),
         )
     }
 }

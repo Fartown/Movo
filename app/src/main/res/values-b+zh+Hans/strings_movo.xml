@@ -125,15 +125,11 @@
   <string name="movo_home_try">试试让 Movo</string>
   <string name="movo_home_all_capabilities">全部能力</string>
   <string name="movo_cap_operate">操作 App</string>
-  <string name="movo_cap_operate_prompt">在微信告诉妈妈\n周末回家吃饭</string>
+  <string name="movo_cap_douyin_prompt">打开抖音每 10 秒下滑一次视频</string>
   <string name="movo_cap_system">系统直达</string>
   <string name="movo_cap_system_prompt">明早 7:30\n叫我起床</string>
   <string name="movo_cap_screen">读懂屏幕</string>
   <string name="movo_cap_screen_prompt">这页在讲什么？\n帮我总结一下</string>
-  <string name="movo_cap_research">联网调研</string>
-  <string name="movo_cap_research_prompt">整理今天的\n科技新闻要点</string>
-  <string name="movo_cap_terminal">终端</string>
-  <string name="movo_cap_terminal_prompt">看看手机的\n内存压力</string>
   <string name="movo_composer_placeholder">交给 Movo 去完成…</string>
   <string name="movo_composer_placeholder_running">补充要求，下一步生效…</string>
   <string name="movo_composer_placeholder_chat">问点什么…</string>

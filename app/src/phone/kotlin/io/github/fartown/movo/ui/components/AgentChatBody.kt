@@ -573,7 +573,8 @@ private fun AgentChatScaffold(
                 MovoHomeContent(
                     characterName = characterName,
                     showCapabilities = showEmptySuggestions,
-                    onSend = onSuggestionClick,
+                    // 能力卡只把指令填进输入框，由用户改完再发（规范 8.0）。
+                    onPrefill = ComposerPrefill::offer,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(bottom = bottomPadding),

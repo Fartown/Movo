@@ -177,7 +177,7 @@ class DesignShotsTest {
             onConversationExport = {}, onConversationDelete = {}, onOpenSettings = {},
         ) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
-                MovoHomeContent(characterName = null, showCapabilities = true, onSend = {}, modifier = Modifier.weight(1f))
+                MovoHomeContent(characterName = null, showCapabilities = true, onPrefill = {}, modifier = Modifier.weight(1f))
                 Box(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp)) { composer(running = false) }
             }
         }

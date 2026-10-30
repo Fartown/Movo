@@ -27,6 +27,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -86,12 +87,13 @@ internal val LocalOpenCapabilities = staticCompositionLocalOf<(() -> Unit)?> { n
  * → 32 →「试试让 Movo」+ 横滑能力卡。
  * 「为你留意」需要通知与日程的摘要数据源，当前还没有，按规范「没有内容时整张卡隐藏」不显示。
  * 角色会话保留原来的「角色名 + 故事从这里开始」。
+ * 点能力卡只把指令填进输入框（[onPrefill]），不发送；输入框里是用户自己写的字时能力卡不出现，免得点一下就把它换掉。
  */
 @Composable
 internal fun MovoHomeContent(
     characterName: String?,
     showCapabilities: Boolean,
-    onSend: (String) -> Unit,
+    onPrefill: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (characterName != null) {
@@ -105,6 +107,12 @@ internal fun MovoHomeContent(
         return
     }
     val openCapabilities = LocalOpenCapabilities.current
+    val prompts = Capabilities.map { capabilityRequest(stringResource(it.prompt)) }
+    val composer = LocalConversationComposer.current
+    // 只按「是不是自己写的字」变化重组，不随每次输入重组首页。
+    val draftIsOwnText by remember(composer, prompts) {
+        derivedStateOf { composer?.text?.toString()?.let { it.isNotBlank() && it !in prompts } == true }
+    }
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -145,7 +153,7 @@ internal fun MovoHomeContent(
         // 问候自带进场：日期淡入，两行问候按 Q2 逐词显现（不再整块淡入上移）。
         Greeting()
         AnimatedVisibility(
-            visible = showCapabilities,
+            visible = showCapabilities && !draftIsOwnText,
             enter = fadeIn(MovoMotion.standard()),
             exit = fadeOut(MovoMotion.fastExit()),
         ) {
@@ -159,7 +167,7 @@ internal fun MovoHomeContent(
                         modifier = Modifier.padding(start = MovoSpacing.pageEdge, end = 15.dp),
                     )
                     Spacer(Modifier.height(MovoSpacing.md))
-                    CapabilityCards(onSend = onSend)
+                    CapabilityCards(onPrefill = onPrefill)
                 }
             }
         }
@@ -243,19 +251,32 @@ private data class Capability(
 )
 
 private val Capabilities = listOf(
-    Capability(MovoIcons.MousePointerClick, MovoColors.indigoBg, MovoColors.indigoFg, R.string.movo_cap_operate, R.string.movo_cap_operate_prompt),
+    Capability(MovoIcons.MousePointerClick, MovoColors.indigoBg, MovoColors.indigoFg, R.string.movo_cap_operate, R.string.movo_cap_douyin_prompt),
     Capability(MovoIcons.AlarmClock, MovoColors.amberBg, MovoColors.amberFg, R.string.movo_cap_system, R.string.movo_cap_system_prompt),
     Capability(MovoIcons.ScanText, MovoColors.greenBg, MovoColors.greenFg, R.string.movo_cap_screen, R.string.movo_cap_screen_prompt),
-    Capability(MovoIcons.Globe, MovoColors.blueBg, MovoColors.blueFg, R.string.movo_cap_research, R.string.movo_cap_research_prompt),
-    Capability(MovoIcons.Terminal, MovoColors.graphiteBg, MovoColors.graphiteFg, R.string.movo_cap_terminal, R.string.movo_cap_terminal_prompt),
 )
 
 /**
- * `Card/Capability` 能力卡：156 × 152、圆角 28、内边距 16、E1；图标底块 40 → 类别标签（Micro，三级色）→ 指令（Body/Strong，≤ 2 行）。
- * 横向滚动，间距 12，首项从 20 开始；点卡片即发送卡片上的指令（按压缩放 0.98）。
+ * 卡片上的指令写成一句：换行处两侧都是中文（含全角标点）时直接相连，否则补一个空格
+ * （「明早 7:30」+「叫我起床」→「明早 7:30 叫我起床」，英文同理，规范 5「中文与英文、数字之间加半角空格」）。
+ */
+internal fun capabilityRequest(prompt: String): String =
+    prompt.split('\n').map(String::trim).filter(String::isNotEmpty).reduceOrNull { joined, line ->
+        if (joined.last().isCjk() && line.first().isCjk()) joined + line else "$joined $line"
+    }.orEmpty()
+
+private fun Char.isCjk(): Boolean =
+    Character.UnicodeScript.of(code) == Character.UnicodeScript.HAN ||
+        Character.UnicodeBlock.of(this).let {
+            it == Character.UnicodeBlock.CJK_SYMBOLS_AND_PUNCTUATION || it == Character.UnicodeBlock.HALFWIDTH_AND_FULLWIDTH_FORMS
+        }
+
+/**
+ * `Card/Capability` 能力卡：156 × 152、圆角 28、内边距 16、E1；图标底块 40 → 类别标签（Micro，三级色）→ 指令（Body/Strong，≤ 2 行，超出以「…」截断）。
+ * 横向滚动，间距 12，首项从 20 开始；点卡片把完整指令填进输入框（按压缩放 0.98），不发送、不弹键盘。
  */
 @Composable
-private fun CapabilityCards(onSend: (String) -> Unit) {
+private fun CapabilityCards(onPrefill: (String) -> Unit) {
     LazyRow(
         contentPadding = PaddingValues(start = MovoSpacing.pageEdge, end = MovoSpacing.pageEdge, bottom = MovoSpacing.lg),
         horizontalArrangement = Arrangement.spacedBy(MovoSpacing.md),
@@ -263,19 +284,11 @@ private fun CapabilityCards(onSend: (String) -> Unit) {
         itemsIndexed(Capabilities) { _, capability ->
             val prompt = stringResource(capability.prompt)
             val shape = RoundedCornerShape(MovoRadius.xl)
-            val chatFlight = LocalChatFlight.current
-            var cardRect by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
             Column(
                 modifier = Modifier
                     .size(width = 156.dp, height = 152.dp)
-                    .onGloballyPositioned { cardRect = it.windowRect() }
                     .movoElevation(MovoElevation.Card, shape)
-                    .movoClickable(PressKind.Card, shape = shape) {
-                        val text = prompt.replace("\n", "")
-                        // Q4：能力卡收成用户气泡并移到对话顶部（由飞行层绘制）。
-                        cardRect?.let { chatFlight?.launch(text, it, filled = true) }
-                        onSend(text)
-                    }
+                    .movoClickable(PressKind.Card, shape = shape) { onPrefill(capabilityRequest(prompt)) }
                     .clip(shape)
                     .background(MovoColors.bgSurface)
                     .padding(MovoSpacing.lg),
@@ -292,7 +305,13 @@ private fun CapabilityCards(onSend: (String) -> Unit) {
                 Spacer(Modifier.height(MovoSpacing.lg))
                 Text(stringResource(capability.label), style = MovoTypography.microMedium, color = MovoColors.textTertiary, maxLines = 1)
                 Spacer(Modifier.height(MovoSpacing.xs))
-                Text(prompt, style = MovoTypography.bodyStrong, color = MovoColors.textPrimary, maxLines = 2)
+                Text(
+                    prompt,
+                    style = MovoTypography.bodyStrong,
+                    color = MovoColors.textPrimary,
+                    maxLines = 2,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
             }
         }
     }

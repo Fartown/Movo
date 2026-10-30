@@ -126,15 +126,11 @@
   <string name="movo_home_try">Try Movo</string>
   <string name="movo_home_all_capabilities">All capabilities</string>
   <string name="movo_cap_operate">Operate apps</string>
-  <string name="movo_cap_operate_prompt">Tell Mom on WeChat\nI\'m coming home for dinner this weekend</string>
+  <string name="movo_cap_douyin_prompt">Open Douyin and swipe to the next video every 10 seconds</string>
   <string name="movo_cap_system">System shortcuts</string>
   <string name="movo_cap_system_prompt">Wake me up\nat 7:30 tomorrow</string>
   <string name="movo_cap_screen">Read the screen</string>
   <string name="movo_cap_screen_prompt">What is this page about?\nSummarize it for me</string>
-  <string name="movo_cap_research">Web research</string>
-  <string name="movo_cap_research_prompt">Summarize today\'s\ntech news</string>
-  <string name="movo_cap_terminal">Terminal</string>
-  <string name="movo_cap_terminal_prompt">Check the phone\'s\nmemory pressure</string>
   <string name="movo_composer_placeholder">Hand it to Movo…</string>
   <string name="movo_composer_placeholder_running">Add a request, applied at the next step…</string>
   <string name="movo_composer_placeholder_chat">Ask anything…</string>
